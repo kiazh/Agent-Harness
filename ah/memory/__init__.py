@@ -1,0 +1,25 @@
+"""AgentHarness memory system — long-term memory with consolidation, forgetting, and retrieval.
+
+Architecture:
+    MemoryEntry (dataclass) → MemoryStore (CRUD) → MemoryConsolidator (write path)
+    ImportanceScorer → ForgettingModel → MemoryRetriever (read path)
+"""
+from __future__ import annotations
+
+from ah.memory.models import MemoryEntry, RetrievedMemory
+from ah.memory.store import MemoryStore, memory_store
+from ah.memory.scorer import ImportanceScorer
+from ah.memory.forgetting import ForgettingModel
+from ah.memory.retriever import MemoryRetriever
+from ah.memory.consolidator import MemoryConsolidator
+
+__all__ = [
+    "MemoryEntry",
+    "RetrievedMemory",
+    "MemoryStore",
+    "memory_store",
+    "ImportanceScorer",
+    "ForgettingModel",
+    "MemoryRetriever",
+    "MemoryConsolidator",
+]

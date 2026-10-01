@@ -1,0 +1,133 @@
+"""File tools — read_file, write_file, list_files."""
+from __future__ import annotations
+
+import logging
+import os
+from pathlib import Path
+
+from ah.tools.base import registry
+
+logger = logging.getLogger(__name__)
+
+# Base directory for all file operations. Defaults to the current working
+# directory; override via the AGENT_HARNESS_HOME environment variable.
+_BASE_DIR = Path(os.environ.get("AGENT_HARNESS_HOME", os.getcwd())).resolve()
+
+
+def _resolve_path(path: str) -> Path:
+    """Resolve *path* relative to the base directory and verify it stays inside.
+
+    Returns the resolved :class:`~pathlib.Path` on success.  Raises
+    ``ValueError`` if the path escapes the base directory.
+    """
+    # Resolve the candidate path (handles .., symlinks, etc.)
+    candidate = (_BASE_DIR / path).resolve()
+
+    # Ensure the resolved path is within the allowed root
+    if not candidate.is_relative_to(_BASE_DIR):
+        raise ValueError(
+            f"Path '{path}' escapes the allowed base directory '{_BASE_DIR}'"
+        )
+
+    return candidate
+
+
+@registry.register(
+    name="read_file",
+    description="Read the contents of a file. Returns the file content as text.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Path to the file to read"},
+            "offset": {"type": "integer", "description": "Line number to start reading from (1-indexed)"},
+            "limit": {"type": "integer", "description": "Maximum number of lines to read"},
+        },
+        "required": ["path"],
+    },
+)
+def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
+    """Read a file with optional offset and limit."""
+    try:
+        file_path = _resolve_path(path)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    if not file_path.exists():
+        return f"Error: File not found: {path}"
+    if not file_path.is_file():
+        return f"Error: Not a file: {path}"
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        end = offset + limit - 1
+        selected = lines[offset - 1:end]
+        return "".join(selected)
+    except Exception as e:
+        return f"Error reading file: {e}"
+
+
+@registry.register(
+    name="write_file",
+    description="Write content to a file. Creates the file if it doesn't exist.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Path to the file to write"},
+            "content": {"type": "string", "description": "Content to write to the file"},
+        },
+        "required": ["path", "content"],
+    },
+)
+def write_file(path: str, content: str) -> str:
+    """Write content to a file."""
+    try:
+        file_path = _resolve_path(path)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    try:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"Successfully wrote {len(content)} characters to {path}"
+    except Exception as e:
+        return f"Error writing file: {e}"
+
+
+@registry.register(
+    name="list_files",
+    description="List files in a directory. Returns filenames with sizes.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Directory path to list"},
+            "pattern": {"type": "string", "description": "Glob pattern to filter files (e.g., '*.py')"},
+        },
+        "required": ["path"],
+    },
+)
+def list_files(path: str = ".", pattern: str = "*") -> str:
+    """List files in a directory."""
+    try:
+        dir_path = _resolve_path(path)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    if not dir_path.exists():
+        return f"Error: Directory not found: {path}"
+    if not dir_path.is_dir():
+        return f"Error: Not a directory: {path}"
+    try:
+        files = list(dir_path.glob(pattern))
+        if not files:
+            return f"No files found matching '{pattern}' in {path}"
+        lines = []
+        for f in sorted(files):
+            if f.is_file():
+                size = f.stat().st_size
+                lines.append(f"{f.relative_to(dir_path)} ({size} bytes)")
+            elif f.is_dir():
+                lines.append(f"{f.relative_to(dir_path)}/ (dir)")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error listing files: {e}"
