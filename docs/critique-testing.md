@@ -288,18 +288,22 @@ async def test_concurrent_session_updates():
 
 ## 6. Summary of Gaps
 
-| Category | Count | Severity |
-|----------|-------|----------|
-| Tests that assert failure as success | 1 | High |
-| Tests that don't test what they claim | 3 | High |
-| Production crash paths untested | 4 | Critical |
-| Data corruption paths untested | 3 | Critical |
-| Security issues untested | 2 | Critical |
-| Features advertised but not implemented | 4 | High |
-| Schema tables unused | 8 | Medium |
-| External service calls untested | 2 | Medium |
-| Concurrency/race conditions untested | 1 | Medium |
-| **Total gaps** | **28** | |
+| Category | Count | Severity | Status |
+|----------|-------|----------|--------|
+| Tests that assert failure as success | 1 | High | ⚠️ STILL VALID |
+| Tests that don't test what they claim | 3 | High | ⚠️ STILL VALID |
+| Production crash paths untested | 4 | Critical | ⚠️ STILL VALID |
+| Data corruption paths untested | 3 | Critical | ⚠️ STILL VALID |
+| Security issues untested | 2 | Critical | ✅ FIXED (shell injection, path traversal) |
+| Features advertised but not implemented | 4 | High | ⚠️ STILL VALID |
+| Schema tables unused | 8 | Medium | ✅ FIXED (schema reduced to 2 tables) |
+| External service calls untested | 2 | Medium | ⚠️ STILL VALID |
+| Concurrency/race conditions untested | 1 | Medium | ⚠️ STILL VALID |
+| Duplicate tool definitions | 1 | High | ✅ FIXED |
+| No input validation | 1 | High | ✅ FIXED |
+| No retry logic | 1 | High | ✅ FIXED |
+| No logging | 1 | Medium | ✅ FIXED |
+| **Total gaps** | **28** | | **7 fixed, 21 remaining** |
 
 ---
 
@@ -325,24 +329,9 @@ async def test_concurrent_session_updates():
 
 ## 8. Code Smells That Tests Don't Catch
 
-### 8.1 Duplicate Tool Definitions
+### 8.1 Duplicate Tool Definitions — ✅ FIXED
 
-The `terminal` tool is defined **twice** with different implementations:
-- `ah/tools/builtins.py` — returns `[exit code: N]` format
-- `ah/tools/terminal.py` — returns `(exit code N, no output)` format, supports `workdir` parameter
-
-Similarly, `read_file`, `write_file`, and `list_files` are defined in both `builtins.py` and `file.py` with **different output formats**:
-
-| Tool | `builtins.py` format | `file.py` format |
-|------|---------------------|------------------|
-| `read_file` | `File: {path} ({total} lines, showing {start}-{end})\n` + numbered lines | Raw content, no line numbers |
-| `write_file` | `Written {n} bytes to {path}` | `Successfully wrote {n} characters to {path}` |
-| `list_files` | `Files in {path} ({n} total):` + `[DIR]` prefix | `{filename} ({size} bytes)` |
-
-The `builtins.py` file imports `file` and `terminal` at the bottom, so the `file.py`/`terminal.py` registrations **overwrite** the `builtins.py` ones. This means:
-- The `builtins.py` implementations are dead code
-- The tests in `test_comprehensive.py` test the `builtins.py` implementations (e.g., `assert "Written" in result`), which means they're testing code that is never actually used in production
-- If someone changes the `builtins.py` implementations, the tests will pass but the production behavior won't change
+**Status:** ✅ FIXED — Duplicate tool definitions removed from `builtins.py`. Only `web_search`, `web_extract`, and `search_files` remain in `builtins.py`. The `read_file`, `write_file`, `list_files`, and `terminal` tools are only defined in their respective modules (`file.py`, `terminal.py`).
 
 ### 8.2 Inconsistent Error Handling
 
@@ -356,21 +345,9 @@ The tools have inconsistent error handling:
 
 All errors are returned as strings, which means the LLM can't distinguish between different error types. The agent's `_compress_chunk` method treats all `result` chunks the same way, so the LLM sees `"Error: File not found"` and `"Error: Command timed out"` as equivalent.
 
-### 8.3 No Input Validation
+### 8.3 No Input Validation — ✅ FIXED
 
-The `ToolRegistry.execute` method passes `**kwargs` directly to the tool function without validation:
-```python
-async def execute(self, name: str, **kwargs) -> Any:
-    if name not in self._tools:
-        raise ValueError(f"Tool '{name}' not registered")
-    tool = self._tools[name]
-    if tool.is_async:
-        return await tool.func(**kwargs)
-    else:
-        return tool.func(**kwargs)
-```
-
-If the LLM provides a string where an int is expected, the tool function may crash or behave unexpectedly. The JSON Schema is sent to the LLM but never enforced on the server side.
+**Status:** ✅ FIXED — `ToolRegistry.execute` now validates tool arguments against the JSON Schema via `_validate_tool_args()`. Checks required parameters, unknown parameters, and type matching. Provider calls validate messages and parameters via `_validate_messages()` and `_validate_params()`.
 
 ### 8.4 No Timeout on Tool Execution
 
@@ -381,17 +358,13 @@ result = await registry.execute(tool_name, **tool_args)
 
 If a tool hangs (e.g., `web_search` with a slow network, or `terminal` with a long-running command), the agent loop hangs forever. The `terminal` tool has a `timeout` parameter, but it's not enforced by the agent.
 
-### 8.5 No Retry Logic
+### 8.5 No Retry Logic — ✅ FIXED
 
-The providers don't implement retries or backoff. If the LLM API returns a 429 (rate limit) or 500 (server error), the provider raises an exception and the agent crashes. There's no retry with exponential backoff, no circuit breaker, and no fallback.
+**Status:** ✅ FIXED — `_call_llm_with_retry()` and `_stream_llm_with_retry()` in `agent.py` implement exponential backoff (1s, 2s, 4s) with 3 retries. On final failure, returns an `AgentResponse` with an error message instead of crashing.
 
-### 8.6 No Logging
+### 8.6 No Logging — ✅ FIXED
 
-The code uses `rich.console.Console` for output but doesn't use Python's `logging` module. This means:
-- Errors are not logged to a file
-- Debugging production issues requires reproducing them
-- There's no audit trail of agent actions
-- There's no way to monitor the system's health
+**Status:** ✅ FIXED — Python's `logging` module is used throughout (`logger = logging.getLogger(__name__)`). Audit logging via `audit_log()` in `provider.py` logs all security-relevant events as JSON. Agent loop logs LLM call failures, tool execution errors, and budget exceeded events.
 
 ### 8.7 No Metrics
 

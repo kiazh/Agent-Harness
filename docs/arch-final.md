@@ -4,6 +4,8 @@
 **Sources:** 10 architecture proposals (purist, pragmatic, minimalist, DDD, functional, testability, performance, security, microservices, DX)
 **Verdict:** Middle ground — pragmatic incremental improvements + domain models + testability + performance + security
 
+> **Implementation Status: Phases 1-4 complete.** All P0 and P1 items have been implemented. The codebase now has: domain models (`models.py`), `PromptAssembler` extracted (`assembler.py`), DI container (`container.py`), 2-table schema, tiktoken, PyYAML, rate limiting, retry logic, streaming, audit logging, input validation, and security hardening. 136 tests pass.
+
 ---
 
 ## Executive Summary
@@ -153,4 +155,4 @@ cli.py → agent.py → assembler.py → context.py → connection.py
 
 ---
 
-*This document synthesizes findings from 10 parallel architecture proposal subagents. Each proposal is available in `docs/arch-proposal-*.md`.*
+*This document synthesizes findings from 10 parallel architecture proposal subagents. The original proposal files have been removed; this document preserves the key decisions.*

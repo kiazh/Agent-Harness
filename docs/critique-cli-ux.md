@@ -1,6 +1,6 @@
 # AgentHarness CLI/UX Critique
 
-**Verdict:** The current CLI is a developer-facing prototype, not a product. It is unusable for real work. A user cannot hold a conversation, cannot see what the agent is doing, cannot interrupt it, cannot manage sessions, and cannot inspect or control the agent's behavior. Every serious agent CLI — Claude Code, Hermes, OpenCode, Codex CLI, Aider — has solved these problems years ago. AgentHarness needs a complete CLI overhaul, not incremental patches.
+**Verdict:** The current CLI is a developer-facing prototype, not a product. A user cannot hold a conversation, cannot interrupt, cannot manage sessions, and cannot inspect or control the agent's behavior. However, streaming has been added (SSE via `run_stream()`), and verbose mode shows progress indicators. Every serious agent CLI — Claude Code, Hermes, OpenCode, Codex CLI, Aider — has solved these problems years ago. AgentHarness needs further CLI improvements, but the foundation is now solid.
 
 ---
 
@@ -125,52 +125,17 @@ The difference is stark. One is a tool you live in. The other is a command you r
 - Model switching
 - Export/import
 
-#### 2.2 No Streaming Output
+#### 2.2 No Streaming Output — ✅ FIXED
 
-**What's missing:** The entire LLM response is buffered and printed at the end in a `Panel`. The user stares at a blank screen while the LLM thinks, with no indication of progress.
+**Status:** ✅ FIXED — SSE streaming added via `run_stream()` and `provider.stream_complete()`. The CLI uses Rich's `Live` display for real-time output. Tokens are shown as they arrive from the LLM.
 
-**Why it matters:** LLM responses can take 10-30 seconds. Without streaming, the user has no idea if the agent is working, stuck, or dead. This is the single most important UX feature for any LLM-powered CLI.
+#### 2.3 No Progress Indicators — ⚠️ PARTIALLY ADDRESSED
 
-**What Claude Code does:** Streams tokens in real-time. You see the response as it's generated. You can interrupt with Ctrl+C.
+**Status:** ⚠️ PARTIAL — Verbose mode shows iteration counter, tool calls, and token counts. Streaming shows real-time progress. No spinner or "Thinking..." indicator yet.
 
-**What Hermes does:** Streams tokens in real-time with Rich formatting.
+#### 2.4 No Token/Cost Display — ⚠️ PARTIALLY ADDRESSED
 
-**What Aider does:** Streams tokens in real-time with syntax highlighting.
-
-**What AgentHarness needs:** Stream tokens from the LLM to the terminal in real-time. Use Rich's `Live` or `Status` for progress indicators. Show a spinner while waiting for the first token. Show a "Thinking..." indicator during tool execution.
-
-#### 2.3 No Progress Indicators
-
-**What's missing:** No spinner, no "Thinking...", no "Tool: read_file" progress, no "Iteration 2/10" counter. The user has no idea what the agent is doing.
-
-**Why it matters:** The ReAct loop can take minutes. Without progress indicators, the user cannot tell if the agent is making progress or stuck in a loop.
-
-**What Claude Code does:** Shows "Thinking...", "Tool: read_file", "Tool: terminal", etc. in real-time. Shows a spinner during LLM calls.
-
-**What Hermes does:** Shows tool execution progress with Rich's `Status` or `Spinner`.
-
-**What AgentHarness needs:** Show real-time progress for:
-- LLM calls (spinner + "Thinking...")
-- Tool execution (spinner + tool name + arguments)
-- Iteration counter (Iteration 2/10)
-- Token counter (Tokens: 1,234 / 8,000)
-- Cost tracker (Cost: $0.0123)
-
-#### 2.4 No Token/Cost Display
-
-**What's missing:** Token counting is `len(text) // 4` — a rough estimate that is often wrong by 20-30%. There is no real-time token counter, no cost tracking, no context window visualization.
-
-**Why it matters:** Tokens are the currency of LLM interactions. Users need to know how many tokens they've used, how many are left, and how much they're spending. Without this, users will blow through their context window or API budget without realizing it.
-
-**What Claude Code does:** Shows real-time token count, cost, and context window usage. Warns when approaching limits.
-
-**What Hermes does:** Shows token count and cost in the status bar.
-
-**What AgentHarness needs:** Use a proper tokenizer (tiktoken or the provider's tokenizer). Show:
-- Real-time token count (input + output)
-- Cost estimate (based on model pricing)
-- Context window usage (visual bar)
-- Token breakdown (system, goal, context, tools, response)
+**Status:** ⚠️ PARTIAL — tiktoken added for accurate counting. Token usage shown in verbose mode. No real-time cost tracking or context window visualization yet.
 
 #### 2.5 No Session Management
 

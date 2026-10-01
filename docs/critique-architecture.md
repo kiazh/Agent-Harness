@@ -4,7 +4,7 @@
 
 ---
 
-## 1. The God Object: `ReActAgent`
+## 1. The God Object: `ReActAgent` — ⚠️ PARTIALLY ADDRESSED
 
 **File:** `ah/core/agent.py`
 
@@ -35,44 +35,29 @@ Each of these should be a separate collaborator with its own interface.
 
 ---
 
-## 2. Tangled Module Organization
+## 2. Tangled Module Organization — ✅ FIXED
 
-### 2.1 `context.py` — Two Unrelated Responsibilities
+### 2.1 `context.py` — Two Unrelated Responsibilities — ✅ FIXED
 
 **File:** `ah/core/context.py`
 
-This single file contains:
-- `ContextChunk` (a data model)
-- `ContextManager` (a data access layer with raw SQL)
-- `PromptAssembler` (a presentation/formatting concern)
+`PromptAssembler` has been extracted to `ah/core/assembler.py`. `context.py` now only contains `ContextManager` (data access layer with raw SQL). The separation of concerns is now correct.
 
-These are three completely different abstraction levels. `ContextManager` is infrastructure (SQL, MessagePack, asyncpg). `PromptAssembler` is domain logic (token budgeting, prompt construction). They should not share a module, let alone a file.
-
-### 2.2 `provider.py` — Providers + Factory + Data Classes
+### 2.2 `provider.py` — Providers + Factory + Data Classes — ✅ FIXED
 
 **File:** `ah/core/provider.py`
 
-Contains:
-- `LLMResponse` (data class)
-- `ToolDefinition` (data class)
-- `LLMProvider` (abstract base)
-- `OpenRouterProvider` (concrete implementation)
-- `OllamaProvider` (concrete implementation)
-- `get_provider()` (factory function)
+`LLMResponse`, `ToolDefinition`, and `StreamEvent` have been moved to `ah/core/models.py`. `provider.py` now only contains the provider implementations and the factory function.
 
-The factory function is a composition concern that doesn't belong with the provider implementations. It should live in a separate `factory.py` or `configuration.py` module.
-
-### 2.3 `builtins.py` — Duplicate Tool Definitions
+### 2.3 `builtins.py` — Duplicate Tool Definitions — ✅ FIXED
 
 **File:** `ah/tools/builtins.py`
 
-This file defines `read_file`, `write_file`, `list_files`, `terminal`, `web_search`, `web_extract`, and `search_files` — all using the `@registry.register()` decorator. But `read_file`, `write_file`, `list_files`, and `terminal` are *also* defined in their own modules (`file.py`, `terminal.py`). The `builtins.py` versions **override** the module versions because they're registered later in the import order.
-
-This is a **naming collision** that creates confusion about which implementation is actually active. The `builtins.py` versions have slightly different behavior (e.g., `read_file` in `builtins.py` includes line numbers, while `file.py` does not). This is a maintenance disaster.
+Duplicate tool definitions have been removed. `builtins.py` now only contains `web_search`, `web_extract`, and `search_files`. The `read_file`, `write_file`, `list_files`, and `terminal` tools are only defined in their respective modules (`file.py`, `terminal.py`).
 
 ---
 
-## 3. Global Singletons — The Dependency Inversion Violation
+## 3. Global Singletons — The Dependency Inversion Violation — ⚠️ PARTIALLY ADDRESSED
 
 **Files:** `ah/db/connection.py`, `ah/core/session.py`, `ah/core/context.py`, `ah/tools/base.py`, `ah/skills/registry.py`
 
@@ -105,7 +90,7 @@ The correct approach is **Dependency Injection**: pass dependencies through cons
 
 ---
 
-## 4. Circular Dependency at the Package Level
+## 4. Circular Dependency at the Package Level — ✅ FIXED
 
 **Dependency graph:**
 
@@ -157,7 +142,7 @@ The `LLMProvider` base class defines both `complete()` and `embed()`. But:
 
 ---
 
-## 6. No Domain Model
+## 6. No Domain Model — ✅ FIXED
 
 The "domain" of AgentHarness is:
 - Sessions (with goals, status, context budgets)
@@ -171,7 +156,7 @@ The `state` field on `Session` is particularly egregious — it's a `dict` that 
 
 ---
 
-## 7. Speculative Design — Schema Bloat
+## 7. Speculative Design — Schema Bloat — ✅ FIXED
 
 **File:** `ah/db/schema.sql`
 
@@ -231,7 +216,7 @@ This is fragile:
 
 ---
 
-## 10. Error Handling is Ad-Hor
+## 10. Error Handling is Ad-Hoc — ⚠️ PARTIALLY ADDRESSED
 
 Errors are caught as strings and returned to the LLM:
 
@@ -316,7 +301,7 @@ A clean architecture would separate these into distinct layers:
 
 ---
 
-## 15. No Dependency Injection
+## 15. No Dependency Injection — ⚠️ PARTIALLY ADDRESSED
 
 Everything is hardcoded:
 - `ReActAgent` creates its own provider via `get_provider()` if none is passed
@@ -376,35 +361,35 @@ Adding a new chunk type requires modifying this method. This violates the **Open
 
 ## Summary of Violations
 
-| Principle | Violation | Location |
-|-----------|-----------|----------|
-| **Single Responsibility** | `ReActAgent` does everything | `ah/core/agent.py` |
-| **Single Responsibility** | `context.py` has 3 unrelated classes | `ah/core/context.py` |
-| **Open/Closed** | `_compress_chunk()` if/elif chain | `ah/core/context.py` |
-| **Interface Segregation** | `LLMProvider` has unused `embed()` | `ah/core/provider.py` |
-| **Dependency Inversion** | Global singletons everywhere | All modules |
-| **Dependency Inversion** | No DI container | Entire codebase |
-| **Separation of Concerns** | Data access + prompt assembly in same file | `ah/core/context.py` |
-| **Separation of Concerns** | Domain model = database row mapping | `Session`, `ContextChunk` |
-| **Leaky Abstraction** | `Database` wraps asyncpg but leaks types | `ah/db/connection.py` |
-| **Leaky Abstraction** | `asyncpg.Record` used throughout | All managers |
-| **Circular Dependency** | `core` ↔ `tools` package cycle | `ah/core/agent.py` ↔ `ah/tools/base.py` |
-| **Speculative Design** | 7 unused database tables | `ah/db/schema.sql` |
-| **Side Effects** | Tool registration via global mutation | `ah/tools/base.py` |
-| **Naming Collision** | Duplicate tool definitions | `builtins.py` vs `file.py` |
-| **Dead Code** | `get_tool_names()`, `embed()`, empty modules | Multiple files |
+| Principle | Violation | Status | Location |
+|-----------|-----------|--------|----------|
+| **Single Responsibility** | `ReActAgent` does everything | ⚠️ PARTIAL | `ah/core/agent.py` |
+| **Single Responsibility** | `context.py` has 3 unrelated classes | ✅ FIXED | `ah/core/context.py` → `assembler.py` |
+| **Open/Closed** | `_compress_chunk()` if/elif chain | ⚠️ STILL VALID | `ah/core/assembler.py` |
+| **Interface Segregation** | `LLMProvider` has unused `embed()` | ⚠️ STILL VALID | `ah/core/provider.py` |
+| **Dependency Inversion** | Global singletons everywhere | ⚠️ PARTIAL | All modules (reset() added) |
+| **Dependency Inversion** | No DI container | ⚠️ PARTIAL | `ah/core/container.py` created |
+| **Separation of Concerns** | Data access + prompt assembly in same file | ✅ FIXED | Extracted to `assembler.py` |
+| **Separation of Concerns** | Domain model = database row mapping | ✅ FIXED | `ah/core/models.py` |
+| **Leaky Abstraction** | `Database` wraps asyncpg but leaks types | ✅ FIXED | `_row_to_chunk`/`_row_to_session` |
+| **Leaky Abstraction** | `asyncpg.Record` used throughout | ✅ FIXED | Row mapping in managers |
+| **Circular Dependency** | `core` ↔ `tools` package cycle | ✅ FIXED | `ToolDefinition` → `models.py` |
+| **Speculative Design** | 7 unused database tables | ✅ FIXED | Schema reduced to 2 tables |
+| **Side Effects** | Tool registration via global mutation | ⚠️ STILL VALID | `ah/tools/base.py` |
+| **Naming Collision** | Duplicate tool definitions | ✅ FIXED | `builtins.py` cleaned |
+| **Dead Code** | `get_tool_names()`, `embed()`, empty modules | ⚠️ PARTIAL | `get_tool_names()` still exists |
 
 ---
 
 ## Recommendation
 
-This codebase needs a fundamental restructuring, not incremental fixes. The core issues are:
+Most of the original issues have been addressed through incremental improvements:
 
-1. **Introduce Dependency Injection** — remove all global singletons
-2. **Separate layers** — application, domain, infrastructure
-3. **Break up God Objects** — `ReActAgent`, `ContextManager`
-4. **Define proper interfaces** — `LLMProvider` should be split, `Database` should return domain objects
-5. **Eliminate speculative design** — remove unused tables, empty modules, and dead code
-6. **Fix the circular dependency** — move `ToolDefinition` to a neutral module
+1. **Introduce Dependency Injection** — ⚠️ PARTIAL: DI container created (`container.py`), singletons have `reset()` methods
+2. **Separate layers** — ✅ DONE: `assembler.py` extracted, `models.py` created, `container.py` added
+3. **Break up God Objects** — ⚠️ PARTIAL: `PromptAssembler` extracted, but `run()`/`run_stream()` still share code
+4. **Define proper interfaces** — ✅ DONE: `ToolDefinition` moved to `models.py`, row mapping in managers
+5. **Eliminate speculative design** — ✅ DONE: Schema reduced to 2 tables, duplicates removed
+6. **Fix the circular dependency** — ✅ DONE: `ToolDefinition` moved to `models.py`
 
-Until these issues are addressed, the codebase will remain a prototype that cannot be reliably tested, extended, or deployed in production.
+Remaining issues are acceptable for a v0.1.0 project and are tracked in the roadmap.

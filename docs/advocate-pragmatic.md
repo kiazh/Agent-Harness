@@ -17,8 +17,8 @@ AgentHarness is a working, self-hosted AI agent framework with a clean architect
 - **Tool registry** (`ah/tools/base.py`): Decorator-based registration with JSON Schema inference. Seven built-in tools covering file ops, terminal, and web search.
 - **Skills system** (`ah/skills/registry.py`): SKILL.md parser with YAML frontmatter, trigger matching, and skill loading. Works with the standard skill format.
 - **CLI** (`ah/cli.py`): Eight commands — `chat`, `status`, `sessions`, `context`, `skills`, `doctor`, `init`, `version`. Clean Typer interface with Rich output.
-- **Tests** (`tests/`): 1,570 lines of comprehensive tests covering unit tests, edge cases, error handling, mocked database operations, CLI tests, and provider tests. This is more test coverage than many production projects.
-- **Schema** (`ah/db/schema.sql`): Well-designed with proper indexes, HNSW vector indexes, foreign keys with cascade deletes, and support for future phases (subagents, heartbeats, external context).
+- **Tests** (`tests/`): 136 tests covering unit tests, edge cases, error handling, mocked database operations, CLI tests, and provider tests.
+- **Schema** (`ah/db/schema.sql`): Minimal 2-table schema (sessions, context_chunks) with proper indexes, HNSW vector indexes, and foreign keys with cascade deletes.
 
 ### Why This Is Portfolio-Ready
 
@@ -28,7 +28,7 @@ AgentHarness is a working, self-hosted AI agent framework with a clean architect
 
 3. **It has real dependencies and integration.** PostgreSQL, pgvector, MessagePack, asyncpg, httpx — these are production-grade tools. You're not using toy substitutes.
 
-4. **The test suite is serious.** 1,570 lines of tests with mocked databases, mocked HTTP providers, and CLI integration tests. This shows you understand how to test async code and complex systems.
+4. **The test suite is serious.** 136 tests with mocked databases, mocked HTTP providers, and CLI integration tests. This shows you understand how to test async code and complex systems.
 
 5. **The README is honest.** It clearly states what's done, what's pending, and why the project exists. No hype, no overpromising.
 
@@ -42,15 +42,15 @@ LangGraph is listed as "Pending" in the roadmap. That's fine. The current ReAct 
 
 ### "But there's no streaming"
 
-Streaming is a UX optimization, not a correctness issue. The agent produces correct responses; it just doesn't token-stream them. For a portfolio project, this is irrelevant. Streaming can be added in an afternoon when the TUI phase comes.
+**Status:** ✅ FIXED — SSE streaming added via `run_stream()` and `provider.stream_complete()`. The CLI uses Rich's `Live` display for real-time output.
 
 ### "But the token estimation is naive"
 
-`len(text) // 4` is a rough heuristic. Yes. But it's *consistent*, it's *fast*, and it's *good enough* for budget management. Swapping in tiktoken would add a dependency and complexity for marginal accuracy gains. The current approach works for the scale this project operates at.
+**Status:** ✅ FIXED — tiktoken with `cl100k_base` encoding added. The `TokenCounter` class in `assembler.py` provides accurate token counts with a `len//4` fallback.
 
 ### "But there's no multi-agent system yet"
 
-The schema already has tables for `subagent_sessions`, `subagent_messages`, and `subagent_results`. The foundation is laid. Building the actual multi-agent orchestration now — before the single-agent system is battle-tested — would be premature. Get the core loop rock-solid first.
+The schema has been simplified to 2 tables (sessions, context_chunks). Multi-agent orchestration is a Phase 6 concern. Building it now — before the single-agent system is battle-tested — would be premature. Get the core loop rock-solid first.
 
 ### "But there's no RAG pipeline"
 
@@ -62,34 +62,17 @@ Every feature in the roadmap (LangGraph, multi-agent, RAG, heartbeat, TUI, produ
 
 ---
 
-## The 2-3 Things That MUST Be Fixed
+## The Remaining Issues
 
-These are the issues that would make a reviewer say "this isn't serious." Fix these three and the project is credible.
+### ✅ FIXED: Duplicate Tool Definitions
 
-### 1. Duplicate Tool Definitions (Bug)
+**Status:** ✅ FIXED — `builtins.py` now only has `web_search`, `web_extract`, and `search_files`. The duplicate `read_file`, `write_file`, `list_files`, and `terminal` definitions have been removed.
 
-**Problem:** `read_file`, `write_file`, `list_files`, and `terminal` are defined in **both** `ah/tools/builtins.py` **and** `ah/tools/file.py` / `ah/tools/terminal.py`. The implementations differ:
+### ✅ FIXED: No Error Handling in the ReAct Loop
 
-- `builtins.py:read_file` returns line-numbered output (`1 | content`)
-- `file.py:read_file` returns raw content without line numbers
-- `builtins.py:terminal` doesn't support `workdir`
-- `terminal.py:terminal` supports `workdir`
+**Status:** ✅ FIXED — Retry logic with exponential backoff (3 retries) added to `_call_llm_with_retry()` and `_stream_llm_with_retry()`. On final failure, returns an `AgentResponse` with an error message instead of crashing.
 
-The `builtins.py` file imports `file` and `terminal` at the bottom, so the later registrations win. But this is fragile, confusing, and a bug waiting to happen.
-
-**Fix:** Delete the duplicate definitions from `builtins.py`. Keep only `web_search`, `web_extract`, and `search_files` in `builtins.py` (since those don't have their own modules). Import `file` and `terminal` modules for their side-effect registrations. This is a 15-minute fix.
-
-**Why it matters:** A reviewer who notices duplicate code with different implementations will question the entire codebase's reliability. This is the kind of sloppiness that undermines confidence in everything else.
-
-### 2. No Error Handling in the ReAct Loop (Robustness)
-
-**Problem:** If the LLM provider call fails (rate limit, network error, invalid API key), the `ReActAgent.run()` method crashes with an unhandled exception. There's no retry logic, no graceful degradation, and no user-friendly error message.
-
-**Fix:** Wrap the `provider.complete()` call in a try-except with exponential backoff retry (2-3 retries). On final failure, return an `AgentResponse` with an error message instead of crashing. This is a 30-minute fix.
-
-**Why it matters:** An agent that crashes on the first API hiccup looks unfinished. Error handling is table stakes for any system that calls external APIs. This is the difference between "toy project" and "serious project."
-
-### 3. No CI/CD (Credibility)
+### ⚠️ STILL VALID: No CI/CD
 
 **Problem:** There's no GitHub Actions workflow, no automated testing on push, no linting on PR. The test suite exists but nothing enforces it.
 
@@ -104,12 +87,10 @@ The `builtins.py` file imports `file` and `terminal` at the bottom, so the later
 | Feature | Why It Can Wait |
 |---|---|
 | LangGraph integration | Current ReAct loop works. Add LangGraph when you need stateful graphs. |
-| Streaming responses | UX optimization, not correctness. Add when building the TUI. |
-| Multi-agent system | Schema is ready. Build when single-agent is battle-tested. |
+| Multi-agent system | Schema is minimal. Build when single-agent is battle-tested. |
 | RAG pipeline | Embedding search exists. Add chunking/reranking when context volume demands it. |
 | Heartbeat scheduler | Nice-to-have. Not core to the agent's functionality. |
 | Production hardening | The project works. Harden when deploying. |
-| Better token estimation | Current heuristic is consistent and fast. Swap for tiktoken if accuracy matters. |
 | Alembic migrations | Schema is managed manually. Add Alembic when schema changes become frequent. |
 
 ---
@@ -118,6 +99,6 @@ The `builtins.py` file imports `file` and `terminal` at the bottom, so the later
 
 AgentHarness is a **working, well-architested, seriously-tested** AI agent framework. It demonstrates real engineering skill: async Python, PostgreSQL, vector search, LLM integration, tool use, and context management. The codebase is clean, readable, and honest about what it does and doesn't do.
 
-Fix the three issues above — duplicate tools, error handling, and CI/CD — and this is a portfolio project you can be proud to show. Everything else is iteration.
+Two of the three critical issues (duplicate tools, error handling) have been fixed. Only CI/CD remains. This is a portfolio project you can be proud to show.
 
 **Ship it.**

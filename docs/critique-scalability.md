@@ -35,7 +35,7 @@ self._pool = await asyncpg.create_pool(
 
 ---
 
-## 2. Zero Caching Layer
+## 2. Zero Caching Layer — ✅ FIXED
 
 **Code:** Entire codebase — no Redis, no Memcached, no LRU cache, no `functools.lru_cache`.
 
@@ -211,7 +211,7 @@ def terminal(command: str, timeout: int = 60) -> str:
 
 ---
 
-## 9. No Streaming — High Latency
+## 9. No Streaming — High Latency — ✅ FIXED
 
 **Code:** `ah/core/provider.py:102` — `resp = await self.client.post("/chat/completions", json=payload)`.
 
@@ -251,7 +251,7 @@ def terminal(command: str, timeout: int = 60) -> str:
 
 ---
 
-## 11. No Observability — Flying Blind
+## 11. No Observability — Flying Blind — ⚠️ PARTIALLY ADDRESSED
 
 **Code:** Entire codebase — no metrics, no structured logging, no tracing.
 
@@ -272,7 +272,7 @@ def terminal(command: str, timeout: int = 60) -> str:
 
 ---
 
-## 12. Schema Design Issues
+## 12. Schema Design Issues — ✅ FIXED
 
 **Code:** `ah/db/schema.sql`
 
@@ -316,7 +316,7 @@ DEFAULT_DSN = "postgresql://postgres:***@localhost:5432/agentharness"
 
 ---
 
-## 14. No Error Recovery or Retry Logic
+## 14. No Error Recovery or Retry Logic — ✅ FIXED
 
 **Code:** `ah/core/agent.py:136-138` — tool execution errors are caught and returned as strings.
 
@@ -371,13 +371,13 @@ def _run(coro):
 | Layer | Current State | Required for Scale |
 |-------|--------------|-------------------|
 | **Database** | Single PostgreSQL, 10-conn pool | PgBouncer, read replicas, partitioning, connection pooling per tenant |
-| **Caching** | None | Redis for sessions, context, tool definitions |
+| **Caching** | ✅ TTLCache for sessions, tool def cache | Redis for cross-instance caching |
 | **Architecture** | CLI batch job | FastAPI service + Celery workers + Redis queue |
 | **Agent Loop** | Sequential, blocking I/O | Parallel tool execution, async I/O, streaming |
 | **Context** | Unbounded growth | Sliding window, summarization, eviction |
-| **Backpressure** | None | Rate limiting, quotas, circuit breakers |
-| **Observability** | None | Prometheus metrics, OpenTelemetry tracing, structured logging |
+| **Backpressure** | ✅ Rate limiting (AsyncTokenBucket) | Per-session quotas, circuit breakers |
+| **Observability** | ⚠️ Audit logging (JSON) | Prometheus metrics, OpenTelemetry tracing |
 | **Multi-tenancy** | None | Org/user IDs, RLS, authentication |
-| **Error Handling** | Catch-and-continue | Retry with backoff, circuit breakers, health checks |
+| **Error Handling** | ✅ Retry with exponential backoff | Circuit breakers, health checks |
 
 **Bottom line:** AgentHarness is a clean, well-organized prototype that demonstrates the ReAct pattern effectively. But it is architecturally incapable of serving more than one user at a time. Every layer — from the 10-connection pool to the unbounded context growth to the blocking subprocess calls — has a hard ceiling that will be hit under concurrent load. Scaling it would require rewriting the core architecture, not just tuning parameters.

@@ -30,7 +30,7 @@ AgentHarness has: 1 developer, 0 funding, ~20 Python files, v0.1.0, and a README
 | Loop pattern | ReAct (hardcoded) | Any (graph-defined) | Any (Flow-defined) | Any (actor-defined) | Agent + Runner (built-in) |
 | Max iterations | 10 (hardcoded) | Configurable (recursion_limit) | Configurable | Configurable | Configurable |
 | Parallel tool calls | No (sequential) | Yes (native) | Yes (via Flow) | Yes (async messaging) | Yes (via Runner) |
-| Streaming | No | Yes (6 modes) | Yes | Yes | Yes |
+| Streaming | ✅ Yes (SSE) | Yes (6 modes) | Yes | Yes | Yes |
 | Human-in-the-loop | No | Yes (interrupt/resume) | Yes (via Flow) | Yes (event-driven) | Yes (approvals) |
 | Checkpointing | No | Yes (MsgPack, encrypted) | No | Yes (serialization) | Yes (Sessions) |
 | State management | `dict` (untyped) | TypedState + reducers | Pydantic models | Typed messages | Context objects |
@@ -58,7 +58,7 @@ AgentHarness has: 1 developer, 0 funding, ~20 Python files, v0.1.0, and a README
 | Memory extraction | No | Yes (LLM-powered) | Yes (self-editing) | No | No |
 | Vector search | Yes (pgvector) | Yes (multi-store) | Yes (archival) | No | No |
 | Memory consolidation | No | Yes (A.U.D.N. cycle) | Yes (dreaming) | No | No |
-| Token efficiency | ~4 chars/token (rough) | 90% reduction | Context window managed | N/A | N/A |
+| Token efficiency | ✅ tiktoken (cl100k_base) | 90% reduction | Context window managed | N/A | N/A |
 | Multi-level scoping | No | Yes (user/agent/app/run) | Yes (agent/conversation) | No | No |
 | Decay/expiration | No | Yes (platform) | Yes (self-editing) | No | No |
 
@@ -92,11 +92,11 @@ AgentHarness has: 1 developer, 0 funding, ~20 Python files, v0.1.0, and a README
 
 | Capability | AgentHarness | LangGraph | AutoGen | OpenAI Agents SDK |
 |------------|-------------|-----------|---------|-------------------|
-| Tracing | No | Yes (LangSmith) | Yes (OpenTelemetry) | Yes (built-in) |
-| Metrics | No | Yes (LangSmith) | Yes | Yes (OpenAI suite) |
-| Debugging | Console print | LangGraph Studio | AutoGen Studio | Tracing UI |
+| Tracing | ⚠️ Audit logging (JSON) | Yes (LangSmith) | Yes (OpenTelemetry) | Yes (built-in) |
+| Metrics | ⚠️ Token tracking | Yes (LangSmith) | Yes | Yes (OpenAI suite) |
+| Debugging | Console print + audit log | LangGraph Studio | AutoGen Studio | Tracing UI |
 | Evaluation | No | Yes (LangSmith) | No | Yes (evals) |
-| Streaming | No | Yes (6 modes) | Yes | Yes |
+| Streaming | ✅ Yes (SSE) | Yes (6 modes) | Yes | Yes |
 
 **Assessment:** AgentHarness has zero observability. No structured logging, no metrics, no tracing, no debugging tools. When an agent turn fails, the only diagnostic information is a console print of the error string. LangGraph has LangSmith (the first LLM observability platform). AutoGen has OpenTelemetry support. OpenAI Agents SDK has built-in tracing with evaluation tools. For a framework that claims to be "built to be understood," the lack of observability is a glaring contradiction.
 
@@ -149,7 +149,7 @@ To be fair, there are a few things AgentHarness does competently:
 
 3. **CLI UX**: The Typer CLI with `chat`, `status`, `sessions`, `context`, `skills`, `doctor` commands is pleasant for a prototype. But a CLI is not a framework — it's an interface.
 
-4. **Token budget awareness**: The `PromptAssembler` with a token budget is a reasonable approach. But it uses a rough `len(text) // 4` estimate, and the budget is not enforced (the `messages` list grows unboundedly within a turn).
+4. **Token budget awareness**: The `PromptAssembler` with a token budget is a reasonable approach. ✅ tiktoken added for accurate counting. Budget enforcement is still decorative (messages list grows unboundedly within a turn).
 
 5. **Bundled skills**: The 20 SKILL.md files provide useful reference material. But they are static files, not a dynamic skill system.
 
@@ -205,7 +205,7 @@ As a **framework**, it has no reason to exist:
 
 1. **No unique feature**: Every feature it implements is available in mature competitors.
 2. **No unique positioning**: "Self-hosted" and "understandable" are not differentiators.
-3. **No production readiness**: No streaming, no observability, no multi-tenancy, no error recovery, no horizontal scaling.
+3. **No production readiness**: ⚠️ PARTIAL — streaming added, audit logging added, rate limiting added. Still no multi-tenancy, no horizontal scaling.
 4. **No ecosystem**: No MCP support, no plugin system, no community, no integrations.
 5. **No multi-agent capability**: Despite the name, it's a single-agent ReAct loop.
 6. **No memory capability**: Despite the schema, the memory system is unimplemented.
@@ -225,9 +225,9 @@ The current path — a broad, shallow framework competing against well-funded, p
 |--------|-------------|-----------|--------|---------|-------------------|
 | Python files | ~20 | ~200+ | ~150+ | ~300+ | ~100+ |
 | Lines of code | ~2,000 | ~30,000+ | ~20,000+ | ~40,000+ | ~15,000+ |
-| Database tables | 10 (3 used) | N/A (pluggable) | N/A | N/A | N/A |
+| Database tables | 2 (sessions, context_chunks) | N/A (pluggable) | N/A | N/A | N/A |
 | Built-in tools | 7 | 100+ | 100+ | 100+ | 10+ (hosted) |
 | LLM providers | 2 | 20+ | 20+ | 20+ | 20+ |
-| Tests | 2 files | 100+ | 100+ | 100+ | 100+ |
+| Tests | 136 tests | 100+ | 100+ | 100+ | 100+ |
 | Contributors | 1 | 50+ | 30+ | 100+ | 20+ |
 | GitHub stars | 0 | ~15K+ | ~12K+ | ~35K+ | ~8K+ |

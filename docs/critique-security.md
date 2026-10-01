@@ -13,7 +13,7 @@ AgentHarness is a self-hosted AI agent framework that grants LLM-driven access t
 
 ---
 
-## 1. Command Injection via Terminal Tool (CRITICAL)
+## 1. Command Injection via Terminal Tool (CRITICAL) — ✅ FIXED
 
 ### Location
 - `ah/tools/terminal.py:22-44`
@@ -96,7 +96,7 @@ def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
 
 ---
 
-## 2. Path Traversal in File Tools (CRITICAL)
+## 2. Path Traversal in File Tools (CRITICAL) — ✅ FIXED
 
 ### Location
 - `ah/tools/file.py:23-37` (read_file)
@@ -378,7 +378,7 @@ def safe_unpackb(data: bytes, max_size: int = 1024 * 1024) -> dict:
 
 ---
 
-## 6. No Input Validation (HIGH)
+## 6. No Input Validation (HIGH) — ✅ FIXED
 
 ### Location
 - All tool functions in `ah/tools/terminal.py`, `ah/tools/file.py`, `ah/tools/builtins.py`
@@ -451,7 +451,7 @@ def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
 
 ---
 
-## 7. No Rate Limiting (MEDIUM)
+## 7. No Rate Limiting (MEDIUM) — ✅ FIXED
 
 ### Location
 - `ah/cli.py` — all commands
@@ -529,7 +529,7 @@ async def complete(self, messages, ...):
 
 ---
 
-## 8. Server-Side Request Forgery (SSRF) in Web Tools (HIGH)
+## 8. Server-Side Request Forgery (SSRF) in Web Tools (HIGH) — ✅ FIXED
 
 ### Location
 - `ah/tools/builtins.py:160-172` (web_extract)
@@ -626,7 +626,7 @@ def web_extract(url: str) -> str:
 
 ---
 
-## 9. No Audit Logging (MEDIUM)
+## 9. No Audit Logging (MEDIUM) — ✅ FIXED
 
 ### Location
 - Entire codebase
@@ -871,20 +871,20 @@ def assemble(self, system_prompt: str, goal: str | None, recent_chunks: list[dic
 
 ## Summary of Findings
 
-| # | Vulnerability | Severity | CVSS |
-|---|--------------|----------|------|
-| 1 | Command Injection (shell=True) | CRITICAL | 10.0 |
-| 2 | Path Traversal (file tools) | CRITICAL | 9.8 |
-| 3 | No Authentication | CRITICAL | 9.1 |
-| 4 | Hardcoded Secrets | HIGH | 8.6 |
-| 5 | Unsafe Deserialization | HIGH | 8.1 |
-| 6 | No Input Validation | HIGH | 7.5 |
-| 7 | No Rate Limiting | MEDIUM | 5.3 |
-| 8 | SSRF (web tools) | HIGH | 8.2 |
-| 9 | No Audit Logging | MEDIUM | 4.3 |
-| 10 | Database Security | MEDIUM | 6.5 |
-| 11 | No Sandboxing | CRITICAL | 9.6 |
-| 12 | LLM Prompt Injection | HIGH | 8.8 |
+| # | Vulnerability | Severity | Status |
+|---|--------------|----------|--------|
+| 1 | Command Injection (shell=True) | CRITICAL | ✅ FIXED |
+| 2 | Path Traversal (file tools) | CRITICAL | ✅ FIXED |
+| 3 | No Authentication | CRITICAL | ⚠️ STILL VALID |
+| 4 | Hardcoded Secrets | HIGH | ⚠️ STILL VALID |
+| 5 | Unsafe Deserialization | HIGH | ⚠️ STILL VALID |
+| 6 | No Input Validation | HIGH | ✅ FIXED |
+| 7 | No Rate Limiting | MEDIUM | ✅ FIXED |
+| 8 | SSRF (web tools) | HIGH | ✅ FIXED |
+| 9 | No Audit Logging | MEDIUM | ✅ FIXED |
+| 10 | Database Security | MEDIUM | ⚠️ STILL VALID |
+| 11 | No Sandboxing | CRITICAL | ⚠️ STILL VALID |
+| 12 | LLM Prompt Injection | HIGH | ⚠️ STILL VALID |
 
 ---
 
@@ -915,6 +915,6 @@ def assemble(self, system_prompt: str, goal: str | None, recent_chunks: list[dic
 
 ## Conclusion
 
-AgentHarness, in its current state, is **not suitable for production use**. The combination of command injection, path traversal, lack of authentication, and no sandboxing creates a system that can be easily compromised by anyone with access to the machine or by a malicious LLM prompt. The vulnerabilities identified in this audit could lead to **complete system compromise**, **data breaches**, and **persistent backdoors**.
+AgentHarness has addressed **6 of 12** identified vulnerabilities, including all command injection, path traversal, SSRF, input validation, rate limiting, and audit logging issues. The remaining vulnerabilities (no authentication, hardcoded secrets, unsafe deserialization, database security, no sandboxing, LLM prompt injection) are still present but are acceptable for a v0.1.0 local development tool.
 
-**Recommendation:** Do not deploy this system in any environment where security is a concern until all critical and high-severity vulnerabilities have been addressed.
+**Recommendation:** Do not deploy this system in any environment where security is a concern until the remaining critical and high-severity vulnerabilities have been addressed. For local development with trusted users, the current security posture is acceptable.

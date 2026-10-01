@@ -13,14 +13,12 @@ CLI (Typer) → ReAct Agent → LLM Provider (OpenRouter/Ollama)
                   ↓
          PostgreSQL (asyncpg)
          ├── sessions
-         ├── context_chunks (MessagePack + pgvector)
-         ├── skills / memories / agent_messages
-         └── subagent_* tables
+         └── context_chunks (MessagePack + pgvector)
 ```
 
 **Why this is good:**
 
-- **The `ah/core/` package is the brain.** `agent.py`, `context.py`, `provider.py`, and `session.py` are the four pillars. Each has a single, well-defined responsibility. The agent loop doesn't know about SQL. The provider doesn't know about sessions. The context manager doesn't know about the agent. This is textbook separation of concerns.
+- **The `ah/core/` package is the brain.** `agent.py`, `assembler.py`, `context.py`, `provider.py`, `session.py`, `models.py`, and `container.py` are the pillars. Each has a single, well-defined responsibility. The agent loop doesn't know about SQL. The provider doesn't know about sessions. The context manager doesn't know about the agent. This is textbook separation of concerns.
 
 - **The `ah/tools/` package is the hands.** Tools are isolated behind a registry pattern with a clean decorator API. The agent loop calls `registry.execute(name, **kwargs)` — it never imports a tool directly. This is dependency inversion done right.
 
@@ -77,12 +75,12 @@ for iteration in range(self.max_iterations):
 
 `ah/core/context.py` implements a **prompt assembly strategy** that is more sophisticated than most open-source agent frameworks:
 
-- **Token budget enforcement.** `PromptAssembler` tracks token usage and stops adding context when the budget is exhausted. The `_estimate_tokens()` method uses a simple `len(text) // 4` heuristic — not perfect, but fast and good enough for budget enforcement.
+- **Token budget enforcement.** `PromptAssembler` tracks token usage and stops adding context when the budget is exhausted. The `TokenCounter` class uses `tiktoken` with `cl100k_base` encoding for accurate token counts, with a `len//4` fallback if tiktoken is unavailable.
 - **Chunk compression.** The `_compress_chunk()` method converts structured context (tool calls, results, memories) into compact text representations. A tool call becomes `[tool_call] read_file(path=/tmp/test)` instead of a full JSON dump.
 - **Embedding search.** The `search_by_embedding()` method uses pgvector's cosine distance operator (`<=>`) with an HNSW index. This is the same vector search strategy used by production RAG systems.
 - **LRU tracking.** The `accessed_at` column and `mark_accessed()` method support future LRU eviction — the schema is designed for it even if eviction isn't implemented yet.
 
-**Defense against criticism:** "Why not use a proper tokenizer?" — Because adding `tiktoken` as a dependency for a rough budget estimate is over-engineering. The `len(text) // 4` heuristic is within ~10% of actual token counts for English text, which is sufficient for budget enforcement. The code is honest about this: the method is called `_estimate_tokens`, not `_count_tokens`.
+**Defense against criticism:** "Why not use a proper tokenizer?" — tiktoken is now used with `cl100k_base` encoding for accurate token counts. The `TokenCounter` class in `assembler.py` provides exact counts with a `len//4` fallback if tiktoken is unavailable.
 
 ---
 
@@ -110,11 +108,11 @@ def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
 
 `ah/db/schema.sql` is a **well-designed PostgreSQL schema** with:
 
-- **Proper constraints.** `CHECK` constraints on `status`, `chunk_type`, `category`, `importance`, etc. This enforces data integrity at the database level.
-- **Foreign keys with cascade.** `ON DELETE CASCADE` for context chunks, `ON DELETE SET NULL` for agent messages. This prevents orphaned records.
+- **Proper constraints.** `CHECK` constraints on `status`, `chunk_type`. This enforces data integrity at the database level.
+- **Foreign keys with cascade.** `ON DELETE CASCADE` for context chunks. This prevents orphaned records.
 - **HNSW indexes for vector search.** `USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)` — these are production-grade pgvector index parameters.
 - **Composite indexes.** `idx_context_chunks_session ON context_chunks(session_id, created_at DESC)` covers the most common query pattern.
-- **Partial indexes.** `idx_agent_messages_unread ON agent_messages(to_agent, read) WHERE read = false` — this is a sophisticated PostgreSQL feature that keeps the index small.
+- **Partial indexes.** `idx_sessions_active_last_activity ON sessions(status, last_activity DESC) WHERE status = 'active'` — this is a sophisticated PostgreSQL feature that keeps the index small.
 
 **Defense against criticism:** "Why not use Alembic for migrations?" — The README lists Alembic as a dependency and the `alembic-migrations` skill exists. The current `schema.sql` is a baseline; Alembic would be added when the schema evolves beyond v1. For a v0.1.0 project, a single schema file is the right starting point.
 
@@ -122,7 +120,7 @@ def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
 
 ## 7. Testing: Comprehensive and Well-Organized
 
-The test suite (`tests/test_comprehensive.py`, 1570 lines) is **genuinely comprehensive**:
+The test suite (`tests/test_comprehensive.py`, 136 tests) is **genuinely comprehensive**:
 
 - **Unit tests** for every major class: `PromptAssembler`, `ToolRegistry`, `SkillParser`, `SkillRegistry`, dataclasses.
 - **Edge case tests** for empty strings, unicode, special characters, very large inputs.
@@ -139,7 +137,7 @@ The test suite (`tests/test_comprehensive.py`, 1570 lines) is **genuinely compre
 - **Mocking is done at the right boundary.** Database tests mock `db.fetchrow`, not the entire `Database` class. Provider tests mock `provider.client.post`, not the entire HTTP stack. This means tests verify business logic, not mock behavior.
 - **The test suite is self-documenting.** Reading `test_agent_run_with_tool_calls` tells you exactly how the agent loop handles tool calls.
 
-**Defense against criticism:** "Why only 1570 lines of tests for 3619 lines of code?" — The test-to-code ratio is ~43%, which is reasonable for a project at this stage. More importantly, the tests cover the critical paths: the agent loop, tool execution, context assembly, and provider interaction. The schema and CLI are thinner and have proportionally fewer tests.
+**Defense against criticism:** "Why only 136 tests?" — The test-to-code ratio is reasonable for a project at this stage. More importantly, the tests cover the critical paths: the agent loop, tool execution, context assembly, and provider interaction. The schema and CLI are thinner and have proportionally fewer tests.
 
 ---
 
@@ -169,7 +167,7 @@ The test suite (`tests/test_comprehensive.py`, 1570 lines) is **genuinely compre
 
 - **Zero-code extensibility.** Adding a new skill is creating a directory and writing a SKILL.md file. No Python code required.
 - **Convention over configuration.** The SKILL.md format is borrowed from the broader agent ecosystem, making it familiar to users of Claude Code, Cursor, etc.
-- **The parser is dependency-free.** `SkillParser._parse_simple_yaml()` handles basic YAML without requiring PyYAML. This keeps the dependency footprint small.
+- **The parser uses PyYAML.** `SkillParser` uses `yaml.safe_load()` for robust YAML frontmatter parsing, with graceful fallback on parse errors.
 
 ---
 
@@ -191,8 +189,6 @@ The test suite (`tests/test_comprehensive.py`, 1570 lines) is **genuinely compre
 
 | Aspect | Why It's Superficial |
 |--------|---------------------|
-| **`_estimate_tokens()` heuristic** | `len(text) // 4` is a rough estimate. It's honest about being an estimate, but it's not a real tokenizer. Acceptable for budget enforcement, not for billing. |
-| **`_parse_simple_yaml()`** | Handles basic YAML but would fail on nested structures, quoted strings, or multi-line values. Sufficient for SKILL.md frontmatter, not a general YAML parser. |
 | **`web_search` fallback** | The DuckDuckGo HTML scraping uses a simple regex that could break if DuckDuckGo changes their HTML. This is fragile but acceptable as a fallback. |
 | **`DEFAULT_DSN` hardcoded** | The default DSN `postgresql://postgres:***@localhost:5432/agentharness` has a placeholder password. This is fine for development but would need to be overridden in production. |
 
@@ -204,10 +200,9 @@ The advocate role requires acknowledging weaknesses:
 
 1. **No CI/CD pipeline.** There's no GitHub Actions workflow or similar. Tests are run manually with `pytest`.
 2. **No type checking in CI.** The code uses type hints (`from __future__ import annotations`, `str | None`, etc.) but there's no `mypy` or `pyright` configuration.
-3. **No structured logging.** The code uses `rich.console.Console` for output but doesn't use Python's `logging` module. This makes it harder to debug production issues.
-4. **No rate limiting or retry logic.** The LLM provider calls don't have exponential backoff or rate limiting. A 429 from OpenRouter would crash the agent loop.
-5. **No streaming.** The agent loop waits for the full LLM response before processing. Streaming would improve perceived latency.
-6. **The `memory/` and `rag/` packages are empty.** These are listed in the README as Phase 4 and Phase 5 items, but the directories exist with only `__init__.py` files.
+3. **No metrics or tracing.** Audit logging is present, but there are no Prometheus metrics or OpenTelemetry tracing.
+4. **No interactive REPL.** The CLI is one-shot commands only. An interactive REPL with slash commands is not yet implemented.
+5. **The `memory/` and `rag/` packages are empty.** These are listed in the README as Phase 4 and Phase 5 items, but the directories exist with only `__init__.py` files.
 
 These are all **acceptable gaps for a v0.1.0 project**. The foundation is solid, and these items are explicitly listed in the roadmap.
 
@@ -230,6 +225,6 @@ This is not a toy project. It is a **solid foundation for a production AI agent 
 ---
 
 *Advocate report generated: 2026-09-30*
+*Updated: 2026-10-01*
 *Codebase version: 0.1.0*
-*Total Python LOC: 3,619 (excluding tests)*
-*Test LOC: 1,570*
+*Tests: 136 passing*
