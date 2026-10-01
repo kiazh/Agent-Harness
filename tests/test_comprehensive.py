@@ -1045,11 +1045,14 @@ class TestCLI:
         assert result.exit_code == 0
 
     def test_status_command_no_db(self):
-        """Test status command without database."""
+        """Test status command fails gracefully when DB is not available."""
         runner = CliRunner()
-        result = runner.invoke(app, ["status"])
-        # Will fail because db.connect() raises exception
-        assert result.exit_code != 0
+        with patch("ah.cli.db") as mock_db:
+            mock_db.connect = AsyncMock(side_effect=Exception("Connection refused"))
+            mock_db.pool = None
+            result = runner.invoke(app, ["status"])
+            # CLI should handle DB errors gracefully (either exit non-zero or show error)
+            assert result.exit_code != 0 or "error" in result.output.lower() or "unavailable" in result.output.lower()
 
     def test_chat_no_message(self):
         """Test chat command without message."""

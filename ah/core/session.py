@@ -176,8 +176,9 @@ class SessionManager:
 
     def _row_to_session(self, row: asyncpg.Record) -> Session:
         state = {}
-        if row["state_msgpack"]:
-            state = msgpack.unpackb(row["state_msgpack"], raw=False)
+        state_msgpack = row.get("state_msgpack")
+        if state_msgpack:
+            state = msgpack.unpackb(state_msgpack, raw=False)
         return Session(
             id=row["id"],
             title=row["title"],
