@@ -1,5 +1,4 @@
 """AgentHarness CLI — `ah` command."""
-
 from __future__ import annotations
 
 import asyncio
@@ -21,6 +20,7 @@ from ah.core.agent import ReActAgent
 from ah.core.context import context_manager
 from ah.core.provider import get_provider
 from ah.core.session import session_manager
+from ah.core.config import config
 from ah.db.connection import db
 from ah.tools import builtins  # noqa: F401 — registers built-in tools
 
@@ -45,8 +45,14 @@ def chat(
     model: str = typer.Option(None, "--model", "-m", help="Model to use (e.g., anthropic/claude-3.5-sonnet)"),
     provider: str = typer.Option("openrouter", "--provider", "-p", help="LLM provider (openrouter, ollama)"),
     verbose: bool = typer.Option(True, "--verbose/--quiet", "-v/-q", help="Show tool calls and reasoning"),
+    interactive: bool = typer.Option(False, "--interactive", "-i", help="Launch interactive REPL mode"),
 ):
     """Chat with the agent. Creates a new session or continues an existing one."""
+
+    if interactive:
+        from ah.cli.interactive import run_repl
+        _run(run_repl(model=model, provider=provider, verbose=verbose, session_id=session_id))
+        return
 
     async def _chat():
         await db.connect()
@@ -126,6 +132,18 @@ def chat(
             await db.close()
 
     _run(_chat())
+
+
+@app.command()
+def repl(
+    model: str = typer.Option(None, "--model", "-m", help="Model to use"),
+    provider: str = typer.Option(None, "--provider", "-p", help="LLM provider"),
+    verbose: bool = typer.Option(None, "--verbose/--quiet", "-v/-q", help="Show tool calls and reasoning"),
+    session_id: Optional[str] = typer.Option(None, "--session", "-s", help="Resume specific session"),
+):
+    """Launch interactive REPL mode."""
+    from ah.cli.interactive import run_repl
+    _run(run_repl(model=model, provider=provider, verbose=verbose, session_id=session_id))
 
 
 @app.command()
@@ -300,7 +318,7 @@ def doctor():
     console.print(f"  Python: {sys.version.split()[0]} {'✓' if sys.version_info >= (3, 11) else '✗ (need 3.11+)'}")
 
     # Dependencies
-    deps = ["typer", "rich", "asyncpg", "httpx", "msgpack"]
+    deps = ["typer", "rich", "asyncpg", "httpx", "msgpack", "prompt_toolkit"]
     for dep in deps:
         try:
             __import__(dep)
@@ -371,6 +389,132 @@ def init(
 def version():
     """Show AgentHarness version."""
     console.print(f"AgentHarness v{__version__}")
+
+
+# ─── Config commands ─────────────────────────────────────────────────────────
+
+@app.command(name="config")
+def config_show():
+    """Show current configuration."""
+    table = Table(title="Configuration")
+    table.add_column("Key", style="cyan")
+    table.add_column("Value", style="white")
+
+    config_dict = config.to_dict()
+    for key, value in config_dict.items():
+        table.add_row(key, str(value))
+
+    console.print(table)
+
+
+@app.command(name="config-set")
+def config_set(
+    key: str = typer.Argument(..., help="Config key to set"),
+    value: str = typer.Argument(..., help="New value"),
+    persist: bool = typer.Option(False, "--persist", "-p", help="Save to config file"),
+):
+    """Set a configuration value."""
+    if key not in config.to_dict():
+        console.print(f"[red]Unknown config key: {key}[/red]")
+        console.print(f"[dim]Available keys: {', '.join(config.to_dict().keys())}[/dim]")
+        raise typer.Exit(1)
+
+    config.set(key, value, persist=persist)
+    console.print(f"[green]Set {key} = {value}[/green]")
+    if persist:
+        console.print("[dim]Config saved to file.[/dim]")
+
+
+# ─── Memory commands ────────────────────────────────────────────────────────
+
+@app.command(name="memory-list")
+def memory_list(
+    limit: int = typer.Option(20, "--limit", "-n", help="Number of memories to show"),
+    category: Optional[str] = typer.Option(None, "--category", "-c", help="Filter by category"),
+):
+    """List all memories."""
+
+    async def _memory_list():
+        await db.connect()
+        try:
+            from ah.memory.store import memory_store
+            memories = await memory_store.search(category=category, limit=limit)
+
+            if not memories:
+                console.print("[yellow]No memories found.[/yellow]")
+                return
+
+            table = Table(title=f"Memories ({len(memories)})")
+            table.add_column("ID", style="cyan", no_wrap=True)
+            table.add_column("Category", style="green")
+            table.add_column("Importance", style="yellow")
+            table.add_column("Content", style="white")
+
+            for m in memories:
+                table.add_row(
+                    str(m.id)[:8],
+                    m.category,
+                    f"{m.importance:.2f}",
+                    m.content[:60],
+                )
+
+            console.print(table)
+        finally:
+            await db.close()
+
+    _run(_memory_list())
+
+
+@app.command(name="memory-search")
+def memory_search(
+    query: str = typer.Argument(..., help="Search query"),
+    limit: int = typer.Option(5, "--limit", "-n", help="Number of results"),
+):
+    """Search memories by relevance."""
+
+    async def _memory_search():
+        await db.connect()
+        try:
+            from ah.memory.retriever import MemoryRetriever
+            retriever = MemoryRetriever(top_k=limit)
+            results = await retriever.retrieve(query=query)
+
+            if not results:
+                console.print(f"[yellow]No memories found for '{query}'[/yellow]")
+                return
+
+            console.print(f"[bold]Search results for '{query}'[/bold]")
+            for i, rm in enumerate(results, 1):
+                m = rm.memory
+                console.print(f"\n  [{i}] [cyan]({m.category}, importance={m.importance:.2f}, score={rm.score:.3f})[/cyan]")
+                console.print(f"      {m.content[:200]}")
+            console.print()
+        finally:
+            await db.close()
+
+    _run(_memory_search())
+
+
+@app.command(name="memory-forget")
+def memory_forget(
+    memory_id: str = typer.Argument(..., help="Memory ID to delete"),
+):
+    """Delete a memory by ID."""
+
+    async def _memory_forget():
+        await db.connect()
+        try:
+            from ah.memory.store import memory_store
+            mid = uuid.UUID(memory_id)
+            deleted = await memory_store.delete(mid)
+            if deleted:
+                console.print(f"[green]Memory {memory_id} deleted.[/green]")
+            else:
+                console.print(f"[yellow]Memory {memory_id} not found.[/yellow]")
+        finally:
+            await db.close()
+
+    _run(_memory_forget())
 
 
 if __name__ == "__main__":
