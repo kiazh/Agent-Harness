@@ -24,13 +24,62 @@ from ah.core.session import session_manager
 from ah.core.config import config
 from ah.db.connection import db
 from ah.tools import builtins  # noqa: F401 — registers built-in tools
+from ah.cli.visual import VisualContext, get_default_visual, ThemeName
+from ah.cli.animations import (
+    Spinner,
+    SquareLoader,
+    ThinkingAnimation,
+    StreamingAnimation,
+    ToolExecutionAnimation,
+    ErrorAnimation,
+    SuccessAnimation,
+    FadeTransition,
+    AnimationRunner,
+    get_spinner,
+    get_thinking_animation,
+    get_streaming_animation,
+    get_tool_animation,
+    get_error_animation,
+    get_success_animation,
+    get_fade_transition,
+    get_animation_runner,
+    should_animate,
+)
 
 app = typer.Typer(
     name="ah",
     help="AgentHarness — self-hosted multi-agent AI orchestration framework",
     no_args_is_help=True,
 )
-console = Console()
+viz = get_default_visual()
+console = viz.console
+
+
+def _print_banner():
+    """Print the ASCII art banner on startup."""
+    from rich.panel import Panel
+    from rich.text import Text
+    from rich import box
+
+    banner_text = Text()
+    banner_text.append("  █████╗  ██████╗ ███████╗███╗   ██╗████████╗\n", style="bold #00D4FF")
+    banner_text.append(" ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝\n", style="bold #00D4FF")
+    banner_text.append(" ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║\n", style="bold #00D4FF")
+    banner_text.append(" ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║\n", style="bold #00D4FF")
+    banner_text.append(" ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║\n", style="bold #00D4FF")
+    banner_text.append(" ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝\n", style="bold #00D4FF")
+    banner_text.append("\n")
+    banner_text.append("  ██╗  ██╗ █████╗ ██████╗ ███╗   ██╗███████╗███████╗███████╗\n", style="bold #7C3AED")
+    banner_text.append("  ██║  ██║██╔══██╗██╔══██╗████╗  ██║██╔════╝██╔════╝██╔════╝\n", style="bold #7C3AED")
+    banner_text.append("  ███████║███████║██████╔╝██╔██╗ ██║█████╗  ███████╗███████╗\n", style="bold #7C3AED")
+    banner_text.append("  ██╔══██║██╔══██║██╔══██╗██║╚██╗██║██╔══╝  ╚════██║╚════██║\n", style="bold #7C3AED")
+    banner_text.append("  ██║  ██║██║  ██║██║  ██║██║ ╚████║███████╗███████║███████║\n", style="bold #7C3AED")
+    banner_text.append("  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝╚══════╝\n", style="bold #7C3AED")
+    banner_text.append("\n")
+    banner_text.append("  Self-hosted Multi-Agent AI Orchestration\n", style="dim")
+    banner_text.append(f"  v{__version__}", style="dim")
+
+    console.print(banner_text)
 
 
 def _run(coro):
@@ -68,14 +117,14 @@ def chat(
             if continue_:
                 session = await session_manager.get_last_active()
                 if not session:
-                    console.print("[red]No active session to continue.[/red]")
+                    viz.error("No active session to continue.", title="Error", suggestion="Use `ah sessions` to list available sessions.")
                     raise typer.Exit(1)
                 console.print(f"[dim]Continuing session: {session.id}[/dim]")
             elif session_id:
                 sid = uuid.UUID(session_id)
                 session = await session_manager.get(sid)
                 if not session:
-                    console.print(f"[red]Session {session_id} not found[/red]")
+                    viz.error(f"Session {session_id} not found", title="Error", suggestion="Use `ah sessions` to list available sessions.")
                     raise typer.Exit(1)
                 console.print(f"[dim]Resuming session: {session.id}[/dim]")
             else:
@@ -89,7 +138,7 @@ def chat(
             try:
                 llm = get_provider(provider=provider, model=model)
             except ValueError as e:
-                console.print(f"[red]Provider error:[/red] {e}")
+                viz.error(f"Provider error: {e}", title="Error", suggestion="Check your provider configuration with `ah config`.")
                 raise typer.Exit(1)
 
             # Create agent and run
@@ -98,34 +147,55 @@ def chat(
                 console.print(f"[dim]Model: {llm.model} ({provider})[/dim]")
                 console.print()
 
-            # Stream response with Rich Live display
+            # Stream response with animations
             response_text = ""
             tool_calls_count = 0
             tokens_used = 0
 
-            with Live(console=console, refresh_per_second=10, transient=False) as live:
-                async for event in agent.run_stream(session.id, message, verbose=verbose):
-                    if event.type == "text":
-                        response_text += event.content
-                        live.update(Text(response_text, style="green"))
-                    elif event.type == "tool_call":
-                        tool_calls_count += 1
-                        if verbose:
-                            live.update(Text(response_text + f"\n\n[yellow]→ {event.tool_name}({event.tool_args})[/yellow]", style="green"))
-                    elif event.type == "tool_result":
-                        if verbose:
-                            preview = str(event.tool_result)[:100].replace("\n", " ")
-                            live.update(Text(response_text + f"\n\n[green]← {preview}[/green]", style="green"))
-                    elif event.type == "token_usage":
-                        tokens_used = event.tokens_used
-                    elif event.type == "done":
-                        response_text = event.response.content
-                        tool_calls_count = len(event.response.tool_calls)
-                        tokens_used = event.response.tokens_used
-                        live.update(Text(response_text, style="green"))
+            # Create animation runner for this turn
+            runner = get_animation_runner(console)
+
+            # Start thinking animation
+            thinking = get_thinking_animation(console, spinner_type="dots")
+            runner.add("thinking", thinking)
+
+            # Start streaming display
+            stream = get_streaming_animation(console, style="green")
+            runner.add_streaming("stream", stream)
+
+            # Start the animations
+            runner.start_all()
+
+            async for event in agent.run_stream(session.id, message, verbose=verbose):
+                if event.type == "text":
+                    response_text += event.content
+                    stream.add_token(event.content)
+                elif event.type == "tool_call":
+                    tool_calls_count += 1
+                    if verbose:
+                        tool_anim = get_tool_animation(console, event.tool_name)
+                        tool_anim.start()
+                        runner.add(f"tool_{tool_calls_count}", tool_anim)
+                elif event.type == "tool_result":
+                    if verbose:
+                        tool_key = f"tool_{tool_calls_count}"
+                        if tool_key in runner._animations:
+                            runner.complete(tool_key)
+                        preview = str(event.tool_result)[:100].replace("\n", " ")
+                        stream.add_token(f"\n  ← {preview}\n")
+                elif event.type == "token_usage":
+                    tokens_used = event.tokens_used
+                elif event.type == "done":
+                    response_text = event.response.content
+                    tool_calls_count = len(event.response.tool_calls)
+                    tokens_used = event.response.tokens_used
+                    stream.set_text(response_text)
+
+            # Stop all animations
+            runner.stop_all()
 
             console.print()
-            console.print(Panel(response_text, title="Agent", border_style="green"))
+            viz.print_response_panel(response_text, title="Agent")
             console.print()
             if verbose:
                 console.print(f"[dim]Iterations: {event.response.iterations} | Tool calls: {tool_calls_count} | Tokens: {tokens_used}[/dim]")
@@ -154,38 +224,44 @@ def status():
     """Show AgentHarness status and recent sessions."""
 
     async def _status():
+        # Animated spinner while checking status
+        spinner = get_spinner(console, label="Checking status...", spinner_type="dots")
+        spinner.start()
+
         await db.connect()
         try:
             # Check DB
             try:
                 version = await db.fetchval("SELECT version()")
-                console.print(f"  PostgreSQL: [green]connected[/green] ({version.split(',')[0]})")
+                viz.print_status_line("PostgreSQL", f"connected ({version.split(',')[0]})", "success")
             except Exception as e:
-                console.print(f"  PostgreSQL: [red]connection failed[/red] ({e})")
+                viz.print_status_line("PostgreSQL", f"connection failed ({e})", "error")
+                spinner.stop()
                 return
 
             # Count sessions
             count = await db.fetchval("SELECT COUNT(*) FROM sessions")
-            console.print(f"  Sessions: {count}")
+            viz.print_status_line("Sessions", str(count), "info")
 
             # Count context chunks
             chunks = await db.fetchval("SELECT COUNT(*) FROM context_chunks")
-            console.print(f"  Context chunks: {chunks}")
+            viz.print_status_line("Context chunks", str(chunks), "info")
 
             # Check tools
             from ah.tools.base import registry
             tools = registry.list_tools()
-            console.print(f"  Tools: {len(tools)} registered")
+            viz.print_status_line("Tools", f"{len(tools)} registered", "info")
             for t in tools:
                 console.print(f"    - {t}")
 
             # Check config
             from ah.core.config import config
             if config.get("openrouter_api_key"):
-                console.print("  OpenRouter API key: [green]set[/green]")
+                viz.print_status_line("OpenRouter API key", "set", "success")
             else:
-                console.print("  OpenRouter API key: [yellow]not set[/yellow]")
+                viz.print_status_line("OpenRouter API key", "not set", "warning")
 
+            spinner.stop()
             console.print()
             console.print("[dim]Run `ah chat \"your message\"` to start.[/dim]")
 
@@ -211,25 +287,7 @@ def list_sessions(
                 console.print("[yellow]No sessions found.[/yellow]")
                 return
 
-            table = Table(title="Sessions")
-            table.add_column("ID", style="cyan", no_wrap=True)
-            table.add_column("Title", style="white")
-            table.add_column("Status", style="green")
-            table.add_column("Agent", style="dim")
-            table.add_column("Goal", style="dim")
-            table.add_column("Last Activity", style="dim")
-
-            for s in sessions:
-                table.add_row(
-                    str(s.id)[:8],
-                    s.title or "(untitled)",
-                    s.status,
-                    s.agent_id,
-                    (s.goal or "")[:40],
-                    s.last_activity.strftime("%Y-%m-%d %H:%M"),
-                )
-
-            console.print(table)
+            viz.print_sessions_table(sessions)
         finally:
             await db.close()
 
@@ -252,25 +310,7 @@ def sessions_search(
                 console.print(f"[yellow]No sessions found for '{query}'[/yellow]")
                 return
 
-            table = Table(title=f"Search results for '{query}'")
-            table.add_column("ID", style="cyan", no_wrap=True)
-            table.add_column("Title", style="white")
-            table.add_column("Status", style="green")
-            table.add_column("Agent", style="dim")
-            table.add_column("Goal", style="dim")
-            table.add_column("Last Activity", style="dim")
-
-            for s in sessions:
-                table.add_row(
-                    str(s.id)[:8],
-                    s.title or "(untitled)",
-                    s.status,
-                    s.agent_id,
-                    (s.goal or "")[:40],
-                    s.last_activity.strftime("%Y-%m-%d %H:%M"),
-                )
-
-            console.print(table)
+            viz.print_sessions_table(sessions)
         finally:
             await db.close()
 
@@ -442,21 +482,7 @@ def context(
                 console.print("[yellow]No context chunks found.[/yellow]")
                 return
 
-            table = Table(title=f"Context Chunks (session {str(sid)[:8]})")
-            table.add_column("Type", style="cyan")
-            table.add_column("Agent", style="green")
-            table.add_column("Tokens", style="yellow")
-            table.add_column("Created", style="dim")
-
-            for c in chunks:
-                table.add_row(
-                    c.chunk_type,
-                    c.agent_id,
-                    str(c.token_count),
-                    c.created_at.strftime("%H:%M:%S"),
-                )
-
-            console.print(table)
+            viz.print_context_table(chunks, sid)
 
             total_tokens = await context_manager.get_token_usage(sid)
             console.print(f"\n[dim]Total tokens: {total_tokens}[/dim]")
@@ -500,6 +526,10 @@ def compress(
             console.print(f"[dim]Session: {session.id}[/dim]")
             console.print(f"[dim]Current context: {len(chunks)} chunks, {total_tokens} tokens[/dim]")
 
+            # Animated loader during compression
+            loader = SquareLoader(console, "Compressing context...", width=30)
+            loader.start()
+
             comp_config = CompressionConfig(
                 enabled=config.get("compression_enabled"),
                 threshold=config.get("compression_threshold"),
@@ -524,6 +554,8 @@ def compress(
                 agent_id=session.agent_id,
                 llm_provider=llm_provider,
             )
+
+            loader.complete()
 
             if result.original_count == 0:
                 console.print("[yellow]Nothing to compress (not enough chunks).[/yellow]")
@@ -563,17 +595,7 @@ def skills_list():
     if not all_skills:
         console.print("[yellow]No skills found.[/yellow]")
         return
-    table = Table(title=f"Skills ({len(all_skills)} loaded)")
-    table.add_column("Name", style="cyan")
-    table.add_column("Description", style="white")
-    table.add_column("Triggers", style="dim")
-    table.add_column("Uses", style="yellow")
-    table.add_column("Views", style="green")
-    table.add_column("Last Activity", style="dim")
-    for s in all_skills:
-        last_act = s.last_activity_at.strftime("%Y-%m-%d %H:%M") if s.last_activity_at else "never"
-        table.add_row(s.name, s.description[:60], ", ".join(s.triggers[:3]), str(s.use_count), str(s.view_count), last_act)
-    console.print(table)
+    viz.print_skills_table(all_skills)
 
 
 @app.command(name="learn")
@@ -852,22 +874,31 @@ def doctor():
     import sys
     console.print(f"  Python: {sys.version.split()[0]} {'✓' if sys.version_info >= (3, 11) else '✗ (need 3.11+)'}")
 
-    # Dependencies
+    # Dependencies with spinner
     deps = ["typer", "rich", "asyncpg", "httpx", "msgpack", "prompt_toolkit"]
+    spinner = get_spinner(console, label="Checking dependencies...", spinner_type="dots")
+    spinner.start()
     for dep in deps:
         try:
             __import__(dep)
             console.print(f"  {dep}: [green]ok[/green]")
         except ImportError:
             console.print(f"  {dep}: [red]missing[/red]")
+    spinner.stop()
 
-    # Database
+    # Database with loader
+    loader = SquareLoader(console, "Connecting to database...", width=25)
+    loader.start()
+
     async def _check_db():
         try:
             await db.connect()
+            loader.set_progress(0.5)
             version = await db.fetchval("SELECT version()")
+            loader.complete()
             console.print(f"  PostgreSQL: [green]connected[/green] ({version.split(',')[0]})")
         except Exception as e:
+            loader.error()
             console.print(f"  PostgreSQL: [red]failed[/red] ({e})")
         finally:
             await db.close()
@@ -903,11 +934,18 @@ def init(
         console.print("[bold]Initializing AgentHarness...[/bold]")
         console.print(f"  Database: {db.dsn.split('@')[-1]}")
 
+        # Animated loader during initialization
+        loader = SquareLoader(console, "Creating schema...", width=30)
+        loader.start()
+
         try:
             await db.connect()
+            loader.set_progress(0.5)
             await db.initialize_schema()
+            loader.complete()
             console.print("  Schema: [green]created[/green]")
         except Exception as e:
+            loader.error()
             console.print(f"  Schema: [red]failed[/red] ({e})")
             raise typer.Exit(1)
         finally:
@@ -923,7 +961,7 @@ def init(
 @app.command()
 def version():
     """Show AgentHarness version."""
-    console.print(f"AgentHarness v{__version__}")
+    _print_banner()
 
 
 # ─── Config commands ─────────────────────────────────────────────────────────
@@ -931,15 +969,7 @@ def version():
 @app.command(name="config")
 def config_show():
     """Show current configuration."""
-    table = Table(title="Configuration")
-    table.add_column("Key", style="cyan")
-    table.add_column("Value", style="white")
-
-    config_dict = config.to_dict()
-    for key, value in config_dict.items():
-        table.add_row(key, str(value))
-
-    console.print(table)
+    viz.print_config_table(config.to_dict())
 
 
 @app.command(name="config-set")
@@ -979,21 +1009,7 @@ def memory_list(
                 console.print("[yellow]No memories found.[/yellow]")
                 return
 
-            table = Table(title=f"Memories ({len(memories)})")
-            table.add_column("ID", style="cyan", no_wrap=True)
-            table.add_column("Category", style="green")
-            table.add_column("Importance", style="yellow")
-            table.add_column("Content", style="white")
-
-            for m in memories:
-                table.add_row(
-                    str(m.id)[:8],
-                    m.category,
-                    f"{m.importance:.2f}",
-                    m.content[:60],
-                )
-
-            console.print(table)
+            viz.print_memory_table(memories)
         finally:
             await db.close()
 
