@@ -85,3 +85,47 @@ CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
 -- Full-text search index for BM25 hybrid search
 CREATE INDEX IF NOT EXISTS idx_context_chunks_fts ON context_chunks
     USING GIN (to_tsvector('english', search_text));
+
+-- ─── Pending Memories (Approval Gate) ───────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS pending_memories (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    memory_id UUID REFERENCES memories(id) ON DELETE SET NULL,
+    content TEXT NOT NULL,
+    category TEXT NOT NULL CHECK (category IN (
+        'preference', 'decision', 'fact', 'event', 'transient'
+    )),
+    importance FLOAT NOT NULL DEFAULT 0.5 CHECK (importance >= 0.0 AND importance <= 1.0),
+    agent_id TEXT NOT NULL DEFAULT 'harness',
+    session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+    redactions TEXT[] NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    explicitly_important BOOLEAN NOT NULL DEFAULT FALSE,
+    base_strength FLOAT NOT NULL DEFAULT 1.0,
+    embedding vector(1536),
+    created_at TIMESTAMPTZ DEFAULT now(),
+    reviewed_at TIMESTAMPTZ,
+    review_note TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_pending_memories_status ON pending_memories(status);
+CREATE INDEX IF NOT EXISTS idx_pending_memories_agent ON pending_memories(agent_id);
+CREATE INDEX IF NOT EXISTS idx_pending_memories_session ON pending_memories(session_id);
+CREATE INDEX IF NOT EXISTS idx_pending_memories_created ON pending_memories(created_at DESC);
+
+-- ─── User Profiles ──────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS user_profiles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL DEFAULT '',
+    preferences JSONB NOT NULL DEFAULT '{}',
+    interaction_count INT NOT NULL DEFAULT 0,
+    topics JSONB NOT NULL DEFAULT '{}',
+    last_topics JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_updated ON user_profiles(updated_at DESC);

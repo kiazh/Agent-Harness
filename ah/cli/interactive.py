@@ -149,6 +149,12 @@ COMMAND_REGISTRY: dict[str, CommandDef] = {
         usage="/clear",
         category="general",
     ),
+    "compress": CommandDef(
+        name="compress",
+        description="Compress context for current session",
+        usage="/compress",
+        category="session",
+    ),
     "exit": CommandDef(
         name="exit",
         description="Exit the REPL",
@@ -492,6 +498,9 @@ class InteractiveREPL:
         elif cmd_name == "clear":
             self.console.clear()
 
+        elif cmd_name == "compress":
+            await self._compress_context()
+
         else:
             self.console.print(f"[red]Unknown command: {cmd}[/red]")
             self.console.print("[dim]Type /help for available commands.[/dim]")
@@ -511,7 +520,7 @@ class InteractiveREPL:
             return
 
         from rich.table import Table
-table = Table(title="Status")
+        table = Table(title="Status")
         table.add_column("Key", style="cyan")
         table.add_column("Value", style="white")
 
@@ -537,7 +546,7 @@ table = Table(title="Status")
             return
 
         from rich.table import Table
-table = Table(title="Recent Sessions")
+        table = Table(title="Recent Sessions")
         table.add_column("ID", style="cyan", no_wrap=True)
         table.add_column("Title", style="white")
         table.add_column("Status", style="green")
@@ -603,7 +612,7 @@ table = Table(title="Recent Sessions")
             return
 
         from rich.table import Table
-table = Table(title=f"Context (session {str(self.session.id)[:8]})")
+        table = Table(title=f"Context (session {str(self.session.id)[:8]})")
         table.add_column("Type", style="cyan")
         table.add_column("Agent", style="green")
         table.add_column("Tokens", style="yellow")
@@ -621,6 +630,74 @@ table = Table(title=f"Context (session {str(self.session.id)[:8]})")
 
         total_tokens = await context_manager.get_token_usage(self.session.id)
         self.console.print(f"\n[dim]Total tokens: {total_tokens}[/dim]")
+        self.console.print()
+
+    async def _compress_context(self) -> None:
+        """Compress context for the current session."""
+        from ah.core.compression import ContextCompressor, CompressionConfig
+
+        if not self.session:
+            self.console.print("[yellow]No active session.[/yellow]")
+            return
+
+        # Get all chunks for the session
+        chunks = await context_manager.get_chunks(self.session.id, limit=1000)
+        if not chunks:
+            self.console.print("[yellow]No context chunks to compress.[/yellow]")
+            return
+
+        total_tokens = await context_manager.get_token_usage(self.session.id)
+        self.console.print(f"[dim]Current context: {len(chunks)} chunks, {total_tokens} tokens[/dim]")
+
+        # Build compression config from global config
+        comp_config = CompressionConfig(
+            enabled=config.get("compression_enabled"),
+            threshold=config.get("compression_threshold"),
+            target_ratio=config.get("compression_target_ratio"),
+            preserve_recent=config.get("compression_preserve_recent"),
+            llm_summarize=config.get("compression_llm_summarize"),
+        )
+
+        compressor = ContextCompressor(config=comp_config)
+
+        # Try to get LLM provider for summarization
+        llm_provider = None
+        if comp_config.llm_summarize:
+            try:
+                llm_provider = get_provider(provider=self.provider, model=self.model)
+            except Exception:
+                llm_provider = None
+
+        result = compressor.compress(
+            chunks=chunks,
+            session_id=self.session.id,
+            agent_id=self.agent_id,
+            llm_provider=llm_provider,
+        )
+
+        if result.original_count == 0:
+            self.console.print("[yellow]Nothing to compress (not enough chunks).[/yellow]")
+            return
+
+        # Delete old chunks and store compressed ones
+        await context_manager.delete_chunks(self.session.id)
+
+        # Store compressed chunks
+        for chunk in result.compressed_chunks:
+            await context_manager.add_chunk(
+                session_id=chunk.session_id,
+                agent_id=chunk.agent_id,
+                chunk_type=chunk.chunk_type,
+                payload=chunk.payload,
+                token_count=chunk.token_count,
+            )
+
+        self.console.print(
+            f"[green]Context compressed:[/green] "
+            f"{result.original_count} chunks → {len(result.compressed_chunks)} chunks, "
+            f"{result.original_tokens} → {result.compressed_tokens} tokens "
+            f"({result.compression_ratio:.1%} ratio, method: {result.method})"
+        )
         self.console.print()
 
     def _set_model(self, model: str) -> None:
@@ -661,7 +738,7 @@ table = Table(title=f"Context (session {str(self.session.id)[:8]})")
     def _show_config(self) -> None:
         """Show current configuration."""
         from rich.table import Table
-table = Table(title="Configuration")
+        table = Table(title="Configuration")
         table.add_column("Key", style="cyan")
         table.add_column("Value", style="white")
 
@@ -710,14 +787,14 @@ table = Table(title="Configuration")
                         tool_calls_count += 1
                         if self.verbose:
                             live.update(Text(
-                                response_text + f"\n\n[{"yellow"}]→ {event.tool_name}({event.tool_args})[/{"yellow"}]",
+                                response_text + f"\n\n[yellow]→ {event.tool_name}({event.tool_args})[/yellow]",
                                 style="green",
                             ))
                     elif event.type == "tool_result":
                         if self.verbose:
                             preview = str(event.tool_result)[:100].replace("\n", " ")
                             live.update(Text(
-                                response_text + f"\n\n[{"green"}]← {preview}[/{"green"}]",
+                                response_text + f"\n\n[green]← {preview}[/green]",
                                 style="green",
                             ))
                     elif event.type == "token_usage":

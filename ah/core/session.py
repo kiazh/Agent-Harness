@@ -33,6 +33,14 @@ class SessionManager:
     def _cache_invalidate(self, session_id: uuid.UUID) -> None:
         self._cache.pop(session_id, None)
 
+    @staticmethod
+    def generate_title(message: str, max_length: int = 60) -> str:
+        """Generate a concise title from the first message."""
+        first_line = message.strip().split("\n")[0].strip()
+        if len(first_line) > max_length:
+            return first_line[: max_length - 3] + "..."
+        return first_line or "Untitled"
+
     async def create(
         self,
         title: str | None = None,
@@ -44,6 +52,10 @@ class SessionManager:
         context_budget: int = 8000,
     ) -> Session:
         """Create a new session."""
+        # Auto-generate title from goal if not provided
+        if title is None and goal:
+            title = self.generate_title(goal)
+
         state_msgpack = msgpack.packb(state or {}, use_bin_type=True)
         row = await db.fetchrow(
             """
@@ -145,6 +157,60 @@ class SessionManager:
             session_id,
         )
         self._cache_invalidate(session_id)
+
+    async def delete(self, session_id: uuid.UUID) -> bool:
+        """Permanently delete a session and all its context chunks."""
+        result = await db.execute(
+            "DELETE FROM sessions WHERE id = $1",
+            session_id,
+        )
+        self._cache_invalidate(session_id)
+        return int(result.split()[-1]) > 0 if result else False
+
+    async def search(self, query: str, limit: int = 20) -> list[Session]:
+        """Full-text search over session titles."""
+        rows = await db.fetch(
+            """
+            SELECT id, title, agent_id, status, goal, model, provider, context_budget, created_at, last_activity
+            FROM sessions
+            WHERE to_tsvector('english', COALESCE(title, '')) @@ plainto_tsquery('english', $1)
+            ORDER BY ts_rank(to_tsvector('english', COALESCE(title, '')), plainto_tsquery('english', $1)) DESC, last_activity DESC
+            LIMIT $2
+            """,
+            query,
+            limit,
+        )
+        return [self._row_to_session(r) for r in rows]
+
+    async def fork(self, session_id: uuid.UUID, title: str | None = None) -> Session:
+        """Fork a session — create a new session with copied state and context."""
+        source = await self.get(session_id)
+        if source is None:
+            raise ValueError(f"Session {session_id} not found")
+
+        new_session = await self.create(
+            title=title or f"Fork of {source.title or 'untitled'}",
+            agent_id=source.agent_id,
+            state=source.state,
+            goal=source.goal,
+            model=source.model,
+            provider=source.provider,
+            context_budget=source.context_budget,
+        )
+
+        # Copy context chunks from source to new session
+        await db.execute(
+            """
+            INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
+            SELECT $2, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text
+            FROM context_chunks
+            WHERE session_id = $1
+            """,
+            session_id,
+            new_session.id,
+        )
+
+        return new_session
 
     async def list_sessions(
         self, status: str | None = None, limit: int = 20

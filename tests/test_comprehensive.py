@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import uuid
 from dataclasses import fields
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 
@@ -35,7 +35,7 @@ from ah.core.provider import (
 from ah.core.session import SessionManager, session_manager
 from ah.core.agent import ReActAgent, SYSTEM_PROMPT
 from ah.db.connection import Database, db
-from ah.skills.registry import Skill, SkillParser, SkillRegistry, skill_registry
+from ah.skills.registry import Skill, SkillParser, SkillRegistry, SkillCurator, SkillHub, skill_registry
 from ah.tools.base import Tool, ToolRegistry, registry
 from ah.tools import builtins  # noqa: F401 — registers web_search, web_extract, search_files
 from ah.tools import file  # noqa: F401 — registers read_file, write_file, list_files
@@ -1595,6 +1595,341 @@ class TestLLMProviderBase:
         provider = LLMProvider()
         with pytest.raises(NotImplementedError):
             await provider.embed("test")
+
+
+# ============================================================================
+# 12. Skill Telemetry Tests
+# ============================================================================
+
+class TestSkillTelemetry:
+    """Tests for skill usage telemetry."""
+
+    def test_record_use(self, sample_skill_dir):
+        """Test recording skill usage."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        reg.record_use("test-skill")
+        skill = reg.get("test-skill")
+        assert skill.use_count == 1
+        assert skill.usage_count == 1
+        assert skill.last_activity_at is not None
+
+    def test_record_view(self, sample_skill_dir):
+        """Test recording skill view."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        reg.record_view("test-skill")
+        skill = reg.get("test-skill")
+        assert skill.view_count == 1
+        assert skill.last_activity_at is not None
+
+    def test_get_telemetry(self, sample_skill_dir):
+        """Test getting telemetry data."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        reg.record_use("test-skill")
+        reg.record_view("test-skill")
+        telemetry = reg.get_telemetry("test-skill")
+        assert telemetry is not None
+        assert telemetry["name"] == "test-skill"
+        assert telemetry["use_count"] == 1
+        assert telemetry["view_count"] == 1
+        assert telemetry["last_activity_at"] is not None
+
+    def test_get_telemetry_not_found(self, sample_skill_dir):
+        """Test getting telemetry for non-existent skill."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        assert reg.get_telemetry("nonexistent") is None
+
+    def test_get_all_telemetry(self, sample_skill_dir):
+        """Test getting all telemetry data."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        reg.record_use("test-skill")
+        all_telemetry = reg.get_all_telemetry()
+        assert len(all_telemetry) == 1
+        assert all_telemetry[0]["name"] == "test-skill"
+
+
+# ============================================================================
+# 13. Skill Provenance Tests
+# ============================================================================
+
+class TestSkillProvenance:
+    """Tests for skill provenance tracking."""
+
+    def test_get_provenance(self, sample_skill_dir):
+        """Test getting provenance data."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        provenance = reg.get_provenance("test-skill")
+        assert provenance is not None
+        assert provenance["name"] == "test-skill"
+        assert provenance["source_type"] == "local"
+        assert "file_path" in provenance
+
+    def test_get_provenance_not_found(self, sample_skill_dir):
+        """Test getting provenance for non-existent skill."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        assert reg.get_provenance("nonexistent") is None
+
+    def test_list_by_source(self, sample_skill_dir):
+        """Test listing skills by source type."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        local_skills = reg.list_by_source("local")
+        assert len(local_skills) == 1
+        assert local_skills[0].name == "test-skill"
+
+    def test_create_skill_with_provenance(self, temp_dir):
+        """Test creating a skill with provenance info."""
+        reg = SkillRegistry(skills_dir=temp_dir)
+        skill = reg.create_skill(
+            name="test-provenance",
+            description="Test skill",
+            content="Test content",
+            triggers=["test"],
+            source="test-source",
+            source_type="learned",
+        )
+        assert skill.source == "test-source"
+        assert skill.source_type == "learned"
+        provenance = reg.get_provenance("test-provenance")
+        assert provenance["source"] == "test-source"
+        assert provenance["source_type"] == "learned"
+
+
+# ============================================================================
+# 14. Skill Curator Tests
+# ============================================================================
+
+class TestSkillCurator:
+    """Tests for skill curator."""
+
+    def test_archive_stale(self, sample_skill_dir):
+        """Test archiving stale skills."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        curator = SkillCurator(reg)
+        # Make the skill stale by setting last_activity_at to 60 days ago
+        skill = reg.get("test-skill")
+        skill.last_activity_at = datetime.utcnow() - timedelta(days=60)
+        archived = curator.archive_stale(days=30)
+        assert "test-skill" in archived
+        assert skill.enabled is False
+
+    def test_get_stale_skills(self, sample_skill_dir):
+        """Test getting stale skills."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        curator = SkillCurator(reg)
+        skill = reg.get("test-skill")
+        skill.last_activity_at = datetime.utcnow() - timedelta(days=60)
+        stale = curator.get_stale_skills(days=30)
+        assert len(stale) == 1
+        assert stale[0].name == "test-skill"
+
+    def test_get_unused_skills(self, sample_skill_dir):
+        """Test getting unused skills."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        curator = SkillCurator(reg)
+        unused = curator.get_unused_skills()
+        assert len(unused) == 1
+        assert unused[0].name == "test-skill"
+
+    def test_get_top_skills(self, sample_skill_dir):
+        """Test getting top skills."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        reg.record_use("test-skill")
+        reg.record_use("test-skill")
+        curator = SkillCurator(reg)
+        top = curator.get_top_skills(limit=5)
+        assert len(top) == 1
+        assert top[0].name == "test-skill"
+        assert top[0].use_count == 2
+
+    def test_cleanup_unused_dry_run(self, sample_skill_dir):
+        """Test cleanup with dry run."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        curator = SkillCurator(reg)
+        removed = curator.cleanup_unused(dry_run=True)
+        assert "test-skill" in removed
+        # Skill should still exist after dry run
+        assert reg.get("test-skill") is not None
+
+    def test_cleanup_unused(self, sample_skill_dir):
+        """Test cleanup actually removes skills."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        curator = SkillCurator(reg)
+        removed = curator.cleanup_unused(dry_run=False)
+        assert "test-skill" in removed
+        assert reg.get("test-skill") is None
+
+    def test_get_health_report(self, sample_skill_dir):
+        """Test health report."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        reg.record_use("test-skill")
+        curator = SkillCurator(reg)
+        report = curator.get_health_report()
+        assert report["total_skills"] == 1
+        assert report["total_uses"] == 1
+        assert "top_skills" in report
+
+
+# ============================================================================
+# 15. Skill Hub Tests
+# ============================================================================
+
+class TestSkillHub:
+    """Tests for skill hub."""
+
+    def test_publish(self, sample_skill_dir, temp_dir):
+        """Test publishing a skill to the hub."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        hub = SkillHub(reg, hub_dir=temp_dir / "hub")
+        entry = hub.publish("test-skill", author="test-author", tags=["test", "demo"])
+        assert entry["name"] == "test-skill"
+        assert entry["author"] == "test-author"
+        assert "test" in entry["tags"]
+
+    def test_list_hub(self, sample_skill_dir, temp_dir):
+        """Test listing hub skills."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        hub = SkillHub(reg, hub_dir=temp_dir / "hub")
+        hub.publish("test-skill")
+        skills = hub.list_hub()
+        assert len(skills) == 1
+        assert skills[0]["name"] == "test-skill"
+
+    def test_search_hub(self, sample_skill_dir, temp_dir):
+        """Test searching hub skills."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        hub = SkillHub(reg, hub_dir=temp_dir / "hub")
+        hub.publish("test-skill", tags=["test", "demo"])
+        results = hub.search("test")
+        assert len(results) == 1
+        assert results[0]["name"] == "test-skill"
+
+    def test_install(self, sample_skill_dir, temp_dir):
+        """Test installing a skill from the hub."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        hub = SkillHub(reg, hub_dir=temp_dir / "hub")
+        hub.publish("test-skill")
+        # Remove from registry first
+        reg.delete_skill("test-skill")
+        # Install from hub
+        skill = hub.install("test-skill")
+        assert skill.name == "test-skill"
+        assert skill.source_type == "hub"
+
+    def test_install_not_found(self, sample_skill_dir, temp_dir):
+        """Test installing a non-existent skill."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        hub = SkillHub(reg, hub_dir=temp_dir / "hub")
+        with pytest.raises(ValueError, match="not found in hub"):
+            hub.install("nonexistent")
+
+    def test_get_hub_telemetry(self, sample_skill_dir, temp_dir):
+        """Test getting hub telemetry."""
+        reg = SkillRegistry(skills_dir=sample_skill_dir)
+        reg.load_all()
+        reg.record_use("test-skill")
+        hub = SkillHub(reg, hub_dir=temp_dir / "hub")
+        hub.publish("test-skill")
+        telemetry = hub.get_hub_telemetry()
+        assert len(telemetry) == 1
+        assert telemetry[0]["name"] == "test-skill"
+
+
+# ============================================================================
+# 16. CLI Command Tests — learn, curator, hub
+# ============================================================================
+
+class TestCLISkillCommands:
+    """Tests for new CLI commands."""
+
+    def test_learn_command_help(self):
+        """Test learn command help."""
+        runner = CliRunner()
+        result = runner.invoke(app, ["learn", "--help"])
+        assert result.exit_code == 0
+
+    def test_curator_command_help(self):
+        """Test curator command help."""
+        runner = CliRunner()
+        result = runner.invoke(app, ["curator", "--help"])
+        assert result.exit_code == 0
+
+    def test_hub_command_help(self):
+        """Test hub command help."""
+        runner = CliRunner()
+        result = runner.invoke(app, ["hub", "--help"])
+        assert result.exit_code == 0
+
+    def test_curator_report(self):
+        """Test curator report action."""
+        runner = CliRunner()
+        result = runner.invoke(app, ["curator", "report"])
+        assert result.exit_code == 0
+        assert "Skill System Health Report" in result.output
+
+    def test_curator_stale(self):
+        """Test curator stale action."""
+        runner = CliRunner()
+        result = runner.invoke(app, ["curator", "stale"])
+        assert result.exit_code == 0
+
+    def test_curator_unused(self):
+        """Test curator unused action."""
+        runner = CliRunner()
+        result = runner.invoke(app, ["curator", "unused"])
+        assert result.exit_code == 0
+
+    def test_curator_top(self):
+        """Test curator top action."""
+        runner = CliRunner()
+        result = runner.invoke(app, ["curator", "top"])
+        assert result.exit_code == 0
+
+    def test_hub_list(self):
+        """Test hub list action."""
+        runner = CliRunner()
+        result = runner.invoke(app, ["hub", "list"])
+        assert result.exit_code == 0
+
+    def test_hub_search_no_query(self):
+        """Test hub search without query."""
+        runner = CliRunner()
+        result = runner.invoke(app, ["hub", "search"])
+        assert result.exit_code != 0
+
+    def test_learn_command_file(self, temp_dir):
+        """Test learn command from file."""
+        # Create a test file to learn from
+        test_file = temp_dir / "test-skill.md"
+        test_file.write_text("# Test Skill\nThis is a test skill content.", encoding="utf-8")
+        runner = CliRunner()
+        result = runner.invoke(app, ["learn", str(test_file), "--name", "my-learned-skill"])
+        assert result.exit_code == 0
+        assert "created successfully" in result.output
+
+    def test_learn_command_not_found(self):
+        """Test learn command with non-existent source."""
+        runner = CliRunner()
+        result = runner.invoke(app, ["learn", "nonexistent-source-12345"])
+        assert result.exit_code != 0
 
 
 # ============================================================================

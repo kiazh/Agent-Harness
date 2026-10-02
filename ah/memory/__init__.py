@@ -3,6 +3,11 @@
 Architecture:
     MemoryEntry (dataclass) → MemoryStore (CRUD) → MemoryConsolidator (write path)
     ImportanceScorer → ForgettingModel → MemoryRetriever (read path)
+
+Additional components:
+    SecretRedactor — redacts secrets before memory storage
+    MemoryApprovalGate — human-in-the-loop approval for memory writes
+    UserProfile / UserProfileStore — persistent user modeling
 """
 from __future__ import annotations
 
@@ -12,6 +17,18 @@ from ah.memory.scorer import ImportanceScorer
 from ah.memory.forgetting import ForgettingModel
 from ah.memory.retriever import MemoryRetriever
 from ah.memory.consolidator import MemoryConsolidator
+from ah.memory.redaction import SecretRedactor, RedactionResult, redact_secrets
+from ah.memory.approval import (
+    ApprovalStatus,
+    PendingMemory,
+    MemoryApprovalGate,
+    memory_approval_gate,
+)
+from ah.memory.user_profile import (
+    UserProfile,
+    UserProfileStore,
+    user_profile_store,
+)
 
 __all__ = [
     "MemoryEntry",
@@ -22,4 +39,14 @@ __all__ = [
     "ForgettingModel",
     "MemoryRetriever",
     "MemoryConsolidator",
+    "SecretRedactor",
+    "RedactionResult",
+    "redact_secrets",
+    "ApprovalStatus",
+    "PendingMemory",
+    "MemoryApprovalGate",
+    "memory_approval_gate",
+    "UserProfile",
+    "UserProfileStore",
+    "user_profile_store",
 ]

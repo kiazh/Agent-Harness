@@ -42,6 +42,12 @@ DEFAULTS: dict[str, Any] = {
     "agent_harness_home": "",
     "tmpdir": "",
     "temp": "",
+    # Context compression settings
+    "compression_enabled": True,
+    "compression_threshold": 0.8,
+    "compression_target_ratio": 0.5,
+    "compression_preserve_recent": 3,
+    "compression_llm_summarize": True,
 }
 
 # Map config keys to their legacy environment variable names
@@ -91,6 +97,12 @@ class Config:
     agent_harness_home: str = ""
     tmpdir: str = ""
     temp: str = ""
+    # Context compression settings
+    compression_enabled: bool = True
+    compression_threshold: float = 0.8
+    compression_target_ratio: float = 0.5
+    compression_preserve_recent: int = 3
+    compression_llm_summarize: bool = True
 
     # Per-session overrides (not persisted to file)
     _session_overrides: dict[str, Any] = field(default_factory=dict, repr=False)

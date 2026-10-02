@@ -1,6 +1,7 @@
 """Prompt assembly and token counting."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from ah.core.models import ContextChunk
@@ -11,6 +12,8 @@ try:
     _TIKTOKEN_AVAILABLE = True
 except ImportError:
     _TIKTOKEN_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 
 class TokenCounter:
@@ -143,3 +146,31 @@ class PromptAssembler:
     def _estimate_tokens(self, text: str) -> int:
         """Accurate token count via tiktoken (falls back to len//4)."""
         return get_token_count(text)
+
+
+def compress_context_chunks(
+    chunks: list[ContextChunk],
+    session_id: Any,
+    agent_id: str,
+    llm_provider: Any = None,
+    config: Any = None,
+) -> Any:
+    """Compress context chunks using the ContextCompressor.
+
+    This is a convenience function that creates a ContextCompressor and
+    compresses the given chunks.
+
+    Args:
+        chunks: The context chunks to compress (newest first).
+        session_id: The session ID.
+        agent_id: The agent ID.
+        llm_provider: Optional LLM provider for summarization.
+        config: Optional CompressionConfig.
+
+    Returns:
+        CompressionResult with compressed chunks and metadata.
+    """
+    from ah.core.compression import ContextCompressor
+
+    compressor = ContextCompressor(config=config)
+    return compressor.compress(chunks, session_id, agent_id, llm_provider=llm_provider)
