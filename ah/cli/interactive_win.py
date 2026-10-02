@@ -691,7 +691,11 @@ async def run_interactive_help(console: Console, skin: SkinConfig) -> str | None
 
         return text
 
-    # Use Live for the help menu
+    # Use Live for the help menu (only when interactive)
+    if not sys.stdin.isatty():
+        console.print(help_text)
+        return None
+
     with Live(
         render_help_view(),
         console=console,
@@ -754,8 +758,11 @@ def _wait_for_char() -> str | None:
     """Wait for a single character from msvcrt (runs in executor).
 
     Uses blocking msvcrt.getch() — no sleep, no polling, no delay.
+    Returns None when stdin is not a TTY (piped/redirected).
     """
     if sys.platform != "win32":
+        return None
+    if not sys.stdin.isatty():
         return None
     try:
         ch = msvcrt.getch()  # Blocks until key is pressed — zero delay
