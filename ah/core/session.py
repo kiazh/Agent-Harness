@@ -22,7 +22,7 @@ class SessionManager:
 
     def __init__(self) -> None:
         # TTLCache: max 128 sessions, 5-second TTL
-        self._cache: TTLCache = TTLCache(maxsize=128, ttl=5)
+        self._cache: TTLCache = TTLCache(maxsize=128, ttl=60)
 
     def _cache_get(self, session_id: uuid.UUID) -> Session | None:
         return self._cache.get(session_id)
@@ -118,7 +118,7 @@ class SessionManager:
             "UPDATE sessions SET last_activity = now() WHERE id = $1",
             session_id,
         )
-        self._cache_invalidate(session_id)
+        # Don't invalidate cache — let it expire naturally
 
     async def set_goal(self, session_id: uuid.UUID, goal: str) -> None:
         """Update session goal."""

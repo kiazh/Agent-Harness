@@ -790,26 +790,26 @@ class TestErrorHandling:
     def test_read_file_not_found(self, temp_dir):
         """Test read_file with non-existent file."""
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = read_file(str(temp_dir / "nonexistent.txt"))
+            result = asyncio.run(read_file(str(temp_dir / "nonexistent.txt")))
         assert "Error" in result
         assert "not found" in result.lower() or "File not found" in result
 
     def test_read_file_directory(self, temp_dir):
         """Test read_file with directory path."""
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = read_file(str(temp_dir))
+            result = asyncio.run(read_file(str(temp_dir)))
         assert "Error" in result
 
     def test_write_file_invalid_path(self):
         """Test write_file with invalid path."""
         with patch("pathlib.Path.mkdir", side_effect=PermissionError("Access denied")):
-            result = write_file("/some/path/test.txt", "content")
+            result = asyncio.run(write_file("/some/path/test.txt", "content"))
             assert "Error" in result
 
     def test_list_files_not_found(self, temp_dir):
         """Test list_files with non-existent directory."""
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = list_files(str(temp_dir / "nonexistent"))
+            result = asyncio.run(list_files(str(temp_dir / "nonexistent")))
         assert "Error" in result
 
     def test_list_files_file_path(self, temp_dir):
@@ -817,13 +817,13 @@ class TestErrorHandling:
         test_file = temp_dir / "test.txt"
         test_file.write_text("content")
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = list_files(str(test_file))
+            result = asyncio.run(list_files(str(test_file)))
         assert "Error" in result
 
     def test_terminal_invalid_command(self):
         """Test terminal with invalid command."""
         from ah.tools.terminal import terminal as terminal_fn
-        result = terminal_fn("this_command_does_not_exist_12345")
+        result = asyncio.run(terminal_fn("this_command_does_not_exist_12345"))
         assert "Error" in result or "not recognized" in result.lower() or "exit code" in result
 
     def test_terminal_timeout(self):
@@ -831,7 +831,7 @@ class TestErrorHandling:
         from ah.tools.terminal import terminal as terminal_fn
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="test", timeout=1)
-            result = terminal_fn("sleep 10", timeout=1)
+            result = asyncio.run(terminal_fn("sleep 10", timeout=1))
             assert "timed out" in result.lower() or "Error" in result
 
     def test_tool_execute_nonexistent(self):
@@ -1442,7 +1442,7 @@ class TestBuiltinTools:
         test_file = temp_dir / "test.txt"
         test_file.write_text("line1\nline2\nline3", encoding="utf-8")
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = read_file(str(test_file))
+            result = asyncio.run(read_file(str(test_file)))
         assert "line1" in result
         assert "line2" in result
 
@@ -1451,7 +1451,7 @@ class TestBuiltinTools:
         test_file = temp_dir / "test.txt"
         test_file.write_text("line1\nline2\nline3", encoding="utf-8")
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = read_file(str(test_file), offset=2)
+            result = asyncio.run(read_file(str(test_file), offset=2))
         assert "line1" not in result
         assert "line2" in result
 
@@ -1460,14 +1460,14 @@ class TestBuiltinTools:
         test_file = temp_dir / "test.txt"
         test_file.write_text("line1\nline2\nline3", encoding="utf-8")
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = read_file(str(test_file), limit=2)
+            result = asyncio.run(read_file(str(test_file), limit=2))
         assert "line3" not in result
 
     def test_write_file_success(self, temp_dir):
         """Test writing a file."""
         test_file = temp_dir / "output.txt"
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = write_file(str(test_file), "test content")
+            result = asyncio.run(write_file(str(test_file), "test content"))
         assert "Written" in result or "Successfully" in result
         assert test_file.read_text() == "test content"
 
@@ -1475,7 +1475,7 @@ class TestBuiltinTools:
         """Test writing a file creates parent directories."""
         test_file = temp_dir / "subdir" / "output.txt"
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = write_file(str(test_file), "test content")
+            result = asyncio.run(write_file(str(test_file), "test content"))
         assert test_file.exists()
 
     def test_list_files_success(self, temp_dir):
@@ -1483,7 +1483,7 @@ class TestBuiltinTools:
         (temp_dir / "file1.txt").write_text("content1")
         (temp_dir / "file2.txt").write_text("content2")
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = list_files(str(temp_dir))
+            result = asyncio.run(list_files(str(temp_dir)))
         assert "file1.txt" in result
         assert "file2.txt" in result
 
@@ -1492,7 +1492,7 @@ class TestBuiltinTools:
         (temp_dir / "file1.txt").write_text("content1")
         (temp_dir / "file2.py").write_text("content2")
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = list_files(str(temp_dir), pattern="*.py")
+            result = asyncio.run(list_files(str(temp_dir), pattern="*.py"))
         assert "file2.py" in result
         assert "file1.txt" not in result
 
@@ -1500,14 +1500,16 @@ class TestBuiltinTools:
         """Test searching files."""
         (temp_dir / "file1.txt").write_text("hello world")
         (temp_dir / "file2.txt").write_text("goodbye world")
-        result = builtins.search_files("hello", str(temp_dir))
+        with patch("ah.tools.file._BASE_DIR", temp_dir):
+            result = asyncio.run(builtins.search_files("hello", str(temp_dir)))
         assert "hello" in result
         assert "file1.txt" in result
 
     def test_search_files_no_match(self, temp_dir):
         """Test searching files with no match."""
         (temp_dir / "file1.txt").write_text("hello world")
-        result = builtins.search_files("nonexistent", str(temp_dir))
+        with patch("ah.tools.file._BASE_DIR", temp_dir):
+            result = asyncio.run(builtins.search_files("nonexistent", str(temp_dir)))
         assert "No matches" in result
 
 

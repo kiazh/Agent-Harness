@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from ah.core.provider import audit_log
+from ah.core.serialization import embedding_to_str, str_to_embedding
 from ah.db.connection import db
 from ah.memory.models import MemoryEntry
 
@@ -39,7 +40,7 @@ class MemoryStore:
         """Add a new memory entry."""
         embedding_str = None
         if embedding is not None:
-            embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+            embedding_str = embedding_to_str(embedding)
 
         row = await db.fetchrow(
             """
@@ -137,7 +138,7 @@ class MemoryStore:
         Returns list of (MemoryEntry, similarity_score) tuples, sorted by
         similarity descending.
         """
-        embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+        embedding_str = embedding_to_str(embedding)
 
         conditions = ["embedding IS NOT NULL"]
         params: list[Any] = [embedding_str, limit]
@@ -195,6 +196,19 @@ class MemoryStore:
             WHERE id = $1
             """,
             memory_id,
+        )
+
+    async def batch_update_access(self, memory_ids: list[uuid.UUID]) -> None:
+        """Batch update last_accessed and increment access_count for multiple memories."""
+        if not memory_ids:
+            return
+        await db.execute(
+            """
+            UPDATE memories
+            SET last_accessed = now(), access_count = access_count + 1
+            WHERE id = ANY($1::uuid[])
+            """,
+            memory_ids,
         )
 
     async def update_importance(self, memory_id: uuid.UUID, importance: float) -> None:
@@ -287,10 +301,7 @@ class MemoryStore:
         """Convert a database row to a MemoryEntry."""
         embedding = None
         if row["embedding"] is not None:
-            # Parse vector string "[1.0,2.0,...]" back to list[float]
-            embedding_str = str(row["embedding"])
-            if embedding_str.startswith("[") and embedding_str.endswith("]"):
-                embedding = [float(x) for x in embedding_str[1:-1].split(",")]
+            embedding = str_to_embedding(row["embedding"])
 
         return MemoryEntry(
             id=row["id"],

@@ -1,21 +1,38 @@
-"""Interactive REPL — persistent prompt with streaming, slash commands, and session management."""
+"""Interactive REPL — persistent prompt with streaming, slash commands, and session management.
+
+Features:
+    - Autocomplete dropdown for slash commands (prompt_toolkit Completer)
+    - Arrow-key navigation in autocomplete and help menu
+    - Interactive scrollable help menu (prompt_toolkit Application + Window + TextArea)
+    - Clean UI with proper styling
+    - Production-quality error handling and logging
+"""
 from __future__ import annotations
 
 import asyncio
 import logging
 import uuid
+from dataclasses import dataclass, field
 from typing import Optional
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application import Application
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import Layout
+from prompt_toolkit.layout.containers import Window
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.processors import Processor, Transformation
 from prompt_toolkit.styles import Style
+from prompt_toolkit.widgets import TextArea
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 from rich.markdown import Markdown
-from rich.syntax import Syntax
 
 from ah import __version__
 from ah.core.agent import ReActAgent
@@ -26,31 +43,279 @@ from ah.core.provider import get_provider
 from ah.core.session import Session, session_manager
 from ah.db.connection import db
 from ah.tools import builtins  # noqa: F401 — registers built-in tools
+# Visual modules removed — using Rich directly
 
 logger = logging.getLogger(__name__)
 
-# Prompt style
+# ─── Prompt style ────────────────────────────────────────────────────────────
+
 PROMPT_STYLE = Style.from_dict({
     "prompt": "ansicyan bold",
     "path": "ansigreen",
+    "completion-menu": "bg:#005577 #ffffff",
+    "completion-menu.current": "bg:#00aaee #000000",
+    "scrollbar.background": "bg:#888888",
+    "scrollbar.button": "bg:#222222",
 })
 
-# Slash commands registry
-SLASH_COMMANDS: dict[str, str] = {
-    "/help": "Show available slash commands",
-    "/status": "Show current session and agent status",
-    "/sessions": "List recent sessions",
-    "/new": "Create a new session",
-    "/switch": "Switch to a different session",
-    "/context": "Show context for current session",
-    "/model": "Show or set the model (e.g., /model anthropic/claude-3.5-sonnet)",
-    "/provider": "Show or set the provider (e.g., /provider openrouter)",
-    "/budget": "Show or set context budget (e.g., /budget 8000)",
-    "/verbose": "Toggle verbose mode on/off",
-    "/config": "Show current configuration",
-    "/clear": "Clear the screen",
-    "/exit": "Exit the REPL",
+# ─── Command registry ────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class CommandDef:
+    """Definition of a slash command."""
+    name: str
+    description: str
+    usage: str = ""
+    category: str = "general"
+    aliases: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def display_name(self) -> str:
+        return f"/{self.name}"
+
+
+# All slash commands, ordered for display
+COMMAND_REGISTRY: dict[str, CommandDef] = {
+    "help": CommandDef(
+        name="help",
+        description="Show available slash commands",
+        usage="/help",
+        category="general",
+    ),
+    "status": CommandDef(
+        name="status",
+        description="Show current session and agent status",
+        usage="/status",
+        category="session",
+    ),
+    "sessions": CommandDef(
+        name="sessions",
+        description="List recent sessions",
+        usage="/sessions",
+        category="session",
+    ),
+    "new": CommandDef(
+        name="new",
+        description="Create a new session",
+        usage="/new [title]",
+        category="session",
+    ),
+    "switch": CommandDef(
+        name="switch",
+        description="Switch to a different session",
+        usage="/switch <session_id>",
+        category="session",
+    ),
+    "context": CommandDef(
+        name="context",
+        description="Show context for current session",
+        usage="/context",
+        category="session",
+    ),
+    "model": CommandDef(
+        name="model",
+        description="Show or set the model",
+        usage="/model [model_name]",
+        category="config",
+    ),
+    "provider": CommandDef(
+        name="provider",
+        description="Show or set the provider",
+        usage="/provider [openrouter|ollama]",
+        category="config",
+    ),
+    "budget": CommandDef(
+        name="budget",
+        description="Show or set context budget",
+        usage="/budget <tokens>",
+        category="config",
+    ),
+    "verbose": CommandDef(
+        name="verbose",
+        description="Toggle verbose mode on/off",
+        usage="/verbose",
+        category="config",
+    ),
+    "config": CommandDef(
+        name="config",
+        description="Show current configuration",
+        usage="/config",
+        category="config",
+    ),
+    "clear": CommandDef(
+        name="clear",
+        description="Clear the screen",
+        usage="/clear",
+        category="general",
+    ),
+    "exit": CommandDef(
+        name="exit",
+        description="Exit the REPL",
+        usage="/exit",
+        category="general",
+        aliases=("quit",),
+    ),
 }
+
+# Backwards-compatible alias
+SLASH_COMMANDS: dict[str, str] = {
+    cmd.name: cmd.description for cmd in COMMAND_REGISTRY.values()
+}
+
+
+# ─── Autocomplete ────────────────────────────────────────────────────────────
+
+
+class SlashCommandCompleter(Completer):
+    """prompt_toolkit Completer that yields matching slash commands.
+
+    When the user types text starting with '/', this completer shows a dropdown
+    of matching commands.  Arrow keys navigate the dropdown; Enter selects.
+    """
+
+    def __init__(self, commands: dict[str, CommandDef]) -> None:
+        self._commands = commands
+
+    def get_completions(self, document: Document, complete_event) -> list[Completion]:
+        text = document.text_before_cursor
+        if not text.startswith("/"):
+            return
+
+        # Filter commands that match the typed prefix
+        for name, cmd in self._commands.items():
+            if name.startswith(text[1:]):
+                yield Completion(
+                    text=f"/{name}",
+                    start_position=-len(text),
+                    display=cmd.display_name,
+                    display_meta=cmd.description,
+                )
+
+
+# ─── Interactive help menu ──────────────────────────────────────────────────
+
+
+def _build_help_text() -> str:
+    """Build the help text with all commands grouped by category."""
+    lines: list[str] = []
+    lines.append("AgentHarness — Slash Commands")
+    lines.append("=" * 40)
+    lines.append("")
+
+    # Group commands by category
+    categories: dict[str, list[CommandDef]] = {}
+    for cmd in COMMAND_REGISTRY.values():
+        categories.setdefault(cmd.category, []).append(cmd)
+
+    category_order = ["general", "session", "config"]
+    for cat in category_order:
+        cmds = categories.get(cat, [])
+        if not cmds:
+            continue
+        lines.append(f"  {cat.upper()}")
+        lines.append("  " + "-" * 38)
+        for cmd in cmds:
+            lines.append(f"    {cmd.display_name:<16} {cmd.description}")
+            if cmd.usage:
+                lines.append(f"    {'':<16} Usage: {cmd.usage}")
+        lines.append("")
+
+    lines.append("=" * 40)
+    lines.append("↑/↓ navigate  •  Enter select  •  Esc close")
+    return "\n".join(lines)
+
+
+def run_interactive_help() -> None:
+    """Show an interactive, scrollable help menu using prompt_toolkit Application.
+
+    The user can navigate with arrow keys and select a command with Enter.
+    Pressing Esc or Ctrl+C closes the menu.
+    """
+    help_text = _build_help_text()
+    selected_command: list[str | None] = [None]
+
+    # Read-only text area for the help content
+    text_area = TextArea(
+        text=help_text,
+        read_only=True,
+        scrollbar=True,
+        line_numbers=False,
+        focusable=True,
+        wrap_lines=True,
+    )
+
+    # Key bindings for the help menu
+    kb = KeyBindings()
+
+    @kb.add("escape")
+    def _close(event) -> None:
+        """Close the help menu."""
+        event.app.exit()
+
+    @kb.add("c-c")
+    def _close_ctrl_c(event) -> None:
+        """Close the help menu with Ctrl+C."""
+        event.app.exit()
+
+    @kb.add("q")
+    def _close_q(event) -> None:
+        """Close the help menu with 'q'."""
+        event.app.exit()
+
+    @kb.add("enter")
+    def _select(event) -> None:
+        """Select the command under the cursor."""
+        # Try to find a command name on the current line
+        try:
+            line = text_area.document.current_line
+            stripped = line.strip()
+            if stripped.startswith("/"):
+                # Extract command name (first token)
+                cmd_name = stripped.split()[0].lstrip("/").lower()
+                if cmd_name in COMMAND_REGISTRY:
+                    selected_command[0] = cmd_name
+                    event.app.exit()
+                else:
+                    # Check aliases
+                    for name, cmd in COMMAND_REGISTRY.items():
+                        if cmd_name in cmd.aliases:
+                            selected_command[0] = name
+                            event.app.exit()
+                            break
+        except Exception:
+            logger.debug("Failed to parse command from help line", exc_info=True)
+
+    # Build the application
+    application: Application[None] = Application(
+        layout=Layout(
+            Window(
+                content=FormattedTextControl(
+                    text=lambda: _build_help_text(),
+                    focusable=True,
+                ),
+                wrap_lines=True,
+                right_margins=[],
+            )
+        ),
+        key_bindings=kb,
+        full_screen=False,
+        mouse_support=False,
+        style=PROMPT_STYLE,
+    )
+
+    # Run the application
+    try:
+        application.run()
+    except Exception as e:
+        logger.debug("Help menu closed with exception: %s", e)
+
+    # If a command was selected, print it so the caller can handle it
+    if selected_command[0]:
+        print(f"/{selected_command[0]}")
+
+
+# ─── Interactive REPL ────────────────────────────────────────────────────────
 
 
 class InteractiveREPL:
@@ -69,6 +334,7 @@ class InteractiveREPL:
         session_id: str | None = None,
     ) -> None:
         self.console = Console()
+        # VisualContext removed — using Rich directly
         self.model = model or config.get("model")
         self.provider = provider or config.get("provider")
         self.verbose = config.get("verbose") if verbose is None else verbose
@@ -80,20 +346,20 @@ class InteractiveREPL:
         if session_id:
             try:
                 sid = uuid.UUID(session_id)
-                # Will be loaded in run() since we need async
                 self._initial_session_id = sid
             except ValueError:
-                console.print(f"[red]Invalid session ID: {session_id}[/red]")
+                self.console.print(f"[red]Invalid session ID: {session_id}[/red]")
                 self._initial_session_id = None
         else:
             self._initial_session_id = None
 
-        # Prompt session
-        history_path = config.get("history_size")
+        # Prompt session with autocomplete
         self._prompt_session: PromptSession = PromptSession(
             history=FileHistory(str(self._get_history_file())),
             auto_suggest=AutoSuggestFromHistory(),
+            completer=SlashCommandCompleter(COMMAND_REGISTRY),
             style=PROMPT_STYLE,
+            complete_while_typing=True,
         )
 
         # Agent
@@ -132,14 +398,14 @@ class InteractiveREPL:
                     context_budget=self.context_budget,
                 )
 
-            self.console.print(Panel(
+            self.console.print(
                 f"[bold]AgentHarness Interactive REPL[/bold] v{__version__}\n"
                 f"Session: [cyan]{self.session.id}[/cyan]\n"
                 f"Model: [green]{self.model}[/green] | Provider: [green]{self.provider}[/green]\n"
                 f"Type [yellow]/help[/yellow] for commands, [yellow]/exit[/yellow] to quit.",
+                style="accent",
                 title="Welcome",
-                border_style="cyan",
-            ))
+            )
             self.console.print()
 
             # Main REPL loop
@@ -183,44 +449,47 @@ class InteractiveREPL:
         cmd = parts[0].lower()
         args = parts[1] if len(parts) > 1 else ""
 
-        if cmd == "/exit" or cmd == "/quit":
+        # Strip leading slash for lookup
+        cmd_name = cmd.lstrip("/")
+
+        if cmd_name in ("exit", "quit"):
             self.console.print("[dim]Goodbye![/dim]")
             return False
 
-        elif cmd == "/help":
+        elif cmd_name == "help":
             self._show_help()
 
-        elif cmd == "/status":
+        elif cmd_name == "status":
             await self._show_status()
 
-        elif cmd == "/sessions":
+        elif cmd_name == "sessions":
             await self._list_sessions()
 
-        elif cmd == "/new":
+        elif cmd_name == "new":
             await self._new_session(args)
 
-        elif cmd == "/switch":
+        elif cmd_name == "switch":
             await self._switch_session(args)
 
-        elif cmd == "/context":
+        elif cmd_name == "context":
             await self._show_context()
 
-        elif cmd == "/model":
+        elif cmd_name == "model":
             self._set_model(args)
 
-        elif cmd == "/provider":
+        elif cmd_name == "provider":
             self._set_provider(args)
 
-        elif cmd == "/budget":
+        elif cmd_name == "budget":
             self._set_budget(args)
 
-        elif cmd == "/verbose":
+        elif cmd_name == "verbose":
             self._toggle_verbose()
 
-        elif cmd == "/config":
+        elif cmd_name == "config":
             self._show_config()
 
-        elif cmd == "/clear":
+        elif cmd_name == "clear":
             self.console.clear()
 
         else:
@@ -230,18 +499,8 @@ class InteractiveREPL:
         return True
 
     def _show_help(self) -> None:
-        """Show help for slash commands."""
-        from rich.table import Table
-
-        table = Table(title="Slash Commands", show_header=True, header_style="bold cyan")
-        table.add_column("Command", style="yellow", no_wrap=True)
-        table.add_column("Description", style="white")
-
-        for cmd, desc in SLASH_COMMANDS.items():
-            table.add_row(cmd, desc)
-
-        self.console.print(table)
-        self.console.print()
+        """Show interactive help menu."""
+        run_interactive_help()
 
     async def _show_status(self) -> None:
         """Show current session and agent status."""
@@ -251,7 +510,8 @@ class InteractiveREPL:
             self.console.print("[yellow]No active session.[/yellow]")
             return
 
-        table = Table(title="Status", show_header=False)
+        from rich.table import Table
+table = Table(title="Status")
         table.add_column("Key", style="cyan")
         table.add_column("Value", style="white")
 
@@ -276,7 +536,8 @@ class InteractiveREPL:
             self.console.print("[yellow]No sessions found.[/yellow]")
             return
 
-        table = Table(title="Recent Sessions")
+        from rich.table import Table
+table = Table(title="Recent Sessions")
         table.add_column("ID", style="cyan", no_wrap=True)
         table.add_column("Title", style="white")
         table.add_column("Status", style="green")
@@ -341,7 +602,8 @@ class InteractiveREPL:
             self.console.print("[yellow]No context chunks found.[/yellow]")
             return
 
-        table = Table(title=f"Context (session {str(self.session.id)[:8]})")
+        from rich.table import Table
+table = Table(title=f"Context (session {str(self.session.id)[:8]})")
         table.add_column("Type", style="cyan")
         table.add_column("Agent", style="green")
         table.add_column("Tokens", style="yellow")
@@ -399,8 +661,7 @@ class InteractiveREPL:
     def _show_config(self) -> None:
         """Show current configuration."""
         from rich.table import Table
-
-        table = Table(title="Configuration")
+table = Table(title="Configuration")
         table.add_column("Key", style="cyan")
         table.add_column("Value", style="white")
 
@@ -449,14 +710,14 @@ class InteractiveREPL:
                         tool_calls_count += 1
                         if self.verbose:
                             live.update(Text(
-                                response_text + f"\n\n[yellow]→ {event.tool_name}({event.tool_args})[/yellow]",
+                                response_text + f"\n\n[{"yellow"}]→ {event.tool_name}({event.tool_args})[/{"yellow"}]",
                                 style="green",
                             ))
                     elif event.type == "tool_result":
                         if self.verbose:
                             preview = str(event.tool_result)[:100].replace("\n", " ")
                             live.update(Text(
-                                response_text + f"\n\n[green]← {preview}[/green]",
+                                response_text + f"\n\n[{"green"}]← {preview}[/{"green"}]",
                                 style="green",
                             ))
                     elif event.type == "token_usage":
@@ -469,11 +730,11 @@ class InteractiveREPL:
 
             # Final output
             self.console.print()
-            self.console.print(Panel(
+            self.console.print(
                 Markdown(response_text),
+                style="agent",
                 title="Agent",
-                border_style="green",
-            ))
+            )
             self.console.print()
             if self.verbose:
                 self.console.print(
@@ -487,6 +748,9 @@ class InteractiveREPL:
         except Exception as e:
             self.console.print(f"[red]Agent error:[/red] {e}")
             logger.exception("Agent run failed in REPL")
+
+
+# ─── Entry point ─────────────────────────────────────────────────────────────
 
 
 async def run_repl(

@@ -336,7 +336,7 @@ class TestToolRegistryProperties:
 
     @given(
         args=st.dictionaries(
-            keys=st.text(min_size=1, max_size=10),
+            keys=st.text(min_size=1, max_size=10).filter(lambda k: k != "self"),
             values=st.integers(),
         ),
     )

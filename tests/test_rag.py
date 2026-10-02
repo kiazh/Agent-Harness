@@ -626,7 +626,7 @@ class TestFileLoader:
         assert "extension" in doc.metadata
         assert "size_bytes" in doc.metadata
 
-    def test_load_directory(self, loader, tmp_path):
+    def test_load_directory_of_files(self, loader, tmp_path):
         """Test loading a directory of files."""
         (tmp_path / "file1.txt").write_text("content1")
         (tmp_path / "file2.txt").write_text("content2")

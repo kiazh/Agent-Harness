@@ -1,6 +1,7 @@
 """Built-in tools — web search, web extract, and file search."""
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import os
@@ -24,6 +25,7 @@ def _is_safe_url(url: str) -> bool:
     - Non-HTTP/HTTPS protocols
     - Private/internal IP ranges (10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x)
     - localhost
+    - IPv6 private ranges
     """
     try:
         parsed = urlparse(url)
@@ -44,13 +46,12 @@ def _is_safe_url(url: str) -> bool:
 
     # Resolve hostname to IP and check against private ranges
     try:
-        ip_str = socket.gethostbyname(hostname)
-        ip = ipaddress.ip_address(ip_str)
-
-        # Check private/internal ranges
-        if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
-            return False
-
+        # Get all addresses (IPv4 and IPv6)
+        addr_infos = socket.getaddrinfo(hostname, None)
+        for family, _, _, _, sockaddr in addr_infos:
+            ip = ipaddress.ip_address(sockaddr[0])
+            if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
+                return False
     except (socket.gaierror, ValueError):
         # If we can't resolve, reject to be safe
         return False
@@ -58,8 +59,19 @@ def _is_safe_url(url: str) -> bool:
     return True
 
 
+def _get_pinned_ip(hostname: str) -> str | None:
+    """Resolve hostname to IP and return it for pinning in HTTP requests."""
+    try:
+        addr_infos = socket.getaddrinfo(hostname, None)
+        if addr_infos:
+            return addr_infos[0][4][0]
+    except (socket.gaierror, ValueError):
+        pass
+    return None
+
+
 @registry.register(description="Search the web for information")
-def web_search(query: str, limit: int = 5) -> str:
+async def web_search(query: str, limit: int = 5) -> str:
     """Search the web using SearXNG (self-hosted) or DuckDuckGo."""
     if not query or not query.strip():
         return "Error: Empty search query"
@@ -67,7 +79,8 @@ def web_search(query: str, limit: int = 5) -> str:
     # Try SearXNG first (self-hosted)
     searxng_url = os.environ.get("SEARXNG_URL", "http://localhost:8080")
     try:
-        resp = httpx.get(
+        resp = await asyncio.to_thread(
+            httpx.get,
             f"{searxng_url}/search",
             params={"q": query, "format": "json"},
             timeout=10,
@@ -91,7 +104,8 @@ def web_search(query: str, limit: int = 5) -> str:
 
     # Fallback: DuckDuckGo HTML
     try:
-        resp = httpx.get(
+        resp = await asyncio.to_thread(
+            httpx.get,
             "https://html.duckduckgo.com/html/",
             params={"q": query},
             timeout=10,
@@ -120,7 +134,7 @@ def web_search(query: str, limit: int = 5) -> str:
 
 
 @registry.register(description="Extract content from a URL")
-def web_extract(url: str) -> str:
+async def web_extract(url: str) -> str:
     """Extract clean text content from a URL using Jina Reader.
 
     SSRF protection: validates URL against private IP ranges before fetching.
@@ -135,10 +149,20 @@ def web_extract(url: str) -> str:
         return f"Error: URL rejected by security policy (private/internal address or invalid protocol): {url}"
 
     try:
-        resp = httpx.get(
-            f"https://r.jina.ai/{url}",
+        # Pin the resolved IP to prevent DNS rebinding
+        parsed = urlparse(url)
+        hostname = parsed.hostname or ""
+        pinned_ip = _get_pinned_ip(hostname)
+        if pinned_ip is None:
+            return f"Error: Could not resolve hostname: {hostname}"
+
+        # Replace hostname with pinned IP in the URL
+        pinned_url = url.replace(hostname, pinned_ip, 1)
+        resp = await asyncio.to_thread(
+            httpx.get,
+            f"https://r.jina.ai/{pinned_url}",
             timeout=30,
-            headers={"Accept": "text/markdown"},
+            headers={"Accept": "text/markdown", "Host": hostname},
             follow_redirects=False,  # Don't follow redirects to prevent SSRF bypass
         )
         if resp.status_code == 200:
@@ -153,26 +177,49 @@ def web_extract(url: str) -> str:
         return f"Error extracting URL: {e}"
 
 
+def _resolve_path(path: str, base_dir: str | None = None) -> Path:
+    """Resolve a path and ensure it stays within the base directory."""
+    # Use the same base directory as file.py for consistency
+    from ah.tools.file import _BASE_DIR
+    base = Path(base_dir or _BASE_DIR).resolve()
+    # Handle absolute paths directly
+    p = Path(path)
+    if p.is_absolute():
+        resolved = p.resolve()
+    else:
+        resolved = (base / path).resolve()
+    try:
+        resolved.relative_to(base)
+    except ValueError:
+        raise ValueError(f"Path '{path}' escapes base directory '{base}'")
+    return resolved
+
+
 @registry.register(description="Search file contents with regex")
-def search_files(pattern: str, path: str = ".", file_glob: Optional[str] = None) -> str:
+async def search_files(pattern: str, path: str = ".", file_glob: Optional[str] = None) -> str:
     """Search file contents using regex pattern."""
-    dir_path = Path(path)
+    try:
+        dir_path = _resolve_path(path)
+    except ValueError as e:
+        return f"Error: {e}"
     if not dir_path.exists():
         return f"Error: Path not found: {path}"
 
     glob_pattern = file_glob or "*"
     matches = []
     try:
-        for f in dir_path.glob(glob_pattern):
-            if not f.is_file():
-                continue
-            try:
-                with open(f, "r", encoding="utf-8", errors="replace") as fh:
-                    for i, line in enumerate(fh, 1):
-                        if re.search(pattern, line):
-                            matches.append(f"{f}:{i}: {line.strip()}")
-            except Exception:
-                continue
+        def _search():
+            for f in dir_path.glob(glob_pattern):
+                if not f.is_file():
+                    continue
+                try:
+                    with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                        for i, line in enumerate(fh, 1):
+                            if re.search(pattern, line):
+                                matches.append(f"{f}:{i}: {line.strip()}")
+                except Exception:
+                    continue
+        await asyncio.to_thread(_search)
     except Exception as e:
         return f"Error searching files: {e}"
 

@@ -1,6 +1,7 @@
 """Terminal tool — execute shell commands securely."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shlex
@@ -11,11 +12,11 @@ from ah.tools.base import registry
 
 logger = logging.getLogger(__name__)
 
-# Allowlist of safe commands
+# Allowlist of safe commands — intentionally narrow
+# Removed: python, pip, npm, node, curl, wget, rm, cp, mv (command injection risk)
 ALLOWED_COMMANDS = frozenset({
-    "git", "ls", "cat", "grep", "find", "pytest", "python", "pip",
-    "npm", "node", "echo", "pwd", "cd", "mkdir", "cp", "mv", "rm",
-    "touch", "head", "tail", "wc", "diff", "curl", "wget",
+    "git", "ls", "cat", "grep", "find", "pytest",
+    "echo", "pwd", "cd", "mkdir", "touch", "head", "tail", "wc", "diff",
 })
 
 # Characters that could be used for command injection
@@ -54,7 +55,7 @@ def _validate_workdir(workdir: str) -> str | None:
         "required": ["command"],
     },
 )
-def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
+async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
     """Execute a shell command securely (no shell injection)."""
     # Validate timeout
     if not isinstance(timeout, int) or timeout < 1 or timeout > 300:

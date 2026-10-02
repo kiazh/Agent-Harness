@@ -99,32 +99,33 @@ class MemoryConsolidator:
         for candidate in candidates:
             candidate.importance = self.scorer.score(candidate)
 
-        # Step 4: Deduplicate against existing memories
+        # Step 4: Deduplicate against existing memories (batch)
         new_memories: list[MemoryEntry] = []
-        for candidate in candidates:
-            # Skip low-importance memories
-            if candidate.importance < 0.2:
-                continue
+        candidates_with_embedding = [c for c in candidates if c.embedding and c.importance >= 0.2]
+        candidates_without_embedding = [c for c in candidates if not c.embedding and c.importance >= 0.2]
 
-            # Check for similar existing memories
-            if candidate.embedding:
-                similar = await self.store.search_by_embedding(
-                    embedding=candidate.embedding,
-                    agent_id=agent_id,
-                    limit=1,
-                )
-                if similar and similar[0][1] > self.dedup_threshold:
-                    # Duplicate found — update access instead of creating new
-                    existing_entry, similarity = similar[0]
-                    await self.store.update_access(existing_entry.id)
-                    logger.debug(
-                        "Duplicate memory detected (similarity=%.2f), updated access for %s",
-                        similarity,
-                        existing_entry.id,
-                    )
-                    continue
+        # Batch check for duplicates
+        if candidates_with_embedding:
+            # Get all existing memories for this agent once
+            existing_memories = await self.store.search(agent_id=agent_id, limit=1000)
+            for candidate in candidates_with_embedding:
+                is_duplicate = False
+                for existing in existing_memories:
+                    if existing.embedding:
+                        # Simple cosine similarity check
+                        dot = sum(a * b for a, b in zip(candidate.embedding, existing.embedding))
+                        norm_a = sum(a * a for a in candidate.embedding) ** 0.5
+                        norm_b = sum(b * b for b in existing.embedding) ** 0.5
+                        if norm_a > 0 and norm_b > 0:
+                            similarity = dot / (norm_a * norm_b)
+                            if similarity > self.dedup_threshold:
+                                await self.store.update_access(existing.id)
+                                is_duplicate = True
+                                break
+                if not is_duplicate:
+                    new_memories.append(candidate)
 
-            new_memories.append(candidate)
+        new_memories.extend(candidates_without_embedding)
 
         # Step 5: Write new memories
         written: list[MemoryEntry] = []

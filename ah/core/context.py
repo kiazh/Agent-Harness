@@ -9,6 +9,11 @@ import msgpack
 
 from ah.db.connection import db
 from ah.core.models import ContextChunk
+from ah.core.serialization import (
+    embedding_to_str,
+    payload_to_msgpack,
+    row_to_chunk,
+)
 
 __all__ = ["ContextChunk", "ContextManager", "context_manager"]
 
@@ -30,10 +35,10 @@ class ContextManager:
         embedding: list[float] | None = None,
     ) -> ContextChunk:
         """Add a context chunk."""
-        payload_msgpack = msgpack.packb(payload, use_bin_type=True)
+        payload_msgpack = payload_to_msgpack(payload)
         embedding_str = None
         if embedding is not None:
-            embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+            embedding_str = embedding_to_str(embedding)
         row = await db.fetchrow(
             """
             INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding)
@@ -67,10 +72,10 @@ class ContextManager:
         # Prepare records for executemany
         records = []
         for c in chunks:
-            payload_msgpack = msgpack.packb(c["payload"], use_bin_type=True)
+            payload_msgpack = payload_to_msgpack(c["payload"])
             embedding_str = None
             if c.get("embedding") is not None:
-                embedding_str = "[" + ",".join(str(x) for x in c["embedding"]) + "]"
+                embedding_str = embedding_to_str(c["embedding"])
             records.append((
                 c["session_id"],
                 c["agent_id"],
@@ -171,7 +176,7 @@ class ContextManager:
         threshold: float = 0.7,
     ) -> list[tuple[ContextChunk, float]]:
         """Search context chunks by embedding similarity."""
-        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+        embedding_str = embedding_to_str(query_embedding)
         rows = await db.fetch(
             """
             SELECT *, 1 - (embedding <=> $1::vector) AS similarity
@@ -216,21 +221,7 @@ class ContextManager:
         )
 
     def _row_to_chunk(self, row: asyncpg.Record) -> ContextChunk:
-        payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
-        embedding = None
-        if row["embedding"] is not None:
-            embedding = [float(x) for x in str(row["embedding"]).strip("[]").split(",")]
-        return ContextChunk(
-            id=row["id"],
-            session_id=row["session_id"],
-            agent_id=row["agent_id"],
-            chunk_type=row["chunk_type"],
-            payload=payload,
-            token_count=row["token_count"],
-            embedding=embedding,
-            created_at=row["created_at"],
-            accessed_at=row["accessed_at"],
-        )
+        return row_to_chunk(row)
 
     @classmethod
     def reset(cls) -> None:

@@ -7,10 +7,13 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-import msgpack
-
 from ah.core.models import ContextChunk
 from ah.core.provider import audit_log
+from ah.core.serialization import (
+    embedding_to_str,
+    payload_to_msgpack,
+    row_to_chunk,
+)
 from ah.db.connection import db
 from ah.rag.chunker import Chunk, RecursiveCharacterTextSplitter
 from ah.rag.embedder import Embedder, OpenAIEmbedder
@@ -108,8 +111,9 @@ class RAGPipeline:
         texts = [c.text for c in chunks]
         embeddings = await self._embedder.embed_batch(texts)
 
-        # Store in database
+        # Store in database (batch)
         stored_chunks: list[ContextChunk] = []
+        records = []
         for chunk, embedding in zip(chunks, embeddings):
             chunk_meta = {
                 **chunk.metadata,
@@ -120,25 +124,15 @@ class RAGPipeline:
             if metadata:
                 chunk_meta.update(metadata)
 
-            # Build search_text for FTS
             search_text = chunk.text
-
-            # Store in context_chunks
             payload = {
                 "text": chunk.text,
                 "metadata": chunk_meta,
                 "source": doc.source,
             }
-            payload_msgpack = msgpack.packb(payload, use_bin_type=True)
-            embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
-
-            row = await db.fetchrow(
-                """
-                INSERT INTO context_chunks
-                    (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
-                """,
+            payload_msgpack = payload_to_msgpack(payload)
+            embedding_str = embedding_to_str(embedding)
+            records.append((
                 session_id,
                 agent_id,
                 "document",
@@ -146,9 +140,31 @@ class RAGPipeline:
                 chunk.token_count,
                 embedding_str,
                 search_text,
-            )
+            ))
 
-            stored_chunks.append(self._row_to_chunk(row))
+        # Batch insert
+        await db.executemany(
+            """
+            INSERT INTO context_chunks
+                (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """,
+            records,
+        )
+
+        # Fetch back the inserted rows
+        rows = await db.fetch(
+            """
+            SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
+            FROM context_chunks
+            WHERE session_id = $1 AND chunk_type = 'document'
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            session_id,
+            len(records),
+        )
+        stored_chunks = [self._row_to_chunk(r) for r in rows]
 
         audit_log(
             "rag_index_complete",
@@ -264,21 +280,21 @@ class RAGPipeline:
         texts = [t for _, t in chunks_to_embed]
         embeddings = await self._embedder.embed_batch(texts)
 
-        # Update rows with embeddings
+        # Update rows with embeddings (batch)
         updated = []
         for (row, _), embedding in zip(chunks_to_embed, embeddings):
-            embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
-            await db.execute(
-                """
-                UPDATE context_chunks
-                SET embedding = $1, search_text = $2
-                WHERE id = $3
-                """,
-                embedding_str,
-                row.get("search_text", ""),
-                row["id"],
-            )
-            updated.append(row["id"])
+            embedding_str = embedding_to_str(embedding)
+            updated.append((embedding_str, row.get("search_text", ""), row["id"]))
+
+        # Batch update using executemany
+        await db.executemany(
+            """
+            UPDATE context_chunks
+            SET embedding = $1, search_text = $2
+            WHERE id = $3
+            """,
+            updated,
+        )
 
         audit_log(
             "rag_index_context_complete",
@@ -304,19 +320,4 @@ class RAGPipeline:
 
     def _row_to_chunk(self, row: Any) -> ContextChunk:
         """Convert a database row to a ContextChunk."""
-        payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
-        embedding = None
-        if row["embedding"] is not None:
-            embedding = [float(x) for x in str(row["embedding"]).strip("[]").split(",")]
-
-        return ContextChunk(
-            id=row["id"],
-            session_id=row["session_id"],
-            agent_id=row["agent_id"],
-            chunk_type=row["chunk_type"],
-            payload=payload,
-            token_count=row["token_count"],
-            embedding=embedding,
-            created_at=row["created_at"],
-            accessed_at=row["accessed_at"],
-        )
+        return row_to_chunk(row)

@@ -42,3 +42,12 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+
+[tool.coverage.run]
+source = ["ah"]
+omit = ["tests/*", "ah/cli/*"]
+
+[tool.coverage.report]
+fail_under = 60
+show_missing = true

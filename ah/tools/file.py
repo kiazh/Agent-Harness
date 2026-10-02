@@ -1,6 +1,7 @@
 """File tools — read_file, write_file, list_files."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -45,7 +46,7 @@ def _resolve_path(path: str) -> Path:
         "required": ["path"],
     },
 )
-def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
+async def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
     """Read a file with optional offset and limit."""
     try:
         file_path = _resolve_path(path)
@@ -57,11 +58,12 @@ def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
     if not file_path.is_file():
         return f"Error: Not a file: {path}"
     try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-        end = offset + limit - 1
-        selected = lines[offset - 1:end]
-        return "".join(selected)
+        def _read():
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            end = offset + limit - 1
+            return "".join(lines[offset - 1:end])
+        return await asyncio.to_thread(_read)
     except Exception as e:
         return f"Error reading file: {e}"
 
@@ -78,7 +80,7 @@ def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
         "required": ["path", "content"],
     },
 )
-def write_file(path: str, content: str) -> str:
+async def write_file(path: str, content: str) -> str:
     """Write content to a file."""
     try:
         file_path = _resolve_path(path)
@@ -86,10 +88,12 @@ def write_file(path: str, content: str) -> str:
         return f"Error: {e}"
 
     try:
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        return f"Successfully wrote {len(content)} characters to {path}"
+        def _write():
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            return f"Successfully wrote {len(content)} characters to {path}"
+        return await asyncio.to_thread(_write)
     except Exception as e:
         return f"Error writing file: {e}"
 
@@ -106,7 +110,7 @@ def write_file(path: str, content: str) -> str:
         "required": ["path"],
     },
 )
-def list_files(path: str = ".", pattern: str = "*") -> str:
+async def list_files(path: str = ".", pattern: str = "*") -> str:
     """List files in a directory."""
     try:
         dir_path = _resolve_path(path)
@@ -118,16 +122,18 @@ def list_files(path: str = ".", pattern: str = "*") -> str:
     if not dir_path.is_dir():
         return f"Error: Not a directory: {path}"
     try:
-        files = list(dir_path.glob(pattern))
-        if not files:
-            return f"No files found matching '{pattern}' in {path}"
-        lines = []
-        for f in sorted(files):
-            if f.is_file():
-                size = f.stat().st_size
-                lines.append(f"{f.relative_to(dir_path)} ({size} bytes)")
-            elif f.is_dir():
-                lines.append(f"{f.relative_to(dir_path)}/ (dir)")
-        return "\n".join(lines)
+        def _list():
+            files = list(dir_path.glob(pattern))
+            if not files:
+                return f"No files found matching '{pattern}' in {path}"
+            lines = []
+            for f in sorted(files):
+                if f.is_file():
+                    size = f.stat().st_size
+                    lines.append(f"{f.relative_to(dir_path)} ({size} bytes)")
+                elif f.is_dir():
+                    lines.append(f"{f.relative_to(dir_path)}/ (dir)")
+            return "\n".join(lines)
+        return await asyncio.to_thread(_list)
     except Exception as e:
         return f"Error listing files: {e}"

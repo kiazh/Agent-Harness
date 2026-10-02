@@ -105,10 +105,11 @@ class MemoryRetriever:
         if self.rerank and len(candidates) > 1:
             candidates = await self._rerank(query, candidates)
 
-        # Update access stats for retrieved memories
-        for rm in candidates[: self.top_k]:
+        # Update access stats for retrieved memories (batch)
+        ids_to_update = [rm.memory.id for rm in candidates[: self.top_k]]
+        if ids_to_update:
             try:
-                await self.store.update_access(rm.memory.id)
+                await self.store.batch_update_access(ids_to_update)
             except Exception:
                 pass  # Don't fail retrieval due to access update failure
 
@@ -132,10 +133,11 @@ class MemoryRetriever:
             RetrievedMemory(memory=m, score=s, source="dense")
             for m, s in results
         ]
-        # Update access
-        for rm in retrieved:
+        # Update access (batch)
+        ids_to_update = [rm.memory.id for rm in retrieved]
+        if ids_to_update:
             try:
-                await self.store.update_access(rm.memory.id)
+                await self.store.batch_update_access(ids_to_update)
             except Exception:
                 pass
         return retrieved

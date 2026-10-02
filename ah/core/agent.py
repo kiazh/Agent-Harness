@@ -187,7 +187,7 @@ class ReActAgent:
         )
 
         # Get recent context for prompt assembly
-        recent = await context_manager.get_recent_context(session_id, limit=5)
+        recent = await context_manager.get_recent_context(session_id, limit=3)
 
         # Retrieve relevant long-term memories
         retrieved_memories = []
@@ -520,7 +520,7 @@ class ReActAgent:
         )
 
         # Get recent context for prompt assembly
-        recent = await context_manager.get_recent_context(session_id, limit=5)
+        recent = await context_manager.get_recent_context(session_id, limit=3)
 
         # Retrieve RAG context if pipeline is configured
         rag_chunks = await self._get_rag_context(session_id, user_message)
