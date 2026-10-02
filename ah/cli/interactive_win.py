@@ -1,18 +1,18 @@
 """
 Windows-compatible Interactive REPL for AgentHarness.
 
-Uses rich for all visual output and msvcrt for keyboard input.
-No prompt_toolkit dependency — works on Windows cmd.exe and PowerShell 7.
+Clean, minimal, dark-themed CLI inspired by Pi/Copilot CLI design.
+Uses rich for rendering and msvcrt for keyboard input.
 
 Features:
-    - Rich Live for animations and streaming output
-    - msvcrt for keyboard input (arrow keys, enter, escape, backspace)
-    - KawaiiSpinner with kawaii faces and thinking verbs
-    - Unicode response box (╭─...╮/╰...╯) for beautiful output
-    - Skin-configurable color system with 8 themes
-    - Interactive help menu with arrow key navigation
+    - Robot icon header (no ASCII art)
+    - Clean minimal text output (no colorful panels)
+    - Input box with left prompt and right session info
+    - Circle pause button on right of input
+    - Bottom status bar with icon + text
+    - Dark charcoal theme with purple/green accents
     - Autocomplete dropdown for slash commands
-    - Status bar at bottom with session info
+    - Interactive help menu with arrow key navigation
     - All animations from ah/cli/animations.py
 """
 from __future__ import annotations
@@ -44,11 +44,11 @@ else:
 
 from rich.console import Console
 from rich.live import Live
-from rich.panel import Panel
 from rich.text import Text
 from rich.markdown import Markdown
 from rich.table import Table
 from rich import box
+from rich.columns import Columns
 
 from ah import __version__
 from ah.core.agent import ReActAgent
@@ -91,23 +91,44 @@ from ah.cli.animations import (
 
 logger = logging.getLogger(__name__)
 
-# ─── ASCII Art Banner ────────────────────────────────────────────────────────
+# ─── Color Constants (Pi/Copilot CLI dark theme) ─────────────────────────────
 
-ASCII_BANNER = r"""
-  █████╗  ██████╗ ███████╗███╗   ██╗████████╗
- ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
- ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║
- ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║
- ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║
- ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝
+# Background: charcoal/near-black
+BG_DARK = "#1A1A2E"
+BG_INPUT = "#16213E"
+BG_STATUS = "#0F3460"
 
-  ██╗  ██╗ █████╗ ██████╗ ███╗   ██╗███████╗███████╗███████╗
-  ██║  ██║██╔══██╗██╔══██╗████╗  ██║██╔════╝██╔════╝██╔════╝
-  ███████║███████║██████╔╝██╔██╗ ██║█████╗  ███████╗███████╗
-  ██╔══██║██╔══██║██╔══██╗██║╚██╗██║██╔══╝  ╚════██║╚════██║
-  ██║  ██║██║  ██║██║  ██║██║ ╚████║███████╗███████║███████║
-  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝╚══════╝
-"""
+# Text colors
+TEXT_PRIMARY = "#E5E7EB"      # Light gray — main text
+TEXT_SECONDARY = "#9CA3AF"    # Muted gray — secondary text
+TEXT_DIM = "#6B7280"          # Dim gray — hints
+
+# Accents
+ACCENT_PURPLE = "#7C3AED"     # Purple — robot mouth, status icon
+ACCENT_GREEN = "#10B981"      # Green — success, robot mouth square
+ACCENT_BLUE = "#3B82F6"       # Blue — tips, links
+ACCENT_CYAN = "#00D4FF"       # Cyan — primary accent
+
+# Status colors
+STATUS_ERROR = "#EF4444"
+STATUS_WARNING = "#F59E0B"
+STATUS_SUCCESS = "#10B981"
+
+
+# ─── Robot Icon ──────────────────────────────────────────────────────────────
+
+ROBOT_ICON = """\
+  ╭─────╮
+  │ ◉  ◉ │
+  ╰──┬──╯
+  ╔══╧══╗
+  ║ ▓▓▓ ║
+  ║ ▓■▓ ║
+  ╚═════╝"""
+
+# Simpler inline robot for header
+ROBOT_FACE = "🤖"
+
 
 # ─── Command registry ────────────────────────────────────────────────────────
 
@@ -439,7 +460,7 @@ class SkinConfig:
         """Get a style string for the given role."""
         return self._viz.style(role, **kwargs)
 
-    def panel(self, content, **kwargs) -> Panel:
+    def panel(self, content, **kwargs):
         """Create a themed panel."""
         return self._viz.panel(content, **kwargs)
 
@@ -457,11 +478,10 @@ class SkinConfig:
 
 
 class StatusBar:
-    """Bottom status bar with session info.
+    """Bottom status bar with session info — Pi/Copilot CLI style.
 
-    Displays a beautiful status bar at the bottom of the REPL:
-    ─────────────────────────────────────────────
-     Session: abc123 | Model: gpt-4o | Tokens: 1,234
+    Displays a minimal status bar at the bottom:
+    ● Session: abc123 | Model: gpt-4o | Tokens: 1,234    Auto
     """
 
     def __init__(self, skin: SkinConfig) -> None:
@@ -478,29 +498,28 @@ class StatusBar:
         """Render the status bar."""
         text = Text()
 
-        # Separator line
-        text.append("─" * 40, style=self.skin.style("muted"))
-        text.append("\n")
+        # Purple circle icon on left
+        text.append("● ", style=f"bold {ACCENT_PURPLE}")
 
-        # Status content
-        text.append(" Session: ", style=self.skin.style("muted"))
+        # Status text
         if session:
-            text.append(f"{str(session.id)[:8]}", style=self.skin.style("secondary"))
+            short_id = str(session.id)[:8]
+            text.append(f"Session: {short_id}", style=TEXT_PRIMARY)
         else:
-            text.append("None", style=self.skin.style("error"))
+            text.append("No session", style=TEXT_DIM)
 
-        text.append(" | Model: ", style=self.skin.style("muted"))
-        text.append(f"{model}", style=self.skin.style("info"))
+        text.append("  Model: ", style=TEXT_DIM)
+        text.append(f"{model}", style=TEXT_SECONDARY)
 
-        text.append(" | Provider: ", style=self.skin.style("muted"))
-        text.append(f"{provider}", style=self.skin.style("info"))
-
-        text.append(" | Tokens: ", style=self.skin.style("muted"))
-        text.append(f"{tokens:,}", style=self.skin.style("warning"))
+        text.append("  Tokens: ", style=TEXT_DIM)
+        text.append(f"{tokens:,}", style=TEXT_SECONDARY)
 
         if verbose:
-            text.append(" | Verbose: ", style=self.skin.style("muted"))
-            text.append("on", style=self.skin.style("success"))
+            text.append("  Verbose: ", style=TEXT_DIM)
+            text.append("on", style=STATUS_SUCCESS)
+
+        # Right side: "Auto"
+        text.append("    Auto", style=f"bold {ACCENT_PURPLE}")
 
         return text
 
@@ -514,21 +533,10 @@ class StatusBar:
 
 
 class UnicodeResponseBox:
-    """Beautiful Unicode box for response display.
+    """Clean response display — no fancy boxes, just clean text output.
 
-    Creates a stunning box with rounded corners and styled content:
-        ╭──────────────────────────────────────╮
-        │ Response text here...                │
-        ╰──────────────────────────────────────╯
+    Pi/Copilot CLI style: plain text with subtle left border.
     """
-
-    # Box-drawing characters
-    TOP_LEFT = "╭"
-    TOP_RIGHT = "╮"
-    BOTTOM_LEFT = "╰"
-    BOTTOM_RIGHT = "╯"
-    HORIZONTAL = "─"
-    VERTICAL = "│"
 
     def __init__(
         self,
@@ -543,47 +551,22 @@ class UnicodeResponseBox:
         self.style = style
 
     def render(self, content: str, width: int | None = None) -> Text:
-        """Render content in a beautiful Unicode box."""
-        if width is None:
-            width = self.console.width - 4
-
-        # Calculate content width
-        content_width = width - 4  # Account for borders and padding
-
-        # Build the box
+        """Render content as clean text with subtle left border."""
         text = Text()
 
-        # Top border with title
-        if self.title:
-            title_str = f" {self.title} "
-            title_len = len(title_str)
-            remaining = width - 2 - title_len
-            left_fill = remaining // 2
-            right_fill = remaining - left_fill
-            text.append(self.TOP_LEFT + self.HORIZONTAL * left_fill, style=self.style)
-            text.append(title_str, style=f"bold {self.style}")
-            text.append(self.HORIZONTAL * right_fill + self.TOP_RIGHT + "\n", style=self.style)
-        else:
-            text.append(self.TOP_LEFT + self.HORIZONTAL * (width - 2) + self.TOP_RIGHT + "\n", style=self.style)
+        # Subtle left border
+        border_style = f"dim {TEXT_DIM}"
 
-        # Content lines
         lines = content.split("\n")
         for line in lines:
-            # Truncate or pad line to fit
-            if len(line) > content_width:
-                line = line[:content_width - 3] + "..."
-            padded = line.ljust(content_width)
-            text.append(f" {self.VERTICAL} ", style=self.style)
-            text.append(padded, style="text")
-            text.append(f" {self.VERTICAL}\n", style=self.style)
-
-        # Bottom border
-        text.append(self.BOTTOM_LEFT + self.HORIZONTAL * (width - 2) + self.BOTTOM_RIGHT, style=self.style)
+            text.append("  │ ", style=border_style)
+            text.append(line, style=TEXT_PRIMARY)
+            text.append("\n")
 
         return text
 
     def print(self, content: str, width: int | None = None) -> None:
-        """Print content in a Unicode box."""
+        """Print content in clean format."""
         self.console.print(self.render(content, width))
 
 
@@ -663,23 +646,23 @@ async def run_interactive_help(console: Console, skin: SkinConfig) -> str | None
                     cmd_name = stripped.split()[0].lstrip("/").lower()
                     if cmd_idx == selected_idx:
                         # Highlight selected line
-                        text.append(" ▶ ", style=skin.style("warning", bold=True))
-                        text.append(line, style=skin.style("warning", bold=True))
+                        text.append(" ▶ ", style=f"bold {ACCENT_BLUE}")
+                        text.append(line, style=f"bold {ACCENT_BLUE}")
                     else:
-                        text.append("   ", style=skin.style("muted"))
-                        text.append(line, style=skin.style("text"))
+                        text.append("   ", style=TEXT_DIM)
+                        text.append(line, style=TEXT_PRIMARY)
                     break
 
             if not is_command:
-                text.append("   ", style=skin.style("muted"))
-                text.append(line, style=skin.style("muted"))
+                text.append("   ", style=TEXT_DIM)
+                text.append(line, style=TEXT_DIM)
 
             text.append("\n")
 
         # Navigation hint at bottom
-        text.append("─" * 40, style=skin.style("muted"))
+        text.append("─" * 40, style=TEXT_DIM)
         text.append("\n")
-        text.append(" ↑/↓ navigate  •  Enter select  •  Esc close", style=skin.style("muted"))
+        text.append(" ↑/↓ navigate  •  Enter select  •  Esc close", style=TEXT_DIM)
 
         return text
 
@@ -819,21 +802,21 @@ class AutocompleteDropdown:
             return None
 
         text = Text()
-        text.append("┌" + "─" * 38 + "┐\n", style=self.skin.style("muted"))
+        text.append("┌" + "─" * 38 + "┐\n", style=TEXT_DIM)
 
         for i, cmd in enumerate(self._matches[:8]):  # Show max 8 matches
             if i == self._selected_idx:
-                text.append("│ ", style=self.skin.style("muted"))
-                text.append(f"{cmd.display_name:<16}", style=self.skin.style("warning", bold=True))
-                text.append(f" {cmd.description:<20}", style=self.skin.style("warning"))
-                text.append(" │\n", style=self.skin.style("muted"))
+                text.append("│ ", style=TEXT_DIM)
+                text.append(f"{cmd.display_name:<16}", style=f"bold {ACCENT_BLUE}")
+                text.append(f" {cmd.description:<20}", style=ACCENT_BLUE)
+                text.append(" │\n", style=TEXT_DIM)
             else:
-                text.append("│ ", style=self.skin.style("muted"))
-                text.append(f"{cmd.display_name:<16}", style=self.skin.style("text"))
-                text.append(f" {cmd.description:<20}", style=self.skin.style("muted"))
-                text.append(" │\n", style=self.skin.style("muted"))
+                text.append("│ ", style=TEXT_DIM)
+                text.append(f"{cmd.display_name:<16}", style=TEXT_PRIMARY)
+                text.append(f" {cmd.description:<20}", style=TEXT_DIM)
+                text.append(" │\n", style=TEXT_DIM)
 
-        text.append("└" + "─" * 38 + "┘", style=self.skin.style("muted"))
+        text.append("└" + "─" * 38 + "┘", style=TEXT_DIM)
         return text
 
     def next_match(self) -> None:
@@ -864,16 +847,19 @@ class AutocompleteDropdown:
 class InteractiveREPL:
     """Interactive REPL for AgentHarness — Windows-compatible.
 
+    Clean, minimal, dark-themed CLI inspired by Pi/Copilot CLI.
     Uses rich Live for animations and msvcrt for keyboard input.
     No prompt_toolkit dependency.
 
     Features:
-    - KawaiiSpinner with kawaii faces and thinking verbs
-    - Unicode response box for beautiful output
-    - Skin-configurable color system with 8 themes
-    - Interactive help menu with arrow key navigation
+    - Robot icon header (no ASCII art)
+    - Clean minimal text output (no colorful panels)
+    - Input box with left prompt and right session info
+    - Circle pause button on right of input
+    - Bottom status bar with icon + text
+    - Dark charcoal theme with purple/green accents
     - Autocomplete dropdown for slash commands
-    - Status bar at bottom with session info
+    - Interactive help menu with arrow key navigation
     - All animations from ah/cli/animations.py
 
     Usage:
@@ -896,6 +882,9 @@ class InteractiveREPL:
         self.verbose = config.get("verbose") if verbose is None else verbose
         self.context_budget = config.get("context_budget")
         self.agent_id = config.get("agent_id")
+
+        # Live display for input rendering
+        self._live: Live | None = None
 
         # Session state
         self.session: Session | None = None
@@ -979,8 +968,8 @@ class InteractiveREPL:
                     context_budget=self.context_budget,
                 )
 
-            # Show ASCII art banner
-            self._show_banner()
+            # Show clean header with robot icon
+            self._show_header()
 
             # Main REPL loop
             while self._running:
@@ -988,7 +977,7 @@ class InteractiveREPL:
                     # Get user input
                     user_input = await self._get_input()
                 except (EOFError, KeyboardInterrupt):
-                    self.console.print("\n[dim]Use /exit to quit.[/dim]")
+                    self.console.print(f"\n[{TEXT_DIM}]Use /exit to quit.[/{TEXT_DIM}]")
                     continue
 
                 if user_input is None:
@@ -1012,39 +1001,24 @@ class InteractiveREPL:
             self._input_handler.stop()
             await db.close()
 
-    def _show_banner(self) -> None:
-        """Display ASCII art banner with per-skin colors."""
-        # Print ASCII banner with skin colors
-        banner_text = Text()
-        banner_text.append(ASCII_BANNER, style=self.skin.style("primary", bold=True))
-        banner_text.append("\n")
-        banner_text.append("  Self-hosted Multi-Agent AI Orchestration\n", style=self.skin.style("muted"))
-        banner_text.append(f"  v{__version__}", style=self.skin.style("muted"))
-        self.console.print(banner_text)
+    def _show_header(self) -> None:
+        """Display clean header with robot icon — Pi/Copilot CLI style."""
+        # Robot icon
+        self.console.print(f"  {ROBOT_FACE}", style=f"bold {ACCENT_PURPLE}")
         self.console.print()
 
-        # Welcome panel with Unicode box
-        session_id_str = str(self.session.id) if self.session else "None"
-        welcome_text = Text()
-        welcome_text.append("AgentHarness Interactive REPL", style=self.skin.style("primary", bold=True))
-        welcome_text.append(f" v{__version__}\n\n", style=self.skin.style("muted"))
-        welcome_text.append("Session: ", style=self.skin.style("muted"))
-        welcome_text.append(f"{session_id_str}\n", style=self.skin.style("secondary"))
-        welcome_text.append("Model: ", style=self.skin.style("muted"))
-        welcome_text.append(f"{self.model}", style=self.skin.style("success"))
-        welcome_text.append(" | Provider: ", style=self.skin.style("muted"))
-        welcome_text.append(f"{self.provider}\n", style=self.skin.style("success"))
-        welcome_text.append("Skin: ", style=self.skin.style("muted"))
-        welcome_text.append(f"{self.skin.skin_name}", style=self.skin.style("info"))
-        welcome_text.append("\n\nType ", style=self.skin.style("muted"))
-        welcome_text.append("/help", style=self.skin.style("warning", bold=True))
-        welcome_text.append(" for commands, ", style=self.skin.style("muted"))
-        welcome_text.append("/exit", style=self.skin.style("error", bold=True))
-        welcome_text.append(" to quit.", style=self.skin.style("muted"))
+        # Clean tagline
+        self.console.print(f"  AgentHarness uses AI.", style=f"bold {TEXT_PRIMARY}")
+        self.console.print(f"  Check for mistakes.", style=TEXT_SECONDARY)
+        self.console.print()
 
-        self.console.print(
-            self.skin.panel(welcome_text, style="primary", title="Welcome")
-        )
+        # Tip with blue bullet
+        self.console.print(f"  ● Tip: Type /help for commands", style=ACCENT_BLUE)
+        self.console.print()
+
+        # Session info line
+        session_id_str = str(self.session.id)[:8] if self.session else "None"
+        self.console.print(f"  Session: {session_id_str}  Model: {self.model}", style=TEXT_DIM)
         self.console.print()
 
     def _get_prompt_text(self) -> str:
@@ -1108,6 +1082,11 @@ class InteractiveREPL:
                 continue
 
             if char == "\r":  # Enter
+                # Stop the Live display
+                if self._live:
+                    self._live.stop()
+                    self._live = None
+
                 # If autocomplete is visible, select the current match and submit
                 if self._autocomplete._visible:
                     selected = self._autocomplete.get_selected()
@@ -1208,32 +1187,53 @@ class InteractiveREPL:
             self._autocomplete.hide()
 
     def _render_input_line(self, prompt: str) -> None:
-        """Render the current input line with prompt and autocomplete."""
-        # Clear the current line and re-render
-        # Use rich console to print the prompt and input
+        """Render the current input line with prompt and autocomplete.
+
+        Pi/Copilot CLI style:
+        - Left: prompt text
+        - Right: session info
+        - Circle button on far right
+        """
+        # Build the full renderable: prompt + input + dropdown
         text = Text()
-        text.append(prompt, style=self.skin.style("primary", bold=True))
+
+        # Left side: prompt
+        text.append(prompt, style=f"bold {ACCENT_CYAN}")
 
         # Show the input buffer with cursor
         before_cursor = self._input_buffer[:self._cursor_pos]
         at_cursor = self._input_buffer[self._cursor_pos:self._cursor_pos + 1]
         after_cursor = self._input_buffer[self._cursor_pos + 1:]
 
-        text.append(before_cursor, style=self.skin.style("text"))
+        text.append(before_cursor, style=TEXT_PRIMARY)
         if at_cursor:
-            text.append(at_cursor, style=self.skin.style("highlight", reverse=True))
+            text.append(at_cursor, style=f"reverse {TEXT_PRIMARY}")
         else:
-            text.append(" ", style=self.skin.style("highlight", reverse=True))
-        text.append(after_cursor, style=self.skin.style("text"))
+            text.append(" ", style=f"reverse {TEXT_PRIMARY}")
+        text.append(after_cursor, style=TEXT_PRIMARY)
 
-        # Print the input line
-        self.console.print(text, end="\r")
+        # Right side: session info + circle button
+        session_info = f"Session: {self._tokens_used} AIC used"
+        text.append(f"  {session_info}", style=TEXT_DIM)
+        text.append("  ◯", style=f"bold {ACCENT_PURPLE}")
 
         # Show autocomplete dropdown if visible
         dropdown = self._autocomplete.render()
         if dropdown:
-            self.console.print()
-            self.console.print(dropdown)
+            text.append("\n")
+            text.append(dropdown)
+
+        # Use Live to replace the previous render
+        if self._live is None:
+            self._live = Live(
+                text,
+                console=self.console,
+                refresh_per_second=10,
+                transient=True,
+            )
+            self._live.start()
+        else:
+            self._live.update(text)
 
     async def _handle_slash_command(self, command: str) -> bool:
         """Handle a slash command. Returns False if the REPL should exit."""
@@ -1245,7 +1245,7 @@ class InteractiveREPL:
         cmd_name = cmd.lstrip("/")
 
         if cmd_name in ("exit", "quit"):
-            self.console.print(self.skin.viz.success("Goodbye!"))
+            self.console.print(f"  Goodbye!", style=ACCENT_GREEN)
             return False
 
         elif cmd_name == "help":
@@ -1291,8 +1291,8 @@ class InteractiveREPL:
             await self._compress_context()
 
         else:
-            self.console.print(self.skin.viz.error(f"Unknown command: {cmd}"))
-            self.console.print(self.skin.viz.muted("Type /help for available commands."))
+            self.console.print(f"  Unknown command: {cmd}", style=STATUS_ERROR)
+            self.console.print(f"  Type /help for available commands.", style=TEXT_DIM)
 
         return True
 
@@ -1306,38 +1306,25 @@ class InteractiveREPL:
     async def _show_status(self) -> None:
         """Show current session and agent status."""
         if not self.session:
-            self.console.print(self.skin.viz.warning("No active session."))
+            self.console.print(f"  No active session.", style=STATUS_WARNING)
             return
 
-        # Build status content
-        status_text = Text()
-        status_text.append("Session ID: ", style=self.skin.style("muted"))
-        status_text.append(f"{self.session.id}\n", style=self.skin.style("secondary"))
-        status_text.append("Title: ", style=self.skin.style("muted"))
-        status_text.append(f"{self.session.title or '(untitled)'}\n", style=self.skin.style("text"))
-        status_text.append("Status: ", style=self.skin.style("muted"))
-        status_text.append(f"{self.session.status}\n", style=self.skin.style("success"))
-        status_text.append("Model: ", style=self.skin.style("muted"))
-        status_text.append(f"{self.model}\n", style=self.skin.style("info"))
-        status_text.append("Provider: ", style=self.skin.style("muted"))
-        status_text.append(f"{self.provider}\n", style=self.skin.style("info"))
-        status_text.append("Context Budget: ", style=self.skin.style("muted"))
-        status_text.append(f"{self.context_budget}\n", style=self.skin.style("warning"))
-        status_text.append("Verbose: ", style=self.skin.style("muted"))
-        status_text.append(f"{'on' if self.verbose else 'off'}\n", style=self.skin.style("text"))
-        status_text.append("Agent ID: ", style=self.skin.style("muted"))
-        status_text.append(f"{self.agent_id}", style=self.skin.style("text"))
-
-        self.console.print(
-            self.skin.panel(status_text, style="info", title="Status")
-        )
+        # Clean status output — no panels
+        self.console.print(f"  Session ID: {self.session.id}", style=TEXT_PRIMARY)
+        self.console.print(f"  Title: {self.session.title or '(untitled)'}", style=TEXT_SECONDARY)
+        self.console.print(f"  Status: {self.session.status}", style=STATUS_SUCCESS)
+        self.console.print(f"  Model: {self.model}", style=TEXT_SECONDARY)
+        self.console.print(f"  Provider: {self.provider}", style=TEXT_SECONDARY)
+        self.console.print(f"  Context Budget: {self.context_budget}", style=TEXT_SECONDARY)
+        self.console.print(f"  Verbose: {'on' if self.verbose else 'off'}", style=TEXT_SECONDARY)
+        self.console.print(f"  Agent ID: {self.agent_id}", style=TEXT_DIM)
         self.console.print()
 
     async def _list_sessions(self) -> None:
         """List recent sessions."""
         sessions = await session_manager.list_sessions(limit=10)
         if not sessions:
-            self.console.print(self.skin.viz.warning("No sessions found."))
+            self.console.print(f"  No sessions found.", style=STATUS_WARNING)
             return
 
         table = self.skin.viz.table(style="standard", title="Recent Sessions")
@@ -1368,39 +1355,39 @@ class InteractiveREPL:
             provider=self.provider,
             context_budget=self.context_budget,
         )
-        self.console.print(self.skin.viz.success(f"New session created: {self.session.id}"))
+        self.console.print(f"  New session created: {self.session.id}", style=STATUS_SUCCESS)
         self.console.print()
 
     async def _switch_session(self, session_id: str) -> None:
         """Switch to a different session."""
         if not session_id:
-            self.console.print(self.skin.viz.warning("Usage: /switch <session_id>"))
+            self.console.print(f"  Usage: /switch <session_id>", style=STATUS_WARNING)
             return
 
         try:
             sid = uuid.UUID(session_id)
         except ValueError:
-            self.console.print(self.skin.viz.error(f"Invalid session ID: {session_id}"))
+            self.console.print(f"  Invalid session ID: {session_id}", style=STATUS_ERROR)
             return
 
         session = await session_manager.get(sid)
         if not session:
-            self.console.print(self.skin.viz.error(f"Session {session_id} not found"))
+            self.console.print(f"  Session {session_id} not found", style=STATUS_ERROR)
             return
 
         self.session = session
-        self.console.print(self.skin.viz.success(f"Switched to session: {session.id}"))
+        self.console.print(f"  Switched to session: {session.id}", style=STATUS_SUCCESS)
         self.console.print()
 
     async def _show_context(self) -> None:
         """Show context for current session."""
         if not self.session:
-            self.console.print(self.skin.viz.warning("No active session."))
+            self.console.print(f"  No active session.", style=STATUS_WARNING)
             return
 
         chunks = await context_manager.get_chunks(self.session.id, limit=10)
         if not chunks:
-            self.console.print(self.skin.viz.warning("No context chunks found."))
+            self.console.print(f"  No context chunks found.", style=STATUS_WARNING)
             return
 
         table = self.skin.viz.table(
@@ -1423,7 +1410,7 @@ class InteractiveREPL:
         self.console.print(table)
 
         total_tokens = await context_manager.get_token_usage(self.session.id)
-        self.console.print(f"\n[dim]Total tokens: {total_tokens}[/dim]")
+        self.console.print(f"\n  Total tokens: {total_tokens}", style=TEXT_DIM)
         self.console.print()
 
     async def _compress_context(self) -> None:
@@ -1431,17 +1418,17 @@ class InteractiveREPL:
         from ah.core.compression import ContextCompressor, CompressionConfig
 
         if not self.session:
-            self.console.print(self.skin.viz.warning("No active session."))
+            self.console.print(f"  No active session.", style=STATUS_WARNING)
             return
 
         # Get all chunks for the session
         chunks = await context_manager.get_chunks(self.session.id, limit=1000)
         if not chunks:
-            self.console.print(self.skin.viz.warning("No context chunks to compress."))
+            self.console.print(f"  No context chunks to compress.", style=STATUS_WARNING)
             return
 
         total_tokens = await context_manager.get_token_usage(self.session.id)
-        self.console.print(f"[dim]Current context: {len(chunks)} chunks, {total_tokens} tokens[/dim]")
+        self.console.print(f"  Current context: {len(chunks)} chunks, {total_tokens} tokens", style=TEXT_DIM)
 
         # Build compression config from global config
         comp_config = CompressionConfig(
@@ -1470,7 +1457,7 @@ class InteractiveREPL:
         )
 
         if result.original_count == 0:
-            self.console.print(self.skin.viz.warning("Nothing to compress (not enough chunks)."))
+            self.console.print(f"  Nothing to compress (not enough chunks).", style=STATUS_WARNING)
             return
 
         # Delete old chunks and store compressed ones
@@ -1487,62 +1474,61 @@ class InteractiveREPL:
             )
 
         self.console.print(
-            self.skin.viz.success(
-                f"Context compressed: "
-                f"{result.original_count} chunks → {len(result.compressed_chunks)} chunks, "
-                f"{result.original_tokens} → {result.compressed_tokens} tokens "
-                f"({result.compression_ratio:.1%} ratio, method: {result.method})"
-            )
+            f"  Context compressed: "
+            f"{result.original_count} chunks → {len(result.compressed_chunks)} chunks, "
+            f"{result.original_tokens} → {result.compressed_tokens} tokens "
+            f"({result.compression_ratio:.1%} ratio, method: {result.method})",
+            style=STATUS_SUCCESS,
         )
         self.console.print()
 
     def _set_model(self, model: str) -> None:
         """Set the model."""
         if not model:
-            self.console.print(f"Current model: {self.skin.viz.info(self.model)}")
+            self.console.print(f"  Current model: {self.model}", style=TEXT_SECONDARY)
             return
         self.model = model
-        self.console.print(self.skin.viz.success(f"Model set to: {model}"))
+        self.console.print(f"  Model set to: {model}", style=STATUS_SUCCESS)
 
     def _set_provider(self, provider: str) -> None:
         """Set the provider."""
         if not provider:
-            self.console.print(f"Current provider: {self.skin.viz.info(self.provider)}")
+            self.console.print(f"  Current provider: {self.provider}", style=TEXT_SECONDARY)
             return
         if provider not in ("openrouter", "ollama"):
-            self.console.print(self.skin.viz.error(f"Unknown provider: {provider}. Use 'openrouter' or 'ollama'."))
+            self.console.print(f"  Unknown provider: {provider}. Use 'openrouter' or 'ollama'.", style=STATUS_ERROR)
             return
         self.provider = provider
-        self.console.print(self.skin.viz.success(f"Provider set to: {provider}"))
+        self.console.print(f"  Provider set to: {provider}", style=STATUS_SUCCESS)
 
     def _set_budget(self, budget: str) -> None:
         """Set the context budget."""
         if not budget:
-            self.console.print(f"Current context budget: {self.skin.viz.info(str(self.context_budget))}")
+            self.console.print(f"  Current context budget: {self.context_budget}", style=TEXT_SECONDARY)
             return
         try:
             self.context_budget = int(budget)
-            self.console.print(self.skin.viz.success(f"Context budget set to: {self.context_budget}"))
+            self.console.print(f"  Context budget set to: {self.context_budget}", style=STATUS_SUCCESS)
         except ValueError:
-            self.console.print(self.skin.viz.error(f"Invalid budget: {budget}"))
+            self.console.print(f"  Invalid budget: {budget}", style=STATUS_ERROR)
 
     def _toggle_verbose(self) -> None:
         """Toggle verbose mode."""
         self.verbose = not self.verbose
-        self.console.print(self.skin.viz.info(f"Verbose mode: {'on' if self.verbose else 'off'}"))
+        self.console.print(f"  Verbose mode: {'on' if self.verbose else 'off'}", style=TEXT_SECONDARY)
 
     def _set_skin(self, skin_name: str) -> None:
         """Set the color skin."""
         if not skin_name:
-            self.console.print(f"Current skin: {self.skin.viz.info(self.skin.skin_name)}")
-            self.console.print(f"Available skins: {', '.join(SkinConfig.available_skins())}")
+            self.console.print(f"  Current skin: {self.skin.skin_name}", style=TEXT_SECONDARY)
+            self.console.print(f"  Available skins: {', '.join(SkinConfig.available_skins())}", style=TEXT_DIM)
             return
         if skin_name not in SkinConfig.SKINS:
-            self.console.print(self.skin.viz.error(f"Unknown skin: {skin_name}"))
-            self.console.print(f"Available skins: {', '.join(SkinConfig.available_skins())}")
+            self.console.print(f"  Unknown skin: {skin_name}", style=STATUS_ERROR)
+            self.console.print(f"  Available skins: {', '.join(SkinConfig.available_skins())}", style=TEXT_DIM)
             return
         self.skin.set_skin(skin_name)
-        self.console.print(self.skin.viz.success(f"Skin set to: {skin_name}"))
+        self.console.print(f"  Skin set to: {skin_name}", style=STATUS_SUCCESS)
 
     def _show_config(self) -> None:
         """Show current configuration."""
@@ -1560,14 +1546,14 @@ class InteractiveREPL:
     async def _handle_message(self, message: str) -> None:
         """Send a message to the agent and display the streaming response."""
         if not self.session:
-            self.console.print(self.skin.viz.error("No active session. Use /new to create one."))
+            self.console.print(f"  No active session. Use /new to create one.", style=STATUS_ERROR)
             return
 
         # Create provider and agent
         try:
             llm = get_provider(provider=self.provider, model=self.model)
         except ValueError as e:
-            self.console.print(self.skin.viz.error(f"Provider error: {e}"))
+            self.console.print(f"  Provider error: {e}", style=STATUS_ERROR)
             return
 
         agent = ReActAgent(
@@ -1636,28 +1622,28 @@ class InteractiveREPL:
             # Update token counter
             self._tokens_used = tokens_used
 
-            # Final output in a beautiful Unicode box
+            # Final output — clean text, no fancy box
             self.console.print()
-            self._response_box.print(response_text)
+            self.console.print(f"  {response_text}", style=TEXT_PRIMARY)
             self.console.print()
 
             # Show metadata
             if self.verbose:
                 meta_text = Text()
-                meta_text.append("Iterations: ", style=self.skin.style("muted"))
-                meta_text.append(f"{event.response.iterations}", style=self.skin.style("info"))
-                meta_text.append(" | Tool calls: ", style=self.skin.style("muted"))
-                meta_text.append(f"{tool_calls_count}", style=self.skin.style("warning"))
-                meta_text.append(" | Tokens: ", style=self.skin.style("muted"))
-                meta_text.append(f"{tokens_used}", style=self.skin.style("success"))
+                meta_text.append("  Iterations: ", style=TEXT_DIM)
+                meta_text.append(f"{event.response.iterations}", style=TEXT_SECONDARY)
+                meta_text.append(" | Tool calls: ", style=TEXT_DIM)
+                meta_text.append(f"{tool_calls_count}", style=TEXT_SECONDARY)
+                meta_text.append(" | Tokens: ", style=TEXT_DIM)
+                meta_text.append(f"{tokens_used}", style=STATUS_SUCCESS)
                 self.console.print(meta_text)
 
             # Show session ID
-            self.console.print(self.skin.viz.muted(f"Session ID: {self.session.id}"))
+            self.console.print(f"  Session ID: {self.session.id}", style=TEXT_DIM)
             self.console.print()
 
         except Exception as e:
-            self.console.print(self.skin.viz.error(f"Agent error: {e}"))
+            self.console.print(f"  Agent error: {e}", style=STATUS_ERROR)
             logger.exception("Agent run failed in REPL")
 
 
