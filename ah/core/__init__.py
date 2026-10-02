@@ -1,6 +1,15 @@
 """AgentHarness core — models, agent, context, session, provider, config."""
 from __future__ import annotations
 
+from ah.core.exceptions import (
+    AgentHarnessError,
+    ContextBudgetExceededError,
+    DatabaseError,
+    ProviderError,
+    SessionNotFoundError,
+    ToolError,
+    ValidationError,
+)
 from ah.core.models import (
     AgentResponse,
     ContextChunk,
@@ -14,6 +23,13 @@ from ah.core.models import (
 from ah.core.config import Config, config
 
 __all__ = [
+    "AgentHarnessError",
+    "ContextBudgetExceededError",
+    "DatabaseError",
+    "ProviderError",
+    "SessionNotFoundError",
+    "ToolError",
+    "ValidationError",
     "AgentResponse",
     "ContextChunk",
     "LLMResponse",

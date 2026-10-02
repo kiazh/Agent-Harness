@@ -8,16 +8,20 @@ from typing import AsyncGenerator
 
 import asyncpg
 
+from ah.core.config import config
+from ah.core.exceptions import DatabaseError
+from ah.core.metrics import metrics
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_DSN = "postgresql://postgres:ah_dev@localhost:5432/agentharness"
+DEFAULT_DSN = "postgresql://postgres:***@localhost:5432/agentharness"
 
 
 class Database:
     """Manages asyncpg connection pool."""
 
     def __init__(self, dsn: str | None = None) -> None:
-        self.dsn = dsn or os.environ.get("DATABASE_URL", DEFAULT_DSN)
+        self.dsn = dsn or config.get("database_url") or DEFAULT_DSN
         self._pool: asyncpg.Pool | None = None
 
     async def connect(self) -> None:
@@ -38,7 +42,7 @@ class Database:
     @property
     def pool(self) -> asyncpg.Pool:
         if self._pool is None:
-            raise RuntimeError("Database not connected. Call connect() first.")
+            raise DatabaseError("Database not connected. Call connect() first.")
         return self._pool
 
     @asynccontextmanager
@@ -49,23 +53,63 @@ class Database:
 
     async def execute(self, query: str, *args) -> str:
         """Execute a query."""
-        async with self.acquire() as conn:
-            return await conn.execute(query, *args)
+        import time
+        start = time.monotonic()
+        try:
+            async with self.acquire() as conn:
+                result = await conn.execute(query, *args)
+            duration_ms = (time.monotonic() - start) * 1000
+            metrics.record_db_call("execute", duration_ms)
+            return result
+        except Exception as e:
+            duration_ms = (time.monotonic() - start) * 1000
+            metrics.record_db_call("execute", duration_ms, is_error=True)
+            raise
 
     async def fetch(self, query: str, *args) -> list[asyncpg.Record]:
         """Fetch rows."""
-        async with self.acquire() as conn:
-            return await conn.fetch(query, *args)
+        import time
+        start = time.monotonic()
+        try:
+            async with self.acquire() as conn:
+                result = await conn.fetch(query, *args)
+            duration_ms = (time.monotonic() - start) * 1000
+            metrics.record_db_call("fetch", duration_ms)
+            return result
+        except Exception as e:
+            duration_ms = (time.monotonic() - start) * 1000
+            metrics.record_db_call("fetch", duration_ms, is_error=True)
+            raise
 
     async def fetchrow(self, query: str, *args) -> asyncpg.Record | None:
         """Fetch a single row."""
-        async with self.acquire() as conn:
-            return await conn.fetchrow(query, *args)
+        import time
+        start = time.monotonic()
+        try:
+            async with self.acquire() as conn:
+                result = await conn.fetchrow(query, *args)
+            duration_ms = (time.monotonic() - start) * 1000
+            metrics.record_db_call("fetchrow", duration_ms)
+            return result
+        except Exception as e:
+            duration_ms = (time.monotonic() - start) * 1000
+            metrics.record_db_call("fetchrow", duration_ms, is_error=True)
+            raise
 
     async def fetchval(self, query: str, *args):
         """Fetch a single value."""
-        async with self.acquire() as conn:
-            return await conn.fetchval(query, *args)
+        import time
+        start = time.monotonic()
+        try:
+            async with self.acquire() as conn:
+                result = await conn.fetchval(query, *args)
+            duration_ms = (time.monotonic() - start) * 1000
+            metrics.record_db_call("fetchval", duration_ms)
+            return result
+        except Exception as e:
+            duration_ms = (time.monotonic() - start) * 1000
+            metrics.record_db_call("fetchval", duration_ms, is_error=True)
+            raise
 
     async def initialize_schema(self, schema_path: str | None = None) -> None:
         """Run schema.sql to create tables."""

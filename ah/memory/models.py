@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from ah.core.exceptions import ValidationError
+
 
 @dataclass
 class MemoryEntry:
@@ -32,7 +34,7 @@ class MemoryEntry:
         """Validate category and clamp importance to [0, 1]."""
         valid_categories = {"preference", "decision", "fact", "event", "transient"}
         if self.category not in valid_categories:
-            raise ValueError(
+            raise ValidationError(
                 f"Invalid category '{self.category}'. Must be one of: {valid_categories}"
             )
         self.importance = max(0.0, min(1.0, self.importance))

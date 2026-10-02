@@ -8,6 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ah.core.config import config
+
+from ah.core.exceptions import ValidationError
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +53,7 @@ class FileLoader:
     })
 
     def __init__(self, base_dir: str | Path | None = None) -> None:
-        self._base_dir = Path(base_dir) if base_dir else Path(os.environ.get("AGENT_HARNESS_HOME", os.getcwd())).resolve()
+        self._base_dir = Path(base_dir) if base_dir else Path(config.get("agent_harness_home") or os.getcwd()).resolve()
 
     def load(self, path: str | Path) -> Document:
         """Load a file and return a Document.
@@ -59,9 +63,9 @@ class FileLoader:
         file_path = self._resolve_path(path)
 
         if not file_path.exists():
-            raise ValueError(f"File not found: {path}")
+            raise ValidationError(f"File not found: {path}")
         if not file_path.is_file():
-            raise ValueError(f"Not a file: {path}")
+            raise ValidationError(f"Not a file: {path}")
 
         ext = file_path.suffix.lower()
         if ext == ".pdf":
@@ -83,9 +87,9 @@ class FileLoader:
         dir_path = self._resolve_path(path)
 
         if not dir_path.exists():
-            raise ValueError(f"Directory not found: {path}")
+            raise ValidationError(f"Directory not found: {path}")
         if not dir_path.is_dir():
-            raise ValueError(f"Not a directory: {path}")
+            raise ValidationError(f"Not a directory: {path}")
 
         documents = []
         glob_pattern = f"**/{pattern}" if recursive else pattern
@@ -109,7 +113,7 @@ class FileLoader:
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
         except Exception as e:
-            raise ValueError(f"Failed to read {file_path}: {e}")
+            raise ValidationError(f"Failed to read {file_path}: {e}")
 
         metadata = {
             "filename": file_path.name,
@@ -133,9 +137,9 @@ class FileLoader:
         try:
             import PyPDF2
         except ImportError:
-            raise ValueError(
-                "PDF support requires PyPDF2. Install with: pip install PyPDF2"
-            )
+            raise ValidationError(
+                            "PDF support requires PyPDF2. Install with: pip install PyPDF2"
+                        )
 
         try:
             with open(file_path, "rb") as f:
@@ -145,7 +149,7 @@ class FileLoader:
                     text_parts.append(page.extract_text() or "")
                 content = "\n\n".join(text_parts)
         except Exception as e:
-            raise ValueError(f"Failed to read PDF {file_path}: {e}")
+            raise ValidationError(f"Failed to read PDF {file_path}: {e}")
 
         metadata = {
             "filename": file_path.name,
@@ -165,7 +169,7 @@ class FileLoader:
         """Resolve path relative to base directory, ensuring it stays inside."""
         candidate = (self._base_dir / str(path)).resolve()
         if not candidate.is_relative_to(self._base_dir):
-            raise ValueError(
-                f"Path '{path}' escapes the allowed base directory '{self._base_dir}'"
-            )
+            raise ValidationError(
+                            f"Path '{path}' escapes the allowed base directory '{self._base_dir}'"
+                        )
         return candidate

@@ -8,6 +8,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from ah.core.exceptions import ToolError, ValidationError
 from ah.core.models import ToolDefinition
 from ah.core.provider import audit_log
 
@@ -123,19 +124,19 @@ class ToolRegistry:
         # Check required parameters
         for req_param in required:
             if req_param not in kwargs:
-                raise ValueError(
-                    f"Tool '{tool.name}' missing required parameter: '{req_param}'"
-                )
+                raise ValidationError(
+                                    f"Tool '{tool.name}' missing required parameter: '{req_param}'"
+                                )
 
         # Check for unknown parameters
         allowed_params = set(properties.keys())
         provided_params = set(kwargs.keys())
         unknown_params = provided_params - allowed_params
         if unknown_params:
-            raise ValueError(
-                f"Tool '{tool.name}' received unknown parameters: {unknown_params}. "
-                f"Allowed: {allowed_params}"
-            )
+            raise ValidationError(
+                            f"Tool '{tool.name}' received unknown parameters: {unknown_params}. "
+                            f"Allowed: {allowed_params}"
+                        )
 
         # Type checking
         type_map = {
@@ -154,16 +155,16 @@ class ToolRegistry:
             if expected_type and expected_type in type_map:
                 python_type = type_map[expected_type]
                 if not isinstance(param_value, python_type):
-                    raise ValueError(
-                        f"Tool '{tool.name}' parameter '{param_name}' expected type "
-                        f"'{expected_type}', got '{type(param_value).__name__}'"
-                    )
+                    raise ValidationError(
+                                            f"Tool '{tool.name}' parameter '{param_name}' expected type "
+                                            f"'{expected_type}', got '{type(param_value).__name__}'"
+                                        )
 
     async def execute(self, name: str, **kwargs) -> Any:
         """Execute a tool by name with input validation."""
         if name not in self._tools:
             audit_log("tool_execution_error", tool_name=name, error="not_registered")
-            raise ValueError(f"Tool '{name}' not registered")
+            raise ToolError(f"Tool '{name}' not registered")
 
         tool = self._tools[name]
 

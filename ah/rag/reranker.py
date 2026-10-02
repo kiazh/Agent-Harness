@@ -10,6 +10,8 @@ from typing import Any
 
 import httpx
 
+from ah.core.config import config
+from ah.core.exceptions import ProviderError
 from ah.core.provider import audit_log
 
 logger = logging.getLogger(__name__)
@@ -65,9 +67,9 @@ class CohereReranker(Reranker):
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
-        self.api_key = api_key or os.environ.get("COHERE_API_KEY", "")
+        self.api_key = api_key or config.get("cohere_api_key") or ""
         if not self.api_key:
-            raise ValueError("COHERE_API_KEY not set")
+            raise ProviderError("COHERE_API_KEY not set")
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout

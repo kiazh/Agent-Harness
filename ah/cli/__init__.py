@@ -176,9 +176,9 @@ def status():
             for t in tools:
                 console.print(f"    - {t}")
 
-            # Check env
-            import os
-            if os.environ.get("OPENROUTER_API_KEY"):
+            # Check config
+            from ah.core.config import config
+            if config.get("openrouter_api_key"):
                 console.print("  OpenRouter API key: [green]set[/green]")
             else:
                 console.print("  OpenRouter API key: [yellow]not set[/yellow]")
@@ -340,13 +340,13 @@ def doctor():
     _run(_check_db())
 
     # Environment
-    import os
-    if os.environ.get("OPENROUTER_API_KEY"):
+    from ah.core.config import config
+    if config.get("openrouter_api_key"):
         console.print("  OPENROUTER_API_KEY: [green]set[/green]")
     else:
         console.print("  OPENROUTER_API_KEY: [yellow]not set[/yellow]")
 
-    if os.environ.get("DATABASE_URL"):
+    if config.get("database_url"):
         console.print("  DATABASE_URL: [green]set[/green]")
     else:
         console.print("  DATABASE_URL: [yellow]not set (using default)[/yellow]")

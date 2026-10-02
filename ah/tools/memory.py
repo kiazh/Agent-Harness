@@ -5,6 +5,7 @@ import logging
 import uuid
 from typing import Any
 
+from ah.core.exceptions import ToolError, ValidationError
 from ah.core.provider import audit_log
 from ah.memory.models import MemoryEntry
 from ah.memory.scorer import ImportanceScorer
@@ -63,7 +64,7 @@ async def remember(
         # Validate category
         valid_categories = {"preference", "decision", "fact", "event", "transient"}
         if category not in valid_categories:
-            return f"Error: Invalid category '{category}'. Must be one of: {valid_categories}"
+            raise ValidationError(f"Invalid category '{category}'. Must be one of: {valid_categories}")
 
         # Clamp importance
         importance = max(0.0, min(1.0, importance))
@@ -74,7 +75,7 @@ async def remember(
             try:
                 sid = uuid.UUID(session_id)
             except ValueError:
-                return f"Error: Invalid session_id '{session_id}'"
+                raise ValidationError(f"Invalid session_id '{session_id}'")
 
         # Create and store memory
         entry = await memory_store.add(
@@ -98,7 +99,7 @@ async def remember(
 
     except Exception as e:
         logger.error("Failed to store memory: %s", e)
-        return f"Error storing memory: {e}"
+        raise ToolError(f"Error storing memory: {e}")
 
 
 @registry.register(
@@ -166,4 +167,4 @@ async def recall(
 
     except Exception as e:
         logger.error("Failed to recall memories: %s", e)
-        return f"Error recalling memories: {e}"
+        raise ToolError(f"Error recalling memories: {e}")

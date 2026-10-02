@@ -33,6 +33,27 @@ DEFAULTS: dict[str, Any] = {
     "streaming": True,
     "theme": "default",
     "history_size": 100,
+    # API keys and service URLs
+    "openrouter_api_key": "",
+    "openai_api_key": "",
+    "cohere_api_key": "",
+    "database_url": "",
+    "searxng_url": "http://localhost:8080",
+    "agent_harness_home": "",
+    "tmpdir": "",
+    "temp": "",
+}
+
+# Map config keys to their legacy environment variable names
+LEGACY_ENV_VARS: dict[str, str] = {
+    "openrouter_api_key": "OPENROUTER_API_KEY",
+    "openai_api_key": "OPENAI_API_KEY",
+    "cohere_api_key": "COHERE_API_KEY",
+    "database_url": "DATABASE_URL",
+    "searxng_url": "SEARXNG_URL",
+    "agent_harness_home": "AGENT_HARNESS_HOME",
+    "tmpdir": "TMPDIR",
+    "temp": "TEMP",
 }
 
 
@@ -61,15 +82,32 @@ class Config:
     streaming: bool = True
     theme: str = "default"
     history_size: int = 100
+    # API keys and service URLs
+    openrouter_api_key: str = ""
+    openai_api_key: str = ""
+    cohere_api_key: str = ""
+    database_url: str = ""
+    searxng_url: str = "http://localhost:8080"
+    agent_harness_home: str = ""
+    tmpdir: str = ""
+    temp: str = ""
 
     # Per-session overrides (not persisted to file)
     _session_overrides: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def get(self, key: str) -> Any:
-        """Get a config value, checking session overrides first."""
+        """Get a config value, checking session overrides first, then legacy env vars."""
         if key in self._session_overrides:
             return self._session_overrides[key]
-        return getattr(self, key, DEFAULTS.get(key))
+        value = getattr(self, key, None)
+        if value is not None and value != "":
+            return value
+        # Check legacy environment variable
+        if key in LEGACY_ENV_VARS:
+            env_val = os.environ.get(LEGACY_ENV_VARS[key])
+            if env_val is not None:
+                return env_val
+        return DEFAULTS.get(key)
 
     def set(self, key: str, value: Any, persist: bool = False) -> None:
         """Set a config value.
@@ -156,7 +194,7 @@ class Config:
             except Exception as e:
                 logger.warning("Failed to load config from %s: %s", load_path, e)
 
-        # Override with environment variables
+        # Override with environment variables (AGENT_HARNESS_<KEY>)
         for key in DEFAULTS:
             env_key = f"AGENT_HARNESS_{key.upper()}"
             env_value = os.environ.get(env_key)
@@ -172,6 +210,12 @@ class Config:
                         env_value = float(env_value)
                 except (ValueError, TypeError):
                     pass
+                setattr(config, key, env_value)
+
+        # Override with legacy environment variables (OPENROUTER_API_KEY, etc.)
+        for key, env_name in LEGACY_ENV_VARS.items():
+            env_value = os.environ.get(env_name)
+            if env_value is not None:
                 setattr(config, key, env_value)
 
         return config

@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ah.core.config import config
+from ah.core.exceptions import ToolError, ValidationError
 from ah.tools.base import registry
 
 logger = logging.getLogger(__name__)
@@ -74,10 +76,10 @@ def _get_pinned_ip(hostname: str) -> str | None:
 async def web_search(query: str, limit: int = 5) -> str:
     """Search the web using SearXNG (self-hosted) or DuckDuckGo."""
     if not query or not query.strip():
-        return "Error: Empty search query"
+        raise ValidationError("Empty search query")
 
     # Try SearXNG first (self-hosted)
-    searxng_url = os.environ.get("SEARXNG_URL", "http://localhost:8080")
+    searxng_url = config.get("searxng_url")
     try:
         resp = await asyncio.to_thread(
             httpx.get,
@@ -130,7 +132,7 @@ async def web_search(query: str, limit: int = 5) -> str:
     except Exception:
         pass
 
-    return f"Search failed for '{query}'. No results."
+    raise ToolError(f"Search failed for '{query}'. No results.")
 
 
 @registry.register(description="Extract content from a URL")
@@ -140,13 +142,13 @@ async def web_extract(url: str) -> str:
     SSRF protection: validates URL against private IP ranges before fetching.
     """
     if not url or not url.strip():
-        return "Error: Empty URL"
+        raise ValidationError("Empty URL")
 
     url = url.strip()
 
     # SSRF validation
     if not _is_safe_url(url):
-        return f"Error: URL rejected by security policy (private/internal address or invalid protocol): {url}"
+        raise ValidationError(f"URL rejected by security policy (private/internal address or invalid protocol): {url}")
 
     try:
         # Pin the resolved IP to prevent DNS rebinding
@@ -154,7 +156,7 @@ async def web_extract(url: str) -> str:
         hostname = parsed.hostname or ""
         pinned_ip = _get_pinned_ip(hostname)
         if pinned_ip is None:
-            return f"Error: Could not resolve hostname: {hostname}"
+            raise ToolError(f"Could not resolve hostname: {hostname}")
 
         # Replace hostname with pinned IP in the URL
         pinned_url = url.replace(hostname, pinned_ip, 1)
@@ -168,13 +170,13 @@ async def web_extract(url: str) -> str:
         if resp.status_code == 200:
             # Limit response size to 5000 chars
             return resp.text[:5000]
-        return f"Error: HTTP {resp.status_code} for {url}"
+        raise ToolError(f"HTTP {resp.status_code} for {url}")
     except httpx.TimeoutException:
-        return f"Error: Request timed out for {url}"
+        raise ToolError(f"Request timed out for {url}")
     except httpx.HTTPError as e:
-        return f"Error: HTTP error for {url}: {e}"
+        raise ToolError(f"HTTP error for {url}: {e}")
     except Exception as e:
-        return f"Error extracting URL: {e}"
+        raise ToolError(f"Error extracting URL: {e}")
 
 
 def _resolve_path(path: str, base_dir: str | None = None) -> Path:
@@ -201,9 +203,9 @@ async def search_files(pattern: str, path: str = ".", file_glob: Optional[str] =
     try:
         dir_path = _resolve_path(path)
     except ValueError as e:
-        return f"Error: {e}"
+        raise ToolError(f"{e}")
     if not dir_path.exists():
-        return f"Error: Path not found: {path}"
+        raise ToolError(f"Path not found: {path}")
 
     glob_pattern = file_glob or "*"
     matches = []
@@ -221,7 +223,7 @@ async def search_files(pattern: str, path: str = ".", file_glob: Optional[str] =
                     continue
         await asyncio.to_thread(_search)
     except Exception as e:
-        return f"Error searching files: {e}"
+        raise ToolError(f"Error searching files: {e}")
 
     if not matches:
         return f"No matches for '{pattern}' in {path}"

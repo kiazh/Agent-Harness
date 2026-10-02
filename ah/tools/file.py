@@ -6,13 +6,15 @@ import logging
 import os
 from pathlib import Path
 
+from ah.core.exceptions import ToolError
+from ah.core.config import config
 from ah.tools.base import registry
 
 logger = logging.getLogger(__name__)
 
 # Base directory for all file operations. Defaults to the current working
-# directory; override via the AGENT_HARNESS_HOME environment variable.
-_BASE_DIR = Path(os.environ.get("AGENT_HARNESS_HOME", os.getcwd())).resolve()
+# directory; override via the agent_harness_home config key.
+_BASE_DIR = Path(config.get("agent_harness_home") or os.getcwd()).resolve()
 
 
 def _resolve_path(path: str) -> Path:
@@ -51,12 +53,12 @@ async def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
     try:
         file_path = _resolve_path(path)
     except ValueError as e:
-        return f"Error: {e}"
+        raise ToolError(f"{e}")
 
     if not file_path.exists():
-        return f"Error: File not found: {path}"
+        raise ToolError(f"File not found: {path}")
     if not file_path.is_file():
-        return f"Error: Not a file: {path}"
+        raise ToolError(f"Not a file: {path}")
     try:
         def _read():
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
@@ -65,7 +67,7 @@ async def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
             return "".join(lines[offset - 1:end])
         return await asyncio.to_thread(_read)
     except Exception as e:
-        return f"Error reading file: {e}"
+        raise ToolError(f"Error reading file: {e}")
 
 
 @registry.register(
@@ -85,7 +87,7 @@ async def write_file(path: str, content: str) -> str:
     try:
         file_path = _resolve_path(path)
     except ValueError as e:
-        return f"Error: {e}"
+        raise ToolError(f"{e}")
 
     try:
         def _write():
@@ -95,7 +97,7 @@ async def write_file(path: str, content: str) -> str:
             return f"Successfully wrote {len(content)} characters to {path}"
         return await asyncio.to_thread(_write)
     except Exception as e:
-        return f"Error writing file: {e}"
+        raise ToolError(f"Error writing file: {e}")
 
 
 @registry.register(
@@ -115,12 +117,12 @@ async def list_files(path: str = ".", pattern: str = "*") -> str:
     try:
         dir_path = _resolve_path(path)
     except ValueError as e:
-        return f"Error: {e}"
+        raise ToolError(f"{e}")
 
     if not dir_path.exists():
-        return f"Error: Directory not found: {path}"
+        raise ToolError(f"Directory not found: {path}")
     if not dir_path.is_dir():
-        return f"Error: Not a directory: {path}"
+        raise ToolError(f"Not a directory: {path}")
     try:
         def _list():
             files = list(dir_path.glob(pattern))
@@ -136,4 +138,4 @@ async def list_files(path: str = ".", pattern: str = "*") -> str:
             return "\n".join(lines)
         return await asyncio.to_thread(_list)
     except Exception as e:
-        return f"Error listing files: {e}"
+        raise ToolError(f"Error listing files: {e}")

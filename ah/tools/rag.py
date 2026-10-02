@@ -55,7 +55,7 @@ async def index_document(
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
-        return f"Error: Invalid session_id '{session_id}'"
+        raise ValidationError(f"Invalid session_id '{session_id}'")
 
     pipeline = get_rag_pipeline()
 
@@ -80,7 +80,7 @@ async def index_document(
             path=path,
             error=str(e),
         )
-        return f"Error indexing document: {e}"
+        raise ToolError(f"Error indexing document: {e}")
 
 
 @registry.register(
@@ -108,7 +108,7 @@ async def search_documents(
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
-        return f"Error: Invalid session_id '{session_id}'"
+        raise ValidationError(f"Invalid session_id '{session_id}'")
 
     pipeline = get_rag_pipeline()
 
@@ -147,4 +147,4 @@ async def search_documents(
             query=query[:100],
             error=str(e),
         )
-        return f"Error searching documents: {e}"
+        raise ToolError(f"Error searching documents: {e}")

@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+from ah.core.config import config
+from ah.core.exceptions import ProviderError
 from ah.core.provider import audit_log
 
 logger = logging.getLogger(__name__)
@@ -63,16 +65,16 @@ class OpenAIEmbedder(Embedder):
         batch_size: int = DEFAULT_BATCH_SIZE,
         timeout: float = 30.0,
     ) -> None:
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        self.api_key = api_key or config.get("openai_api_key") or ""
         if not self.api_key:
             # Fall back to OpenRouter if no OpenAI key
-            self.api_key = os.environ.get("OPENROUTER_API_KEY", "")
+            self.api_key = config.get("openrouter_api_key") or ""
             if self.api_key:
                 base_url = "https://openrouter.ai/api/v1"
                 logger.info("Using OpenRouter for embeddings (no OPENAI_API_KEY set)")
 
         if not self.api_key:
-            raise ValueError(
+            raise ProviderError(
                 "No API key found. Set OPENAI_API_KEY or OPENROUTER_API_KEY."
             )
 

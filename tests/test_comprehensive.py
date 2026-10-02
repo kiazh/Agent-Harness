@@ -789,50 +789,55 @@ class TestErrorHandling:
 
     def test_read_file_not_found(self, temp_dir):
         """Test read_file with non-existent file."""
+        from ah.core.exceptions import ToolError
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = asyncio.run(read_file(str(temp_dir / "nonexistent.txt")))
-        assert "Error" in result
-        assert "not found" in result.lower() or "File not found" in result
+            with pytest.raises(ToolError, match="File not found"):
+                asyncio.run(read_file(str(temp_dir / "nonexistent.txt")))
 
     def test_read_file_directory(self, temp_dir):
         """Test read_file with directory path."""
+        from ah.core.exceptions import ToolError
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = asyncio.run(read_file(str(temp_dir)))
-        assert "Error" in result
+            with pytest.raises(ToolError, match="Not a file"):
+                asyncio.run(read_file(str(temp_dir)))
 
     def test_write_file_invalid_path(self):
         """Test write_file with invalid path."""
-        with patch("pathlib.Path.mkdir", side_effect=PermissionError("Access denied")):
-            result = asyncio.run(write_file("/some/path/test.txt", "content"))
-            assert "Error" in result
+        from ah.core.exceptions import ToolError
+        with pytest.raises(ToolError, match="escapes the allowed base directory"):
+            asyncio.run(write_file("/some/path/test.txt", "content"))
 
     def test_list_files_not_found(self, temp_dir):
         """Test list_files with non-existent directory."""
+        from ah.core.exceptions import ToolError
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = asyncio.run(list_files(str(temp_dir / "nonexistent")))
-        assert "Error" in result
+            with pytest.raises(ToolError, match="Directory not found"):
+                asyncio.run(list_files(str(temp_dir / "nonexistent")))
 
     def test_list_files_file_path(self, temp_dir):
         """Test list_files with file path instead of directory."""
+        from ah.core.exceptions import ToolError
         test_file = temp_dir / "test.txt"
         test_file.write_text("content")
         with patch("ah.tools.file._BASE_DIR", temp_dir):
-            result = asyncio.run(list_files(str(test_file)))
-        assert "Error" in result
+            with pytest.raises(ToolError, match="Not a directory"):
+                asyncio.run(list_files(str(test_file)))
 
     def test_terminal_invalid_command(self):
         """Test terminal with invalid command."""
+        from ah.core.exceptions import ValidationError
         from ah.tools.terminal import terminal as terminal_fn
-        result = asyncio.run(terminal_fn("this_command_does_not_exist_12345"))
-        assert "Error" in result or "not recognized" in result.lower() or "exit code" in result
+        with pytest.raises(ValidationError, match="not in the allowlist"):
+            asyncio.run(terminal_fn("this_command_does_not_exist_12345"))
 
     def test_terminal_timeout(self):
         """Test terminal with timeout."""
+        from ah.core.exceptions import ToolError
         from ah.tools.terminal import terminal as terminal_fn
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="test", timeout=1)
-            result = asyncio.run(terminal_fn("sleep 10", timeout=1))
-            assert "timed out" in result.lower() or "Error" in result
+            with pytest.raises(ToolError, match="timed out"):
+                asyncio.run(terminal_fn("git status", timeout=1))
 
     def test_tool_execute_nonexistent(self):
         """Test executing non-existent tool."""

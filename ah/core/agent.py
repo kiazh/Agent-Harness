@@ -13,6 +13,8 @@ from rich.console import Console
 
 from ah.core.assembler import PromptAssembler
 from ah.core.context import context_manager
+from ah.core.exceptions import SessionNotFoundError
+from ah.core.metrics import metrics
 from ah.core.models import AgentResponse, LLMResponse, StreamEvent, ToolDefinition
 from ah.core.provider import LLMProvider, audit_log, get_provider
 from ah.core.session import Session, session_manager
@@ -189,7 +191,7 @@ class BaseReActAgent:
         # Get session for context budget and goal
         session = await session_manager.get(session_id)
         if session is None:
-            raise ValueError(f"Session {session_id} not found")
+            raise SessionNotFoundError(f"Session {session_id} not found")
 
         assembler = PromptAssembler(session.context_budget)
 
@@ -508,6 +510,11 @@ class ReActAgent(BaseReActAgent):
                 )
 
             total_tokens += response.usage.get("total_tokens", 0)
+            metrics.record_tokens(
+                str(session_id),
+                response.usage.get("prompt_tokens", 0),
+                response.usage.get("completion_tokens", 0),
+            )
 
             # Check for tool calls
             if not response.tool_calls:
@@ -626,6 +633,11 @@ class ReActAgent(BaseReActAgent):
                     elif event.type == "done":
                         final_response = event.response
                         total_tokens += event.response.usage.get("total_tokens", 0)
+                        metrics.record_tokens(
+                            str(session_id),
+                            event.response.usage.get("prompt_tokens", 0),
+                            event.response.usage.get("completion_tokens", 0),
+                        )
                         yield StreamEvent(
                             type="token_usage",
                             tokens_used=event.response.usage.get("total_tokens", 0),

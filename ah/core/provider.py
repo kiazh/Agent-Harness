@@ -12,6 +12,9 @@ from typing import Any, AsyncGenerator, Optional
 import httpx
 from dotenv import load_dotenv
 
+from ah.core.config import config
+from ah.core.exceptions import ProviderError, ValidationError
+from ah.core.metrics import metrics
 from ah.core.models import LLMResponse, StreamEvent, ToolDefinition  # noqa: F401 — re-exported for backward compat
 
 load_dotenv()
@@ -73,8 +76,8 @@ class AsyncTokenBucket:
 
 
 def _get_rate_limiter() -> AsyncTokenBucket:
-    """Build a rate limiter from environment configuration."""
-    calls_per_minute = int(os.environ.get("LLM_RATE_LIMIT_CALLS_PER_MINUTE", "10"))
+    """Build a rate limiter from configuration."""
+    calls_per_minute = int(config.get("rate_limit_calls_per_minute"))
     return AsyncTokenBucket(rate=calls_per_minute / 60.0, capacity=calls_per_minute)
 
 
@@ -90,12 +93,12 @@ def _get_rate_limiter() -> AsyncTokenBucket:
 def _validate_messages(messages: list[dict[str, str]]) -> None:
     """Validate LLM message format."""
     if not isinstance(messages, list) or not messages:
-        raise ValueError("messages must be a non-empty list")
+        raise ValidationError("messages must be a non-empty list")
     for i, msg in enumerate(messages):
         if not isinstance(msg, dict):
-            raise ValueError(f"Message at index {i} must be a dict")
+            raise ValidationError(f"Message at index {i} must be a dict")
         if "role" not in msg:
-            raise ValueError(f"Message at index {i} missing 'role' field")
+            raise ValidationError(f"Message at index {i} missing 'role' field")
         if "content" not in msg:
             raise ValueError(f"Message at index {i} missing 'content' field")
 
@@ -153,7 +156,7 @@ class OpenRouterProvider(LLMProvider):
     BASE_URL = "https://openrouter.ai/api/v1"
 
     def __init__(self, api_key: str | None = None, model: str = "anthropic/claude-3.5-sonnet") -> None:
-        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        self.api_key = api_key or config.get("openrouter_api_key") or ""
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY not set")
         self.model = model
@@ -205,19 +208,36 @@ class OpenRouterProvider(LLMProvider):
 
         audit_log("llm_call_start", provider="openrouter", model=model, message_count=len(messages))
 
+        start = time.monotonic()
         try:
             resp = await self.client.post("/chat/completions", json=payload)
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
+            duration_ms = (time.monotonic() - start) * 1000
+            metrics.record_llm_call(
+                session_id="",
+                model=model,
+                duration_ms=duration_ms,
+                is_error=True,
+            )
             audit_log("llm_call_error", provider="openrouter", model=model, error=str(e))
             raise
 
+        duration_ms = (time.monotonic() - start) * 1000
         choice = data["choices"][0]
         message = choice["message"]
         content = message.get("content", "")
         tool_calls = message.get("tool_calls", []) or []
         usage = data.get("usage", {})
+
+        metrics.record_llm_call(
+            session_id="",
+            model=data.get("model", model),
+            duration_ms=duration_ms,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+        )
 
         audit_log(
             "llm_call_complete",
@@ -421,17 +441,34 @@ class OllamaProvider(LLMProvider):
 
         audit_log("llm_call_start", provider="ollama", model=model or self.model, message_count=len(messages))
 
+        start = time.monotonic()
         try:
             resp = await self.client.post("/api/chat", json=payload)
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
+            duration_ms = (time.monotonic() - start) * 1000
+            metrics.record_llm_call(
+                session_id="",
+                model=model or self.model,
+                duration_ms=duration_ms,
+                is_error=True,
+            )
             audit_log("llm_call_error", provider="ollama", model=model or self.model, error=str(e))
             raise
 
+        duration_ms = (time.monotonic() - start) * 1000
         message = data["message"]
         content = message.get("content", "")
         tool_calls = message.get("tool_calls", []) or []
+
+        metrics.record_llm_call(
+            session_id="",
+            model=data.get("model", model or self.model),
+            duration_ms=duration_ms,
+            prompt_tokens=data.get("prompt_eval_count", 0),
+            completion_tokens=data.get("eval_count", 0),
+        )
 
         audit_log(
             "llm_call_complete",
