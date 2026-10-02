@@ -10,6 +10,24 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agentharness_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/agentharness_test
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,7 +38,10 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install pytest-cov bandit
 
       - name: Run ruff check
         run: ruff check ah/
@@ -28,13 +49,23 @@ jobs:
       - name: Run ruff format check
         run: ruff format --check ah/
 
-      - name: Run pytest
-        run: pytest tests/ -v
+      - name: Run bandit security scan
+        run: bandit -r ah/ -ll -x ah/cli/
 
-      - name: Run mypy (if configured)
+      - name: Run pytest with coverage
         run: |
-          if grep -q '\[tool.mypy\]' pyproject.toml; then
-            mypy ah/
-          else
-            echo "No mypy configuration found in pyproject.toml — skipping mypy."
-          fi
+          pytest tests/ -v \
+            --cov=ah \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=60
+
+      - name: Upload coverage to Codecov
+        if: github.event_name == 'push'
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+          verbose: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

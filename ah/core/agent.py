@@ -40,8 +40,13 @@ Be concise. Don't over-explain. Get things done."""
 MAX_TOKEN_BUDGET = 50_000
 
 
-class ReActAgent:
-    """ReAct loop: Thought → Action → Observation."""
+class BaseReActAgent:
+    """Base class for ReAct agents — Template Method pattern.
+
+    Contains all shared logic for session retrieval, context storage,
+    memory retrieval, RAG retrieval, prompt assembly, tool execution,
+    and memory consolidation. Subclasses implement run() and run_stream().
+    """
 
     def __init__(
         self,
@@ -159,20 +164,31 @@ class ReActAgent:
                     )
         raise last_exception  # type: ignore[misc]
 
-    async def run(
+    async def _prepare_context(
         self,
         session_id: uuid.UUID,
         user_message: str,
-        verbose: bool = True,
-    ) -> AgentResponse:
-        """Run the ReAct loop for a user message."""
-        # Audit log: session start
-        audit_log("agent_run_start", session_id=str(session_id), agent_id=self.agent_id)
+        include_memory: bool = True,
+    ) -> tuple[Session, list[dict[str, Any]]]:
+        """Prepare session, context, and prompt messages.
 
+        Handles session retrieval, user message storage, recent context retrieval,
+        memory retrieval (optional), RAG retrieval, and prompt assembly.
+
+        Args:
+            session_id: The session ID.
+            user_message: The user's message.
+            include_memory: Whether to include memory retrieval. Defaults to True.
+
+        Returns:
+            A tuple of (Session, messages list).
+
+        Raises:
+            ValueError: If the session is not found.
+        """
         # Get session for context budget and goal
         session = await session_manager.get(session_id)
         if session is None:
-            audit_log("agent_run_error", session_id=str(session_id), error="session_not_found")
             raise ValueError(f"Session {session_id} not found")
 
         assembler = PromptAssembler(session.context_budget)
@@ -189,35 +205,36 @@ class ReActAgent:
         # Get recent context for prompt assembly
         recent = await context_manager.get_recent_context(session_id, limit=3)
 
-        # Retrieve relevant long-term memories
-        retrieved_memories = []
-        try:
-            retrieved_memories = await self.memory_retriever.retrieve(
-                query=user_message,
-                agent_id=self.agent_id,
-                limit=5,
-            )
-        except Exception as e:
-            logger.warning("Memory retrieval failed: %s", e)
+        # Build retrieved chunks for the assembler
+        retrieved_chunks: list[tuple] = []
 
-        # Convert retrieved memories to ContextChunk-like tuples for assembler
-        from ah.core.models import ContextChunk
-        retrieved_chunks = []
-        for rm in retrieved_memories:
-            m = rm.memory
-            chunk = ContextChunk(
-                id=m.id,
-                session_id=session_id,
-                agent_id=self.agent_id,
-                chunk_type="memory",
-                payload={
-                    "content": m.content,
-                    "importance": m.importance,
-                    "category": m.category,
-                },
-                token_count=len(m.content) // 4,
-            )
-            retrieved_chunks.append((chunk, rm.score))
+        # Retrieve relevant long-term memories (optional)
+        if include_memory:
+            try:
+                retrieved_memories = await self.memory_retriever.retrieve(
+                    query=user_message,
+                    agent_id=self.agent_id,
+                    limit=5,
+                )
+                # Convert retrieved memories to ContextChunk-like tuples for assembler
+                from ah.core.models import ContextChunk
+                for rm in retrieved_memories:
+                    m = rm.memory
+                    chunk = ContextChunk(
+                        id=m.id,
+                        session_id=session_id,
+                        agent_id=self.agent_id,
+                        chunk_type="memory",
+                        payload={
+                            "content": m.content,
+                            "importance": m.importance,
+                            "category": m.category,
+                        },
+                        token_count=len(m.content) // 4,
+                    )
+                    retrieved_chunks.append((chunk, rm.score))
+            except Exception as e:
+                logger.warning("Memory retrieval failed: %s", e)
 
         # Retrieve RAG context if pipeline is configured
         rag_chunks = await self._get_rag_context(session_id, user_message)
@@ -235,6 +252,205 @@ class ReActAgent:
         messages = [
             {"role": "user", "content": prompt},
         ]
+        return session, messages
+
+    async def _execute_tool_calls(
+        self,
+        response: LLMResponse,
+        messages: list[dict[str, Any]],
+        tool_calls_made: list[dict[str, Any]],
+        session_id: uuid.UUID,
+        verbose: bool,
+    ) -> None:
+        """Execute tool calls from an LLM response.
+
+        Handles missing tool names, invalid JSON arguments, tool execution,
+        context storage, and message updates. Modifies messages and
+        tool_calls_made in place.
+
+        Args:
+            response: The LLM response containing tool calls.
+            messages: The message list to update with tool results.
+            tool_calls_made: The list to append executed tool calls to.
+            session_id: The session ID for context storage.
+            verbose: Whether to print verbose output.
+        """
+        for tc in response.tool_calls:
+            # Handle missing tool name gracefully
+            function_data = tc.get("function", {})
+            tool_name = function_data.get("name")
+            if not tool_name:
+                logger.warning("Tool call missing 'name' field: %s", tc)
+                audit_log(
+                    "tool_call_invalid",
+                    session_id=str(session_id),
+                    error="missing_name",
+                    raw_call=str(tc),
+                )
+                error_msg = "Error: tool call missing 'name' field"
+                messages.append({
+                    "role": "assistant",
+                    "content": response.content,
+                    "tool_calls": [tc],
+                })
+                messages.append({
+                    "role": "tool",
+                    "content": error_msg,
+                    "tool_call_id": tc.get("id", ""),
+                })
+                continue
+
+            # Parse tool arguments with JSONDecodeError handling
+            try:
+                tool_args = json.loads(function_data.get("arguments", "{}"))
+            except json.JSONDecodeError as e:
+                logger.error(
+                    "Failed to parse tool arguments for '%s': %s (raw: %s)",
+                    tool_name,
+                    e,
+                    function_data.get("arguments", ""),
+                )
+                audit_log(
+                    "tool_call_invalid_args",
+                    session_id=str(session_id),
+                    tool_name=tool_name,
+                    error=str(e),
+                    raw_args=function_data.get("arguments", ""),
+                )
+                error_msg = f"Error: invalid JSON in tool arguments: {e}"
+                messages.append({
+                    "role": "assistant",
+                    "content": response.content,
+                    "tool_calls": [tc],
+                })
+                messages.append({
+                    "role": "tool",
+                    "content": error_msg,
+                    "tool_call_id": tc.get("id", ""),
+                })
+                continue
+
+            if verbose:
+                console.print(f"[yellow]  → {tool_name}({json.dumps(tool_args, default=str)[:80]})[/yellow]")
+
+            # Audit log: tool execution start
+            audit_log(
+                "tool_call_start",
+                session_id=str(session_id),
+                tool_name=tool_name,
+                tool_args=tool_args,
+            )
+
+            tool_start_time = time.monotonic()
+            try:
+                result = await registry.execute(tool_name, **tool_args)
+            except Exception as e:
+                logger.exception("Tool execution failed for '%s'", tool_name)
+                audit_log(
+                    "tool_call_error",
+                    session_id=str(session_id),
+                    tool_name=tool_name,
+                    error=str(e),
+                    duration_ms=int((time.monotonic() - tool_start_time) * 1000),
+                )
+                result = f"Error: {e}"
+
+            tool_duration_ms = int((time.monotonic() - tool_start_time) * 1000)
+            audit_log(
+                "tool_call_complete",
+                session_id=str(session_id),
+                tool_name=tool_name,
+                duration_ms=tool_duration_ms,
+                result_preview=str(result)[:200],
+            )
+
+            result_str = str(result)
+            if verbose:
+                preview = result_str[:200].replace("\n", " ")
+                console.print(f"[green]  ← {preview}[/green]")
+
+            # Store tool call and result in context
+            await context_manager.add_chunk(
+                session_id=session_id,
+                agent_id=self.agent_id,
+                chunk_type="tool_call",
+                payload={
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "result_preview": result_str[:500],
+                },
+                token_count=len(result_str) // 4,
+            )
+
+            tool_calls_made.append({
+                "tool": tool_name,
+                "args": tool_args,
+                "result_preview": result_str[:200],
+            })
+
+            # Add tool result to messages for next iteration
+            messages.append({
+                "role": "assistant",
+                "content": response.content,
+                "tool_calls": [tc],
+            })
+            messages.append({
+                "role": "tool",
+                "content": result_str[:1000],
+                "tool_call_id": tc.get("id", ""),
+            })
+
+    def _schedule_memory_consolidation(self, session_id: uuid.UUID) -> None:
+        """Schedule memory consolidation as a background task.
+
+        Errors in the background task are logged but never propagated
+        to avoid disrupting the user experience.
+        """
+        if not self.memory_consolidator:
+            return
+        asyncio.create_task(self._consolidate_memories(session_id))
+
+    async def _consolidate_memories(self, session_id: uuid.UUID) -> None:
+        """Consolidate session context into long-term memories.
+
+        Called after each agent run as a background task. Failures are logged
+        but never propagated to avoid disrupting the user experience.
+        """
+        try:
+            new_memories = await self.memory_consolidator.consolidate_session(
+                session_id=session_id,
+                agent_id=self.agent_id,
+            )
+            if new_memories:
+                logger.info(
+                    "Consolidated %d new memories for session %s",
+                    len(new_memories),
+                    session_id,
+                )
+        except Exception as e:
+            logger.warning("Memory consolidation failed for session %s: %s", session_id, e)
+
+
+class ReActAgent(BaseReActAgent):
+    """ReAct loop: Thought → Action → Observation.
+
+    Provides both synchronous (run) and streaming (run_stream) execution.
+    """
+
+    async def run(
+        self,
+        session_id: uuid.UUID,
+        user_message: str,
+        verbose: bool = True,
+    ) -> AgentResponse:
+        """Run the ReAct loop for a user message."""
+        # Audit log: session start
+        audit_log("agent_run_start", session_id=str(session_id), agent_id=self.agent_id)
+
+        # Prepare context (includes memory retrieval)
+        session, messages = await self._prepare_context(
+            session_id, user_message, include_memory=True
+        )
 
         total_tokens = 0
         tool_calls_made = []
@@ -257,7 +473,7 @@ class ReActAgent:
                     max_budget=MAX_TOKEN_BUDGET,
                 )
                 # Consolidate memories before returning
-                await self._consolidate_memories(session_id)
+                self._schedule_memory_consolidation(session_id)
                 return AgentResponse(
                     content="Reached maximum token budget. Partial results may be available.",
                     tool_calls=tool_calls_made,
@@ -283,7 +499,7 @@ class ReActAgent:
                     iteration=iteration,
                 )
                 # Consolidate memories before returning
-                await self._consolidate_memories(session_id)
+                self._schedule_memory_consolidation(session_id)
                 return AgentResponse(
                     content=f"LLM provider error: {e}",
                     tool_calls=tool_calls_made,
@@ -312,7 +528,7 @@ class ReActAgent:
                     tool_calls_count=len(tool_calls_made),
                 )
                 # Consolidate memories after successful run
-                await self._consolidate_memories(session_id)
+                self._schedule_memory_consolidation(session_id)
                 return AgentResponse(
                     content=response.content,
                     tool_calls=tool_calls_made,
@@ -321,130 +537,9 @@ class ReActAgent:
                 )
 
             # Execute tool calls
-            for tc in response.tool_calls:
-                # Handle missing tool name gracefully
-                function_data = tc.get("function", {})
-                tool_name = function_data.get("name")
-                if not tool_name:
-                    logger.warning("Tool call missing 'name' field: %s", tc)
-                    audit_log(
-                        "tool_call_invalid",
-                        session_id=str(session_id),
-                        error="missing_name",
-                        raw_call=str(tc),
-                    )
-                    error_msg = "Error: tool call missing 'name' field"
-                    messages.append({
-                        "role": "assistant",
-                        "content": response.content,
-                        "tool_calls": [tc],
-                    })
-                    messages.append({
-                        "role": "tool",
-                        "content": error_msg,
-                        "tool_call_id": tc.get("id", ""),
-                    })
-                    continue
-
-                # Parse tool arguments with JSONDecodeError handling
-                try:
-                    tool_args = json.loads(function_data.get("arguments", "{}"))
-                except json.JSONDecodeError as e:
-                    logger.error(
-                        "Failed to parse tool arguments for '%s': %s (raw: %s)",
-                        tool_name,
-                        e,
-                        function_data.get("arguments", ""),
-                    )
-                    audit_log(
-                        "tool_call_invalid_args",
-                        session_id=str(session_id),
-                        tool_name=tool_name,
-                        error=str(e),
-                        raw_args=function_data.get("arguments", ""),
-                    )
-                    error_msg = f"Error: invalid JSON in tool arguments: {e}"
-                    messages.append({
-                        "role": "assistant",
-                        "content": response.content,
-                        "tool_calls": [tc],
-                    })
-                    messages.append({
-                        "role": "tool",
-                        "content": error_msg,
-                        "tool_call_id": tc.get("id", ""),
-                    })
-                    continue
-
-                if verbose:
-                    console.print(f"[yellow]  → {tool_name}({json.dumps(tool_args, default=str)[:80]})[/yellow]")
-
-                # Audit log: tool execution start
-                audit_log(
-                    "tool_call_start",
-                    session_id=str(session_id),
-                    tool_name=tool_name,
-                    tool_args=tool_args,
-                )
-
-                tool_start_time = time.monotonic()
-                try:
-                    result = await registry.execute(tool_name, **tool_args)
-                except Exception as e:
-                    logger.exception("Tool execution failed for '%s'", tool_name)
-                    audit_log(
-                        "tool_call_error",
-                        session_id=str(session_id),
-                        tool_name=tool_name,
-                        error=str(e),
-                        duration_ms=int((time.monotonic() - tool_start_time) * 1000),
-                    )
-                    result = f"Error: {e}"
-
-                tool_duration_ms = int((time.monotonic() - tool_start_time) * 1000)
-                audit_log(
-                    "tool_call_complete",
-                    session_id=str(session_id),
-                    tool_name=tool_name,
-                    duration_ms=tool_duration_ms,
-                    result_preview=str(result)[:200],
-                )
-
-                result_str = str(result)
-                if verbose:
-                    preview = result_str[:200].replace("\n", " ")
-                    console.print(f"[green]  ← {preview}[/green]")
-
-                # Store tool call and result in context
-                await context_manager.add_chunk(
-                    session_id=session_id,
-                    agent_id=self.agent_id,
-                    chunk_type="tool_call",
-                    payload={
-                        "tool": tool_name,
-                        "args": tool_args,
-                        "result_preview": result_str[:500],
-                    },
-                    token_count=len(result_str) // 4,
-                )
-
-                tool_calls_made.append({
-                    "tool": tool_name,
-                    "args": tool_args,
-                    "result_preview": result_str[:200],
-                })
-
-                # Add tool result to messages for next iteration
-                messages.append({
-                    "role": "assistant",
-                    "content": response.content,
-                    "tool_calls": [tc],
-                })
-                messages.append({
-                    "role": "tool",
-                    "content": result_str[:1000],
-                    "tool_call_id": tc.get("id", ""),
-                })
+            await self._execute_tool_calls(
+                response, messages, tool_calls_made, session_id, verbose
+            )
 
         # Max iterations reached
         audit_log(
@@ -454,35 +549,13 @@ class ReActAgent:
             total_tokens=total_tokens,
         )
         # Consolidate memories before returning
-        await self._consolidate_memories(session_id)
+        self._schedule_memory_consolidation(session_id)
         return AgentResponse(
             content="Reached max iterations. Partial results may be available.",
             tool_calls=tool_calls_made,
             tokens_used=total_tokens,
             iterations=self.max_iterations,
         )
-
-    async def _consolidate_memories(self, session_id: uuid.UUID) -> None:
-        """Consolidate session context into long-term memories.
-
-        Called after each agent run. Failures are logged but never propagated
-        to avoid disrupting the user experience.
-        """
-        if not self.memory_consolidator:
-            return
-        try:
-            new_memories = await self.memory_consolidator.consolidate_session(
-                session_id=session_id,
-                agent_id=self.agent_id,
-            )
-            if new_memories:
-                logger.info(
-                    "Consolidated %d new memories for session %s",
-                    len(new_memories),
-                    session_id,
-                )
-        except Exception as e:
-            logger.warning("Memory consolidation failed for session %s: %s", session_id, e)
 
     async def run_stream(
         self,
@@ -502,41 +575,10 @@ class ReActAgent:
         # Audit log: session start
         audit_log("agent_run_stream_start", session_id=str(session_id), agent_id=self.agent_id)
 
-        # Get session for context budget and goal
-        session = await session_manager.get(session_id)
-        if session is None:
-            audit_log("agent_run_error", session_id=str(session_id), error="session_not_found")
-            raise ValueError(f"Session {session_id} not found")
-
-        assembler = PromptAssembler(session.context_budget)
-
-        # Store user message in context
-        await context_manager.add_chunk(
-            session_id=session_id,
-            agent_id=self.agent_id,
-            chunk_type="user_message",
-            payload={"content": user_message},
-            token_count=len(user_message) // 4,
+        # Prepare context (no memory retrieval for streaming)
+        session, messages = await self._prepare_context(
+            session_id, user_message, include_memory=False
         )
-
-        # Get recent context for prompt assembly
-        recent = await context_manager.get_recent_context(session_id, limit=3)
-
-        # Retrieve RAG context if pipeline is configured
-        rag_chunks = await self._get_rag_context(session_id, user_message)
-
-        # Assemble prompt
-        prompt = assembler.assemble(
-            system_prompt=self.system_prompt,
-            goal=session.goal,
-            recent_chunks=recent,
-            retrieved_chunks=rag_chunks,
-            query=user_message,
-        )
-
-        messages = [
-            {"role": "user", "content": prompt},
-        ]
 
         total_tokens = 0
         tool_calls_made = []
@@ -642,7 +684,7 @@ class ReActAgent:
                 )
                 return
 
-            # Execute tool calls
+            # Execute tool calls with streaming events
             for tc in response.tool_calls:
                 # Handle missing tool name gracefully
                 function_data = tc.get("function", {})
