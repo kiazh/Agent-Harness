@@ -84,7 +84,9 @@ def _print_banner():
 
 def _run(coro):
     """Run async coroutine from sync Typer command."""
-    return asyncio.run(coro)
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 
 @app.command()
