@@ -15,6 +15,9 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.live import Live
 from rich.text import Text
+from rich import box
+from rich.style import Style
+from rich.emoji import Emoji
 
 from ah import __version__
 from ah.core.agent import ReActAgent
@@ -44,6 +47,14 @@ from ah.cli.animations import (
     get_fade_transition,
     get_animation_runner,
     should_animate,
+    PRIMARY,
+    SECONDARY,
+    SUCCESS,
+    WARNING,
+    ERROR,
+    INFO,
+    MUTED,
+    TEXT,
 )
 
 app = typer.Typer(
@@ -55,26 +66,53 @@ viz = get_default_visual()
 console = viz.console
 
 
+def _gradient_color(idx: int, total: int, start_hex: str, end_hex: str) -> str:
+    """Interpolate between two hex colors for gradient effect."""
+    def hex_to_rgb(h: str) -> tuple[int, int, int]:
+        h = h.lstrip('#')
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    def rgb_to_hex(r: int, g: int, b: int) -> str:
+        return f"#{r:02X}{g:02X}{b:02X}"
+    r1, g1, b1 = hex_to_rgb(start_hex)
+    r2, g2, b2 = hex_to_rgb(end_hex)
+    t = idx / max(total - 1, 1)
+    r = int(r1 + (r2 - r1) * t)
+    g = int(g1 + (g2 - g1) * t)
+    b = int(b1 + (b2 - b1) * t)
+    return rgb_to_hex(r, g, b)
+
+
 def _print_banner():
-    """Print the ASCII art banner on startup."""
-    from rich.panel import Panel
-    from rich.text import Text
-    from rich import box
+    """Print the ASCII art banner with gradient colors."""
+    # Agent line — gradient from cyan to blue
+    agent_lines = [
+        "  █████╗  ██████╗ ███████╗███╗   ██╗████████╗",
+        " ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝",
+        " ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║",
+        " ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║",
+        " ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║",
+        " ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝",
+    ]
+    # Harness line — gradient from purple to magenta
+    harness_lines = [
+        "  ██╗  ██╗ █████╗ ██████╗ ███╗   ██╗███████╗███████╗███████╗",
+        "  ██║  ██║██╔══██╗██╔══██╗████╗  ██║██╔════╝██╔════╝██╔════╝",
+        "  ███████║███████║██████╔╝██╔██╗ ██║█████╗  ███████╗███████╗",
+        "  ██╔══██║██╔══██║██╔══██╗██║╚██╗██║██╔══╝  ╚════██║╚════██║",
+        "  ██║  ██║██║  ██║██║  ██║██║ ╚████║███████╗███████║███████║",
+        "  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝╚══════╝",
+    ]
 
     banner_text = Text()
-    banner_text.append("  █████╗  ██████╗ ███████╗███╗   ██╗████████╗\n", style="bold #00D4FF")
-    banner_text.append(" ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝\n", style="bold #00D4FF")
-    banner_text.append(" ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║\n", style="bold #00D4FF")
-    banner_text.append(" ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║\n", style="bold #00D4FF")
-    banner_text.append(" ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║\n", style="bold #00D4FF")
-    banner_text.append(" ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝\n", style="bold #00D4FF")
+    # Agent gradient: #00D4FF → #3B82F6
+    for i, line in enumerate(agent_lines):
+        color = _gradient_color(i, len(agent_lines), "#00D4FF", "#3B82F6")
+        banner_text.append(line + "\n", style=f"bold {color}")
     banner_text.append("\n")
-    banner_text.append("  ██╗  ██╗ █████╗ ██████╗ ███╗   ██╗███████╗███████╗███████╗\n", style="bold #7C3AED")
-    banner_text.append("  ██║  ██║██╔══██╗██╔══██╗████╗  ██║██╔════╝██╔════╝██╔════╝\n", style="bold #7C3AED")
-    banner_text.append("  ███████║███████║██████╔╝██╔██╗ ██║█████╗  ███████╗███████╗\n", style="bold #7C3AED")
-    banner_text.append("  ██╔══██║██╔══██║██╔══██╗██║╚██╗██║██╔══╝  ╚════██║╚════██║\n", style="bold #7C3AED")
-    banner_text.append("  ██║  ██║██║  ██║██║  ██║██║ ╚████║███████╗███████║███████║\n", style="bold #7C3AED")
-    banner_text.append("  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝╚══════╝\n", style="bold #7C3AED")
+    # Harness gradient: #7C3AED → #EC4899
+    for i, line in enumerate(harness_lines):
+        color = _gradient_color(i, len(harness_lines), "#7C3AED", "#EC4899")
+        banner_text.append(line + "\n", style=f"bold {color}")
     banner_text.append("\n")
     banner_text.append("  Self-hosted Multi-Agent AI Orchestration\n", style="dim")
     banner_text.append(f"  v{__version__}", style="dim")
@@ -87,6 +125,42 @@ def _run(coro):
     import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coro).result()
+
+
+def _print_colored(message: str, color: str = "white", bold: bool = False, icon: str = ""):
+    """Print a color-coded message with optional icon."""
+    style = color
+    if bold:
+        style = f"bold {color}"
+    if icon:
+        console.print(f"{icon} {message}", style=style)
+    else:
+        console.print(message, style=style)
+
+
+def _print_success(message: str, icon: str = "✓"):
+    """Print a success message in green."""
+    _print_colored(message, color=SUCCESS, bold=True, icon=icon)
+
+
+def _print_error(message: str, icon: str = "✗"):
+    """Print an error message in red."""
+    _print_colored(message, color=ERROR, bold=True, icon=icon)
+
+
+def _print_warning(message: str, icon: str = "⚠"):
+    """Print a warning message in yellow."""
+    _print_colored(message, color=WARNING, bold=True, icon=icon)
+
+
+def _print_info(message: str, icon: str = "ℹ"):
+    """Print an info message in blue."""
+    _print_colored(message, color=INFO, icon=icon)
+
+
+def _print_muted(message: str):
+    """Print a muted/dimmed message."""
+    console.print(message, style=MUTED)
 
 
 @app.command()
@@ -102,7 +176,7 @@ def chat(
     """Chat with the agent. Creates a new session or continues an existing one."""
 
     if interactive:
-        from ah.cli.interactive import run_repl
+        from ah.cli.interactive_win import run_repl
         _run(run_repl(model=model, provider=provider, verbose=verbose, session_id=session_id))
         return
 
@@ -121,20 +195,20 @@ def chat(
                 if not session:
                     viz.error("No active session to continue.", title="Error", suggestion="Use `ah sessions` to list available sessions.")
                     raise typer.Exit(1)
-                console.print(f"[dim]Continuing session: {session.id}[/dim]")
+                _print_muted(f"Continuing session: {session.id}")
             elif session_id:
                 sid = uuid.UUID(session_id)
                 session = await session_manager.get(sid)
                 if not session:
                     viz.error(f"Session {session_id} not found", title="Error", suggestion="Use `ah sessions` to list available sessions.")
                     raise typer.Exit(1)
-                console.print(f"[dim]Resuming session: {session.id}[/dim]")
+                _print_muted(f"Resuming session: {session.id}")
             else:
                 session = await session_manager.create(
                     title=message[:50] if message else None,
                     goal=message[:100] if message else None,
                 )
-                console.print(f"[dim]New session: {session.id}[/dim]")
+                _print_muted(f"New session: {session.id}")
 
             # Create LLM provider
             try:
@@ -146,7 +220,7 @@ def chat(
             # Create agent and run
             agent = ReActAgent(provider=llm)
             if verbose:
-                console.print(f"[dim]Model: {llm.model} ({provider})[/dim]")
+                _print_muted(f"Model: {llm.model} ({provider})")
                 console.print()
 
             # Stream response with animations
@@ -157,11 +231,11 @@ def chat(
             # Create animation runner for this turn
             runner = get_animation_runner(console)
 
-            # Start thinking animation
+            # Start thinking animation with braille spinner
             thinking = get_thinking_animation(console, spinner_type="dots")
             runner.add("thinking", thinking)
 
-            # Start streaming display
+            # Start streaming display with green style
             stream = get_streaming_animation(console, style="green")
             runner.add_streaming("stream", stream)
 
@@ -200,8 +274,8 @@ def chat(
             viz.print_response_panel(response_text, title="Agent")
             console.print()
             if verbose:
-                console.print(f"[dim]Iterations: {event.response.iterations} | Tool calls: {tool_calls_count} | Tokens: {tokens_used}[/dim]")
-            console.print(f"[dim]Session ID: {session.id}[/dim]")
+                _print_muted(f"Iterations: {event.response.iterations} | Tool calls: {tool_calls_count} | Tokens: {tokens_used}")
+            _print_muted(f"Session ID: {session.id}")
 
         finally:
             await db.close()
@@ -217,7 +291,7 @@ def repl(
     session_id: Optional[str] = typer.Option(None, "--session", "-s", help="Resume specific session"),
 ):
     """Launch interactive REPL mode."""
-    from ah.cli.interactive import run_repl
+    from ah.cli.interactive_win import run_repl
     _run(run_repl(model=model, provider=provider, verbose=verbose, session_id=session_id))
 
 
@@ -254,7 +328,7 @@ def status():
             tools = registry.list_tools()
             viz.print_status_line("Tools", f"{len(tools)} registered", "info")
             for t in tools:
-                console.print(f"    - {t}")
+                console.print(f"    [dim]•[/dim] {t}")
 
             # Check config
             from ah.core.config import config
@@ -265,7 +339,7 @@ def status():
 
             spinner.stop()
             console.print()
-            console.print("[dim]Run `ah chat \"your message\"` to start.[/dim]")
+            _print_muted("Run `ah chat \"your message\"` to start.")
 
         finally:
             await db.close()
@@ -388,7 +462,7 @@ def export(
                 console.print(f"[red]Path traversal blocked:[/red] {e}")
                 raise typer.Exit(1)
             output_path.write_text("\n".join(lines), encoding="utf-8")
-            console.print(f"[green]Exported session {session.id} to {filename}[/green]")
+            _print_success(f"Exported session {session.id} to {filename}")
         finally:
             await db.close()
 
@@ -407,8 +481,8 @@ def fork(
         try:
             sid = uuid.UUID(session_id)
             new_session = await session_manager.fork(sid, title=title)
-            console.print(f"[green]Forked session {session_id} → {new_session.id}[/green]")
-            console.print(f"[dim]Title: {new_session.title or '(untitled)'}[/dim]")
+            _print_success(f"Forked session {session_id} → {new_session.id}")
+            _print_muted(f"Title: {new_session.title or '(untitled)'}")
         finally:
             await db.close()
 
@@ -525,8 +599,8 @@ def compress(
                 return
 
             total_tokens = await context_manager.get_token_usage(sid)
-            console.print(f"[dim]Session: {session.id}[/dim]")
-            console.print(f"[dim]Current context: {len(chunks)} chunks, {total_tokens} tokens[/dim]")
+            _print_muted(f"Session: {session.id}")
+            _print_muted(f"Current context: {len(chunks)} chunks, {total_tokens} tokens")
 
             # Animated loader during compression
             loader = SquareLoader(console, "Compressing context...", width=30)
@@ -575,8 +649,8 @@ def compress(
                     token_count=chunk.token_count,
                 )
 
-            console.print(
-                f"[green]Context compressed:[/green] "
+            _print_success(
+                f"Context compressed: "
                 f"{result.original_count} chunks → {len(result.compressed_chunks)} chunks, "
                 f"{result.original_tokens} → {result.compressed_tokens} tokens "
                 f"({result.compression_ratio:.1%} ratio, method: {result.method})"
@@ -874,7 +948,10 @@ def doctor():
 
     # Python version
     import sys
-    console.print(f"  Python: {sys.version.split()[0]} {'✓' if sys.version_info >= (3, 11) else '✗ (need 3.11+)'}")
+    py_ok = sys.version_info >= (3, 11)
+    py_icon = "✓" if py_ok else "✗"
+    py_color = "green" if py_ok else "red"
+    console.print(f"  Python: {sys.version.split()[0]} [{py_color}]{py_icon}[/{py_color}]{'' if py_ok else ' (need 3.11+)'}")
 
     # Dependencies with spinner
     deps = ["typer", "rich", "asyncpg", "httpx", "msgpack", "prompt_toolkit"]
@@ -883,9 +960,9 @@ def doctor():
     for dep in deps:
         try:
             __import__(dep)
-            console.print(f"  {dep}: [green]ok[/green]")
+            console.print(f"  {dep}: [green]✓ ok[/green]")
         except ImportError:
-            console.print(f"  {dep}: [red]missing[/red]")
+            console.print(f"  {dep}: [red]✗ missing[/red]")
     spinner.stop()
 
     # Database with loader
@@ -898,10 +975,10 @@ def doctor():
             loader.set_progress(0.5)
             version = await db.fetchval("SELECT version()")
             loader.complete()
-            console.print(f"  PostgreSQL: [green]connected[/green] ({version.split(',')[0]})")
+            console.print(f"  PostgreSQL: [green]✓ connected[/green] ({version.split(',')[0]})")
         except Exception as e:
             loader.error()
-            console.print(f"  PostgreSQL: [red]failed[/red] ({e})")
+            console.print(f"  PostgreSQL: [red]✗ failed[/red] ({e})")
         finally:
             await db.close()
 
@@ -910,17 +987,17 @@ def doctor():
     # Environment
     from ah.core.config import config
     if config.get("openrouter_api_key"):
-        console.print("  OPENROUTER_API_KEY: [green]set[/green]")
+        console.print("  OPENROUTER_API_KEY: [green]✓ set[/green]")
     else:
-        console.print("  OPENROUTER_API_KEY: [yellow]not set[/yellow]")
+        console.print("  OPENROUTER_API_KEY: [yellow]⚠ not set[/yellow]")
 
     if config.get("database_url"):
-        console.print("  DATABASE_URL: [green]set[/green]")
+        console.print("  DATABASE_URL: [green]✓ set[/green]")
     else:
-        console.print("  DATABASE_URL: [yellow]not set (using default)[/yellow]")
+        console.print("  DATABASE_URL: [yellow]⚠ not set (using default)[/yellow]")
 
     console.print()
-    console.print("[dim]Run `ah chat \"hello\"` to test the agent.[/dim]")
+    _print_muted("Run `ah chat \"hello\"` to test the agent.")
 
 
 @app.command()
@@ -945,17 +1022,17 @@ def init(
             loader.set_progress(0.5)
             await db.initialize_schema()
             loader.complete()
-            console.print("  Schema: [green]created[/green]")
+            console.print("  Schema: [green]✓ created[/green]")
         except Exception as e:
             loader.error()
-            console.print(f"  Schema: [red]failed[/red] ({e})")
+            console.print(f"  Schema: [red]✗ failed[/red] ({e})")
             raise typer.Exit(1)
         finally:
             await db.close()
 
         console.print()
-        console.print("[green]AgentHarness initialized![/green]")
-        console.print("[dim]Run `ah chat \"hello\"` to start.[/dim]")
+        _print_success("AgentHarness initialized!")
+        _print_muted("Run `ah chat \"hello\"` to start.")
 
     _run(_init())
 
