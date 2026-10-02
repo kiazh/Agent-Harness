@@ -192,8 +192,17 @@ class SecretRedactor:
         return RedactionResult(text=redacted, redactions=redactions)
 
     def redact_dict(self, data: dict) -> RedactionResult:
-        """Redact secrets from all string values in a dict."""
-        redacted_dict = {}
+        """Redact secrets from all string values in a dict, recursively.
+
+        Nested mappings are redacted in place and remain dicts; only the
+        top-level result is exposed as the ``text`` representation.
+        """
+        redacted_dict, all_redactions = self._redact_mapping(data)
+        return RedactionResult(text=str(redacted_dict), redactions=all_redactions)
+
+    def _redact_mapping(self, data: dict) -> tuple[dict, list[str]]:
+        """Return ``(redacted_dict, redaction_names)`` for a mapping."""
+        redacted_dict: dict = {}
         all_redactions: list[str] = []
 
         for key, value in data.items():
@@ -202,13 +211,13 @@ class SecretRedactor:
                 redacted_dict[key] = result.text
                 all_redactions.extend(result.redactions)
             elif isinstance(value, dict):
-                result = self.redact_dict(value)
-                redacted_dict[key] = result.text
-                all_redactions.extend(result.redactions)
+                nested, nested_redactions = self._redact_mapping(value)
+                redacted_dict[key] = nested
+                all_redactions.extend(nested_redactions)
             else:
                 redacted_dict[key] = value
 
-        return RedactionResult(text=str(redacted_dict), redactions=all_redactions)
+        return redacted_dict, all_redactions
 
     def has_secrets(self, text: str) -> bool:
         """Quick check if text contains any known secret patterns."""

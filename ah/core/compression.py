@@ -7,6 +7,8 @@ Provides:
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -16,6 +18,24 @@ from ah.core.models import ContextChunk
 from ah.core.assembler import get_token_count
 
 logger = logging.getLogger(__name__)
+
+
+def _run_awaitable(awaitable: Any) -> Any:
+    """Run *awaitable* to completion from synchronous code.
+
+    ``ContextCompressor.compress`` is synchronous, but its optional LLM
+    summarization step is a coroutine. A bare ``asyncio.run`` raises
+    "asyncio.run() cannot be called from a running event loop" whenever
+    ``compress()`` is invoked from async code (the CLI does exactly that).
+    Use ``asyncio.run`` when no loop is running; otherwise execute the
+    coroutine on a dedicated worker thread that owns its own event loop.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(awaitable)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, awaitable).result()
 
 
 @dataclass
@@ -127,9 +147,8 @@ class ContextCompressor:
 
         # Compress old chunks
         if self.config.llm_summarize and llm_provider is not None:
-            import asyncio
             try:
-                compressed = asyncio.run(
+                compressed = _run_awaitable(
                     self._llm_summarize(old_chunks, session_id, agent_id, llm_provider)
                 )
                 method = "llm_summarize"

@@ -55,6 +55,12 @@ def chat(
         _run(run_repl(model=model, provider=provider, verbose=verbose, session_id=session_id))
         return
 
+    # Guard before any I/O: message is required, and slicing it for the
+    # session title (message[:50]) would raise TypeError on None.
+    if not message:
+        console.print("[yellow]No message provided. Use: ah chat \"your message\"[/yellow]")
+        raise typer.Exit(0)
+
     async def _chat():
         await db.connect()
         try:
@@ -78,10 +84,6 @@ def chat(
                     goal=message[:100] if message else None,
                 )
                 console.print(f"[dim]New session: {session.id}[/dim]")
-
-            if not message:
-                console.print("[yellow]No message provided. Use: ah chat \"your message\"[/yellow]")
-                raise typer.Exit(0)
 
             # Create LLM provider
             try:

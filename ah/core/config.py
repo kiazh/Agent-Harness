@@ -236,7 +236,7 @@ class Config:
     def reset(cls) -> None:
         """Reset the global config singleton."""
         global config
-        cls._instance = None
+        config = cls()
 
 
 # Global singleton

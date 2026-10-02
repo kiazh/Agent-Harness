@@ -98,16 +98,23 @@ class ContextManager:
                 embedding_str,
             ))
 
+        # Assign ids client-side so the batch insert can be a single
+        # executemany() *and* we can still fetch back exactly the rows we
+        # inserted. Selecting by session_id with a LIMIT would also match
+        # pre-existing rows in that session (created_at is identical for every
+        # row written in one transaction, so the ordering is nondeterministic).
+        chunk_ids = [uuid.uuid4() for _ in records]
+        records_with_ids = [(cid, *rec) for cid, rec in zip(chunk_ids, records)]
+
         # Use executemany for batch insert
         await db.executemany(
             """
-            INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             """,
-            records,
+            records_with_ids,
         )
 
-        # Fetch back the inserted rows (ordered by created_at DESC to match typical usage)
         session_ids = list({c["session_id"] for c in chunks})
         # Invalidate cache for all affected sessions
         for sid in session_ids:
@@ -116,12 +123,10 @@ class ContextManager:
             """
             SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
             FROM context_chunks
-            WHERE session_id = ANY($1::uuid[])
-            ORDER BY created_at DESC
-            LIMIT $2
+            WHERE id = ANY($1::uuid[])
+            ORDER BY created_at DESC, id DESC
             """,
-            session_ids,
-            len(chunks),
+            chunk_ids,
         )
         return [self._row_to_chunk(r) for r in rows]
 

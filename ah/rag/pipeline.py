@@ -149,28 +149,24 @@ class RAGPipeline:
                 search_text,
             ))
 
-        # Batch insert
-        await db.executemany(
-            """
-            INSERT INTO context_chunks
-                (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            """,
-            records,
-        )
+        if not records:
+            return []
 
-        # Fetch back the inserted rows
-        rows = await db.fetch(
-            """
-            SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
-            FROM context_chunks
-            WHERE session_id = $1 AND chunk_type = 'document'
-            ORDER BY created_at DESC
-            LIMIT $2
-            """,
-            session_id,
-            len(records),
-        )
+        # Insert one row at a time with RETURNING so we get exactly the rows
+        # belonging to this document. Fetching by (session_id, chunk_type) with
+        # a LIMIT would also match documents indexed earlier in the session.
+        rows = []
+        for record in records:
+            row = await db.fetchrow(
+                """
+                INSERT INTO context_chunks
+                    (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
+                """,
+                *record,
+            )
+            rows.append(row)
         stored_chunks = [self._row_to_chunk(r) for r in rows]
 
         audit_log(

@@ -8,7 +8,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, get_type_hints
 
 from ah.core.exceptions import ToolError, ValidationError
 from ah.core.models import ToolDefinition
@@ -86,10 +86,18 @@ class ToolRegistry:
         }
         properties = {}
         required = []
+        # ``from __future__ import annotations`` makes every annotation a string
+        # at runtime, so ``param.annotation`` is e.g. ``"int"`` and never matches
+        # ``type_map``. Resolve the real runtime types with get_type_hints().
+        try:
+            hints = get_type_hints(func)
+        except Exception:
+            hints = {}
         for param_name, param in sig.parameters.items():
             if param_name == "self":
                 continue
-            param_type = type_map.get(param.annotation, "string")
+            annotation = hints.get(param_name, param.annotation)
+            param_type = type_map.get(annotation, "string")
             properties[param_name] = {
                 "type": param_type,
                 "description": param_name,

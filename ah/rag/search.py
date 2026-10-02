@@ -12,6 +12,7 @@ import asyncpg
 
 from ah.core.models import ContextChunk
 from ah.core.provider import audit_log
+from ah.core.serialization import embedding_to_str
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,9 @@ class HybridSearch:
         db: Any,
     ) -> list[tuple[ContextChunk, float]]:
         """Dense vector search using pgvector cosine similarity."""
-        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+        # Build the pgvector literal with the shared helper so the format
+        # matches how embeddings are stored (embedding_to_str).
+        embedding_str = embedding_to_str(query_embedding)
         rows = await db.fetch(
             """
             SELECT id, session_id, agent_id, chunk_type, payload_msgpack,
