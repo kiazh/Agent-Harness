@@ -1108,14 +1108,15 @@ class InteractiveREPL:
                 continue
 
             if char == "\r":  # Enter
-                # If autocomplete is visible, select the current match
+                # If autocomplete is visible, select the current match and submit
                 if self._autocomplete._visible:
                     selected = self._autocomplete.get_selected()
                     if selected:
-                        self._input_buffer = selected.display_name + " "
-                        self._cursor_pos = len(self._input_buffer)
-                        self._autocomplete.hide()
-                        continue
+                        result = selected.display_name
+                        if result.strip():
+                            self._history.append(result)
+                        self.console.print()
+                        return result
 
                 # Submit the input
                 result = self._input_buffer
