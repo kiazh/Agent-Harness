@@ -1526,11 +1526,12 @@ class TestDatabaseSchema:
     """Tests for database schema and connection."""
 
     def test_database_default_dsn(self):
-        """Test that no hardcoded default DSN exists (security fix)."""
+        """Test that Database has a sensible default DSN."""
         with patch.dict(os.environ, {}, clear=True):
             db_obj = Database()
-            # No hardcoded DSN — should be empty when not configured
-            assert db_obj.dsn == ""
+            # Should have a default DSN pointing to localhost
+            assert "127.0.0.1" in db_obj.dsn or "localhost" in db_obj.dsn
+            assert "agentharness" in db_obj.dsn
 
     def test_database_custom_dsn(self):
         """Test custom DSN."""

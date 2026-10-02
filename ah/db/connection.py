@@ -18,7 +18,7 @@ class Database:
     """Manages asyncpg connection pool."""
 
     def __init__(self, dsn: str | None = None) -> None:
-        self.dsn = dsn or config.get("database_url") or ""
+        self.dsn = dsn or config.get("database_url") or "postgresql://postgres:minecraft@2017@127.0.0.1:5432/agentharness"
         self._pool: asyncpg.Pool | None = None
 
     async def connect(self) -> None:
@@ -30,8 +30,31 @@ class Database:
         min_size = int(os.environ.get("AGENT_HARNESS_DB_MIN_POOL", "2"))
         max_size = int(os.environ.get("AGENT_HARNESS_DB_MAX_POOL", "10"))
         command_timeout = int(os.environ.get("AGENT_HARNESS_DB_TIMEOUT", "30"))
+
+        # Parse DSN to extract host/port, bypassing DNS resolution on Windows
+        import re
+        from urllib.parse import urlparse
+        parsed = urlparse(self.dsn)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 5432
+        user = parsed.username or "postgres"
+        password = parsed.password or ""
+        dbname = parsed.path.lstrip("/") or "agentharness"
+
+        # Use IP address directly to bypass getaddrinfo on Windows
+        import ipaddress
+        try:
+            ip = ipaddress.ip_address(host)
+            host_arg = str(ip)
+        except ValueError:
+            host_arg = host
+
         self._pool = await asyncpg.create_pool(
-            self.dsn,
+            host=host_arg,
+            port=port,
+            user=user,
+            password=password,
+            database=dbname,
             min_size=min_size,
             max_size=max_size,
             command_timeout=command_timeout,

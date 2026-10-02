@@ -232,11 +232,13 @@ def _build_help_text() -> str:
     return "\n".join(lines)
 
 
-def run_interactive_help() -> None:
+async def run_interactive_help() -> str | None:
     """Show an interactive, scrollable help menu using prompt_toolkit Application.
 
     The user can navigate with arrow keys and select a command with Enter.
     Pressing Esc or Ctrl+C closes the menu.
+
+    Returns the selected command name, or None if closed without selection.
     """
     help_text = _build_help_text()
     selected_command: list[str | None] = [None]
@@ -272,18 +274,15 @@ def run_interactive_help() -> None:
     @kb.add("enter")
     def _select(event) -> None:
         """Select the command under the cursor."""
-        # Try to find a command name on the current line
         try:
             line = text_area.document.current_line
             stripped = line.strip()
             if stripped.startswith("/"):
-                # Extract command name (first token)
                 cmd_name = stripped.split()[0].lstrip("/").lower()
                 if cmd_name in COMMAND_REGISTRY:
                     selected_command[0] = cmd_name
                     event.app.exit()
                 else:
-                    # Check aliases
                     for name, cmd in COMMAND_REGISTRY.items():
                         if cmd_name in cmd.aliases:
                             selected_command[0] = name
@@ -310,15 +309,13 @@ def run_interactive_help() -> None:
         style=PROMPT_STYLE,
     )
 
-    # Run the application
+    # Run the application asynchronously
     try:
-        application.run()
+        await application.run_async()
     except Exception as e:
         logger.debug("Help menu closed with exception: %s", e)
 
-    # If a command was selected, print it so the caller can handle it
-    if selected_command[0]:
-        print(f"/{selected_command[0]}")
+    return selected_command[0]
 
 
 # ─── Interactive REPL ────────────────────────────────────────────────────────
@@ -464,7 +461,7 @@ class InteractiveREPL:
             return False
 
         elif cmd_name == "help":
-            self._show_help()
+            await self._show_help()
 
         elif cmd_name == "status":
             await self._show_status()
@@ -508,9 +505,12 @@ class InteractiveREPL:
 
         return True
 
-    def _show_help(self) -> None:
+    async def _show_help(self) -> None:
         """Show interactive help menu."""
-        run_interactive_help()
+        selected = await run_interactive_help()
+        if selected:
+            # Execute the selected command
+            await self._handle_slash_command(selected)
 
     async def _show_status(self) -> None:
         """Show current session and agent status."""
