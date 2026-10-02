@@ -559,9 +559,9 @@ retrieved_chunks = [
 | `MemoryEntry` | `ah/core/models.py` | New dataclass for long-term memories |
 | `MemoryStore` | `ah/memory/store.py` | CRUD for long-term memories (new table) |
 | `MemoryConsolidator` | `ah/memory/consolidator.py` | Extract, dedup, score, write |
-| `ImportanceScorer` | `ah/memory/scoring.py` | Multi-factor importance scoring |
+| `ImportanceScorer` | `ah/memory/scorer.py` | Multi-factor importance scoring |
 | `ForgettingModel` | `ah/memory/forgetting.py` | Decay and eviction |
-| `MemoryRetriever` | `ah/memory/retrieval.py` | Hybrid retrieval pipeline |
+| `MemoryRetriever` | `ah/memory/retriever.py` | Hybrid retrieval pipeline |
 | `MemoryManager` | `ah/memory/__init__.py` | Facade coordinating all components |
 
 ### 7.3 Schema Changes

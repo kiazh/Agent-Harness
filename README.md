@@ -10,16 +10,19 @@ Most agent frameworks are black boxes. AgentHarness is built to be understood �
 
 - **ReAct loop**: Thought → Action → Observation with streaming output
 - **PostgreSQL-backed context**: asyncpg + connection pooling, MessagePack payloads, pgvector embeddings
-- **Long-term memory**: LLM-based extraction, importance scoring, Ebbinghaus forgetting, hybrid retrieval
+- **Long-term memory**: LLM-based extraction, importance scoring, Ebbinghaus forgetting, hybrid retrieval, approval gate
 - **RAG pipeline**: Document indexing, chunking, embedding, hybrid search (BM25 + dense + RRF), reranking
 - **Tool registry**: Decorator-based with JSON Schema inference, input validation, caching
 - **Skills system**: SKILL.md parser with YAML frontmatter, trigger matching
 - **Interactive REPL**: prompt_toolkit with autocomplete, slash commands, streaming
 - **Configuration**: YAML file + environment variable overrides + per-session overrides
 - **Metrics**: Latency histograms, throughput counters, error rates, token usage tracking
-- **Security**: No shell injection, no path traversal, no SSRF, rate limiting, audit logging
+- **Security**: No shell injection, no path traversal, no SSRF, rate limiting, audit logging, PII redaction
 - **Retry logic**: Exponential backoff on LLM calls
 - **DI container**: Production and testing configurations
+- **Compression**: Context compression with token budget enforcement
+- **User profiles**: Per-user preference and topic tracking
+- **Memory approval**: Human-in-the-loop approval for sensitive memories
 
 ## Quick Start
 
@@ -50,7 +53,9 @@ CLI (Typer) → ReActAgent → LLMProvider (OpenRouter/Ollama)
          PostgreSQL (asyncpg)
          ├── sessions
          ├── context_chunks (MessagePack + pgvector)
-         └── memories (pgvector)
+         ├── memories (pgvector)
+         ├── pending_memories (approval gate)
+         └── user_profiles
 ```
 
 ## Roadmap
@@ -89,11 +94,12 @@ agent-harness/
 │   ├── __init__.py
 │   ├── __main__.py
 │   ├── cli/
-│   │   ├── __init__.py      # Typer CLI (chat, repl, status, sessions, context, skills, doctor, init, config, memory)
+│   │   ├── __init__.py      # Typer CLI (31 commands: chat, repl, status, sessions, sessions-search, export, fork, delete, context, compress, skills, learn, curator, hub, doctor, init, version, config, config-set, memory-list, memory-search, memory-forget, memory-pending, memory-approve, memory-reject, memory-approve-all, memory-reject-all, memory-stats, user-profile, user-profile-update, user-profile-list)
 │   │   └── interactive.py   # Interactive REPL (prompt_toolkit)
 │   ├── core/
 │   │   ├── agent.py         # ReActAgent + BaseReActAgent (Template Method)
 │   │   ├── assembler.py     # PromptAssembler + TokenCounter (tiktoken)
+│   │   ├── compression.py   # Context compression with token budget enforcement
 │   │   ├── config.py        # Config (YAML + env vars + session overrides)
 │   │   ├── container.py     # DI container (production / testing)
 │   │   ├── context.py       # ContextManager (CRUD, batch insert, embedding search)
@@ -105,14 +111,17 @@ agent-harness/
 │   │   └── session.py       # SessionManager (with TTLCache)
 │   ├── db/
 │   │   ├── connection.py    # asyncpg pool
-│   │   └── schema.sql       # PostgreSQL schema (3 tables)
+│   │   └── schema.sql       # PostgreSQL schema (5 tables)
 │   ├── memory/
+│   │   ├── approval.py      # MemoryApproval (human-in-the-loop approval gate)
 │   │   ├── consolidator.py  # MemoryConsolidator (LLM extraction → scoring → dedup → write)
 │   │   ├── forgetting.py    # ForgettingModel (Ebbinghaus decay)
 │   │   ├── models.py        # MemoryEntry, RetrievedMemory
+│   │   ├── redaction.py     # PII redaction for memory content
 │   │   ├── retriever.py     # MemoryRetriever (hybrid search + reranking)
 │   │   ├── scorer.py        # ImportanceScorer (multi-factor)
-│   │   └── store.py         # MemoryStore (CRUD)
+│   │   ├── store.py         # MemoryStore (CRUD)
+│   │   └── user_profile.py  # UserProfileManager (per-user preferences)
 │   ├── rag/
 │   │   ├── chunker.py       # RecursiveCharacterTextSplitter
 │   │   ├── embedder.py      # OpenAIEmbedder (LRU cache + batch)
@@ -130,7 +139,7 @@ agent-harness/
 │       ├── rag.py           # index_document, search_documents
 │       ├── registry.py      # Re-export for backward compat
 │       └── terminal.py      # terminal (allowlist + SSRF protection)
-├── tests/                  # 332 tests
+├── tests/                  # 436 tests
 ├── skills/                 # Bundled skills (20 SKILL.md files)
 ├── docs/
 ├── pyproject.toml

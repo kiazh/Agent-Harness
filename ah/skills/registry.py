@@ -40,6 +40,43 @@ class Skill:
 class SkillParser:
     """Parse SKILL.md files with YAML frontmatter."""
 
+    # Maximum allowed content size (1 MB) to prevent memory exhaustion
+    MAX_CONTENT_SIZE = 1_000_000
+
+    # Patterns that may indicate prompt injection attempts
+    # These are targeted to reduce false positives on legitimate content
+    _PROMPT_INJECTION_PATTERNS = [
+        re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.IGNORECASE),
+        re.compile(r"disregard\s+(all\s+)?prior\s+instructions", re.IGNORECASE),
+        re.compile(r"forget\s+(all\s+)?previous\s+instructions", re.IGNORECASE),
+        re.compile(r"system\s*:\s*(you\s+are|ignore|disregard|forget|override)", re.IGNORECASE),
+        re.compile(r"<\s*system\s*>", re.IGNORECASE),
+        re.compile(r"\[INST\]", re.IGNORECASE),
+        re.compile(r"\[/INST\]", re.IGNORECASE),
+        re.compile(r"<\|im_start\|>", re.IGNORECASE),
+        re.compile(r"<\|im_end\|>", re.IGNORECASE),
+    ]
+
+    @staticmethod
+    def _validate_content(content: str, source_path: str = "") -> str:
+        """Validate skill content for prompt injection attempts.
+        
+        Returns the content if safe, raises ValueError if suspicious patterns found.
+        """
+        if len(content) > SkillParser.MAX_CONTENT_SIZE:
+            raise ValueError(
+                f"Skill content exceeds maximum size of {SkillParser.MAX_CONTENT_SIZE} characters"
+            )
+        
+        for pattern in SkillParser._PROMPT_INJECTION_PATTERNS:
+            if pattern.search(content):
+                raise ValueError(
+                    f"Skill content contains potential prompt injection pattern "
+                    f"(matched: {pattern.pattern[:30]}...)"
+                )
+        
+        return content
+
     @staticmethod
     def parse(file_path: str | Path) -> Skill:
         """Parse a SKILL.md file."""
@@ -49,16 +86,17 @@ class SkillParser:
         # Extract YAML frontmatter
         frontmatter_match = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)
         if not frontmatter_match:
+            content = SkillParser._validate_content(text, str(path))
             return Skill(
                 name=path.parent.name,
                 description="",
                 triggers=[],
-                content=text,
+                content=content,
                 file_path=str(path),
             )
 
         yaml_text = frontmatter_match.group(1)
-        content = frontmatter_match.group(2).strip()
+        content = SkillParser._validate_content(frontmatter_match.group(2).strip(), str(path))
 
         # Parse YAML frontmatter with PyYAML
         try:
@@ -193,6 +231,9 @@ class SkillRegistry:
         version: str = "1.0.0",
     ) -> Skill:
         """Create a new skill and persist it to the skills directory."""
+        # Validate content for prompt injection
+        content = SkillParser._validate_content(content)
+
         # Sanitize name for directory
         safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", name.lower())
         skill_dir = self.skills_dir / safe_name

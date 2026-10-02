@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Optional
@@ -34,12 +35,50 @@ if not _audit_logger.handlers:
     _audit_logger.addHandler(_handler)
 
 
+def _sanitize_value(value: Any) -> Any:
+    """Sanitize a value for audit logging — redact potential secrets."""
+    if isinstance(value, str):
+        sanitized = value
+        sanitized = re.sub(r"sk-[a-zA-Z0-9]{20,}", "[REDACTED_KEY]", sanitized)
+        sanitized = re.sub(r"sk-ant-[a-zA-Z0-9\-_]{20,}", "[REDACTED_KEY]", sanitized)
+        sanitized = re.sub(r"sk-or-[a-zA-Z0-9]{20,}", "[REDACTED_KEY]", sanitized)
+        sanitized = re.sub(r"(Bearer\s+)[a-zA-Z0-9\-._~+/]+=*", r"\1[REDACTED_TOKEN]", sanitized, flags=re.IGNORECASE)
+        sanitized = re.sub(
+            r"(password|passwd|pwd)\s*[=:]\s*['\"]?([^\s'\"]{4,})['\"]?",
+            r"\1=[REDACTED_PASSWORD]",
+            sanitized,
+            flags=re.IGNORECASE,
+        )
+        sanitized = re.sub(
+            r"(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://([^:]+):([^@]+)@",
+            r"\1://\2:[REDACTED_DB_PASSWORD]@",
+            sanitized,
+        )
+        sanitized = re.sub(r"AKIA[0-9A-Z]{16}", "[REDACTED_AWS_KEY]", sanitized)
+        sanitized = re.sub(
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+            "[REDACTED_PRIVATE_KEY]",
+            sanitized,
+            flags=re.DOTALL,
+        )
+        return sanitized
+    elif isinstance(value, dict):
+        return {k: _sanitize_value(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [_sanitize_value(v) for v in value]
+    elif isinstance(value, tuple):
+        return tuple(_sanitize_value(v) for v in value)
+    else:
+        return value
+
+
 def audit_log(event_type: str, **kwargs) -> None:
-    """Log a security-relevant event as JSON."""
+    """Log a security-relevant event as JSON. All kwargs are sanitized to redact secrets."""
+    sanitized_kwargs = {k: _sanitize_value(v) for k, v in kwargs.items()}
     entry = {
         "timestamp": time.time(),
         "event": event_type,
-        **kwargs,
+        **sanitized_kwargs,
     }
     _audit_logger.info(json.dumps(entry, default=str))
 
@@ -387,6 +426,7 @@ class OpenRouterProvider(LLMProvider):
         return data["data"][0]["embedding"]
 
     async def close(self) -> None:
+        # Close the shared client (it will be recreated if needed)
         await self.client.aclose()
 
 
@@ -535,7 +575,7 @@ class OllamaProvider(LLMProvider):
         tool_calls: list[dict] = []
 
         try:
-            async with self.client.stream("POST", "/api/chat", json=payload) as resp:
+            async with self.client.stream(f"{self.base_url}/api/chat", json=payload) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     if not line:
@@ -579,7 +619,7 @@ class OllamaProvider(LLMProvider):
     async def embed(self, text: str) -> list[float]:
         """Embed using Ollama's embedding endpoint."""
         resp = await self.client.post(
-            "/api/embeddings",
+            f"{self.base_url}/api/embeddings",
             json={"model": "nomic-embed-text", "prompt": text},
         )
         resp.raise_for_status()
@@ -587,6 +627,7 @@ class OllamaProvider(LLMProvider):
         return data["embedding"]
 
     async def close(self) -> None:
+        # Close the shared client (it will be recreated if needed)
         await self.client.aclose()
 
 

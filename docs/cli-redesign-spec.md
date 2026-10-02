@@ -1448,9 +1448,7 @@ ah/
 │   ├── __init__.py          # Typer app
 │   ├── interactive.py       # REPL implementation
 │   ├── commands.py          # One-shot commands
-│   ├── autocomplete.py      # Autocomplete logic
-│   ├── animations.py        # Animation frames
-│   └── themes.py            # Color themes
+│   └── autocomplete.py      # Autocomplete logic
 ├── core/
 │   ├── agent.py             # ReAct loop
 │   ├── assembler.py         # Prompt assembly

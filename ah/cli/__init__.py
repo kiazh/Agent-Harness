@@ -337,7 +337,12 @@ def export(
                         lines.append(f"**Result:** {result_preview[:200]}")
                     lines.append("")
 
-            output_path = Path(filename)
+            from ah.tools.file import _resolve_path
+            try:
+                output_path = _resolve_path(filename)
+            except ValueError as e:
+                console.print(f"[red]Path traversal blocked:[/red] {e}")
+                raise typer.Exit(1)
             output_path.write_text("\n".join(lines), encoding="utf-8")
             console.print(f"[green]Exported session {session.id} to {filename}[/green]")
         finally:
@@ -581,18 +586,28 @@ def learn(
     Extracts reusable knowledge from the source and creates a new skill.
     """
     from ah.skills.registry import skill_registry
+    from ah.tools.file import _resolve_path
+    from ah.tools.builtins import _is_safe_url
     skill_registry.load_all()
 
     # Determine source type
     source_path = Path(source)
     if source_path.exists() and source_path.is_file():
-        # Learn from file
-        content = source_path.read_text(encoding="utf-8")
-        skill_name = name or source_path.stem
-        skill_description = description or f"Skill learned from {source_path.name}"
+        # Learn from file — prevent path traversal via ..
+        resolved = source_path.resolve()
+        # Check for path traversal attempts (.. in the original path)
+        if ".." in source:
+            console.print(f"[red]Path traversal blocked:[/red] '{source}' contains '..'")
+            raise typer.Exit(1)
+        content = resolved.read_text(encoding="utf-8")
+        skill_name = name or resolved.stem
+        skill_description = description or f"Skill learned from {resolved.name}"
         trigger_list = [t.strip() for t in triggers.split(",")] if triggers else []
     elif source.startswith("http://") or source.startswith("https://"):
-        # Learn from URL
+        # Learn from URL — SSRF protection
+        if not _is_safe_url(source):
+            console.print(f"[red]URL rejected by security policy (private/internal address or invalid protocol):[/red] {source}")
+            raise typer.Exit(1)
         import httpx
         try:
             resp = httpx.get(source, timeout=30)

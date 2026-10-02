@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -27,11 +29,19 @@ class Tool:
 
 
 class ToolRegistry:
-    """Global tool registry — register tools with decorator."""
+    """Global tool registry — register tools with decorator.
+
+    Includes a TTL cache for tool execution results to avoid redundant
+    calls with identical arguments.
+    """
 
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
         self._definitions_cache: list[ToolDefinition] | None = None
+        # TTL cache: (tool_name, args_hash) -> (timestamp, result)
+        self._result_cache: dict[tuple[str, str], tuple[float, Any]] = {}
+        self._cache_ttl: float = 60.0  # 1 minute default
+        self._cache_max_size: int = 256
 
     def register(
         self,
@@ -161,7 +171,7 @@ class ToolRegistry:
                                         )
 
     async def execute(self, name: str, **kwargs) -> Any:
-        """Execute a tool by name with input validation."""
+        """Execute a tool by name with input validation and TTL caching."""
         if name not in self._tools:
             audit_log("tool_execution_error", tool_name=name, error="not_registered")
             raise ToolError(f"Tool '{name}' not registered")
@@ -175,11 +185,36 @@ class ToolRegistry:
             audit_log("tool_execution_validation_error", tool_name=name, error=str(e))
             raise
 
+        # Check TTL cache (only for non-side-effect tools — skip cache for tools with side effects)
+        cache_key = None
+        if not name.startswith(("write_", "delete_", "create_", "update_", "send_", "post_")):
+            args_hash = hashlib.sha256(
+                json.dumps(kwargs, sort_keys=True, default=str).encode()
+            ).hexdigest()
+            cache_key = (name, args_hash)
+            now = time.monotonic()
+            if cache_key in self._result_cache:
+                cached_time, cached_result = self._result_cache[cache_key]
+                if now - cached_time < self._cache_ttl:
+                    logger.debug("Tool result cache hit for %s", name)
+                    return cached_result
+                else:
+                    del self._result_cache[cache_key]
+
         # Execute
         if tool.is_async:
-            return await tool.func(**kwargs)
+            result = await tool.func(**kwargs)
         else:
-            return tool.func(**kwargs)
+            result = tool.func(**kwargs)
+
+        # Store in cache
+        if cache_key is not None:
+            self._result_cache[cache_key] = (time.monotonic(), result)
+            if len(self._result_cache) > self._cache_max_size:
+                oldest_key = min(self._result_cache, key=lambda k: self._result_cache[k][0])
+                del self._result_cache[oldest_key]
+
+        return result
 
     def list_tools(self) -> list[str]:
         """List all registered tool names."""

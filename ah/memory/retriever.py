@@ -176,6 +176,7 @@ class MemoryRetriever:
             param_idx += 1
 
         # Keyword matching: any keyword in content
+        # Note: keywords are passed as parameters, not interpolated into SQL
         keyword_conditions = []
         for kw in keywords:
             keyword_conditions.append(f"content ILIKE ${param_idx}")

@@ -50,6 +50,10 @@ def _resolve_path(path: str) -> Path:
 )
 async def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
     """Read a file with optional offset and limit."""
+    if offset < 1:
+        raise ToolError(f"offset must be >= 1, got {offset}")
+    if limit < 1:
+        raise ToolError(f"limit must be >= 1, got {limit}")
     try:
         file_path = _resolve_path(path)
     except ValueError as e:

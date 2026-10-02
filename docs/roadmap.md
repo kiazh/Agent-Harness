@@ -2,13 +2,13 @@
 
 **Last updated:** 2026-10-01  
 **Current version:** 0.1.0  
-**Test status:** 332 tests passing
+**Test status:** 436 tests passing
 
 ---
 
 ## Executive Summary
 
-AgentHarness has completed Phases 1-4: a working ReAct loop, async PostgreSQL with pgvector, MessagePack context storage, decorator-based tool registry, skills system, long-term memory with LLM-based extraction and hybrid retrieval, RAG pipeline with hybrid search and reranking, interactive REPL with prompt_toolkit, configuration system, and 332 passing tests. The architecture is clean with proper separation of concerns (models, assembler, container, context, provider, session, memory, rag).
+AgentHarness has completed Phases 1-4: a working ReAct loop, async PostgreSQL with pgvector, MessagePack context storage, decorator-based tool registry, skills system, long-term memory with LLM-based extraction and hybrid retrieval, RAG pipeline with hybrid search and reranking, interactive REPL with prompt_toolkit, configuration system, and 436 passing tests. The architecture is clean with proper separation of concerns (models, assembler, container, context, provider, session, memory, rag).
 
 The next phase focuses on **multi-agent orchestration, production hardening, and advanced features**.
 

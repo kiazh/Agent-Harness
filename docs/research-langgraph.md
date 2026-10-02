@@ -212,7 +212,7 @@ AgentHarness already implements several features that LangGraph provides:
 | **Debugging** | Direct — read your own code | Indirect — framework internals[^6] |
 | **Learning curve** | Minimal (standard Python) | Steeper (graph concepts, reducers, checkpointers)[^4] |
 | **API stability** | You control it | Fast-moving; patterns change[^6] |
-| **Testing** | 136 tests pass | Framework-coupled tests |
+| **Testing** | 436 tests pass | Framework-coupled tests |
 
 **Verdict:** AgentHarness is simpler to develop, debug, and maintain. LangGraph reduces boilerplate but introduces framework coupling and a steeper learning curve.
 
@@ -271,7 +271,7 @@ Integrating LangGraph into AgentHarness would require:
 
 **Rationale:**
 
-1. **AgentHarness's ReAct loop already works.** 136 tests pass. The loop handles tool calls, retries, token budgets, streaming, and audit logging. It is debuggable, performant, and self-contained.
+1. **AgentHarness's ReAct loop already works.** 436 tests pass. The loop handles tool calls, retries, token budgets, streaming, and audit logging. It is debuggable, performant, and self-contained.
 
 2. **LangGraph's advantages are not yet needed.** The project does not currently require multi-agent coordination, human-in-the-loop pause/resume, or crash recovery across restarts. These are real needs for long-running workflows (hours/days), but AgentHarness runs are short-lived (seconds/minutes).
 
@@ -319,7 +319,7 @@ These can be built incrementally without adopting the full LangGraph framework.
 | Simplicity | ✅ | ❌ | AgentHarness |
 | Debugging | ✅ Direct | ❌ Framework internals | AgentHarness |
 | Dependencies | Minimal | ~50MB | AgentHarness |
-| Testability | ✅ 136 tests | Framework-coupled | AgentHarness |
+| Testability | ✅ 436 tests | Framework-coupled | AgentHarness |
 | Self-hostable | ✅ | ❌ | AgentHarness |
 
 ---
@@ -328,7 +328,7 @@ These can be built incrementally without adopting the full LangGraph framework.
 
 LangGraph is a well-designed framework for complex, long-running, multi-agent workflows. It solves real problems: durable execution, checkpointing, human-in-the-loop, and multi-agent coordination. For teams building production agents with these needs, it is the right choice.[^3][^6]
 
-AgentHarness is a lightweight, self-hosted ReAct agent with 136 passing tests, token budget management, rate limiting, audit logging, and PostgreSQL persistence. Its custom ReAct loop is the correct architectural choice for its current scope. The project should continue iterating on its custom loop and revisit LangGraph when multi-agent coordination, human-in-the-loop, or crash recovery become requirements.
+AgentHarness is a lightweight, self-hosted ReAct agent with 436 passing tests, token budget management, rate limiting, audit logging, and PostgreSQL persistence. Its custom ReAct loop is the correct architectural choice for its current scope. The project should continue iterating on its custom loop and revisit LangGraph when multi-agent coordination, human-in-the-loop, or crash recovery become requirements.
 
 **The best time to adopt a framework is when you have pain it solves — not before.**
 

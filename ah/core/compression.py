@@ -134,11 +134,21 @@ class ContextCompressor:
                 )
                 method = "llm_summarize"
             except Exception:
+                try:
+                    compressed = self._truncate_compress(old_chunks, session_id, agent_id)
+                    method = "truncate"
+                except Exception:
+                    # If all compression fails, preserve original chunks to avoid context loss
+                    compressed = old_chunks
+                    method = "none"
+        else:
+            try:
                 compressed = self._truncate_compress(old_chunks, session_id, agent_id)
                 method = "truncate"
-        else:
-            compressed = self._truncate_compress(old_chunks, session_id, agent_id)
-            method = "truncate"
+            except Exception:
+                # If truncation fails, preserve original chunks to avoid context loss
+                compressed = old_chunks
+                method = "none"
 
         # Combine: compressed old chunks + preserved recent chunks
         all_compressed = compressed + recent_chunks

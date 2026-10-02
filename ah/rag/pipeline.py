@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -45,6 +47,11 @@ class RAGPipeline:
         await pipeline.index_document("path/to/doc.md", session_id)
         results = await pipeline.search("query", session_id)
     """
+
+    # TTL cache for search results: (session_id, query_hash) -> (timestamp, results)
+    _search_cache: dict[tuple, tuple[float, list[SearchResult]]] = {}
+    _search_cache_ttl: float = 300.0  # 5 minutes
+    _search_cache_max_size: int = 256
 
     def __init__(
         self,
@@ -202,6 +209,18 @@ class RAGPipeline:
             top_k=k,
         )
 
+        # Check TTL cache
+        cache_key = (session_id, hashlib.sha256(query.encode()).hexdigest())
+        now = time.monotonic()
+        if cache_key in self._search_cache:
+            cached_time, cached_results = self._search_cache[cache_key]
+            if now - cached_time < self._search_cache_ttl:
+                logger.debug("RAG search cache hit for session %s", session_id)
+                return cached_results[:k]
+            else:
+                # Expired
+                del self._search_cache[cache_key]
+
         # Embed query
         query_embedding = await self._embedder.embed(query)
 
@@ -239,6 +258,13 @@ class RAGPipeline:
             results = reranked
 
         final_results = results[:k]
+
+        # Store in TTL cache
+        self._search_cache[cache_key] = (now, final_results)
+        # Evict oldest if cache is full (simple approach)
+        if len(self._search_cache) > self._search_cache_max_size:
+            oldest_key = min(self._search_cache, key=lambda k: self._search_cache[k][0])
+            del self._search_cache[oldest_key]
 
         audit_log(
             "rag_search_complete",

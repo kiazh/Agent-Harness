@@ -409,8 +409,6 @@ class InteractiveREPL:
                 f"Session: [cyan]{self.session.id}[/cyan]\n"
                 f"Model: [green]{self.model}[/green] | Provider: [green]{self.provider}[/green]\n"
                 f"Type [yellow]/help[/yellow] for commands, [yellow]/exit[/yellow] to quit.",
-                style="accent",
-                title="Welcome",
             )
             self.console.print()
 
@@ -440,6 +438,9 @@ class InteractiveREPL:
 
         finally:
             self._running = False
+            # Close the PromptSession to release terminal resources
+            if hasattr(self._prompt_session, 'close'):
+                self._prompt_session.close()
             await db.close()
 
     def _get_prompt_text(self) -> str:

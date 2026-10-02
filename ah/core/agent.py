@@ -38,7 +38,7 @@ When you need to do something, use the available tools. Think step by step:
 
 Be concise. Don't over-explain. Get things done."""
 
-# Maximum token budget for a single agent run
+# Maximum token budget for a single agent run (fallback, session.context_budget takes precedence)
 MAX_TOKEN_BUDGET = 50_000
 
 
@@ -594,18 +594,19 @@ class ReActAgent(BaseReActAgent):
             if verbose:
                 console.print(f"[dim]Iteration {iteration + 1}/{self.max_iterations}[/dim]")
 
-            # Check token budget before calling LLM
-            if total_tokens >= MAX_TOKEN_BUDGET:
+            # Check token budget before calling LLM (use session.context_budget)
+            effective_budget = min(session.context_budget, MAX_TOKEN_BUDGET)
+            if total_tokens >= effective_budget:
                 logger.warning(
                     "Token budget exceeded (%d >= %d) — stopping agent loop",
                     total_tokens,
-                    MAX_TOKEN_BUDGET,
+                    effective_budget,
                 )
                 audit_log(
                     "agent_run_budget_exceeded",
                     session_id=str(session_id),
                     total_tokens=total_tokens,
-                    max_budget=MAX_TOKEN_BUDGET,
+                    max_budget=effective_budget,
                 )
                 yield StreamEvent(
                     type="done",

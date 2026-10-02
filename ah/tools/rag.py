@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -14,13 +15,17 @@ logger = logging.getLogger(__name__)
 
 # Global RAG pipeline instance (lazy-initialized)
 _rag_pipeline: RAGPipeline | None = None
+_rag_pipeline_lock = asyncio.Lock()
 
 
-def get_rag_pipeline() -> RAGPipeline:
+async def get_rag_pipeline() -> RAGPipeline:
     """Get or create the global RAG pipeline instance."""
     global _rag_pipeline
     if _rag_pipeline is None:
-        _rag_pipeline = RAGPipeline()
+        async with _rag_pipeline_lock:
+            # Double-check after acquiring lock
+            if _rag_pipeline is None:
+                _rag_pipeline = RAGPipeline()
     return _rag_pipeline
 
 
@@ -57,7 +62,7 @@ async def index_document(
     except ValueError:
         raise ValidationError(f"Invalid session_id '{session_id}'")
 
-    pipeline = get_rag_pipeline()
+    pipeline = await get_rag_pipeline()
 
     try:
         chunks = await pipeline.index_document(
@@ -110,7 +115,7 @@ async def search_documents(
     except ValueError:
         raise ValidationError(f"Invalid session_id '{session_id}'")
 
-    pipeline = get_rag_pipeline()
+    pipeline = await get_rag_pipeline()
 
     try:
         results = await pipeline.search(

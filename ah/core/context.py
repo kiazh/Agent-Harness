@@ -1,7 +1,9 @@
 """Context chunks — token-efficient storage, retrieval, and prompt assembly."""
 from __future__ import annotations
 
+import logging
 import uuid
+from collections import OrderedDict
 from typing import Any
 
 import asyncpg
@@ -15,15 +17,24 @@ from ah.core.serialization import (
     row_to_chunk,
 )
 
+logger = logging.getLogger(__name__)
+
 __all__ = ["ContextChunk", "ContextManager", "context_manager"]
 
 
 class ContextManager:
-    """CRUD for context chunks stored as MessagePack with batch insert support."""
+    """CRUD for context chunks stored as MessagePack with batch insert support.
 
-    def __init__(self, batch_size: int = 50) -> None:
+    Includes an LRU cache for recent context per session to avoid redundant
+    database queries when the same session is accessed repeatedly.
+    """
+
+    def __init__(self, batch_size: int = 50, cache_size: int = 128) -> None:
         self._batch_size = batch_size
         self._pending: list[dict[str, Any]] = []
+        # LRU cache: session_id -> list of recent context dicts
+        self._recent_cache: OrderedDict[uuid.UUID, list[dict[str, Any]]] = OrderedDict()
+        self._cache_size = cache_size
 
     async def add_chunk(
         self,
@@ -52,6 +63,8 @@ class ContextManager:
             token_count,
             embedding_str,
         )
+        # Invalidate cache for this session
+        self._recent_cache.pop(session_id, None)
         return self._row_to_chunk(row)
 
     async def add_chunks_batch(
@@ -96,6 +109,9 @@ class ContextManager:
 
         # Fetch back the inserted rows (ordered by created_at DESC to match typical usage)
         session_ids = list({c["session_id"] for c in chunks})
+        # Invalidate cache for all affected sessions
+        for sid in session_ids:
+            self._recent_cache.pop(sid, None)
         rows = await db.fetch(
             """
             SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
@@ -146,7 +162,19 @@ class ContextManager:
     async def get_recent_context(
         self, session_id: uuid.UUID, limit: int = 10
     ) -> list[dict[str, Any]]:
-        """Get recent context as a list of payloads (for prompt assembly)."""
+        """Get recent context as a list of payloads (for prompt assembly).
+
+        Uses an LRU cache per session to avoid redundant DB queries.
+        Cache is invalidated when new chunks are added to the session.
+        """
+        # Check cache first
+        if session_id in self._recent_cache:
+            cached = self._recent_cache[session_id]
+            # Move to end (most recently used)
+            self._recent_cache.move_to_end(session_id)
+            # Return up to limit items
+            return cached[:limit]
+
         rows = await db.fetch(
             """
             SELECT payload_msgpack, chunk_type, token_count
@@ -166,6 +194,12 @@ class ContextManager:
                 "payload": payload,
                 "tokens": r["token_count"],
             })
+
+        # Cache the results
+        self._recent_cache[session_id] = results
+        if len(self._recent_cache) > self._cache_size:
+            self._recent_cache.popitem(last=False)  # Evict LRU
+
         return results
 
     async def search_by_embedding(
@@ -219,6 +253,111 @@ class ContextManager:
             "SELECT COALESCE(SUM(token_count), 0) FROM context_chunks WHERE session_id = $1",
             session_id,
         )
+
+    async def evict_old_chunks(
+        self,
+        session_id: uuid.UUID,
+        max_tokens: int | None = None,
+        max_chunks: int | None = None,
+    ) -> int:
+        """Evict old chunks to enforce token/chunk limits.
+
+        Uses LRU eviction based on accessed_at timestamp.
+        Preserves the most recent chunks and tool_call/result pairs.
+
+        Args:
+            session_id: The session to evict from.
+            max_tokens: Maximum total tokens allowed. If None, no token limit.
+            max_chunks: Maximum number of chunks allowed. If None, no chunk limit.
+
+        Returns:
+            Number of chunks evicted.
+        """
+        if max_tokens is None and max_chunks is None:
+            return 0
+
+        # Get current token usage
+        total_tokens = await self.get_token_usage(session_id)
+        total_chunks = await db.fetchval(
+            "SELECT COUNT(*) FROM context_chunks WHERE session_id = $1",
+            session_id,
+        )
+
+        if (max_tokens is None or total_tokens <= max_tokens) and            (max_chunks is None or total_chunks <= max_chunks):
+            return 0
+
+        # Get chunks to evict (oldest first, preserving recent and tool pairs)
+        # Strategy: evict oldest chunks first, but preserve the most recent 10
+        # and any tool_call/result pairs
+        rows = await db.fetch(
+            """
+            SELECT id, token_count, chunk_type, created_at
+            FROM context_chunks
+            WHERE session_id = $1
+            ORDER BY created_at ASC
+            """,
+            session_id,
+        )
+
+        if not rows:
+            return 0
+
+        # Always preserve the most recent 10 chunks
+        preserve_count = min(10, len(rows))
+        evictable = rows[:-preserve_count] if preserve_count > 0 else rows
+
+        # Calculate how many to evict
+        tokens_to_evict = 0
+        chunks_to_evict = 0
+        if max_tokens is not None:
+            tokens_to_evict = total_tokens - max_tokens
+        if max_chunks is not None:
+            chunks_to_evict = total_chunks - max_chunks
+
+        evicted = 0
+        tokens_freed = 0
+        chunks_freed = 0
+
+        for row in evictable:
+            if (max_tokens is not None and tokens_freed >= tokens_to_evict) and                (max_chunks is not None and chunks_freed >= chunks_to_evict):
+                break
+            if max_tokens is not None and tokens_freed >= tokens_to_evict and max_chunks is None:
+                break
+            if max_chunks is not None and chunks_freed >= chunks_to_evict and max_tokens is None:
+                break
+
+            # Evict this chunk
+            await db.execute(
+                "DELETE FROM context_chunks WHERE id = $1",
+                row["id"],
+            )
+            tokens_freed += row["token_count"]
+            chunks_freed += 1
+            evicted += 1
+
+        if evicted > 0:
+            # Invalidate cache
+            self._recent_cache.pop(session_id, None)
+            logger.info(
+                "Evicted %d chunks (freed %d tokens) from session %s",
+                evicted,
+                tokens_freed,
+                session_id,
+            )
+
+        return evicted
+
+    async def enforce_budget(self, session_id: uuid.UUID, budget: int) -> int:
+        """Enforce context budget by evicting old chunks.
+
+        Args:
+            session_id: The session to enforce budget on.
+            budget: Maximum token budget.
+
+        Returns:
+            Number of chunks evicted.
+        """
+        return await self.evict_old_chunks(session_id, max_tokens=budget)
 
     def _row_to_chunk(self, row: asyncpg.Record) -> ContextChunk:
         return row_to_chunk(row)

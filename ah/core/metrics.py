@@ -38,6 +38,8 @@ class JsonFormatter(logging.Formatter):
 class MetricsCollector:
     """Thread-safe metrics collector for latency, throughput, errors, and token usage."""
 
+    _MAX_LATENCY_SAMPLES = 10_000  # Cap per-operation latency list size
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._latencies: dict[str, list[float]] = defaultdict(list)
@@ -50,7 +52,12 @@ class MetricsCollector:
     def record_latency(self, operation: str, duration_ms: float) -> None:
         """Record a latency measurement in milliseconds."""
         with self._lock:
-            self._latencies[operation].append(duration_ms)
+            latencies = self._latencies[operation]
+            latencies.append(duration_ms)
+            # Cap the list size to prevent unbounded memory growth
+            if len(latencies) > self._MAX_LATENCY_SAMPLES:
+                # Keep the most recent half to preserve recent latency data
+                self._latencies[operation] = latencies[-self._MAX_LATENCY_SAMPLES // 2:]
 
     def increment_counter(self, operation: str, value: int = 1) -> None:
         """Increment a throughput counter."""

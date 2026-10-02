@@ -5,6 +5,7 @@ Persisted to the database via the user_profiles table.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -126,6 +127,9 @@ class UserProfile:
 class UserProfileStore:
     """CRUD for user profiles stored in PostgreSQL."""
 
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+
     async def create(
         self,
         user_id: str,
@@ -231,58 +235,59 @@ class UserProfileStore:
         topic: str | None = None,
     ) -> UserProfile | None:
         """Record an interaction for a profile."""
-        # Build the topic update
-        if topic:
-            # Get current topics and last_topics
-            row = await db.fetchrow(
-                """
-                SELECT topics, last_topics FROM user_profiles WHERE id = $1
-                """,
-                profile_id,
-            )
+        async with self._lock:
+            # Build the topic update
+            if topic:
+                # Get current topics and last_topics
+                row = await db.fetchrow(
+                    """
+                    SELECT topics, last_topics FROM user_profiles WHERE id = $1
+                    """,
+                    profile_id,
+                )
+                if row is None:
+                    return None
+
+                topics = json.loads(row["topics"]) if row["topics"] else {}
+                last_topics = json.loads(row["last_topics"]) if row["last_topics"] else []
+
+                topics[topic] = topics.get(topic, 0) + 1
+                if topic in last_topics:
+                    last_topics.remove(topic)
+                last_topics.insert(0, topic)
+                last_topics = last_topics[:10]
+
+                row = await db.fetchrow(
+                    """
+                    UPDATE user_profiles
+                    SET interaction_count = interaction_count + 1,
+                        topics = $2,
+                        last_topics = $3,
+                        updated_at = now()
+                    WHERE id = $1
+                    RETURNING id, user_id, display_name, preferences, interaction_count,
+                              topics, last_topics, created_at, updated_at
+                    """,
+                    profile_id,
+                    json.dumps(topics),
+                    json.dumps(last_topics),
+                )
+            else:
+                row = await db.fetchrow(
+                    """
+                    UPDATE user_profiles
+                    SET interaction_count = interaction_count + 1,
+                        updated_at = now()
+                    WHERE id = $1
+                    RETURNING id, user_id, display_name, preferences, interaction_count,
+                              topics, last_topics, created_at, updated_at
+                    """,
+                    profile_id,
+                )
+
             if row is None:
                 return None
-
-            topics = json.loads(row["topics"]) if row["topics"] else {}
-            last_topics = json.loads(row["last_topics"]) if row["last_topics"] else []
-
-            topics[topic] = topics.get(topic, 0) + 1
-            if topic in last_topics:
-                last_topics.remove(topic)
-            last_topics.insert(0, topic)
-            last_topics = last_topics[:10]
-
-            row = await db.fetchrow(
-                """
-                UPDATE user_profiles
-                SET interaction_count = interaction_count + 1,
-                    topics = $2,
-                    last_topics = $3,
-                    updated_at = now()
-                WHERE id = $1
-                RETURNING id, user_id, display_name, preferences, interaction_count,
-                          topics, last_topics, created_at, updated_at
-                """,
-                profile_id,
-                json.dumps(topics),
-                json.dumps(last_topics),
-            )
-        else:
-            row = await db.fetchrow(
-                """
-                UPDATE user_profiles
-                SET interaction_count = interaction_count + 1,
-                    updated_at = now()
-                WHERE id = $1
-                RETURNING id, user_id, display_name, preferences, interaction_count,
-                          topics, last_topics, created_at, updated_at
-                """,
-                profile_id,
-            )
-
-        if row is None:
-            return None
-        return self._row_to_profile(row)
+            return self._row_to_profile(row)
 
     async def list_all(self, limit: int = 100) -> list[UserProfile]:
         """List all user profiles."""

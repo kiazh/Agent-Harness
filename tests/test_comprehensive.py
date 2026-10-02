@@ -1526,10 +1526,11 @@ class TestDatabaseSchema:
     """Tests for database schema and connection."""
 
     def test_database_default_dsn(self):
-        """Test default DSN."""
+        """Test that no hardcoded default DSN exists (security fix)."""
         with patch.dict(os.environ, {}, clear=True):
             db_obj = Database()
-            assert "postgresql" in db_obj.dsn
+            # No hardcoded DSN — should be empty when not configured
+            assert db_obj.dsn == ""
 
     def test_database_custom_dsn(self):
         """Test custom DSN."""

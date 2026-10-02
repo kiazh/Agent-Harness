@@ -1,6 +1,7 @@
 """Session manager — create, resume, and track agent sessions."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Optional
@@ -23,15 +24,19 @@ class SessionManager:
     def __init__(self) -> None:
         # TTLCache: max 128 sessions, 5-second TTL
         self._cache: TTLCache = TTLCache(maxsize=128, ttl=60)
+        self._cache_lock = asyncio.Lock()
 
-    def _cache_get(self, session_id: uuid.UUID) -> Session | None:
-        return self._cache.get(session_id)
+    async def _cache_get(self, session_id: uuid.UUID) -> Session | None:
+        async with self._cache_lock:
+            return self._cache.get(session_id)
 
-    def _cache_put(self, session: Session) -> None:
-        self._cache[session.id] = session
+    async def _cache_put(self, session: Session) -> None:
+        async with self._cache_lock:
+            self._cache[session.id] = session
 
-    def _cache_invalidate(self, session_id: uuid.UUID) -> None:
-        self._cache.pop(session_id, None)
+    async def _cache_invalidate(self, session_id: uuid.UUID) -> None:
+        async with self._cache_lock:
+            self._cache.pop(session_id, None)
 
     @staticmethod
     def generate_title(message: str, max_length: int = 60) -> str:
@@ -72,12 +77,12 @@ class SessionManager:
             context_budget,
         )
         session = self._row_to_session(row)
-        self._cache_put(session)
+        await self._cache_put(session)
         return session
 
     async def get(self, session_id: uuid.UUID) -> Session | None:
         """Get a session by ID (cached for 5 seconds)."""
-        cached = self._cache_get(session_id)
+        cached = await self._cache_get(session_id)
         if cached is not None:
             return cached
         row = await db.fetchrow(
@@ -90,7 +95,7 @@ class SessionManager:
         if row is None:
             return None
         session = self._row_to_session(row)
-        self._cache_put(session)
+        await self._cache_put(session)
         return session
 
     async def get_last_active(self) -> Session | None:
@@ -107,7 +112,7 @@ class SessionManager:
         if row is None:
             return None
         session = self._row_to_session(row)
-        self._cache_put(session)
+        await self._cache_put(session)
         return session
 
     async def update_state(self, session_id: uuid.UUID, state: dict) -> None:
@@ -122,7 +127,7 @@ class SessionManager:
             session_id,
             state_msgpack,
         )
-        self._cache_invalidate(session_id)
+        await self._cache_invalidate(session_id)
 
     async def update_activity(self, session_id: uuid.UUID) -> None:
         """Touch last_activity timestamp."""
@@ -139,7 +144,7 @@ class SessionManager:
             session_id,
             goal,
         )
-        self._cache_invalidate(session_id)
+        await self._cache_invalidate(session_id)
 
     async def set_status(self, session_id: uuid.UUID, status: str) -> None:
         """Update session status."""
@@ -148,7 +153,7 @@ class SessionManager:
             session_id,
             status,
         )
-        self._cache_invalidate(session_id)
+        await self._cache_invalidate(session_id)
 
     async def archive(self, session_id: uuid.UUID) -> None:
         """Archive a session."""
@@ -156,7 +161,7 @@ class SessionManager:
             "UPDATE sessions SET status = 'archived' WHERE id = $1",
             session_id,
         )
-        self._cache_invalidate(session_id)
+        await self._cache_invalidate(session_id)
 
     async def delete(self, session_id: uuid.UUID) -> bool:
         """Permanently delete a session and all its context chunks."""
@@ -164,7 +169,7 @@ class SessionManager:
             "DELETE FROM sessions WHERE id = $1",
             session_id,
         )
-        self._cache_invalidate(session_id)
+        await self._cache_invalidate(session_id)
         return int(result.split()[-1]) > 0 if result else False
 
     async def search(self, query: str, limit: int = 20) -> list[Session]:

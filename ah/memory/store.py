@@ -14,6 +14,7 @@ from ah.core.provider import audit_log
 from ah.core.serialization import embedding_to_str, str_to_embedding
 from ah.db.connection import db
 from ah.memory.models import MemoryEntry
+from ah.memory.redaction import SecretRedactor
 
 __all__ = ["MemoryStore", "memory_store"]
 
@@ -24,7 +25,7 @@ class MemoryStore:
     """CRUD for long-term memories stored in PostgreSQL with pgvector."""
 
     def __init__(self) -> None:
-        pass
+        self._redactor = SecretRedactor()
 
     async def add(
         self,
@@ -37,7 +38,11 @@ class MemoryStore:
         explicitly_important: bool = False,
         base_strength: float = 1.0,
     ) -> MemoryEntry:
-        """Add a new memory entry."""
+        """Add a new memory entry. Secrets are redacted before storage."""
+        # Redact secrets from content before storing
+        redaction_result = self._redactor.redact(content)
+        content = redaction_result.text
+
         embedding_str = None
         if embedding is not None:
             embedding_str = embedding_to_str(embedding)
@@ -94,7 +99,7 @@ class MemoryStore:
         limit: int = 20,
         offset: int = 0,
     ) -> list[MemoryEntry]:
-        """Search memories with optional filters."""
+        """Search memories with optional filters (fully parameterized)."""
         conditions = []
         params: list[Any] = []
         param_idx = 1
@@ -253,6 +258,82 @@ class MemoryStore:
             return int(result.split()[-1])
         except (ValueError, IndexError):
             return 0
+
+    async def evict_weak_memories(
+        self,
+        threshold: float = 0.05,
+        agent_id: str | None = None,
+        max_memories: int | None = None,
+    ) -> int:
+        """Evict weak/unimportant memories to prevent unbounded growth.
+
+        Args:
+            threshold: Importance threshold below which memories are evicted.
+            agent_id: Optional agent ID filter.
+            max_memories: If set, evict down to this many memories per agent.
+
+        Returns:
+            Number of memories evicted.
+        """
+        if max_memories is not None:
+            # Evict oldest/weakest memories beyond the limit
+            if agent_id:
+                count = await db.fetchval(
+                    "SELECT COUNT(*) FROM memories WHERE agent_id = $1",
+                    agent_id,
+                )
+                if count <= max_memories:
+                    return 0
+                # Delete oldest, least important memories beyond the limit
+                result = await db.execute(
+                    """
+                    DELETE FROM memories
+                    WHERE id IN (
+                        SELECT id FROM memories
+                        WHERE agent_id = $1
+                        ORDER BY importance ASC, created_at ASC
+                        LIMIT $2
+                    )
+                    """,
+                    agent_id,
+                    count - max_memories,
+                )
+            else:
+                count = await db.fetchval("SELECT COUNT(*) FROM memories")
+                if count <= max_memories:
+                    return 0
+                result = await db.execute(
+                    """
+                    DELETE FROM memories
+                    WHERE id IN (
+                        SELECT id FROM memories
+                        ORDER BY importance ASC, created_at ASC
+                        LIMIT $1
+                    )
+                    """,
+                    count - max_memories,
+                )
+            try:
+                return int(result.split()[-1])
+            except (ValueError, IndexError):
+                return 0
+        else:
+            # Evict by importance threshold
+            if agent_id:
+                result = await db.execute(
+                    "DELETE FROM memories WHERE agent_id = $1 AND importance < $2",
+                    agent_id,
+                    threshold,
+                )
+            else:
+                result = await db.execute(
+                    "DELETE FROM memories WHERE importance < $1",
+                    threshold,
+                )
+            try:
+                return int(result.split()[-1])
+            except (ValueError, IndexError):
+                return 0
 
     async def get_weak_memories(
         self,

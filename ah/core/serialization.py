@@ -64,11 +64,26 @@ def str_to_embedding(embedding_str: str | Any) -> list[float]:
     """Parse a pgvector string back to a list of floats.
 
     Handles format: "[1.0,2.0,3.0]"
+    Raises ValueError on malformed input.
     """
-    s = str(embedding_str)
+    s = str(embedding_str).strip()
     if s.startswith("[") and s.endswith("]"):
-        s = s[1:-1]
-    return [float(x) for x in s.split(",")]
+        s = s[1:-1].strip()
+    if not s:
+        return []
+    parts = s.split(",")
+    result = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            result.append(float(part))
+        except ValueError as e:
+            raise ValueError(
+                f"Invalid embedding value '{part}' in '{embedding_str}'"
+            ) from e
+    return result
 
 
 def payload_to_msgpack(payload: dict[str, Any]) -> bytes:
