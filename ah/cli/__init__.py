@@ -127,6 +127,14 @@ def _run(coro):
         return pool.submit(asyncio.run, coro).result()
 
 
+def _parse_uuid(s: str) -> "uuid.UUID | None":
+    """Parse a UUID string, returning None if invalid."""
+    try:
+        return uuid.UUID(s)
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 def _print_colored(message: str, color: str = "white", bold: bool = False, icon: str = ""):
     """Print a color-coded message with optional icon."""
     style = color
@@ -184,7 +192,7 @@ def chat(
     # session title (message[:50]) would raise TypeError on None.
     if not message:
         console.print("[yellow]No message provided. Use: ah chat \"your message\"[/yellow]")
-        raise typer.Exit(0)
+        raise typer.Exit(1)
 
     async def _chat():
         await db.connect()
@@ -197,7 +205,10 @@ def chat(
                     raise typer.Exit(1)
                 _print_muted(f"Continuing session: {session.id}")
             elif session_id:
-                sid = uuid.UUID(session_id)
+                sid = _parse_uuid(session_id)
+                if sid is None:
+                    console.print(f"[red]Invalid session ID: {session_id}[/red]")
+                    raise typer.Exit(1)
                 session = await session_manager.get(sid)
                 if not session:
                     viz.error(f"Session {session_id} not found", title="Error", suggestion="Use `ah sessions` to list available sessions.")
@@ -479,7 +490,10 @@ def fork(
     async def _fork():
         await db.connect()
         try:
-            sid = uuid.UUID(session_id)
+            sid = _parse_uuid(session_id)
+            if sid is None:
+                console.print(f"[red]Invalid session ID: {session_id}[/red]")
+                raise typer.Exit(1)
             new_session = await session_manager.fork(sid, title=title)
             _print_success(f"Forked session {session_id} → {new_session.id}")
             _print_muted(f"Title: {new_session.title or '(untitled)'}")
@@ -499,7 +513,10 @@ def delete(
     async def _delete():
         await db.connect()
         try:
-            sid = uuid.UUID(session_id)
+            sid = _parse_uuid(session_id)
+            if sid is None:
+                console.print(f"[red]Invalid session ID: {session_id}[/red]")
+                raise typer.Exit(1)
             session = await session_manager.get(sid)
             if not session:
                 console.print(f"[red]Session {session_id} not found[/red]")
@@ -1135,7 +1152,10 @@ def memory_forget(
         await db.connect()
         try:
             from ah.memory.store import memory_store
-            mid = uuid.UUID(memory_id)
+            mid = _parse_uuid(memory_id)
+            if mid is None:
+                console.print(f"[red]Invalid memory ID: {memory_id}[/red]")
+                raise typer.Exit(1)
             deleted = await memory_store.delete(mid)
             if deleted:
                 console.print(f"[green]Memory {memory_id} deleted.[/green]")
@@ -1202,7 +1222,10 @@ def memory_approve(
         await db.connect()
         try:
             from ah.memory.approval import memory_approval_gate
-            pid = uuid.UUID(pending_id)
+            pid = _parse_uuid(pending_id)
+            if pid is None:
+                console.print(f"[red]Invalid pending memory ID: {pending_id}[/red]")
+                raise typer.Exit(1)
             memory = await memory_approval_gate.approve(pid, review_note=note)
             if memory:
                 console.print(f"[green]Pending memory {pending_id} approved → memory {memory.id}[/green]")
@@ -1225,7 +1248,10 @@ def memory_reject(
         await db.connect()
         try:
             from ah.memory.approval import memory_approval_gate
-            pid = uuid.UUID(pending_id)
+            pid = _parse_uuid(pending_id)
+            if pid is None:
+                console.print(f"[red]Invalid pending memory ID: {pending_id}[/red]")
+                raise typer.Exit(1)
             rejected = await memory_approval_gate.reject(pid, review_note=note)
             if rejected:
                 console.print(f"[green]Pending memory {pending_id} rejected.[/green]")

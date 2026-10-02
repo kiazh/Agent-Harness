@@ -20,8 +20,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
-import threading
-import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
@@ -246,154 +244,6 @@ COMMAND_REGISTRY: dict[str, CommandDef] = {
 SLASH_COMMANDS: dict[str, str] = {
     cmd.name: cmd.description for cmd in COMMAND_REGISTRY.values()
 }
-
-
-# ─── Windows Input Handler ───────────────────────────────────────────────────
-
-
-class WindowsInputHandler:
-    """Handles keyboard input on Windows using msvcrt.
-
-    Supports:
-        - Regular character input
-        - Arrow keys (up/down/left/right)
-        - Enter, Escape, Backspace, Delete
-        - Ctrl+C, Ctrl+D
-        - Tab (for autocomplete)
-    """
-
-    # Special key codes from msvcrt.getch()
-    VK_BACKSPACE = b"\x08"
-    VK_TAB = b"\x09"
-    VK_ENTER = b"\r"
-    VK_ESCAPE = b"\x1b"
-    VK_DELETE = b"\x53"
-    VK_CTRL_C = b"\x03"
-    VK_CTRL_D = b"\x04"
-
-    # Arrow keys are escape sequences: \xe0 or \x00 followed by a code
-    ARROW_PREFIXES = (b"\xe0", b"\x00")
-    VK_UP = b"\x48"
-    VK_DOWN = b"\x50"
-    VK_LEFT = b"\x4b"
-    VK_RIGHT = b"\x4d"
-
-    def __init__(self) -> None:
-        self._buffer: list[str] = []
-        self._lock = threading.Lock()
-        self._input_event = threading.Event()
-        self._running = False
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        """Start the background input reader thread."""
-        if self._running:
-            return
-        self._running = True
-        self._thread = threading.Thread(target=self._read_loop, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        """Stop the background input reader thread."""
-        self._running = False
-        self._input_event.set()
-
-    def _read_loop(self) -> None:
-        """Background thread that reads keyboard input via msvcrt.
-
-        Uses blocking msvcrt.getch() — no sleep, no polling, no delay.
-        """
-        while self._running:
-            try:
-                ch = msvcrt.getch()  # Blocks until key is pressed — zero delay
-                self._handle_key(ch)
-            except Exception:
-                time.sleep(0.05)
-
-    def _handle_key(self, ch: bytes) -> None:
-        """Process a key press from msvcrt."""
-        with self._lock:
-            if ch == self.VK_BACKSPACE:
-                if self._buffer:
-                    self._buffer.pop()
-            elif ch == self.VK_ENTER:
-                self._buffer.append("\n")
-                self._input_event.set()
-            elif ch == self.VK_ESCAPE:
-                self._buffer.append("\x1b")
-                self._input_event.set()
-            elif ch == self.VK_CTRL_C:
-                self._buffer.append("\x03")
-                self._input_event.set()
-            elif ch == self.VK_CTRL_D:
-                self._buffer.append("\x04")
-                self._input_event.set()
-            elif ch == self.VK_TAB:
-                self._buffer.append("\t")
-                self._input_event.set()
-            elif ch in self.ARROW_PREFIXES:
-                # Arrow key — read the second byte
-                if msvcrt.kbhit():
-                    ch2 = msvcrt.getch()
-                    if ch2 == self.VK_UP:
-                        self._buffer.append("\x1b[A")
-                    elif ch2 == self.VK_DOWN:
-                        self._buffer.append("\x1b[B")
-                    elif ch2 == self.VK_LEFT:
-                        self._buffer.append("\x1b[D")
-                    elif ch2 == self.VK_RIGHT:
-                        self._buffer.append("\x1b[C")
-                    self._input_event.set()
-            elif ch == self.VK_DELETE:
-                self._buffer.append("\x1b[3~")
-                self._input_event.set()
-            else:
-                # Regular character
-                try:
-                    char = ch.decode("utf-8", errors="ignore")
-                    if char:
-                        self._buffer.append(char)
-                except Exception:
-                    pass
-
-    def get_input(self, timeout: float | None = None) -> str | None:
-        """Get a line of input from the buffer.
-
-        Returns the input string when Enter is pressed, or None on timeout.
-        """
-        if timeout is not None:
-            self._input_event.wait(timeout)
-        else:
-            self._input_event.wait()
-
-        with self._lock:
-            if self._buffer:
-                result = "".join(self._buffer)
-                self._buffer.clear()
-                self._input_event.clear()
-                return result
-            self._input_event.clear()
-            return None
-
-    def has_input(self) -> bool:
-        """Check if there's input available in the buffer."""
-        with self._lock:
-            return len(self._buffer) > 0
-
-    def get_char(self) -> str | None:
-        """Get a single character from the buffer without waiting for Enter."""
-        with self._lock:
-            if self._buffer:
-                result = "".join(self._buffer)
-                self._buffer.clear()
-                return result
-            return None
-
-    def clear_buffer(self) -> None:
-        """Clear the input buffer."""
-        with self._lock:
-            self._buffer.clear()
-            self._input_event.clear()
 
 
 # ─── SkinConfig ──────────────────────────────────────────────────────────────
@@ -708,7 +558,7 @@ async def run_interactive_help(console: Console, skin: SkinConfig) -> str | None
                 None, _wait_for_char
             )
             if char is None:
-                continue
+                break
 
             if char == "\x1b":  # Escape
                 break
@@ -930,8 +780,6 @@ class InteractiveREPL:
         else:
             self._initial_session_id = None
 
-        # Windows input handler
-        self._input_handler = WindowsInputHandler()
 
         # Agent
         self._agent: ReActAgent | None = None
@@ -978,8 +826,6 @@ class InteractiveREPL:
         """Run the interactive REPL."""
         self._running = True
 
-        # Start the input handler
-        self._input_handler.start()
 
         # Connect to database
         await db.connect()
@@ -1033,7 +879,6 @@ class InteractiveREPL:
 
         finally:
             self._running = False
-            self._input_handler.stop()
             await db.close()
 
     def _set_background(self) -> None:
@@ -1124,7 +969,7 @@ class InteractiveREPL:
                 None, _wait_for_char
             )
             if char is None:
-                continue
+                raise EOFError("Input stream closed")
 
             if char == "\r":  # Enter
                 # Stop the Live display
