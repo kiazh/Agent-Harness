@@ -282,7 +282,13 @@ class SkinConfig:
     def __init__(self, skin: str = "default", console: Console | None = None) -> None:
         self._skin_name = skin
         self._console = console or Console()
-        self._viz = get_visual_context(skin)
+        # Pass the console's no_color setting to VisualContext so colors work
+        # when the console has force_terminal=True
+        self._viz = VisualContext(
+            self.SKINS.get(skin, ThemeName.DEFAULT),
+            console=self._console,
+            no_color=self._console.no_color,
+        )
 
     @property
     def skin_name(self) -> str:
@@ -300,7 +306,11 @@ class SkinConfig:
         """Switch to a different skin."""
         if skin in self.SKINS:
             self._skin_name = skin
-            self._viz = VisualContext(self.SKINS[skin], console=self._console)
+            self._viz = VisualContext(
+                self.SKINS[skin],
+                console=self._console,
+                no_color=self._console.no_color,
+            )
 
     def get_color(self, role: str) -> str:
         """Get a color for the given role in the current skin."""
@@ -882,12 +892,14 @@ class InteractiveREPL:
             await db.close()
 
     def _set_background(self) -> None:
-        """Set the terminal background color to dark charcoal (#1A1A2E)."""
+        """Set the terminal background color to dark charcoal (#111827)."""
         # ANSI escape sequence to set background color
-        # \x1b]11;#1A1A2E\x1b\\ — OSC 11 to set background
+        # \x1b]11;#111827\x1b\\ — OSC 11 to set background
         bg_color = self.skin.get_color("background")
         if bg_color:
-            self.console.print(f"\x1b]11;{bg_color}\x1b\\", end="")
+            # Write directly to console.file to avoid Rich styling interference
+            self.console.file.write(f"\x1b]11;{bg_color}\x1b\\")
+            self.console.file.flush()
 
     def _show_header(self) -> None:
         """Display clean header with robot icon — Pi/Copilot CLI style."""
