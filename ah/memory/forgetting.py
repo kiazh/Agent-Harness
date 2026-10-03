@@ -10,9 +10,8 @@ Where:
 from __future__ import annotations
 
 import math
-from datetime import datetime
 
-from ah.memory.models import MemoryEntry
+from ah.memory.models import MemoryEntry, age_days
 
 
 # Default half-life in days
@@ -40,9 +39,8 @@ class ForgettingModel:
 
         Combines exponential decay with access count boost.
         """
-        now = datetime.utcnow()
         reference_time = memory.last_accessed or memory.created_at
-        days_since_access = (now - reference_time).days
+        days_since_access = int(age_days(reference_time))
 
         # Importance-modulated decay: high importance = slow decay
         importance_factor = 1.0 - memory.importance

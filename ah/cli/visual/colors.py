@@ -7,9 +7,7 @@ luminance/contrast calculations, and color parsing.
 from __future__ import annotations
 
 import math
-from typing import Any
 
-from rich.style import Style
 
 
 # ─── OKLCH / OKHSL Color Space ───────────────────────────────────────────────

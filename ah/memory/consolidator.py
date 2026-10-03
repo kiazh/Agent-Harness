@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any
 
 from ah.core.context import context_manager
 from ah.core.models import ContextChunk
@@ -25,6 +24,11 @@ DEFAULT_DEDUP_THRESHOLD = 0.85
 
 # Maximum chunks to process in a single consolidation run
 MAX_CHUNKS_PER_CONSOLIDATION = 100
+
+
+def _normalize(text: str) -> str:
+    """Normalize memory content for duplicate detection."""
+    return " ".join(str(text).lower().split()).strip(" .!?")
 
 # System prompt for memory extraction
 EXTRACTION_SYSTEM_PROMPT = """You are a memory extraction system. Given a conversation, extract durable memories that would be useful in future conversations.
@@ -101,13 +105,15 @@ class MemoryConsolidator:
 
         # Step 4: Deduplicate against existing memories (batch)
         new_memories: list[MemoryEntry] = []
-        candidates_with_embedding = [c for c in candidates if c.embedding and c.importance >= 0.2]
-        candidates_without_embedding = [c for c in candidates if not c.embedding and c.importance >= 0.2]
+        eligible = [c for c in candidates if c.importance >= 0.2]
+        candidates_with_embedding = [c for c in eligible if c.embedding]
+        candidates_without_embedding = [c for c in eligible if not c.embedding]
+
+        # Existing memories are needed by both dedup paths; fetch once.
+        existing_memories = await self.store.search(agent_id=agent_id, limit=1000) if eligible else []
 
         # Batch check for duplicates
         if candidates_with_embedding:
-            # Get all existing memories for this agent once
-            existing_memories = await self.store.search(agent_id=agent_id, limit=1000)
             for candidate in candidates_with_embedding:
                 is_duplicate = False
                 for existing in existing_memories:
@@ -125,7 +131,22 @@ class MemoryConsolidator:
                 if not is_duplicate:
                     new_memories.append(candidate)
 
-        new_memories.extend(candidates_without_embedding)
+        # Candidates extracted by the LLM carry no embeddings, so the vector
+        # check above never applies to them. Dedup by normalized content
+        # against stored memories and within this batch.
+        seen = {_normalize(m.content) for m in existing_memories}
+        for candidate in candidates_without_embedding:
+            key = _normalize(candidate.content)
+            if not key or key in seen:
+                match = next((m for m in existing_memories if _normalize(m.content) == key), None)
+                if match is not None and getattr(match, "id", None) is not None:
+                    try:
+                        await self.store.update_access(match.id)
+                    except Exception:
+                        pass
+                continue
+            seen.add(key)
+            new_memories.append(candidate)
 
         # Step 5: Write new memories
         written: list[MemoryEntry] = []

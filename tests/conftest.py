@@ -1,36 +1,81 @@
-"""Shared test fixtures and global singleton reset."""
+"""Shared test fixtures and global state isolation."""
 import asyncio
+import os
+
 import pytest
 import pytest_asyncio
+
+# Config keys that must never leak from the developer's real
+# ~/.agent-harness/config.yaml into tests (keeps tests hermetic and prevents
+# accidental real API calls with a personal key).
+_SECRET_CONFIG_KEYS = ("openrouter_api_key", "openai_api_key", "cohere_api_key", "database_url")
+
+
+@pytest.fixture(autouse=True)
+def isolate_config_secrets():
+    """Blank secrets loaded from the user's config file for each test.
+
+    ``Config.get`` falls back to the legacy env vars when the attribute is
+    empty, so tests that patch ``os.environ`` still work as intended.
+    """
+    from ah.core.config import config
+
+    saved = {k: getattr(config, k) for k in _SECRET_CONFIG_KEYS}
+    for k in _SECRET_CONFIG_KEYS:
+        setattr(config, k, "")
+    yield
+    for k, v in saved.items():
+        setattr(config, k, v)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def init_test_database():
+    """Create the schema in the isolated test database once per session."""
+    dsn = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL")
+    if not dsn:
+        return
+    from ah.db.connection import Database
+
+    async def _init() -> None:
+        test_db = Database(dsn=dsn)
+        try:
+            await test_db.connect()
+            await test_db.initialize_schema()
+        finally:
+            await test_db.close()
+
+    try:
+        asyncio.run(_init())
+    except Exception:
+        pass  # DB-backed tests will skip on their own if the DB is unreachable
 
 
 @pytest.fixture(autouse=True)
 def reset_singletons():
-    """Reset all global singletons before each test."""
-    # Reset db
-    from ah.db.connection import db as db_singleton
-    db_singleton._pool = None
-    db_singleton._initialized = False
+    """Reset mutable global singleton state before each test.
 
-    # Reset context_manager
-    from ah.core.context import context_manager, ContextManager
-    context_manager = ContextManager()
+    Modules import the singletons by name (``from ah.core.context import
+    context_manager``), so rebinding the module global would not affect them.
+    Instead, clear their state in place.
+    """
+    from ah.db.connection import db
+    db._pool = None
+    # Never let tests touch the developer database: use the isolated test DB,
+    # or no DSN at all (DB-backed tests then skip).
+    db.dsn = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL", "")
 
-    # Reset session_manager
-    from ah.core.session import session_manager, SessionManager
-    session_manager = SessionManager()
+    from ah.core.context import context_manager
+    context_manager._recent_cache.clear()
+    context_manager._pending.clear()
 
-    # Reset registry (but don't clear — tests share the registry state)
-    # The registry is populated by imports at module level, so clearing
-    # would break tests that rely on built-in tools being registered.
+    from ah.core.session import session_manager
+    session_manager._cache.clear()
 
-    # Reset memory_store
-    from ah.memory.store import memory_store, MemoryStore
-    memory_store = MemoryStore()
+    from ah.tools.base import registry
+    registry._result_cache.clear()
 
-    # Reset skill_registry
-    from ah.skills.registry import skill_registry, SkillRegistry
-    skill_registry = SkillRegistry()
+    from ah.rag.pipeline import RAGPipeline
+    RAGPipeline._search_cache.clear()
 
     yield
 
@@ -45,13 +90,18 @@ def event_loop():
 
 @pytest_asyncio.fixture
 async def db_pool():
-    """Create a test database pool."""
+    """A real test database, configured via AGENT_HARNESS_TEST_DATABASE_URL.
+
+    Skips the test when no test database is configured. Never hardcode
+    credentials here.
+    """
+    dsn = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL")
+    if not dsn:
+        pytest.skip("AGENT_HARNESS_TEST_DATABASE_URL not set")
     from ah.db.connection import Database
-    test_db = Database(
-        dsn="postgresql://postgres:minecraft@2017@localhost:5432/agentharness_test",
-        min_size=1,
-        max_size=5,
-    )
-    await test_db.initialize()
+
+    test_db = Database(dsn=dsn)
+    await test_db.connect()
+    await test_db.initialize_schema()
     yield test_db
     await test_db.close()

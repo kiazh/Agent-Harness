@@ -4,8 +4,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -128,14 +126,23 @@ class SkillRegistry:
         self._skills: dict[str, Skill] = {}
 
     def load_all(self) -> None:
-        """Load all skills from the skills directory."""
+        """Load all skills from the skills directory.
+
+        A single malformed or rejected SKILL.md (e.g. it trips the
+        prompt-injection filter) is skipped with a warning rather than
+        aborting the whole load.
+        """
         if not self.skills_dir.exists():
             return
-        for skill_dir in self.skills_dir.iterdir():
+        for skill_dir in sorted(self.skills_dir.iterdir()):
             if skill_dir.is_dir():
                 skill_file = skill_dir / "SKILL.md"
                 if skill_file.exists():
-                    skill = SkillParser.parse(skill_file)
+                    try:
+                        skill = SkillParser.parse(skill_file)
+                    except (ValueError, OSError, UnicodeDecodeError) as e:
+                        logger.warning("Skipping skill %s: %s", skill_file, e)
+                        continue
                     self._skills[skill.name] = skill
 
     def get(self, name: str) -> Skill | None:
@@ -405,6 +412,15 @@ class SkillHub:
         self.hub_dir = Path(hub_dir)
         self.hub_dir.mkdir(parents=True, exist_ok=True)
 
+    def _hub_file(self, name: str) -> Path:
+        """Return the hub JSON path for *name*, rejecting path traversal."""
+        if not name or any(sep in name for sep in ("/", "\\")) or name in (".", "..") or ".." in name:
+            raise ValueError(f"Invalid skill name: {name!r}")
+        path = (self.hub_dir / f"{name}.json").resolve()
+        if not path.is_relative_to(self.hub_dir.resolve()):
+            raise ValueError(f"Invalid skill name: {name!r}")
+        return path
+
     def publish(self, name: str, author: str = "", tags: list[str] | None = None) -> dict[str, Any]:
         """Publish a skill to the hub."""
         skill = self.registry.get(name)
@@ -424,7 +440,7 @@ class SkillHub:
             "view_count": skill.view_count,
         }
 
-        hub_file = self.hub_dir / f"{name}.json"
+        hub_file = self._hub_file(name)
         hub_file.write_text(json.dumps(hub_entry, indent=2), encoding="utf-8")
         return hub_entry
 
@@ -452,7 +468,7 @@ class SkillHub:
 
     def install(self, name: str) -> Skill:
         """Install a skill from the hub into the local registry."""
-        hub_file = self.hub_dir / f"{name}.json"
+        hub_file = self._hub_file(name)
         if not hub_file.exists():
             raise ValueError(f"Skill '{name}' not found in hub")
 

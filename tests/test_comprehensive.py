@@ -1916,8 +1916,12 @@ class TestCLISkillCommands:
         result = runner.invoke(app, ["hub", "search"])
         assert result.exit_code != 0
 
-    def test_learn_command_file(self, temp_dir):
+    def test_learn_command_file(self, temp_dir, monkeypatch):
         """Test learn command from file."""
+        from ah.skills.registry import skill_registry
+
+        # Write learned skills to a temp dir, never the repo's real skills/.
+        monkeypatch.setattr(skill_registry, "skills_dir", temp_dir / "skills")
         # Create a test file to learn from
         test_file = temp_dir / "test-skill.md"
         test_file.write_text("# Test Skill\nThis is a test skill content.", encoding="utf-8")

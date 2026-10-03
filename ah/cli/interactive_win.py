@@ -22,7 +22,6 @@ import logging
 import sys
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional
 
 # Windows-specific imports
 if sys.platform == "win32":
@@ -43,16 +42,10 @@ else:
 from rich.console import Console
 from rich.live import Live
 from rich.text import Text
-from rich.markdown import Markdown
-from rich.table import Table
-from rich import box
-from rich.columns import Columns
 
-from ah import __version__
 from ah.core.agent import ReActAgent
 from ah.core.config import config
 from ah.core.context import context_manager
-from ah.core.models import StreamEvent
 from ah.core.provider import get_provider
 from ah.core.session import Session, session_manager
 from ah.db.connection import db
@@ -62,29 +55,13 @@ from ah.tools import builtins  # noqa: F401 — registers built-in tools
 from ah.cli.visual import (
     VisualContext,
     ThemeName,
-    StatusLevel,
-    get_visual_context,
-    THEMES,
 )
 from ah.cli.animations import (
     Spinner,
-    SquareLoader,
-    ThinkingAnimation,
-    StreamingAnimation,
-    ToolExecutionAnimation,
-    ErrorAnimation,
-    SuccessAnimation,
     FadeTransition,
-    AnimationRunner,
-    get_spinner,
-    get_thinking_animation,
     get_streaming_animation,
     get_tool_animation,
-    get_error_animation,
-    get_success_animation,
-    get_fade_transition,
     get_animation_runner,
-    should_animate,
 )
 
 logger = logging.getLogger(__name__)
@@ -419,7 +396,6 @@ class UnicodeResponseBox:
         # Use skin colors
         border_color = skin.get_color("muted")
         text_color = skin.get_color("text")
-        accent_color = skin.get_color("primary")
 
         # Calculate box width
         lines = content.split("\n")
@@ -524,11 +500,9 @@ async def run_interactive_help(console: Console, skin: SkinConfig) -> str | None
             abs_idx = scroll_offset + i
             # Check if this line is a command line
             is_command = False
-            cmd_name = None
             for cmd_idx, (line_idx, stripped) in enumerate(command_lines):
                 if line_idx == abs_idx:
                     is_command = True
-                    cmd_name = stripped.split()[0].lstrip("/").lower()
                     if cmd_idx == selected_idx:
                         # Highlight selected line
                         text.append(" ▶ ", style=f"bold {skin.get_color('info')}")
@@ -1369,18 +1343,8 @@ class InteractiveREPL:
             self.console.print(f"  Nothing to compress (not enough chunks).", style=self.skin.get_color("warning"))
             return
 
-        # Delete old chunks and store compressed ones
-        await context_manager.delete_chunks(self.session.id)
-
-        # Store compressed chunks
-        for chunk in result.compressed_chunks:
-            await context_manager.add_chunk(
-                session_id=chunk.session_id,
-                agent_id=chunk.agent_id,
-                chunk_type=chunk.chunk_type,
-                payload=chunk.payload,
-                token_count=chunk.token_count,
-            )
+        # Atomically replace old chunks with compressed ones (order-preserving)
+        await context_manager.replace_chunks(self.session.id, result.compressed_chunks)
 
         self.console.print(
             f"  Context compressed: "

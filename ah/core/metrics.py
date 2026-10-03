@@ -41,7 +41,10 @@ class MetricsCollector:
     _MAX_LATENCY_SAMPLES = 10_000  # Cap per-operation latency list size
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        # Reentrant: get_all_metrics() holds the lock while calling
+        # get_latency_stats()/get_error_rate(), which lock again. A plain Lock
+        # deadlocked there as soon as any metric had been recorded.
+        self._lock = threading.RLock()
         self._latencies: dict[str, list[float]] = defaultdict(list)
         self._counters: dict[str, int] = defaultdict(int)
         self._errors: dict[str, int] = defaultdict(int)

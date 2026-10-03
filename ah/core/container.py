@@ -10,7 +10,7 @@ from ah.db.connection import Database, db
 from ah.rag.pipeline import RAGPipeline
 from ah.skills.registry import SkillRegistry, skill_registry
 from ah.tools.base import ToolRegistry, registry
-from ah.memory.store import MemoryStore, memory_store
+from ah.memory.store import MemoryStore
 from ah.memory.scorer import ImportanceScorer
 from ah.memory.forgetting import ForgettingModel
 from ah.memory.retriever import MemoryRetriever

@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
-import os
 import re
 import socket
 from pathlib import Path
@@ -151,20 +150,14 @@ async def web_extract(url: str) -> str:
         raise ValidationError(f"URL rejected by security policy (private/internal address or invalid protocol): {url}")
 
     try:
-        # Pin the resolved IP to prevent DNS rebinding
-        parsed = urlparse(url)
-        hostname = parsed.hostname or ""
-        pinned_ip = _get_pinned_ip(hostname)
-        if pinned_ip is None:
-            raise ToolError(f"Could not resolve hostname: {hostname}")
-
-        # Replace hostname with pinned IP in the URL
-        pinned_url = url.replace(hostname, pinned_ip, 1)
+        # The fetch is performed by the Jina Reader proxy, so the URL is passed
+        # through unchanged. Rewriting it to a pinned IP (and overriding Host)
+        # sent the *target's* hostname to r.jina.ai and broke TLS/SNI there.
         resp = await asyncio.to_thread(
             httpx.get,
-            f"https://r.jina.ai/{pinned_url}",
+            f"https://r.jina.ai/{url}",
             timeout=30,
-            headers={"Accept": "text/markdown", "Host": hostname},
+            headers={"Accept": "text/markdown"},
             follow_redirects=False,  # Don't follow redirects to prevent SSRF bypass
         )
         if resp.status_code == 200:
@@ -207,6 +200,11 @@ async def search_files(pattern: str, path: str = ".", file_glob: Optional[str] =
     if not dir_path.exists():
         raise ToolError(f"Path not found: {path}")
 
+    try:
+        regex = re.compile(pattern)
+    except re.error as e:
+        raise ToolError(f"Invalid regex pattern '{pattern}': {e}") from e
+
     glob_pattern = file_glob or "*"
     matches = []
     try:
@@ -217,13 +215,15 @@ async def search_files(pattern: str, path: str = ".", file_glob: Optional[str] =
                 try:
                     with open(f, "r", encoding="utf-8", errors="replace") as fh:
                         for i, line in enumerate(fh, 1):
-                            if re.search(pattern, line):
+                            if regex.search(line):
                                 matches.append(f"{f}:{i}: {line.strip()}")
-                except Exception:
+                                if len(matches) >= 500:
+                                    return
+                except OSError:
                     continue
         await asyncio.to_thread(_search)
     except Exception as e:
-        raise ToolError(f"Error searching files: {e}")
+        raise ToolError(f"Error searching files: {e}") from e
 
     if not matches:
         return f"No matches for '{pattern}' in {path}"

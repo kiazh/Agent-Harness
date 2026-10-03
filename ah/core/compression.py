@@ -11,8 +11,8 @@ import asyncio
 import concurrent.futures
 import logging
 import uuid
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 from ah.core.models import ContextChunk
 from ah.core.assembler import get_token_count
@@ -126,9 +126,6 @@ class ContextCompressor:
         if original_tokens == 0:
             original_tokens = sum(get_token_count(str(c.payload)) for c in chunks)
 
-        # Identify tool_call/result pairs
-        pairs = self._identify_tool_pairs(chunks)
-
         # Split into recent (preserve) and old (compress)
         preserve_count = self.config.preserve_recent
         if len(chunks) <= preserve_count:
@@ -196,11 +193,17 @@ class ContextCompressor:
         tool_call_indices: dict[str, list[int]] = {}
         for i, chunk in enumerate(chunks):
             if chunk.chunk_type == "tool_call":
+                # The agent stores a call and its result in ONE chunk
+                # (payload has "result_preview"). Treat that as a complete,
+                # self-contained pair so it gets pair priority.
+                if "result_preview" in chunk.payload:
+                    pairs[i] = i
+                    continue
                 tool_name = chunk.payload.get("tool", "")
                 if tool_name:
                     tool_call_indices.setdefault(tool_name, []).append(i)
 
-        # Match results to tool calls
+        # Match separate result chunks to their tool calls
         for i, chunk in enumerate(chunks):
             if chunk.chunk_type == "result":
                 tool_name = chunk.payload.get("tool", "")
@@ -246,7 +249,13 @@ class ContextCompressor:
 
             summary_text = response.content
 
-            # Create a single summary chunk
+            # Create a single summary chunk. It replaces older chunks, so it
+            # takes their newest timestamp — keeping it ordered *before* the
+            # preserved recent chunks instead of jumping to "now".
+            summary_kwargs = {}
+            stamps = [c.created_at for c in chunks if c.created_at is not None]
+            if stamps:
+                summary_kwargs["created_at"] = max(stamps)
             summary_chunk = ContextChunk(
                 id=uuid.uuid4(),
                 session_id=session_id,
@@ -258,6 +267,7 @@ class ContextCompressor:
                     "original_tokens": sum(c.token_count for c in chunks),
                 },
                 token_count=get_token_count(summary_text),
+                **summary_kwargs,
             )
             return [summary_chunk]
 
@@ -367,7 +377,11 @@ class ContextCompressor:
             tool = payload.get("tool", "unknown")
             args = payload.get("args", {})
             args_str = ", ".join(f"{k}={v}" for k, v in args.items())
-            return f"[Tool Call] {tool}({args_str})"
+            text = f"[Tool Call] {tool}({args_str})"
+            preview = payload.get("result_preview", "")
+            if preview:
+                text += f"\n[Result] {str(preview)[:200]}"
+            return text
         elif chunk_type == "result":
             status = payload.get("status", "ok")
             result = payload.get("result", "")

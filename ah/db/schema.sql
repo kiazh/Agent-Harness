@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS context_chunks (
     agent_id TEXT NOT NULL,
     chunk_type TEXT NOT NULL CHECK (chunk_type IN (
         'tool_call', 'result', 'memory', 'heartbeat', 'system', 'user', 'assistant',
-        'user_message', 'assistant_message', 'document'
+        'user_message', 'assistant_message', 'document', 'compression_summary'
     )),
     payload_msgpack BYTEA NOT NULL,
     embedding vector(1536),
@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS context_chunks (
     created_at TIMESTAMPTZ DEFAULT now(),
     accessed_at TIMESTAMPTZ
 );
+
+-- Migration for existing databases: CREATE TABLE IF NOT EXISTS does not update
+-- the CHECK constraint, so re-create it to allow 'compression_summary'.
+ALTER TABLE context_chunks DROP CONSTRAINT IF EXISTS context_chunks_chunk_type_check;
+ALTER TABLE context_chunks ADD CONSTRAINT context_chunks_chunk_type_check CHECK (chunk_type IN (
+    'tool_call', 'result', 'memory', 'heartbeat', 'system', 'user', 'assistant',
+    'user_message', 'assistant_message', 'document', 'compression_summary'
+));
 
 -- Composite index for get_chunks query: WHERE session_id = $1 [AND chunk_type = $2] ORDER BY created_at DESC
 CREATE INDEX IF NOT EXISTS idx_context_chunks_session_type_created ON context_chunks(session_id, chunk_type, created_at DESC);

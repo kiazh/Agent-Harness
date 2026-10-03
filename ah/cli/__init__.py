@@ -8,16 +8,8 @@ from pathlib import Path
 from typing import Optional
 
 import typer
-
-logger = logging.getLogger(__name__)
-from rich.console import Console
 from rich.table import Table
-from rich.panel import Panel
-from rich.live import Live
 from rich.text import Text
-from rich import box
-from rich.style import Style
-from rich.emoji import Emoji
 
 from ah import __version__
 from ah.core.agent import ReActAgent
@@ -27,35 +19,22 @@ from ah.core.session import session_manager
 from ah.core.config import config
 from ah.db.connection import db
 from ah.tools import builtins  # noqa: F401 — registers built-in tools
-from ah.cli.visual import VisualContext, get_default_visual, ThemeName
+from ah.cli.visual import get_default_visual
 from ah.cli.animations import (
-    Spinner,
     SquareLoader,
-    ThinkingAnimation,
-    StreamingAnimation,
-    ToolExecutionAnimation,
-    ErrorAnimation,
-    SuccessAnimation,
-    FadeTransition,
-    AnimationRunner,
     get_spinner,
     get_thinking_animation,
     get_streaming_animation,
     get_tool_animation,
-    get_error_animation,
-    get_success_animation,
-    get_fade_transition,
     get_animation_runner,
-    should_animate,
-    PRIMARY,
-    SECONDARY,
     SUCCESS,
     WARNING,
     ERROR,
     INFO,
     MUTED,
-    TEXT,
 )
+
+logger = logging.getLogger(__name__)
 
 app = typer.Typer(
     name="ah",
@@ -180,8 +159,14 @@ def chat(
     provider: str = typer.Option("openrouter", "--provider", "-p", help="LLM provider (openrouter, ollama)"),
     verbose: bool = typer.Option(True, "--verbose/--quiet", "-v/-q", help="Show tool calls and reasoning"),
     interactive: bool = typer.Option(False, "--interactive", "-i", help="Launch interactive REPL mode"),
+    tui: bool = typer.Option(False, "--tui", help="Launch the pi-style TUI (ported terminal UI)"),
 ):
     """Chat with the agent. Creates a new session or continues an existing one."""
+
+    if tui:
+        from ah.cli.tui.screen import run_tui
+        _run(run_tui(model=model, provider=provider, verbose=verbose, session_id=session_id))
+        return
 
     if interactive:
         from ah.cli.interactive_win import run_repl
@@ -300,10 +285,28 @@ def repl(
     provider: str = typer.Option(None, "--provider", "-p", help="LLM provider"),
     verbose: bool = typer.Option(None, "--verbose/--quiet", "-v/-q", help="Show tool calls and reasoning"),
     session_id: Optional[str] = typer.Option(None, "--session", "-s", help="Resume specific session"),
+    tui: bool = typer.Option(False, "--tui", help="Launch the pi-style TUI (ported terminal UI)"),
 ):
     """Launch interactive REPL mode."""
+    if tui:
+        from ah.cli.tui.screen import run_tui
+        _run(run_tui(model=model, provider=provider, verbose=verbose, session_id=session_id))
+        return
     from ah.cli.interactive_win import run_repl
     _run(run_repl(model=model, provider=provider, verbose=verbose, session_id=session_id))
+
+
+@app.command(name="tui")
+def tui_cmd(
+    model: str = typer.Option(None, "--model", "-m", help="Model to use"),
+    provider: str = typer.Option(None, "--provider", "-p", help="LLM provider"),
+    verbose: bool = typer.Option(None, "--verbose/--quiet", "-v/-q", help="Show tool calls and reasoning"),
+    session_id: Optional[str] = typer.Option(None, "--session", "-s", help="Resume specific session"),
+    skin: str = typer.Option("dark", "--skin", help="Theme: dark or light"),
+):
+    """Launch the pi-style TUI (ported from earendil-works/pi, MIT)."""
+    from ah.cli.tui.screen import run_tui
+    _run(run_tui(model=model, provider=provider, verbose=verbose, session_id=session_id, skin=skin))
 
 
 @app.command()
@@ -663,17 +666,8 @@ def compress(
                 console.print("[yellow]Nothing to compress (not enough chunks).[/yellow]")
                 return
 
-            # Delete old chunks and store compressed ones
-            await context_manager.delete_chunks(sid)
-
-            for chunk in result.compressed_chunks:
-                await context_manager.add_chunk(
-                    session_id=chunk.session_id,
-                    agent_id=chunk.agent_id,
-                    chunk_type=chunk.chunk_type,
-                    payload=chunk.payload,
-                    token_count=chunk.token_count,
-                )
+            # Atomically replace old chunks with compressed ones (order-preserving)
+            await context_manager.replace_chunks(sid, result.compressed_chunks)
 
             _print_success(
                 f"Context compressed: "
@@ -712,20 +706,24 @@ def learn(
     Extracts reusable knowledge from the source and creates a new skill.
     """
     from ah.skills.registry import skill_registry
-    from ah.tools.file import _resolve_path
     from ah.tools.builtins import _is_safe_url
     skill_registry.load_all()
 
     # Determine source type
     source_path = Path(source)
     if source_path.exists() and source_path.is_file():
-        # Learn from file — prevent path traversal via ..
+        # Local CLI run by the file's owner, so any readable file is allowed.
+        # (The previous `".." in source` string check was not a real boundary:
+        # it rejected legitimate relative paths but allowed absolute ones.)
         resolved = source_path.resolve()
-        # Check for path traversal attempts (.. in the original path)
-        if ".." in source:
-            console.print(f"[red]Path traversal blocked:[/red] '{source}' contains '..'")
-            raise typer.Exit(1)
-        content = resolved.read_text(encoding="utf-8")
+        try:
+            content = resolved.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            console.print(f"[red]Cannot learn from binary or non-UTF-8 file:[/red] {resolved.name}")
+            raise typer.Exit(1) from None
+        except OSError as e:
+            console.print(f"[red]Cannot read file:[/red] {e}")
+            raise typer.Exit(1) from None
         skill_name = name or resolved.stem
         skill_description = description or f"Skill learned from {resolved.name}"
         trigger_list = [t.strip() for t in triggers.split(",")] if triggers else []
@@ -759,14 +757,18 @@ def learn(
             raise typer.Exit(1)
 
     # Create the skill
-    skill = skill_registry.create_skill(
-        name=skill_name,
-        description=skill_description,
-        content=content,
-        triggers=trigger_list,
-        source=source,
-        source_type="learned",
-    )
+    try:
+        skill = skill_registry.create_skill(
+            name=skill_name,
+            description=skill_description,
+            content=content,
+            triggers=trigger_list,
+            source=source,
+            source_type="learned",
+        )
+    except ValueError as e:
+        console.print(f"[red]Skill rejected:[/red] {e}")
+        raise typer.Exit(1) from None
     console.print(f"[green]Skill '{skill.name}' created successfully![/green]")
     console.print(f"  Description: {skill.description}")
     console.print(f"  Triggers: {', '.join(skill.triggers)}")

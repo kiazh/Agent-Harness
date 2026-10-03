@@ -1,39 +1,18 @@
 """Theme definitions: ThemeName, ColorScheme, built-in themes, system theme."""
 from __future__ import annotations
 
-import math
-import os
-import re
-import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
 from rich.style import Style
-from rich import box
 
 from ah.cli.visual.colors import (
-    srgb_to_oklab,
-    oklab_to_srgb,
-    oklch_to_oklab,
-    oklab_to_oklch,
     oklch_to_srgb,
     srgb_to_oklch,
     gamut_map_bisection,
-    hex_to_rgb,
     rgb_to_hex,
-    parse_color,
-    tint,
-    relative_luminance,
-    contrast_ratio,
 )
-from ah.cli.visual.panels import PanelStyles, PANEL_STYLES
-from ah.cli.visual.tables import TableStyles, TABLE_STYLES
-from ah.cli.visual.banners import BANNER_LOGO, BANNER_HERO
 
 # ─── Theme Name Enum ─────────────────────────────────────────────────────────
 

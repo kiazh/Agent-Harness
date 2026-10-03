@@ -194,7 +194,6 @@ class VisualContext:
         ps = self.panel_styles.get(style, self.panel_styles["info"])
 
         border_color = self._color(ps.border_color or style)
-        title_color = self._color(ps.title_color or style)
 
         box_style = getattr(box, border_style or ps.border_style, box.ROUNDED)
 
@@ -599,8 +598,8 @@ class VisualContext:
         """Create success-colored text."""
         return Text(text, style=self.style("success", bold=True))
 
-    def error(self, text: str) -> Text:
-        """Create error-colored text."""
+    def error_text(self, text: str) -> Text:
+        """Create error-colored text (see ``error()`` for the printed panel)."""
         return Text(text, style=self.style("error", bold=True))
 
     def warning(self, text: str) -> Text:
@@ -862,12 +861,6 @@ class VisualContext:
     def print_divider(self, char: str = "─", length: int = 60) -> None:
         """Print a divider line."""
         self.console.print(char * length, style=self._color("muted"))
-
-    def print_header(self, text: str) -> None:
-        """Print a section header."""
-        self.console.print()
-        self.console.print(f"  {text}", style=self.style("primary", bold=True))
-        self.console.print(f"  {'─' * len(text)}", style=self._color("muted"))
 
     def __repr__(self) -> str:
         return (

@@ -7,6 +7,7 @@ import logging
 import uuid
 from typing import Any
 
+from ah.core.exceptions import ToolError, ValidationError
 from ah.core.provider import audit_log
 from ah.rag.pipeline import RAGPipeline
 from ah.tools.base import registry

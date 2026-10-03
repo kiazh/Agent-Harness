@@ -33,6 +33,17 @@ class TokenCounter:
             return len(self._encoding.encode(text))
         return len(text) // 4
 
+    def truncate(self, text: str, max_tokens: int) -> str:
+        """Return the longest prefix of *text* that fits in *max_tokens* tokens."""
+        if max_tokens <= 0:
+            return ""
+        if self._encoding is not None:
+            tokens = self._encoding.encode(text)
+            if len(tokens) <= max_tokens:
+                return text
+            return self._encoding.decode(tokens[:max_tokens])
+        return text[: max_tokens * 4]
+
 
 _token_counter = TokenCounter()
 
@@ -40,6 +51,11 @@ _token_counter = TokenCounter()
 def get_token_count(text: str) -> int:
     """Return the number of tokens in *text* (tiktoken or len//4 fallback)."""
     return _token_counter.count(text)
+
+
+def truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """Truncate *text* to at most *max_tokens* tokens."""
+    return _token_counter.truncate(text, max_tokens)
 
 
 class PromptAssembler:
@@ -94,15 +110,17 @@ class PromptAssembler:
         remaining = self.session_budget - used_tokens
         if retrieved_chunks and remaining > 100:
             retrieved_text = "\n\n## Relevant Context\n"
+            remaining -= self._estimate_tokens(retrieved_text)
             for chunk, sim in retrieved_chunks:
                 compressed = self._compress_chunk({
                     "type": chunk.chunk_type,
                     "payload": chunk.payload,
                 })
-                chunk_tokens = self._estimate_tokens(compressed)
+                chunk_tokens = self._estimate_tokens(compressed) + 1  # +1 for newline
                 if chunk_tokens > remaining:
-                    compressed = compressed[:remaining * 4]
-                    retrieved_text += compressed + "...\n"
+                    # Token-accurate truncation (char-based slicing overshoots
+                    # the budget for code and non-Latin text).
+                    retrieved_text += truncate_to_tokens(compressed, max(0, remaining - 2)) + "...\n"
                     break
                 retrieved_text += compressed + "\n"
                 remaining -= chunk_tokens

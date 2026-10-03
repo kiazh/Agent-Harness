@@ -51,7 +51,6 @@ class Database:
         command_timeout = int(os.environ.get("AGENT_HARNESS_DB_TIMEOUT", "30"))
 
         # Parse DSN to extract host/port, bypassing DNS resolution on Windows
-        import re
         from urllib.parse import urlparse
         parsed = urlparse(self.dsn)
         host = parsed.hostname or "127.0.0.1"
@@ -107,9 +106,21 @@ class Database:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_db_call("execute", duration_ms)
             return result
-        except Exception as e:
+        except Exception:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_db_call("execute", duration_ms, is_error=True)
+            raise
+
+    async def executemany(self, query: str, args: list) -> None:
+        """Execute *query* once per argument tuple in *args* (single round trip batch)."""
+        import time
+        start = time.monotonic()
+        try:
+            async with self.acquire() as conn:
+                await conn.executemany(query, args)
+            metrics.record_db_call("executemany", (time.monotonic() - start) * 1000)
+        except Exception:
+            metrics.record_db_call("executemany", (time.monotonic() - start) * 1000, is_error=True)
             raise
 
     async def fetch(self, query: str, *args) -> list[asyncpg.Record]:
@@ -122,7 +133,7 @@ class Database:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_db_call("fetch", duration_ms)
             return result
-        except Exception as e:
+        except Exception:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_db_call("fetch", duration_ms, is_error=True)
             raise
@@ -137,7 +148,7 @@ class Database:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_db_call("fetchrow", duration_ms)
             return result
-        except Exception as e:
+        except Exception:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_db_call("fetchrow", duration_ms, is_error=True)
             raise
@@ -152,7 +163,7 @@ class Database:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_db_call("fetchval", duration_ms)
             return result
-        except Exception as e:
+        except Exception:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_db_call("fetchval", duration_ms, is_error=True)
             raise

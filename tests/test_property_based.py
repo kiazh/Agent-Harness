@@ -172,18 +172,34 @@ class TestPromptAssemblerProperties:
     )
     @settings(max_examples=100)
     def test_assemble_respects_budget(self, system_prompt, goal, query, budget):
-        """Property: Assembled prompt respects token budget."""
+        """Property: optional (retrieved) context never pushes the prompt past
+        the budget. System prompt, goal and query are always included, so the
+        bound is max(budget, mandatory tokens)."""
+        from ah.core.models import ContextChunk
+
         assembler = PromptAssembler(session_budget=budget)
-        prompt = assembler.assemble(
+        mandatory = assembler.assemble(
             system_prompt=system_prompt,
             goal=goal or None,
             recent_chunks=[],
             retrieved_chunks=[],
             query=query,
         )
-        # Prompt should not exceed budget by too much
+        mandatory_tokens = assembler._estimate_tokens(mandatory)
+
+        big = ContextChunk(
+            id=uuid.uuid4(), session_id=uuid.uuid4(), agent_id="h",
+            chunk_type="memory", payload={"content": (system_prompt + query + " ctx") * 50},
+        )
+        prompt = assembler.assemble(
+            system_prompt=system_prompt,
+            goal=goal or None,
+            recent_chunks=[],
+            retrieved_chunks=[(big, 0.9)] * 20,
+            query=query,
+        )
         prompt_tokens = assembler._estimate_tokens(prompt)
-        assert prompt_tokens <= budget + 200  # Allow some overflow
+        assert prompt_tokens <= max(budget, mandatory_tokens) + 20
 
     @given(
         num_chunks=st.integers(min_value=0, max_value=20),

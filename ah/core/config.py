@@ -7,15 +7,24 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = Path.home() / ".agent-harness" / "config.yaml"
+
+# Secrets live in the environment (.env), never in config.yaml.
+SECRET_KEYS = frozenset({"openrouter_api_key", "openai_api_key", "cohere_api_key", "database_url"})
+
+# Load .env from the current directory (or a parent) before the config
+# singleton below is built, so its values take effect at startup. Existing
+# real environment variables win over .env.
+load_dotenv(override=False)
 
 # Sensible defaults for all settings
 DEFAULTS: dict[str, Any] = {
@@ -181,7 +190,8 @@ class Config:
 
         data = {}
         for key in DEFAULTS:
-            data[key] = getattr(self, key)
+            # Secrets belong in .env / the environment, not a plain-text file.
+            data[key] = "" if key in SECRET_KEYS else getattr(self, key)
 
         with open(save_path, "w") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=True)

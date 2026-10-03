@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Optional
 
 import asyncpg
 import msgpack

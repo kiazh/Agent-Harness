@@ -3,26 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
-import sys
-import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
-    Any,
-    Callable,
-    ClassVar,
-    Coroutine,
-    Generator,
-    Optional,
-    Protocol,
-    Sequence,
 )
 
 from rich.console import Console, RenderableType
 from rich.live import Live
-from rich.panel import Panel
 from rich.text import Text
 
 if TYPE_CHECKING:
@@ -32,25 +19,12 @@ logger = logging.getLogger(__name__)
 
 from ah.cli.animations._base import (
     DOTS_FRAMES,
-    BOUNCE_FRAMES,
-    GROW_FRAMES,
-    ARROW_FRAMES,
-    STAR_FRAMES,
-    MOON_FRAMES,
-    PULSE_FRAMES,
-    BRAIN_FRAMES,
-    SPARKLE_FRAMES,
     SPINNER_FRAMES,
     THINKING_VERBS,
-    PRIMARY,
-    SECONDARY,
     SUCCESS,
     WARNING,
     ERROR,
-    INFO,
     MUTED,
-    TEXT,
-    is_tty,
     should_animate,
 )
 # ─── FrameAnimation Base Class ───────────────────────────────────────────────

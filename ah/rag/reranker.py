@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import logging
-import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 import httpx
 

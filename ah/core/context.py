@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections import OrderedDict
+from datetime import datetime, timezone
 from typing import Any
 
 import asyncpg
@@ -20,6 +21,24 @@ from ah.core.serialization import (
 logger = logging.getLogger(__name__)
 
 __all__ = ["ContextChunk", "ContextManager", "context_manager"]
+
+
+def _search_text_for(payload: dict[str, Any]) -> str | None:
+    """Derive full-text-search content from a chunk payload.
+
+    Without this, only RAG documents had ``search_text`` set, so BM25/FTS in
+    hybrid search never matched ordinary conversation or tool chunks.
+    """
+    parts: list[str] = []
+    for key in ("content", "text", "tool", "result_preview", "result", "message", "prompt"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            parts.append(value)
+    args = payload.get("args")
+    if isinstance(args, dict):
+        parts.extend(str(v) for v in args.values() if v is not None)
+    text = " ".join(parts).strip()
+    return text[:20000] or None
 
 
 class ContextManager:
@@ -52,8 +71,8 @@ class ContextManager:
             embedding_str = embedding_to_str(embedding)
         row = await db.fetchrow(
             """
-            INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
             """,
             session_id,
@@ -62,6 +81,7 @@ class ContextManager:
             payload_msgpack,
             token_count,
             embedding_str,
+            _search_text_for(payload),
         )
         # Invalidate cache for this session
         self._recent_cache.pop(session_id, None)
@@ -96,6 +116,7 @@ class ContextManager:
                 payload_msgpack,
                 c.get("token_count", 0),
                 embedding_str,
+                _search_text_for(c["payload"]),
             ))
 
         # Assign ids client-side so the batch insert can be a single
@@ -109,8 +130,8 @@ class ContextManager:
         # Use executemany for batch insert
         await db.executemany(
             """
-            INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             """,
             records_with_ids,
         )
@@ -172,13 +193,14 @@ class ContextManager:
         Uses an LRU cache per session to avoid redundant DB queries.
         Cache is invalidated when new chunks are added to the session.
         """
-        # Check cache first
+        # Check cache first. Entries store (fetched_limit, rows); a hit is only
+        # valid if the cached fetch covered at least the requested limit, or the
+        # session simply had fewer rows than were asked for.
         if session_id in self._recent_cache:
-            cached = self._recent_cache[session_id]
-            # Move to end (most recently used)
-            self._recent_cache.move_to_end(session_id)
-            # Return up to limit items
-            return cached[:limit]
+            cached_limit, cached = self._recent_cache[session_id]
+            if cached_limit >= limit or len(cached) < cached_limit:
+                self._recent_cache.move_to_end(session_id)
+                return cached[:limit]
 
         rows = await db.fetch(
             """
@@ -200,8 +222,9 @@ class ContextManager:
                 "tokens": r["token_count"],
             })
 
-        # Cache the results
-        self._recent_cache[session_id] = results
+        # Cache the results with the limit they were fetched at
+        self._recent_cache[session_id] = (limit, results)
+        self._recent_cache.move_to_end(session_id)
         if len(self._recent_cache) > self._cache_size:
             self._recent_cache.popitem(last=False)  # Evict LRU
 
@@ -243,6 +266,46 @@ class ContextManager:
             "UPDATE context_chunks SET accessed_at = now() WHERE id = $1",
             chunk_id,
         )
+
+    async def replace_chunks(self, session_id: uuid.UUID, chunks: list[ContextChunk]) -> int:
+        """Atomically replace all chunks of a session with *chunks*.
+
+        Runs in a single transaction so a failure can never leave the session
+        with its context deleted, and preserves each chunk's ``created_at`` so
+        conversation order (and recency-based retrieval) survive compression.
+        Returns the number of chunks written.
+        """
+        records = []
+        for c in chunks:
+            created = c.created_at or datetime.now(timezone.utc)
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            records.append((
+                uuid.uuid4(),
+                session_id,
+                c.agent_id,
+                c.chunk_type,
+                payload_to_msgpack(c.payload),
+                c.token_count,
+                embedding_to_str(c.embedding) if c.embedding is not None else None,
+                _search_text_for(c.payload),
+                created,
+            ))
+
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM context_chunks WHERE session_id = $1", session_id)
+                if records:
+                    await conn.executemany(
+                        """
+                        INSERT INTO context_chunks
+                            (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, created_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        """,
+                        records,
+                    )
+        self._recent_cache.pop(session_id, None)
+        return len(records)
 
     async def delete_chunks(self, session_id: uuid.UUID) -> int:
         """Delete all chunks for a session."""

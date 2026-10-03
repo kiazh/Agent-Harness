@@ -4,21 +4,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
 import time
-from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Optional
+from typing import Any, AsyncGenerator
 
 import httpx
-from dotenv import load_dotenv
 
 from ah.core.config import config
-from ah.core.exceptions import ProviderError, ValidationError
+from ah.core.exceptions import ValidationError
 from ah.core.metrics import metrics
 from ah.core.models import LLMResponse, StreamEvent, ToolDefinition  # noqa: F401 — re-exported for backward compat
-
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +145,21 @@ def _validate_params(temperature: float, max_tokens: int) -> None:
         raise ValidationError(f"max_tokens must be between 1 and 32768, got {max_tokens}")
 
 
+def _tools_payload(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
+    """Convert tool definitions to the OpenAI-compatible function-calling format."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.parameters,
+            },
+        }
+        for t in tools
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Base provider
 # ---------------------------------------------------------------------------
@@ -233,17 +243,7 @@ class OpenRouterProvider(LLMProvider):
             "max_tokens": max_tokens,
         }
         if tools:
-            payload["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    },
-                }
-                for t in tools
-            ]
+            payload["tools"] = _tools_payload(tools)
 
         audit_log("llm_call_start", provider="openrouter", model=model, message_count=len(messages))
 
@@ -323,24 +323,17 @@ class OpenRouterProvider(LLMProvider):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": True,
+            # Ask for a final usage chunk so streamed turns report real token counts
+            "stream_options": {"include_usage": True},
         }
         if tools:
-            payload["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    },
-                }
-                for t in tools
-            ]
+            payload["tools"] = _tools_payload(tools)
 
         audit_log("llm_stream_start", provider="openrouter", model=model, message_count=len(messages))
 
         content_parts: list[str] = []
         tool_calls_by_index: dict[int, dict[str, str]] = {}
+        stream_usage: dict[str, int] = {}
 
         try:
             async with self.client.stream("POST", "/chat/completions", json=payload) as resp:
@@ -355,6 +348,9 @@ class OpenRouterProvider(LLMProvider):
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    # The usage chunk arrives with an empty choices list.
+                    if chunk.get("usage"):
+                        stream_usage = chunk["usage"]
                     choices = chunk.get("choices", [])
                     if not choices:
                         continue
@@ -388,10 +384,6 @@ class OpenRouterProvider(LLMProvider):
         tool_calls: list[dict] = []
         for idx in sorted(tool_calls_by_index.keys()):
             tc = tool_calls_by_index[idx]
-            try:
-                args = json.loads(tc["arguments"]) if tc["arguments"] else {}
-            except json.JSONDecodeError:
-                args = {}
             tool_calls.append({
                 "id": tc["id"],
                 "type": "function",
@@ -402,6 +394,11 @@ class OpenRouterProvider(LLMProvider):
             })
 
         full_content = "".join(content_parts)
+        usage = {
+            "prompt_tokens": stream_usage.get("prompt_tokens", 0),
+            "completion_tokens": stream_usage.get("completion_tokens", 0),
+            "total_tokens": stream_usage.get("total_tokens", 0),
+        }
 
         audit_log("llm_stream_complete", provider="openrouter", model=model, tool_calls=len(tool_calls))
 
@@ -410,7 +407,7 @@ class OpenRouterProvider(LLMProvider):
             response=LLMResponse(
                 content=full_content,
                 model=model,
-                usage={},  # Streaming may not provide usage
+                usage=usage,
                 tool_calls=tool_calls,
             ),
         )
@@ -467,17 +464,7 @@ class OllamaProvider(LLMProvider):
             },
         }
         if tools:
-            payload["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    },
-                }
-                for t in tools
-            ]
+            payload["tools"] = _tools_payload(tools)
 
         audit_log("llm_call_start", provider="ollama", model=model or self.model, message_count=len(messages))
 
@@ -557,17 +544,7 @@ class OllamaProvider(LLMProvider):
             },
         }
         if tools:
-            payload["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    },
-                }
-                for t in tools
-            ]
+            payload["tools"] = _tools_payload(tools)
 
         audit_log("llm_stream_start", provider="ollama", model=model or self.model, message_count=len(messages))
 
@@ -575,7 +552,7 @@ class OllamaProvider(LLMProvider):
         tool_calls: list[dict] = []
 
         try:
-            async with self.client.stream(f"{self.base_url}/api/chat", json=payload) as resp:
+            async with self.client.stream("POST", "/api/chat", json=payload) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     if not line:

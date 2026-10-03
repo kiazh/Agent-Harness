@@ -3,10 +3,26 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timezone
 
 from ah.core.exceptions import ValidationError
+
+
+def age_days(dt: datetime | None, now: datetime | None = None) -> float:
+    """Days elapsed since *dt*, safe for naive (UTC) and aware datetimes.
+
+    Rows loaded from PostgreSQL TIMESTAMPTZ columns are timezone-aware, while
+    in-process defaults use naive ``datetime.utcnow()``; subtracting the two
+    raises ``TypeError``. Both are normalized to aware UTC here.
+    """
+    if dt is None:
+        return 0.0
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - dt).total_seconds() / 86400.0)
 
 
 @dataclass

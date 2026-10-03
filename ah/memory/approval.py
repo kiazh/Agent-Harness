@@ -21,7 +21,7 @@ from typing import Any
 from ah.core.provider import audit_log
 from ah.db.connection import db
 from ah.memory.models import MemoryEntry
-from ah.memory.redaction import SecretRedactor, redact_secrets
+from ah.memory.redaction import SecretRedactor
 
 __all__ = [
     "ApprovalStatus",

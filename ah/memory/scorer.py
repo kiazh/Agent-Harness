@@ -8,10 +8,8 @@ access frequency boost.
 """
 from __future__ import annotations
 
-import math
-from datetime import datetime
 
-from ah.memory.models import MemoryEntry
+from ah.memory.models import MemoryEntry, age_days
 
 
 # Category-based base importance weights (from research)
@@ -56,7 +54,7 @@ class ImportanceScorer:
             scores.append(1.0)
 
         # Recency boost (decays over RECENCY_WINDOW_DAYS)
-        days_old = (datetime.utcnow() - memory.created_at).days
+        days_old = int(age_days(memory.created_at))
         recency_score = max(0.0, 1.0 - days_old / RECENCY_WINDOW_DAYS)
         scores.append(recency_score * 0.3)
 
@@ -69,7 +67,7 @@ class ImportanceScorer:
     def score_with_breakdown(self, memory: MemoryEntry) -> dict[str, float]:
         """Return importance score with factor breakdown for debugging."""
         category_weight = CATEGORY_WEIGHTS.get(memory.category, 0.5)
-        days_old = (datetime.utcnow() - memory.created_at).days
+        days_old = int(age_days(memory.created_at))
         recency_score = max(0.0, 1.0 - days_old / RECENCY_WINDOW_DAYS)
         freq_score = min(1.0, memory.access_count / FREQUENCY_NORMALIZATION)
 

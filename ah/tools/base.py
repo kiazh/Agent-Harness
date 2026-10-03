@@ -7,7 +7,7 @@ import inspect
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Optional, get_type_hints
 
 from ah.core.exceptions import ToolError, ValidationError
@@ -15,6 +15,12 @@ from ah.core.models import ToolDefinition
 from ah.core.provider import audit_log
 
 logger = logging.getLogger(__name__)
+
+# Tools that mutate state: never cached, and flush the result cache when run.
+_SIDE_EFFECT_PREFIXES = ("write_", "delete_", "create_", "update_", "send_", "post_")
+_SIDE_EFFECT_TOOLS = frozenset({"terminal", "remember", "index_document"})
+# Read-only but non-deterministic / state-dependent: never cached.
+_UNCACHEABLE_TOOLS = frozenset({"recall", "search_documents"})
 
 
 @dataclass
@@ -193,9 +199,12 @@ class ToolRegistry:
             audit_log("tool_execution_validation_error", tool_name=name, error=str(e))
             raise
 
-        # Check TTL cache (only for non-side-effect tools — skip cache for tools with side effects)
+        # TTL cache: only for read-only, deterministic tools. Side-effecting tools
+        # are never cached and flush the cache (so read_file after write_file,
+        # or repeated `git status`, never returns stale results).
+        is_side_effect = name.startswith(_SIDE_EFFECT_PREFIXES) or name in _SIDE_EFFECT_TOOLS
         cache_key = None
-        if not name.startswith(("write_", "delete_", "create_", "update_", "send_", "post_")):
+        if not is_side_effect and name not in _UNCACHEABLE_TOOLS:
             args_hash = hashlib.sha256(
                 json.dumps(kwargs, sort_keys=True, default=str).encode()
             ).hexdigest()
@@ -214,6 +223,9 @@ class ToolRegistry:
             result = await tool.func(**kwargs)
         else:
             result = tool.func(**kwargs)
+
+        if is_side_effect:
+            self._result_cache.clear()
 
         # Store in cache
         if cache_key is not None:

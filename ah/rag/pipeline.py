@@ -6,8 +6,10 @@ import hashlib
 import logging
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
+
+import msgpack
 
 from ah.core.models import ContextChunk
 from ah.core.provider import audit_log
@@ -176,6 +178,7 @@ class RAGPipeline:
             chunks_stored=len(stored_chunks),
         )
 
+        self._invalidate_search_cache(session_id)
         return stored_chunks
 
     async def search(
@@ -275,7 +278,7 @@ class RAGPipeline:
         self,
         session_id: uuid.UUID,
         agent_id: str = "harness",
-    ) -> list[ContextChunk]:
+    ) -> list[uuid.UUID]:
         """Index all existing context chunks for a session that don't have embeddings.
 
         Useful for bootstrapping RAG on existing sessions.
@@ -296,19 +299,17 @@ class RAGPipeline:
         for row in rows:
             payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
             text = payload.get("text", payload.get("content", str(payload)))
-            chunks_to_embed.append((row, text))
+            chunks_to_embed.append((row, str(text)))
 
         # Embed in batch
         texts = [t for _, t in chunks_to_embed]
         embeddings = await self._embedder.embed_batch(texts)
 
-        # Update rows with embeddings (batch)
+        # Update rows with embeddings and FTS text (batch)
         updated = []
-        for (row, _), embedding in zip(chunks_to_embed, embeddings):
-            embedding_str = embedding_to_str(embedding)
-            updated.append((embedding_str, row.get("search_text", ""), row["id"]))
+        for (row, text), embedding in zip(chunks_to_embed, embeddings):
+            updated.append((embedding_to_str(embedding), text, row["id"]))
 
-        # Batch update using executemany
         await db.executemany(
             """
             UPDATE context_chunks
@@ -318,13 +319,21 @@ class RAGPipeline:
             updated,
         )
 
+        # Indexed content changed — drop cached search results for this session.
+        self._invalidate_search_cache(session_id)
+
         audit_log(
             "rag_index_context_complete",
             session_id=str(session_id),
             chunks_embedded=len(updated),
         )
 
-        return updated
+        return [row["id"] for row, _ in chunks_to_embed]
+
+    def _invalidate_search_cache(self, session_id: uuid.UUID) -> None:
+        """Remove cached search results for *session_id* (after re-indexing)."""
+        for key in [k for k in self._search_cache if k[0] == session_id]:
+            self._search_cache.pop(key, None)
 
     def _chunk_document(
         self,

@@ -86,9 +86,10 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
     # Validate workdir
     _validate_workdir(workdir)
 
-    # Execute with shell=False
+    # Execute with shell=False, off the event loop so streaming/UI stay responsive
     try:
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             args,
             shell=False,
             capture_output=True,

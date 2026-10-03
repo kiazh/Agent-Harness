@@ -283,7 +283,7 @@ class TestDeadCodeRemoval:
             name for name in dir(Database)
             if not name.startswith('_') and callable(getattr(Database, name))
         ]
-        expected = {'connect', 'close', 'execute', 'fetch', 'fetchrow', 'fetchval', 'initialize_schema', 'reset', 'acquire'}
+        expected = {'connect', 'close', 'execute', 'executemany', 'fetch', 'fetchrow', 'fetchval', 'initialize_schema', 'reset', 'acquire'}
         assert set(public_methods) == expected
 
 
