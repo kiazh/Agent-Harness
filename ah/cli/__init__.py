@@ -415,7 +415,10 @@ def export(
         await db.connect()
         try:
             if session_id:
-                sid = uuid.UUID(session_id)
+                sid = _parse_uuid(session_id)
+                if sid is None:
+                    console.print(f"[red]Invalid session ID: {session_id}[/red]")
+                    raise typer.Exit(1)
             else:
                 session = await session_manager.get_last_active()
                 if not session:
@@ -553,7 +556,10 @@ def context(
         await db.connect()
         try:
             if session_id:
-                sid = uuid.UUID(session_id)
+                sid = _parse_uuid(session_id)
+                if sid is None:
+                    console.print(f"[red]Invalid session ID: {session_id}[/red]")
+                    raise typer.Exit(1)
             else:
                 session = await session_manager.get_last_active()
                 if not session:
@@ -595,7 +601,10 @@ def compress(
         await db.connect()
         try:
             if session_id:
-                sid = uuid.UUID(session_id)
+                sid = _parse_uuid(session_id)
+                if sid is None:
+                    console.print(f"[red]Invalid session ID: {session_id}[/red]")
+                    raise typer.Exit(1)
             else:
                 session = await session_manager.get_last_active()
                 if not session:
@@ -798,7 +807,7 @@ def curator(
         if report['top_skills']:
             console.print("\n[bold]Top skills:[/bold]")
             for s in report['top_skills']:
-                console.print(f"  {s['name']}: {s['use_count']} uses")
+                console.print(f"  {s['name']}: {s['usage_count']} uses")
 
     elif action == "archive":
         archived = curator.archive_stale(days=days)
@@ -843,7 +852,7 @@ def curator(
         if top:
             console.print(f"[bold]Top {len(top)} skills:[/bold]")
             for i, s in enumerate(top, 1):
-                console.print(f"  {i}. {s.name} — {s.use_count} uses, {s.view_count} views")
+                console.print(f"  {i}. {s.name} — {s.usage_count} uses, {s.view_count} views")
         else:
             console.print("[yellow]No skill usage data.[/yellow]")
 
@@ -946,7 +955,7 @@ def hub(
         for t in telemetry:
             table.add_row(
                 t.get("name", ""),
-                str(t.get("use_count", 0)),
+                str(t.get("usage_count", 0)),
                 str(t.get("view_count", 0)),
                 t.get("published_at", "")[:10],
             )

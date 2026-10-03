@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any
 
 from ah.core.provider import LLMProvider
+from ah.db.connection import db
 from ah.memory.models import MemoryEntry, RetrievedMemory
 from ah.memory.store import MemoryStore, memory_store
 
@@ -189,8 +190,6 @@ class MemoryRetriever:
         where_clause = " AND ".join(conditions) if conditions else "TRUE"
 
         params.append(limit)
-        # Use db directly for this query
-        from ah.db.connection import db
         rows = await db.fetch(
             f"""
             SELECT id, session_id, agent_id, content, category, importance,

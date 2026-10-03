@@ -1529,9 +1529,8 @@ class TestDatabaseSchema:
         """Test that Database has a sensible default DSN."""
         with patch.dict(os.environ, {}, clear=True):
             db_obj = Database()
-            # Should have a default DSN pointing to localhost
-            assert "127.0.0.1" in db_obj.dsn or "localhost" in db_obj.dsn
-            assert "agentharness" in db_obj.dsn
+            # Default DSN should be empty (no hardcoded credentials)
+            assert db_obj.dsn == ""
 
     def test_database_custom_dsn(self):
         """Test custom DSN."""
@@ -1612,7 +1611,6 @@ class TestSkillTelemetry:
         reg.load_all()
         reg.record_use("test-skill")
         skill = reg.get("test-skill")
-        assert skill.use_count == 1
         assert skill.usage_count == 1
         assert skill.last_activity_at is not None
 
@@ -1634,7 +1632,7 @@ class TestSkillTelemetry:
         telemetry = reg.get_telemetry("test-skill")
         assert telemetry is not None
         assert telemetry["name"] == "test-skill"
-        assert telemetry["use_count"] == 1
+        assert telemetry["usage_count"] == 1
         assert telemetry["view_count"] == 1
         assert telemetry["last_activity_at"] is not None
 
@@ -1752,7 +1750,7 @@ class TestSkillCurator:
         top = curator.get_top_skills(limit=5)
         assert len(top) == 1
         assert top[0].name == "test-skill"
-        assert top[0].use_count == 2
+        assert top[0].usage_count == 2
 
     def test_cleanup_unused_dry_run(self, sample_skill_dir):
         """Test cleanup with dry run."""

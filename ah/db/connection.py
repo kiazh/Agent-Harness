@@ -14,11 +14,30 @@ from ah.core.metrics import metrics
 
 logger = logging.getLogger(__name__)
 
+
+def parse_command_count(result: str | None) -> int:
+    """Parse the count from an asyncpg command result string (e.g. 'DELETE 3' -> 3).
+
+    Handles various formats: 'DELETE 3', 'UPDATE 1', 'INSERT 0 1', etc.
+    Returns 0 if the result is None, empty, or cannot be parsed.
+    """
+    if not result:
+        return 0
+    parts = result.split()
+    if not parts:
+        return 0
+    # The count is always the last token in asyncpg command results
+    try:
+        return int(parts[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
 class Database:
     """Manages asyncpg connection pool."""
 
     def __init__(self, dsn: str | None = None) -> None:
-        self.dsn = dsn or config.get("database_url") or "postgresql://postgres:minecraft@2017@127.0.0.1:5432/agentharness"
+        self.dsn = dsn or config.get("database_url") or ""
         self._pool: asyncpg.Pool | None = None
 
     async def connect(self) -> None:
@@ -136,61 +155,6 @@ class Database:
         except Exception as e:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_db_call("fetchval", duration_ms, is_error=True)
-            raise
-
-    async def fetchval_cached(self, query: str, *args):
-        """Fetch a single value using prepared statements for repeated queries.
-
-        Uses asyncpg's prepared statement cache to avoid re-parsing
-        the same query multiple times.
-        """
-        import time
-        start = time.monotonic()
-        try:
-            async with self.acquire() as conn:
-                # asyncpg automatically caches prepared statements per connection
-                result = await conn.fetchval(query, *args)
-            duration_ms = (time.monotonic() - start) * 1000
-            metrics.record_db_call("fetchval_cached", duration_ms)
-            return result
-        except Exception as e:
-            duration_ms = (time.monotonic() - start) * 1000
-            metrics.record_db_call("fetchval_cached", duration_ms, is_error=True)
-            raise
-
-    async def execute_prepared(self, query: str, *args):
-        """Execute a query using asyncpg's prepared statement cache.
-
-        asyncpg automatically caches prepared statements per connection,
-        so repeated executions of the same query skip the parse/plan step.
-        This is the recommended way to execute the same query multiple times.
-        """
-        import time
-        start = time.monotonic()
-        try:
-            async with self.acquire() as conn:
-                result = await conn.execute(query, *args)
-            duration_ms = (time.monotonic() - start) * 1000
-            metrics.record_db_call("execute_prepared", duration_ms)
-            return result
-        except Exception as e:
-            duration_ms = (time.monotonic() - start) * 1000
-            metrics.record_db_call("execute_prepared", duration_ms, is_error=True)
-            raise
-
-    async def fetch_prepared(self, query: str, *args):
-        """Fetch rows using asyncpg's prepared statement cache."""
-        import time
-        start = time.monotonic()
-        try:
-            async with self.acquire() as conn:
-                result = await conn.fetch(query, *args)
-            duration_ms = (time.monotonic() - start) * 1000
-            metrics.record_db_call("fetch_prepared", duration_ms)
-            return result
-        except Exception as e:
-            duration_ms = (time.monotonic() - start) * 1000
-            metrics.record_db_call("fetch_prepared", duration_ms, is_error=True)
             raise
 
     async def initialize_schema(self, schema_path: str | None = None) -> None:

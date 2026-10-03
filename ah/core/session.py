@@ -19,10 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 class SessionManager:
-    """Manages agent sessions in PostgreSQL with a 5-second LRU cache."""
+    """Manages agent sessions in PostgreSQL with a 60-second LRU cache."""
 
     def __init__(self) -> None:
-        # TTLCache: max 128 sessions, 5-second TTL
+        # TTLCache: max 128 sessions, 60-second TTL
         self._cache: TTLCache = TTLCache(maxsize=128, ttl=60)
         self._cache_lock = asyncio.Lock()
 
@@ -81,7 +81,7 @@ class SessionManager:
         return session
 
     async def get(self, session_id: uuid.UUID) -> Session | None:
-        """Get a session by ID (cached for 5 seconds)."""
+        """Get a session by ID (cached for 60 seconds)."""
         cached = await self._cache_get(session_id)
         if cached is not None:
             return cached
@@ -170,7 +170,8 @@ class SessionManager:
             session_id,
         )
         await self._cache_invalidate(session_id)
-        return int(result.split()[-1]) > 0 if result else False
+        from ah.db.connection import parse_command_count
+        return parse_command_count(result) > 0
 
     async def search(self, query: str, limit: int = 20) -> list[Session]:
         """Full-text search over session titles."""

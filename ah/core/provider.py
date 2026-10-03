@@ -139,15 +139,15 @@ def _validate_messages(messages: list[dict[str, str]]) -> None:
         if "role" not in msg:
             raise ValidationError(f"Message at index {i} missing 'role' field")
         if "content" not in msg:
-            raise ValueError(f"Message at index {i} missing 'content' field")
+            raise ValidationError(f"Message at index {i} missing 'content' field")
 
 
 def _validate_params(temperature: float, max_tokens: int) -> None:
     """Validate LLM call parameters."""
     if not (0.0 <= temperature <= 2.0):
-        raise ValueError(f"temperature must be between 0.0 and 2.0, got {temperature}")
+        raise ValidationError(f"temperature must be between 0.0 and 2.0, got {temperature}")
     if not (1 <= max_tokens <= 32768):
-        raise ValueError(f"max_tokens must be between 1 and 32768, got {max_tokens}")
+        raise ValidationError(f"max_tokens must be between 1 and 32768, got {max_tokens}")
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +197,7 @@ class OpenRouterProvider(LLMProvider):
     def __init__(self, api_key: str | None = None, model: str = "anthropic/claude-3.5-sonnet") -> None:
         self.api_key = api_key or config.get("openrouter_api_key") or ""
         if not self.api_key:
-            raise ValueError("OPENROUTER_API_KEY not set")
+            raise ValidationError("OPENROUTER_API_KEY not set")
         self.model = model
         self._rate_limiter = _get_rate_limiter()
         self.client = httpx.AsyncClient(
@@ -641,4 +641,4 @@ def get_provider(
     elif provider == "ollama":
         return OllamaProvider(model=model or "llama3.1")
     else:
-        raise ValueError(f"Unknown provider: {provider}")
+        raise ValidationError(f"Unknown provider: {provider}")

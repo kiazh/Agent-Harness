@@ -254,10 +254,8 @@ class MemoryStore:
             session_id,
         )
         # Parse "DELETE N" format
-        try:
-            return int(result.split()[-1])
-        except (ValueError, IndexError):
-            return 0
+        from ah.db.connection import parse_command_count
+        return parse_command_count(result)
 
     async def evict_weak_memories(
         self,
@@ -313,10 +311,8 @@ class MemoryStore:
                     """,
                     count - max_memories,
                 )
-            try:
-                return int(result.split()[-1])
-            except (ValueError, IndexError):
-                return 0
+            from ah.db.connection import parse_command_count
+            return parse_command_count(result)
         else:
             # Evict by importance threshold
             if agent_id:
@@ -330,10 +326,8 @@ class MemoryStore:
                     "DELETE FROM memories WHERE importance < $1",
                     threshold,
                 )
-            try:
-                return int(result.split()[-1])
-            except (ValueError, IndexError):
-                return 0
+            from ah.db.connection import parse_command_count
+            return parse_command_count(result)
 
     async def get_weak_memories(
         self,

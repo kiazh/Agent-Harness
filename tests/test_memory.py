@@ -605,7 +605,7 @@ class TestMemoryRetriever:
         # Patch db for keyword search
         mock_db = AsyncMock()
         mock_db.fetch = AsyncMock(return_value=[])
-        with patch("ah.db.connection.db", mock_db):
+        with patch("ah.memory.retriever.db", mock_db):
             results = await retriever.retrieve("Python")
         assert isinstance(results, list)
 
@@ -630,7 +630,7 @@ class TestMemoryRetriever:
 
         mock_db = AsyncMock()
         mock_db.fetch = AsyncMock(return_value=[])
-        with patch("ah.db.connection.db", mock_db):
+        with patch("ah.memory.retriever.db", mock_db):
             results = await retriever.retrieve("nonexistent")
         assert isinstance(results, list)
 
@@ -645,7 +645,7 @@ class TestMemoryRetriever:
 
         mock_db = AsyncMock()
         mock_db.fetch = AsyncMock(return_value=[])
-        with patch("ah.db.connection.db", mock_db):
+        with patch("ah.memory.retriever.db", mock_db):
             results = await retriever.retrieve("test", agent_id="harness")
         assert isinstance(results, list)
 
@@ -660,7 +660,7 @@ class TestMemoryRetriever:
 
         mock_db = AsyncMock()
         mock_db.fetch = AsyncMock(return_value=[])
-        with patch("ah.db.connection.db", mock_db):
+        with patch("ah.memory.retriever.db", mock_db):
             results = await retriever.retrieve("test", category="preference")
         assert isinstance(results, list)
 
@@ -676,7 +676,7 @@ class TestMemoryRetriever:
 
         mock_db = AsyncMock()
         mock_db.fetch = AsyncMock(return_value=[])
-        with patch("ah.db.connection.db", mock_db):
+        with patch("ah.memory.retriever.db", mock_db):
             await retriever.retrieve("test")
         # update_access may or may not be called depending on implementation
         assert isinstance(mock_store.update_access, AsyncMock)
@@ -697,7 +697,7 @@ class TestMemoryRetriever:
 
         mock_db = AsyncMock()
         mock_db.fetch = AsyncMock(return_value=[])
-        with patch("ah.db.connection.db", mock_db):
+        with patch("ah.memory.retriever.db", mock_db):
             results = await retriever.retrieve(
                 "test",
                 query_embedding=[0.1] * 1536,

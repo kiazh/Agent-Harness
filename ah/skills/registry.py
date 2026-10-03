@@ -26,8 +26,6 @@ class Skill:
     version: str = "1.0.0"
     enabled: bool = True
     usage_count: int = 0
-    # Telemetry fields
-    use_count: int = 0
     view_count: int = 0
     last_activity_at: datetime | None = None
     # Provenance fields
@@ -168,7 +166,6 @@ class SkillRegistry:
         """Record that a skill was used (triggered and content injected)."""
         skill = self._skills.get(name)
         if skill:
-            skill.use_count += 1
             skill.usage_count += 1
             skill.last_activity_at = datetime.utcnow()
 
@@ -186,9 +183,8 @@ class SkillRegistry:
             return None
         return {
             "name": skill.name,
-            "use_count": skill.use_count,
-            "view_count": skill.view_count,
             "usage_count": skill.usage_count,
+            "view_count": skill.view_count,
             "last_activity_at": skill.last_activity_at.isoformat() if skill.last_activity_at else None,
             "source": skill.source,
             "source_type": skill.source_type,
@@ -358,12 +354,12 @@ class SkillCurator:
 
     def get_unused_skills(self) -> list[Skill]:
         """Get skills that have never been used."""
-        return [s for s in self.registry.list_skills() if s.use_count == 0]
+        return [s for s in self.registry.list_skills() if s.usage_count == 0]
 
     def get_top_skills(self, limit: int = 10) -> list[Skill]:
         """Get most frequently used skills."""
         skills = self.registry.list_skills()
-        return sorted(skills, key=lambda s: s.use_count, reverse=True)[:limit]
+        return sorted(skills, key=lambda s: s.usage_count, reverse=True)[:limit]
 
     def cleanup_unused(self, dry_run: bool = True) -> list[str]:
         """Remove skills that have never been used. Returns list of removed skill names."""
@@ -381,8 +377,8 @@ class SkillCurator:
         total = len(skills)
         enabled = sum(1 for s in skills if s.enabled)
         disabled = total - enabled
-        never_used = sum(1 for s in skills if s.use_count == 0)
-        total_uses = sum(s.use_count for s in skills)
+        never_used = sum(1 for s in skills if s.usage_count == 0)
+        total_uses = sum(s.usage_count for s in skills)
         total_views = sum(s.view_count for s in skills)
         stale = len(self.get_stale_skills())
 
@@ -395,7 +391,7 @@ class SkillCurator:
             "total_views": total_views,
             "stale_skills": stale,
             "top_skills": [
-                {"name": s.name, "use_count": s.use_count}
+                {"name": s.name, "usage_count": s.usage_count}
                 for s in self.get_top_skills(5)
             ],
         }
@@ -424,7 +420,7 @@ class SkillHub:
             "author": author,
             "tags": tags or [],
             "published_at": datetime.utcnow().isoformat(),
-            "use_count": skill.use_count,
+            "usage_count": skill.usage_count,
             "view_count": skill.view_count,
         }
 

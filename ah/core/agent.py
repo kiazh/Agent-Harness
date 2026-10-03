@@ -402,6 +402,159 @@ class BaseReActAgent:
                 "tool_call_id": tc.get("id", ""),
             })
 
+
+    async def _execute_tool_calls_stream(
+        self,
+        response: LLMResponse,
+        messages: list[dict[str, Any]],
+        tool_calls_made: list[dict[str, Any]],
+        session_id: uuid.UUID,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Execute tool calls from an LLM response with streaming events.
+
+        Like _execute_tool_calls but yields StreamEvent objects for real-time
+        UI updates. Modifies messages and tool_calls_made in place.
+
+        Args:
+            response: The LLM response containing tool calls.
+            messages: The message list to update with tool results.
+            tool_calls_made: The list to append executed tool calls to.
+            session_id: The session ID for context storage.
+
+        Yields:
+            StreamEvent objects for tool_call and tool_result events.
+        """
+        for tc in response.tool_calls:
+            # Handle missing tool name gracefully
+            function_data = tc.get("function", {})
+            tool_name = function_data.get("name")
+            if not tool_name:
+                logger.warning("Tool call missing 'name' field: %s", tc)
+                audit_log(
+                    "tool_call_invalid",
+                    session_id=str(session_id),
+                    error="missing_name",
+                    raw_call=str(tc),
+                )
+                error_msg = "Error: tool call missing 'name' field"
+                messages.append({
+                    "role": "assistant",
+                    "content": response.content,
+                    "tool_calls": [tc],
+                })
+                messages.append({
+                    "role": "tool",
+                    "content": error_msg,
+                    "tool_call_id": tc.get("id", ""),
+                })
+                continue
+
+            # Parse tool arguments with JSONDecodeError handling
+            try:
+                tool_args = json.loads(function_data.get("arguments", "{}"))
+            except json.JSONDecodeError as e:
+                logger.error(
+                    "Failed to parse tool arguments for '%s': %s (raw: %s)",
+                    tool_name,
+                    e,
+                    function_data.get("arguments", ""),
+                )
+                audit_log(
+                    "tool_call_invalid_args",
+                    session_id=str(session_id),
+                    tool_name=tool_name,
+                    error=str(e),
+                    raw_args=function_data.get("arguments", ""),
+                )
+                error_msg = f"Error: invalid JSON in tool arguments: {e}"
+                messages.append({
+                    "role": "assistant",
+                    "content": response.content,
+                    "tool_calls": [tc],
+                })
+                messages.append({
+                    "role": "tool",
+                    "content": error_msg,
+                    "tool_call_id": tc.get("id", ""),
+                })
+                continue
+
+            yield StreamEvent(
+                type="tool_call",
+                tool_name=tool_name,
+                tool_args=tool_args,
+            )
+
+            # Audit log: tool execution start
+            audit_log(
+                "tool_call_start",
+                session_id=str(session_id),
+                tool_name=tool_name,
+                tool_args=tool_args,
+            )
+
+            tool_start_time = time.monotonic()
+            try:
+                result = await registry.execute(tool_name, **tool_args)
+            except Exception as e:
+                logger.exception("Tool execution failed for '%s'", tool_name)
+                audit_log(
+                    "tool_call_error",
+                    session_id=str(session_id),
+                    tool_name=tool_name,
+                    error=str(e),
+                    duration_ms=int((time.monotonic() - tool_start_time) * 1000),
+                )
+                result = f"Error: {e}"
+
+            tool_duration_ms = int((time.monotonic() - tool_start_time) * 1000)
+            audit_log(
+                "tool_call_complete",
+                session_id=str(session_id),
+                tool_name=tool_name,
+                duration_ms=tool_duration_ms,
+                result_preview=str(result)[:200],
+            )
+
+            result_str = str(result)
+
+            yield StreamEvent(
+                type="tool_result",
+                tool_name=tool_name,
+                tool_result=result_str,
+            )
+
+            # Store tool call and result in context
+            await context_manager.add_chunk(
+                session_id=session_id,
+                agent_id=self.agent_id,
+                chunk_type="tool_call",
+                payload={
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "result_preview": result_str[:500],
+                },
+                token_count=len(result_str) // 4,
+            )
+
+            tool_calls_made.append({
+                "tool": tool_name,
+                "args": tool_args,
+                "result_preview": result_str[:200],
+            })
+
+            # Add tool result to messages for next iteration
+            messages.append({
+                "role": "assistant",
+                "content": response.content,
+                "tool_calls": [tc],
+            })
+            messages.append({
+                "role": "tool",
+                "content": result_str[:1000],
+                "tool_call_id": tc.get("id", ""),
+            })
+
     def _schedule_memory_consolidation(self, session_id: uuid.UUID) -> None:
         """Schedule memory consolidation as a background task.
 
@@ -461,18 +614,19 @@ class ReActAgent(BaseReActAgent):
             if verbose:
                 console.print(f"[dim]Iteration {iteration + 1}/{self.max_iterations}[/dim]")
 
-            # Check token budget before calling LLM
-            if total_tokens >= MAX_TOKEN_BUDGET:
+            # Check token budget before calling LLM (use session.context_budget)
+            effective_budget = min(session.context_budget, MAX_TOKEN_BUDGET)
+            if total_tokens >= effective_budget:
                 logger.warning(
                     "Token budget exceeded (%d >= %d) — stopping agent loop",
                     total_tokens,
-                    MAX_TOKEN_BUDGET,
+                    effective_budget,
                 )
                 audit_log(
                     "agent_run_budget_exceeded",
                     session_id=str(session_id),
                     total_tokens=total_tokens,
-                    max_budget=MAX_TOKEN_BUDGET,
+                    max_budget=effective_budget,
                 )
                 # Consolidate memories before returning
                 self._schedule_memory_consolidation(session_id)
@@ -698,136 +852,10 @@ class ReActAgent(BaseReActAgent):
                 return
 
             # Execute tool calls with streaming events
-            for tc in response.tool_calls:
-                # Handle missing tool name gracefully
-                function_data = tc.get("function", {})
-                tool_name = function_data.get("name")
-                if not tool_name:
-                    logger.warning("Tool call missing 'name' field: %s", tc)
-                    audit_log(
-                        "tool_call_invalid",
-                        session_id=str(session_id),
-                        error="missing_name",
-                        raw_call=str(tc),
-                    )
-                    error_msg = "Error: tool call missing 'name' field"
-                    messages.append({
-                        "role": "assistant",
-                        "content": response.content,
-                        "tool_calls": [tc],
-                    })
-                    messages.append({
-                        "role": "tool",
-                        "content": error_msg,
-                        "tool_call_id": tc.get("id", ""),
-                    })
-                    continue
-
-                # Parse tool arguments with JSONDecodeError handling
-                try:
-                    tool_args = json.loads(function_data.get("arguments", "{}"))
-                except json.JSONDecodeError as e:
-                    logger.error(
-                        "Failed to parse tool arguments for '%s': %s (raw: %s)",
-                        tool_name,
-                        e,
-                        function_data.get("arguments", ""),
-                    )
-                    audit_log(
-                        "tool_call_invalid_args",
-                        session_id=str(session_id),
-                        tool_name=tool_name,
-                        error=str(e),
-                        raw_args=function_data.get("arguments", ""),
-                    )
-                    error_msg = f"Error: invalid JSON in tool arguments: {e}"
-                    messages.append({
-                        "role": "assistant",
-                        "content": response.content,
-                        "tool_calls": [tc],
-                    })
-                    messages.append({
-                        "role": "tool",
-                        "content": error_msg,
-                        "tool_call_id": tc.get("id", ""),
-                    })
-                    continue
-
-                yield StreamEvent(
-                    type="tool_call",
-                    tool_name=tool_name,
-                    tool_args=tool_args,
-                )
-
-                # Audit log: tool execution start
-                audit_log(
-                    "tool_call_start",
-                    session_id=str(session_id),
-                    tool_name=tool_name,
-                    tool_args=tool_args,
-                )
-
-                tool_start_time = time.monotonic()
-                try:
-                    result = await registry.execute(tool_name, **tool_args)
-                except Exception as e:
-                    logger.exception("Tool execution failed for '%s'", tool_name)
-                    audit_log(
-                        "tool_call_error",
-                        session_id=str(session_id),
-                        tool_name=tool_name,
-                        error=str(e),
-                        duration_ms=int((time.monotonic() - tool_start_time) * 1000),
-                    )
-                    result = f"Error: {e}"
-
-                tool_duration_ms = int((time.monotonic() - tool_start_time) * 1000)
-                audit_log(
-                    "tool_call_complete",
-                    session_id=str(session_id),
-                    tool_name=tool_name,
-                    duration_ms=tool_duration_ms,
-                    result_preview=str(result)[:200],
-                )
-
-                result_str = str(result)
-
-                yield StreamEvent(
-                    type="tool_result",
-                    tool_name=tool_name,
-                    tool_result=result_str,
-                )
-
-                # Store tool call and result in context
-                await context_manager.add_chunk(
-                    session_id=session_id,
-                    agent_id=self.agent_id,
-                    chunk_type="tool_call",
-                    payload={
-                        "tool": tool_name,
-                        "args": tool_args,
-                        "result_preview": result_str[:500],
-                    },
-                    token_count=len(result_str) // 4,
-                )
-
-                tool_calls_made.append({
-                    "tool": tool_name,
-                    "args": tool_args,
-                    "result_preview": result_str[:200],
-                })
-
-                # Add tool result to messages for next iteration
-                messages.append({
-                    "role": "assistant",
-                    "content": response.content,
-                    "tool_calls": [tc],
-                })
-                messages.append({
-                    "role": "tool",
-                    "content": result_str[:1000],
-                    "tool_call_id": tc.get("id", ""),
-                })
+            async for event in self._execute_tool_calls_stream(
+                response, messages, tool_calls_made, session_id
+            ):
+                yield event
 
         # Max iterations reached
         audit_log(

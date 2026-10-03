@@ -250,7 +250,8 @@ class ContextManager:
             "DELETE FROM context_chunks WHERE session_id = $1",
             session_id,
         )
-        return int(result.split()[-1]) if result else 0
+        from ah.db.connection import parse_command_count
+        return parse_command_count(result)
 
     async def get_token_usage(self, session_id: uuid.UUID) -> int:
         """Get total token count for a session."""
@@ -324,11 +325,10 @@ class ContextManager:
         chunks_freed = 0
 
         for row in evictable:
-            if (max_tokens is not None and tokens_freed >= tokens_to_evict) and                (max_chunks is not None and chunks_freed >= chunks_to_evict):
-                break
-            if max_tokens is not None and tokens_freed >= tokens_to_evict and max_chunks is None:
-                break
-            if max_chunks is not None and chunks_freed >= chunks_to_evict and max_tokens is None:
+            # Stop when all active eviction targets are met
+            tokens_done = max_tokens is None or tokens_freed >= tokens_to_evict
+            chunks_done = max_chunks is None or chunks_freed >= chunks_to_evict
+            if tokens_done and chunks_done:
                 break
 
             # Evict this chunk
