@@ -8,6 +8,7 @@ Covers:
 5. Dead code removal (fetchval_cached, execute_prepared, fetch_prepared)
 6. Naming consistency (usage_count, not use_count)
 """
+
 import inspect
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -25,6 +26,7 @@ from ah.skills.registry import Skill, SkillCurator, SkillHub, SkillRegistry
 # ============================================================================
 # 1. TTLCache Docstring Fix
 # ============================================================================
+
 
 class TestTTLCacheDocstring:
     """Verify TTLCache docstring matches actual TTL value."""
@@ -54,6 +56,7 @@ class TestTTLCacheDocstring:
 # 2. Redundant Eviction Logic
 # ============================================================================
 
+
 class TestEvictionLogic:
     """Verify eviction logic works correctly after simplification."""
 
@@ -74,8 +77,10 @@ class TestEvictionLogic:
         """No eviction when within limits."""
         session_id = uuid.uuid4()
         # Mock db calls
-        with patch.object(context_manager, 'get_token_usage', new_callable=AsyncMock, return_value=100):
-            with patch('ah.core.context.db') as mock_db:
+        with patch.object(
+            context_manager, "get_token_usage", new_callable=AsyncMock, return_value=100
+        ):
+            with patch("ah.core.context.db") as mock_db:
                 mock_db.fetchval = AsyncMock(return_value=5)
                 mock_db.fetch = AsyncMock(return_value=[])
                 result = await context_manager.evict_old_chunks(
@@ -89,21 +94,83 @@ class TestEvictionLogic:
         session_id = uuid.uuid4()
         # Create mock rows for eviction
         mock_rows = [
-            {"id": uuid.uuid4(), "token_count": 100, "chunk_type": "text", "created_at": "2024-01-01"},
-            {"id": uuid.uuid4(), "token_count": 100, "chunk_type": "text", "created_at": "2024-01-02"},
-            {"id": uuid.uuid4(), "token_count": 100, "chunk_type": "text", "created_at": "2024-01-03"},
-            {"id": uuid.uuid4(), "token_count": 100, "chunk_type": "text", "created_at": "2024-01-04"},
-            {"id": uuid.uuid4(), "token_count": 100, "chunk_type": "text", "created_at": "2024-01-05"},
-            {"id": uuid.uuid4(), "token_count": 100, "chunk_type": "text", "created_at": "2024-01-06"},
-            {"id": uuid.uuid4(), "token_count": 100, "chunk_type": "text", "created_at": "2024-01-07"},
-            {"id": uuid.uuid4(), "token_count": 100, "chunk_type": "text", "created_at": "2024-01-08"},
-            {"id": uuid.uuid4(), "token_count": 100, "chunk_type": "text", "created_at": "2024-01-09"},
-            {"id": uuid.uuid4(), "token_count": 100, "chunk_type": "text", "created_at": "2024-01-10"},
-            {"id": uuid.uuid4(), "token_count": 100, "chunk_type": "text", "created_at": "2024-01-11"},
-            {"id": uuid.uuid4(), "token_count": 100, "chunk_type": "text", "created_at": "2024-01-12"},
+            {
+                "id": uuid.uuid4(),
+                "token_count": 100,
+                "chunk_type": "text",
+                "created_at": "2024-01-01",
+            },
+            {
+                "id": uuid.uuid4(),
+                "token_count": 100,
+                "chunk_type": "text",
+                "created_at": "2024-01-02",
+            },
+            {
+                "id": uuid.uuid4(),
+                "token_count": 100,
+                "chunk_type": "text",
+                "created_at": "2024-01-03",
+            },
+            {
+                "id": uuid.uuid4(),
+                "token_count": 100,
+                "chunk_type": "text",
+                "created_at": "2024-01-04",
+            },
+            {
+                "id": uuid.uuid4(),
+                "token_count": 100,
+                "chunk_type": "text",
+                "created_at": "2024-01-05",
+            },
+            {
+                "id": uuid.uuid4(),
+                "token_count": 100,
+                "chunk_type": "text",
+                "created_at": "2024-01-06",
+            },
+            {
+                "id": uuid.uuid4(),
+                "token_count": 100,
+                "chunk_type": "text",
+                "created_at": "2024-01-07",
+            },
+            {
+                "id": uuid.uuid4(),
+                "token_count": 100,
+                "chunk_type": "text",
+                "created_at": "2024-01-08",
+            },
+            {
+                "id": uuid.uuid4(),
+                "token_count": 100,
+                "chunk_type": "text",
+                "created_at": "2024-01-09",
+            },
+            {
+                "id": uuid.uuid4(),
+                "token_count": 100,
+                "chunk_type": "text",
+                "created_at": "2024-01-10",
+            },
+            {
+                "id": uuid.uuid4(),
+                "token_count": 100,
+                "chunk_type": "text",
+                "created_at": "2024-01-11",
+            },
+            {
+                "id": uuid.uuid4(),
+                "token_count": 100,
+                "chunk_type": "text",
+                "created_at": "2024-01-12",
+            },
         ]
-        with patch.object(context_manager, 'get_token_usage', new_callable=AsyncMock, return_value=1200):
-            with patch('ah.core.context.db') as mock_db:
+        with patch.object(
+            context_manager, "get_token_usage", new_callable=AsyncMock, return_value=1200
+        ):
+            with patch("ah.core.context.db") as mock_db:
                 mock_db.fetchval = AsyncMock(return_value=12)
                 mock_db.fetch = AsyncMock(return_value=mock_rows)
                 mock_db.execute = AsyncMock(return_value="DELETE 1")
@@ -117,11 +184,18 @@ class TestEvictionLogic:
         """Eviction occurs when over chunk limit."""
         session_id = uuid.uuid4()
         mock_rows = [
-            {"id": uuid.uuid4(), "token_count": 10, "chunk_type": "text", "created_at": f"2024-01-{i:02d}"}
+            {
+                "id": uuid.uuid4(),
+                "token_count": 10,
+                "chunk_type": "text",
+                "created_at": f"2024-01-{i:02d}",
+            }
             for i in range(1, 16)
         ]
-        with patch.object(context_manager, 'get_token_usage', new_callable=AsyncMock, return_value=150):
-            with patch('ah.core.context.db') as mock_db:
+        with patch.object(
+            context_manager, "get_token_usage", new_callable=AsyncMock, return_value=150
+        ):
+            with patch("ah.core.context.db") as mock_db:
                 mock_db.fetchval = AsyncMock(return_value=15)
                 mock_db.fetch = AsyncMock(return_value=mock_rows)
                 mock_db.execute = AsyncMock(return_value="DELETE 1")
@@ -136,11 +210,18 @@ class TestEvictionLogic:
         session_id = uuid.uuid4()
         # 15 chunks, should preserve last 10, evict from first 5
         mock_rows = [
-            {"id": uuid.uuid4(), "token_count": 100, "chunk_type": "text", "created_at": f"2024-01-{i:02d}"}
+            {
+                "id": uuid.uuid4(),
+                "token_count": 100,
+                "chunk_type": "text",
+                "created_at": f"2024-01-{i:02d}",
+            }
             for i in range(1, 16)
         ]
-        with patch.object(context_manager, 'get_token_usage', new_callable=AsyncMock, return_value=1500):
-            with patch('ah.core.context.db') as mock_db:
+        with patch.object(
+            context_manager, "get_token_usage", new_callable=AsyncMock, return_value=1500
+        ):
+            with patch("ah.core.context.db") as mock_db:
                 mock_db.fetchval = AsyncMock(return_value=15)
                 mock_db.fetch = AsyncMock(return_value=mock_rows)
                 mock_db.execute = AsyncMock(return_value="DELETE 1")
@@ -154,6 +235,7 @@ class TestEvictionLogic:
 # ============================================================================
 # 3. Exception Type Consistency
 # ============================================================================
+
 
 class TestExceptionTypes:
     """Verify ValueError is used for input validation, not ValidationError."""
@@ -218,12 +300,14 @@ class TestExceptionTypes:
 # 4. Circular Import Fix
 # ============================================================================
 
+
 class TestCircularImport:
     """Verify retriever module imports work correctly."""
 
     def test_retriever_imports_db_at_module_level(self):
         """MemoryRetriever should import db at module level, not in method."""
         import ah.memory.retriever as retriever_module
+
         source = inspect.getsource(retriever_module)
         # The import should be at the top of the file, not inside a method
         assert "from ah.db.connection import db" in source
@@ -242,7 +326,7 @@ class TestCircularImport:
     def test_retriever_has_keyword_search_method(self):
         """MemoryRetriever should have _keyword_search method."""
         retriever = MemoryRetriever()
-        assert hasattr(retriever, '_keyword_search')
+        assert hasattr(retriever, "_keyword_search")
         assert callable(retriever._keyword_search)
 
 
@@ -250,44 +334,58 @@ class TestCircularImport:
 # 5. Dead Code Removal
 # ============================================================================
 
+
 class TestDeadCodeRemoval:
     """Verify dead code methods have been removed from Database."""
 
     def test_fetchval_cached_removed(self):
         """fetchval_cached should not exist on Database."""
-        assert not hasattr(Database, 'fetchval_cached')
+        assert not hasattr(Database, "fetchval_cached")
 
     def test_execute_prepared_removed(self):
         """execute_prepared should not exist on Database."""
-        assert not hasattr(Database, 'execute_prepared')
+        assert not hasattr(Database, "execute_prepared")
 
     def test_fetch_prepared_removed(self):
         """fetch_prepared should not exist on Database."""
-        assert not hasattr(Database, 'fetch_prepared')
+        assert not hasattr(Database, "fetch_prepared")
 
     def test_database_still_has_core_methods(self):
         """Core database methods should still exist."""
-        assert hasattr(Database, 'execute')
-        assert hasattr(Database, 'fetch')
-        assert hasattr(Database, 'fetchrow')
-        assert hasattr(Database, 'fetchval')
-        assert hasattr(Database, 'connect')
-        assert hasattr(Database, 'close')
+        assert hasattr(Database, "execute")
+        assert hasattr(Database, "fetch")
+        assert hasattr(Database, "fetchrow")
+        assert hasattr(Database, "fetchval")
+        assert hasattr(Database, "connect")
+        assert hasattr(Database, "close")
 
     def test_database_method_count(self):
         """Database should have exactly the expected public methods."""
         # Get all public methods (not starting with _)
         public_methods = [
-            name for name in dir(Database)
-            if not name.startswith('_') and callable(getattr(Database, name))
+            name
+            for name in dir(Database)
+            if not name.startswith("_") and callable(getattr(Database, name))
         ]
-        expected = {'connect', 'close', 'execute', 'executemany', 'fetch', 'fetchrow', 'fetchval', 'initialize_schema', 'reset', 'acquire'}
+        expected = {
+            "connect",
+            "close",
+            "execute",
+            "executemany",
+            "fetch",
+            "fetchrow",
+            "fetchval",
+            "initialize_schema",
+            "reset",
+            "acquire",
+        }
         assert set(public_methods) == expected
 
 
 # ============================================================================
 # 6. Naming Consistency (usage_count)
 # ============================================================================
+
 
 class TestNamingConsistency:
     """Verify usage_count is used consistently, not use_count."""
@@ -301,7 +399,7 @@ class TestNamingConsistency:
             content="test content",
             file_path="/tmp/test.md",
         )
-        assert hasattr(skill, 'usage_count')
+        assert hasattr(skill, "usage_count")
         assert skill.usage_count == 0
 
     def test_skill_does_not_have_use_count_field(self):
@@ -313,7 +411,7 @@ class TestNamingConsistency:
             content="test content",
             file_path="/tmp/test.md",
         )
-        assert not hasattr(skill, 'use_count')
+        assert not hasattr(skill, "use_count")
 
     def test_record_use_increments_usage_count(self):
         """record_use should increment usage_count."""
@@ -341,7 +439,7 @@ class TestNamingConsistency:
         )
         registry.record_use("test")
         skill = registry.get("test")
-        assert not hasattr(skill, 'use_count')
+        assert not hasattr(skill, "use_count")
 
     def test_get_telemetry_returns_usage_count(self):
         """get_telemetry should return usage_count, not use_count."""

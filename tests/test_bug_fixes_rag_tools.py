@@ -6,6 +6,7 @@ hex instead of readable text. Fix: remove the broken fallback entirely.
 Bug 13: 'cd' in ALLOWED_COMMANDS fails because it's a shell builtin and can't
 work with shell=False. Fix: remove 'cd' from the allowlist.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -36,9 +37,7 @@ class TestBug12Bm25ILikeFallback:
         empty results instead of attempting the broken ILIKE fallback."""
         mock_db = AsyncMock()
         # First call (FTS) raises UndefinedColumnError
-        mock_db.fetch = AsyncMock(
-            side_effect=asyncpg.UndefinedColumnError("column does not exist")
-        )
+        mock_db.fetch = AsyncMock(side_effect=asyncpg.UndefinedColumnError("column does not exist"))
 
         results = await searcher._bm25_search(
             session_id=uuid.uuid4(),
@@ -124,7 +123,22 @@ class TestBug13CdNotInAllowlist:
 
     def test_other_commands_still_present(self):
         """Other common commands should still be in the allowlist."""
-        expected = {"git", "ls", "cat", "grep", "find", "pytest", "echo", "pwd", "mkdir", "touch", "head", "tail", "wc", "diff"}
+        expected = {
+            "git",
+            "ls",
+            "cat",
+            "grep",
+            "find",
+            "pytest",
+            "echo",
+            "pwd",
+            "mkdir",
+            "touch",
+            "head",
+            "tail",
+            "wc",
+            "diff",
+        }
         assert expected.issubset(ALLOWED_COMMANDS)
 
     async def test_cd_command_rejected(self):

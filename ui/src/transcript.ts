@@ -5,7 +5,7 @@
 
 import type { Component, Container } from "@earendil-works/pi-tui";
 import { AssistantMessage, Notice, ToolCard, UserMessage } from "./components.ts";
-import type { NoticeKind } from "./features.ts";
+import type { NoticeKind } from "./features/index.ts";
 import type { GatewayEvent, HistoryEntry } from "./protocol.ts";
 
 export interface TurnSummary {

@@ -1,4 +1,5 @@
 """Tests for the JSON-RPC gateway (ah.gateway)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -30,10 +31,16 @@ needs_db = pytest.mark.skipif(not TEST_DSN, reason="AGENT_HARNESS_TEST_DATABASE_
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
 
+
 class FakeAgent:
     """Stands in for ReActAgent: replays scripted stream events."""
 
-    def __init__(self, events: list[StreamEvent], gate: asyncio.Event | None = None, error: Exception | None = None):
+    def __init__(
+        self,
+        events: list[StreamEvent],
+        gate: asyncio.Event | None = None,
+        error: Exception | None = None,
+    ):
         self.events = events
         self.gate = gate
         self.error = error
@@ -54,9 +61,15 @@ def scripted_turn() -> list[StreamEvent]:
         StreamEvent(type="tool_result", tool_name="read_file", tool_result="print('hi')"),
         StreamEvent(type="token_usage", tokens_used=42),
         StreamEvent(type="text", content="done."),
-        StreamEvent(type="done", response=AgentResponse(
-            content="Looking done.", tool_calls=[{"tool": "read_file"}], tokens_used=42, iterations=2,
-        )),
+        StreamEvent(
+            type="done",
+            response=AgentResponse(
+                content="Looking done.",
+                tool_calls=[{"tool": "read_file"}],
+                tokens_used=42,
+                iterations=2,
+            ),
+        ),
     ]
 
 
@@ -81,8 +94,10 @@ class Harness:
 
     def events(self, event_type: str | None = None) -> list[dict]:
         return [
-            f["params"] for f in self.frames
-            if f.get("method") == "event" and (event_type is None or f["params"]["type"] == event_type)
+            f["params"]
+            for f in self.frames
+            if f.get("method") == "event"
+            and (event_type is None or f["params"]["type"] == event_type)
         ]
 
     async def wait_for(self, event_type: str, timeout: float = 5.0) -> dict:
@@ -97,6 +112,7 @@ class Harness:
 
 # ─── protocol errors (no database needed) ─────────────────────────────────────
 
+
 class TestProtocolErrors:
     async def test_parse_error(self):
         h = Harness()
@@ -106,7 +122,9 @@ class TestProtocolErrors:
 
     async def test_invalid_request(self):
         h = Harness()
-        await h.gateway.handle_line(json.dumps({"id": 1, "method": "initialize"}))  # no jsonrpc field
+        await h.gateway.handle_line(
+            json.dumps({"id": 1, "method": "initialize"})
+        )  # no jsonrpc field
         assert h.frames[-1]["error"]["code"] == INVALID_REQUEST
 
     async def test_unknown_method(self):
@@ -116,7 +134,9 @@ class TestProtocolErrors:
 
     async def test_params_must_be_object(self):
         h = Harness()
-        await h.gateway.handle_line(json.dumps({"jsonrpc": "2.0", "id": 7, "method": "session.list", "params": [1]}))
+        await h.gateway.handle_line(
+            json.dumps({"jsonrpc": "2.0", "id": 7, "method": "session.list", "params": [1]})
+        )
         assert h.frames[-1]["error"]["code"] == INVALID_PARAMS
 
     async def test_session_methods_require_initialize(self):
@@ -126,8 +146,12 @@ class TestProtocolErrors:
 
     async def test_config_set_validates(self):
         h = Harness()
-        assert (await h.call("config.set", {"key": "provider", "value": "nope"}))["error"]["code"] == INVALID_PARAMS
-        assert (await h.call("config.set", {"key": "no_such_key", "value": "x"}))["error"]["code"] == INVALID_PARAMS
+        assert (await h.call("config.set", {"key": "provider", "value": "nope"}))["error"][
+            "code"
+        ] == INVALID_PARAMS
+        assert (await h.call("config.set", {"key": "no_such_key", "value": "x"}))["error"][
+            "code"
+        ] == INVALID_PARAMS
         secret = await h.call("config.set", {"key": "openrouter_api_key", "value": "sk-x"})
         assert secret["error"]["code"] == INVALID_PARAMS
         bad_type = await h.call("config.set", {"key": "context_budget", "value": "lots"})
@@ -152,7 +176,9 @@ def test_history_from_chunks_is_chronological():
     sid = uuid.uuid4()
 
     def chunk(kind, payload):
-        return ContextChunk(id=uuid.uuid4(), session_id=sid, agent_id="h", chunk_type=kind, payload=payload)
+        return ContextChunk(
+            id=uuid.uuid4(), session_id=sid, agent_id="h", chunk_type=kind, payload=payload
+        )
 
     newest_first = [
         chunk("assistant_message", {"content": "answer"}),
@@ -169,6 +195,7 @@ def test_history_from_chunks_is_chronological():
 
 # ─── sessions and turns (real test database) ──────────────────────────────────
 
+
 @needs_db
 class TestSessionsAndTurns:
     async def test_initialize_and_session_lifecycle(self):
@@ -178,7 +205,9 @@ class TestSessionsAndTurns:
             assert init["result"]["model"] == "test/model"
             assert init["result"]["version"]
 
-            created = (await h.call("session.create", {"title": "gateway test"}))["result"]["session"]
+            created = (await h.call("session.create", {"title": "gateway test"}))["result"][
+                "session"
+            ]
             assert created["title"] == "gateway test"
             assert created["model"] == "test/model"
 
@@ -207,17 +236,28 @@ class TestSessionsAndTurns:
         try:
             await h.call("initialize")
             sid = (await h.call("session.create"))["result"]["session"]["id"]
-            turn_id = (await h.call("prompt.submit", {"sessionId": sid, "text": "read a.py"}))["result"]["turnId"]
+            turn_id = (await h.call("prompt.submit", {"sessionId": sid, "text": "read a.py"}))[
+                "result"
+            ]["turnId"]
 
             complete = await h.wait_for("message.complete")
             assert complete["text"] == "Looking done."
-            assert complete["tokens"] == 42 and complete["iterations"] == 2 and complete["toolCalls"] == 1
+            assert (
+                complete["tokens"] == 42
+                and complete["iterations"] == 2
+                and complete["toolCalls"] == 1
+            )
             assert complete["cancelled"] is False
 
             types = [e["type"] for e in h.events()]
             assert types == [
-                "message.start", "message.delta", "tool.start", "tool.complete",
-                "usage", "message.delta", "message.complete",
+                "message.start",
+                "message.delta",
+                "tool.start",
+                "tool.complete",
+                "usage",
+                "message.delta",
+                "message.complete",
             ]
             assert all(e["sessionId"] == sid and e["turnId"] == turn_id for e in h.events())
 
@@ -250,7 +290,9 @@ class TestSessionsAndTurns:
             sid = (await h.call("session.create"))["result"]["session"]["id"]
             await h.call("prompt.submit", {"sessionId": sid, "text": "slow"})
             await asyncio.sleep(0)
-            assert (await h.call("prompt.cancel", {"sessionId": sid}))["result"] == {"cancelled": True}
+            assert (await h.call("prompt.cancel", {"sessionId": sid}))["result"] == {
+                "cancelled": True
+            }
             complete = await h.wait_for("message.complete")
             assert complete["cancelled"] is True
         finally:
@@ -290,7 +332,11 @@ def test_gateway_process_speaks_clean_json_over_stdio():
     proc = subprocess.run(
         [sys.executable, "-m", "ah.gateway"],
         input="".join(json.dumps(r) + "\n" for r in requests),
-        capture_output=True, text=True, encoding="utf-8", env=env, timeout=90,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=90,
         cwd=Path(__file__).resolve().parents[1],
     )
     assert proc.returncode == 0, proc.stderr[-2000:]

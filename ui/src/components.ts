@@ -11,7 +11,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { NoticeKind } from "./features.ts";
+import type { NoticeKind } from "./features/index.ts";
 import { markdownTheme, selectListTheme, theme } from "./theme.ts";
 
 /** A user turn: highlighted block with a marker. */

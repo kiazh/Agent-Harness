@@ -3,6 +3,7 @@
 Bug 7: agents_save doesn't protect all built-in names.
 Bug 8: agents_run parallel mode loses results on failure.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -119,9 +120,7 @@ async def test_run_parallel_returns_results_despite_failure(monkeypatch):
     orch._agent_factory = factory
 
     # Run parallel — one agent fails, two succeed
-    results = await orch.run_parallel(
-        [("researcher", "a"), ("coder", "b"), ("harness", "c")]
-    )
+    results = await orch.run_parallel([("researcher", "a"), ("coder", "b"), ("harness", "c")])
 
     # All three slots must be present (no results lost)
     assert len(results) == 3

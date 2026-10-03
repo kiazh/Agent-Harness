@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { parseCommand } from "../src/commands.ts";
-import { type FeatureHost, type NoticeKind, runCommand } from "../src/features.ts";
+import { type FeatureHost, type NoticeKind, runCommand } from "../src/features/index.ts";
 import { GatewayClient } from "../src/gateway.ts";
 import type { HistoryEntry, InitializeResult, SessionInfo, SessionListResult, SessionResult } from "../src/protocol.ts";
 

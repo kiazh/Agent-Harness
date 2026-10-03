@@ -1,4 +1,5 @@
 """Tests for ah.core.metrics."""
+
 import json
 import logging
 
@@ -27,7 +28,11 @@ def test_token_usage():
     m = MetricsCollector()
     m.record_tokens("s1", 100, 50)
     m.record_tokens("s1", 200, 100)
-    assert m.get_token_usage("s1") == {"prompt_tokens": 300, "completion_tokens": 150, "total_tokens": 450}
+    assert m.get_token_usage("s1") == {
+        "prompt_tokens": 300,
+        "completion_tokens": 150,
+        "total_tokens": 450,
+    }
 
 
 def test_db_and_llm_calls():
@@ -43,7 +48,13 @@ def test_db_and_llm_calls():
 def test_all_metrics_and_reset():
     m = MetricsCollector()
     m.increment_counter("op")
-    assert {"latencies", "counters", "errors", "error_rates", "token_usage"} <= m.get_all_metrics().keys()
+    assert {
+        "latencies",
+        "counters",
+        "errors",
+        "error_rates",
+        "token_usage",
+    } <= m.get_all_metrics().keys()
     m.reset()
     assert m.get_counter("op") == 0
 

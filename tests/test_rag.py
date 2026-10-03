@@ -1,4 +1,5 @@
 """Tests for the RAG pipeline — Embedder, Chunker, RAGPipeline, HybridSearch, etc."""
+
 from __future__ import annotations
 
 import uuid
@@ -25,6 +26,7 @@ from ah.rag.reranker import IdentityReranker, RerankResult
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def sample_text():
@@ -62,6 +64,7 @@ def mock_embedder():
 # ===========================================================================
 # Embedder Tests
 # ===========================================================================
+
 
 class TestEmbedder:
     """Tests for the Embedder interface."""
@@ -175,6 +178,7 @@ class TestEmbedder:
 # ===========================================================================
 # Chunker Tests
 # ===========================================================================
+
 
 class TestChunker:
     """Tests for the RecursiveCharacterTextSplitter."""
@@ -290,6 +294,7 @@ class MyClass:
 # RAGPipeline Tests
 # ===========================================================================
 
+
 class TestRAGPipeline:
     """Tests for the RAGPipeline."""
 
@@ -320,18 +325,23 @@ class TestRAGPipeline:
         test_file.write_text("Test content for indexing", encoding="utf-8")
 
         import msgpack
+
         mock_db = AsyncMock()
-        mock_db.fetchrow = AsyncMock(return_value={
-            "id": uuid.uuid4(),
-            "session_id": uuid.uuid4(),
-            "agent_id": "harness",
-            "chunk_type": "document",
-            "payload_msgpack": msgpack.packb({"text": "Test content", "metadata": {}}, use_bin_type=True),
-            "token_count": 5,
-            "embedding": "[0.1,0.2]",
-            "created_at": datetime.utcnow(),
-            "accessed_at": None,
-        })
+        mock_db.fetchrow = AsyncMock(
+            return_value={
+                "id": uuid.uuid4(),
+                "session_id": uuid.uuid4(),
+                "agent_id": "harness",
+                "chunk_type": "document",
+                "payload_msgpack": msgpack.packb(
+                    {"text": "Test content", "metadata": {}}, use_bin_type=True
+                ),
+                "token_count": 5,
+                "embedding": "[0.1,0.2]",
+                "created_at": datetime.utcnow(),
+                "accessed_at": None,
+            }
+        )
 
         # Patch the loader's base_dir to allow loading from tmp_path
         pipeline._loader._base_dir = tmp_path
@@ -375,6 +385,7 @@ class TestRAGPipeline:
 # ===========================================================================
 # HybridSearch Tests
 # ===========================================================================
+
 
 class TestHybridSearch:
     """Tests for HybridSearch (BM25 + dense + RRF)."""
@@ -427,12 +438,18 @@ class TestHybridSearch:
         from ah.core.models import ContextChunk
 
         chunk1 = ContextChunk(
-            id=uuid.uuid4(), session_id=uuid.uuid4(), agent_id="test",
-            chunk_type="document", payload={},
+            id=uuid.uuid4(),
+            session_id=uuid.uuid4(),
+            agent_id="test",
+            chunk_type="document",
+            payload={},
         )
         chunk2 = ContextChunk(
-            id=uuid.uuid4(), session_id=uuid.uuid4(), agent_id="test",
-            chunk_type="document", payload={},
+            id=uuid.uuid4(),
+            session_id=uuid.uuid4(),
+            agent_id="test",
+            chunk_type="document",
+            payload={},
         )
 
         dense_results = [(chunk1, 0.9), (chunk2, 0.7)]
@@ -454,8 +471,11 @@ class TestHybridSearch:
         from ah.core.models import ContextChunk
 
         chunk = ContextChunk(
-            id=uuid.uuid4(), session_id=uuid.uuid4(), agent_id="test",
-            chunk_type="document", payload={},
+            id=uuid.uuid4(),
+            session_id=uuid.uuid4(),
+            agent_id="test",
+            chunk_type="document",
+            payload={},
         )
         fused = searcher._rrf_fuse([(chunk, 0.9)], [])
         assert len(fused) == 1
@@ -465,6 +485,7 @@ class TestHybridSearch:
 # ===========================================================================
 # Reranker Tests
 # ===========================================================================
+
 
 class TestReranker:
     """Tests for the Reranker."""
@@ -543,6 +564,7 @@ class TestReranker:
 # ===========================================================================
 # FileLoader Tests
 # ===========================================================================
+
 
 class TestFileLoader:
     """Tests for the FileLoader."""
@@ -643,6 +665,7 @@ class TestFileLoader:
 # ===========================================================================
 # RAG Integration Tests
 # ===========================================================================
+
 
 class TestRAGIntegration:
     """Integration tests for the RAG pipeline."""

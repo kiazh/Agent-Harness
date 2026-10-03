@@ -6,6 +6,7 @@ import pytest
 def test_import():
     """Test that all modules import cleanly."""
     import ah
+
     assert ah.__version__ == "0.2.0"
 
 
@@ -95,6 +96,7 @@ async def test_session_crud():
 
     try:
         from ah.db.connection import db
+
         await db.connect()
     except Exception:
         pytest.skip("PostgreSQL not available")

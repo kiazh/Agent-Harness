@@ -111,7 +111,9 @@ class TestOrchestrator:
 
     async def test_delegate_records_message_and_child_session(self, orch):
         parent = await _parent_session()
-        result = await orch.delegate("researcher", "find the latest release", parent_session_id=parent)
+        result = await orch.delegate(
+            "researcher", "find the latest release", parent_session_id=parent
+        )
         assert result.status == "complete"
         assert "handled: find the latest release" in result.response
         assert result.tokens == 11
@@ -138,7 +140,9 @@ class TestOrchestrator:
         from ah.core.orchestrator import Orchestrator
 
         orch = Orchestrator(agent_factory=Recorder)
-        results = await orch.run_sequential([("researcher", "gather facts"), ("coder", "write code")])
+        results = await orch.run_sequential(
+            [("researcher", "gather facts"), ("coder", "write code")]
+        )
         assert len(results) == 2
         assert "## Results so far" in captured[1]  # second step sees the first's output
         assert "## Results so far" not in captured[0]
@@ -195,19 +199,25 @@ class TestGatewayAgents:
         listed = (await h.call("agents.list"))["result"]["agents"]
         assert {"harness", "researcher", "coder"} <= {a["name"] for a in listed}
 
-        saved = (await h.call("agents.save", {"name": name, "description": "x", "tools": ["read_file"]}))["result"]
+        saved = (
+            await h.call("agents.save", {"name": name, "description": "x", "tools": ["read_file"]})
+        )["result"]
         assert saved["agent"]["name"] == name and saved["agent"]["tools"] == ["read_file"]
 
         assert (await h.call("agents.delete", {"name": name}))["result"] == {"deleted": True}
         assert (await h.call("agents.delete", {"name": name}))["error"]["code"] == NOT_FOUND
 
     async def test_cannot_delete_builtin_or_save_builtin_name(self, h):
-        assert (await h.call("agents.delete", {"name": "harness"}))["error"]["code"] == INVALID_PARAMS
+        assert (await h.call("agents.delete", {"name": "harness"}))["error"][
+            "code"
+        ] == INVALID_PARAMS
         assert (await h.call("agents.save", {"name": "harness"}))["error"]["code"] == INVALID_PARAMS
         assert (await h.call("agents.save", {"name": "coder"}))["error"]["code"] == INVALID_PARAMS
 
     async def test_run_sequential_and_history(self, h):
-        parent = (await h.call("session.create", {"title": "orchestration"}))["result"]["session"]["id"]
+        parent = (await h.call("session.create", {"title": "orchestration"}))["result"]["session"][
+            "id"
+        ]
         run = await h.call(
             "agents.run",
             {
@@ -230,7 +240,9 @@ class TestGatewayAgents:
         assert (await h.call("agents.run", {"steps": []}))["error"]["code"] == INVALID_PARAMS
         bad = await h.call("agents.run", {"steps": [{"agent": "x"}]})
         assert bad["error"]["code"] == INVALID_PARAMS
-        bad_mode = await h.call("agents.run", {"mode": "race", "steps": [{"agent": "harness", "task": "t"}]})
+        bad_mode = await h.call(
+            "agents.run", {"mode": "race", "steps": [{"agent": "harness", "task": "t"}]}
+        )
         assert bad_mode["error"]["code"] == INVALID_PARAMS
 
     async def test_run_unknown_agent(self, h):

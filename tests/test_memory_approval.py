@@ -1,4 +1,5 @@
 """Tests for memory approval gate, secret redaction, and user profiles."""
+
 from __future__ import annotations
 
 import uuid
@@ -25,6 +26,7 @@ from ah.memory.user_profile import (
 # ===========================================================================
 # SecretRedactor Tests
 # ===========================================================================
+
 
 class TestSecretRedactor:
     """Tests for the SecretRedactor."""
@@ -147,6 +149,7 @@ MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy...
 # MemoryApprovalGate Tests
 # ===========================================================================
 
+
 class TestMemoryApprovalGate:
     """Tests for the MemoryApprovalGate."""
 
@@ -216,19 +219,21 @@ class TestMemoryApprovalGate:
     async def test_approve_creates_memory(self, gate, mock_db):
         with patch("ah.memory.approval.db", mock_db):
             # Mock the pending record fetch
-            mock_db.fetchrow = AsyncMock(return_value={
-                "id": uuid.uuid4(),
-                "content": "Test memory",
-                "category": "fact",
-                "importance": 0.5,
-                "agent_id": "harness",
-                "session_id": None,
-                "redactions": [],
-                "status": "pending",
-                "created_at": datetime.utcnow(),
-                "explicitly_important": False,
-                "base_strength": 1.0,
-            })
+            mock_db.fetchrow = AsyncMock(
+                return_value={
+                    "id": uuid.uuid4(),
+                    "content": "Test memory",
+                    "category": "fact",
+                    "importance": 0.5,
+                    "agent_id": "harness",
+                    "session_id": None,
+                    "redactions": [],
+                    "status": "pending",
+                    "created_at": datetime.utcnow(),
+                    "explicitly_important": False,
+                    "base_strength": 1.0,
+                }
+            )
             # Mock memory_store.add
             mock_memory = AsyncMock()
             mock_memory.add = AsyncMock(return_value=MagicMock(id=uuid.uuid4()))
@@ -258,11 +263,13 @@ class TestMemoryApprovalGate:
 
     async def test_get_stats(self, gate, mock_db):
         with patch("ah.memory.approval.db", mock_db):
-            mock_db.fetch = AsyncMock(return_value=[
-                {"status": "pending", "count": 5},
-                {"status": "approved", "count": 10},
-                {"status": "rejected", "count": 2},
-            ])
+            mock_db.fetch = AsyncMock(
+                return_value=[
+                    {"status": "pending", "count": 5},
+                    {"status": "approved", "count": 10},
+                    {"status": "rejected", "count": 2},
+                ]
+            )
             stats = await gate.get_stats()
             assert stats["pending"] == 5
             assert stats["approved"] == 10
@@ -272,19 +279,21 @@ class TestMemoryApprovalGate:
         gate = MemoryApprovalGate(enabled=False)
         with patch("ah.memory.approval.db", mock_db):
             mock_db.execute = AsyncMock(return_value="INSERT 0 1")
-            mock_db.fetchrow = AsyncMock(return_value={
-                "id": uuid.uuid4(),
-                "content": "Test",
-                "category": "fact",
-                "importance": 0.5,
-                "agent_id": "harness",
-                "session_id": None,
-                "redactions": [],
-                "status": "pending",
-                "created_at": datetime.utcnow(),
-                "explicitly_important": False,
-                "base_strength": 1.0,
-            })
+            mock_db.fetchrow = AsyncMock(
+                return_value={
+                    "id": uuid.uuid4(),
+                    "content": "Test",
+                    "category": "fact",
+                    "importance": 0.5,
+                    "agent_id": "harness",
+                    "session_id": None,
+                    "redactions": [],
+                    "status": "pending",
+                    "created_at": datetime.utcnow(),
+                    "explicitly_important": False,
+                    "base_strength": 1.0,
+                }
+            )
             mock_memory = AsyncMock()
             mock_memory.add = AsyncMock(return_value=MagicMock(id=uuid.uuid4()))
             with patch("ah.memory.store.memory_store", mock_memory):
@@ -296,6 +305,7 @@ class TestMemoryApprovalGate:
 # ===========================================================================
 # UserProfile Tests
 # ===========================================================================
+
 
 class TestUserProfile:
     """Tests for the UserProfile dataclass."""

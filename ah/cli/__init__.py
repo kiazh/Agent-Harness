@@ -764,6 +764,48 @@ def version():
     console.print(f"[bold cyan]AgentHarness[/bold cyan] v{__version__}")
 
 
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Bind host"),
+    port: int = typer.Option(8000, "--port", "-p", help="Bind port"),
+    reload: bool = typer.Option(False, "--reload", help="Enable auto-reload"),
+):
+    """Start the AgentHarness HTTP API server."""
+    import uvicorn
+
+    console.print("[bold]AgentHarness API[/bold]")
+    console.print(f"  Host: {host}")
+    console.print(f"  Port: {port}")
+    console.print(f"  Reload: {'enabled' if reload else 'disabled'}")
+    console.print()
+
+    url = f"http://{host}:{port}"
+
+    try:
+        with output.spinner("Starting server..."):
+            from ah.api.app import create_app
+
+            create_app()
+    except Exception as e:
+        output.error(f"Failed to start server: {e}")
+        raise typer.Exit(1) from None
+
+    console.print(f"[green]Server ready at {url}[/green]")
+    console.print("[dim]Press Ctrl+C to stop[/dim]")
+    console.print()
+
+    try:
+        uvicorn.run(
+            "ah.api.app:create_app",
+            host=host,
+            port=port,
+            reload=reload,
+            factory=True,
+        )
+    except KeyboardInterrupt:
+        console.print("\n[dim]Server stopped.[/dim]")
+
+
 # ─── Config commands ─────────────────────────────────────────────────────────
 
 

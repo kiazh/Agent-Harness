@@ -1,4 +1,5 @@
 """Tests for context compression — ContextCompressor, RollingCompaction, CompressionConfig."""
+
 from __future__ import annotations
 
 import uuid
@@ -95,11 +96,13 @@ def sample_chunks() -> list[ContextChunk]:
 def mock_llm_provider():
     """Create a mock LLM provider for summarization."""
     provider = AsyncMock()
-    provider.complete = AsyncMock(return_value=LLMResponse(
-        content="Summary: User asked about weather and file contents.",
-        model="test-model",
-        usage={"total_tokens": 10},
-    ))
+    provider.complete = AsyncMock(
+        return_value=LLMResponse(
+            content="Summary: User asked about weather and file contents.",
+            model="test-model",
+            usage={"total_tokens": 10},
+        )
+    )
     return provider
 
 

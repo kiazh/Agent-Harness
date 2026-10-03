@@ -12,13 +12,17 @@
     "start": "node src/main.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --test --test-reporter=spec test/*.test.ts",
-    "check": "npm run typecheck && npm test"
+    "lint": "eslint src/ test/ --ext .ts",
+    "check": "npm run typecheck && npm test && npm run lint"
   },
   "dependencies": {
     "@earendil-works/pi-tui": "1.0.0"
   },
   "devDependencies": {
     "@types/node": "24.19.1",
-    "typescript": "~5.6.0"
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.1",
+    "typescript": "~5.8.0"
   }
 }

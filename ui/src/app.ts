@@ -16,7 +16,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { parseCommand } from "./commands.ts";
 import { Footer, header, Picker } from "./components.ts";
-import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features.ts";
+import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features/index.ts";
 import type { GatewayClient } from "./gateway.ts";
 import type {
 	ConfigResult,

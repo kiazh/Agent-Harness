@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { parseCommand } from "../src/commands.ts";
-import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "../src/features.ts";
+import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "../src/features/index.ts";
 import { resolvePrefix, table } from "../src/format.ts";
 import type { ConfigResult, HistoryEntry, SessionInfo } from "../src/protocol.ts";
 

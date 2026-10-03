@@ -110,7 +110,7 @@ export type CompressResult =
 			compressedTokens: number;
 			ratio: number;
 			method: string;
-	  };
+		};
 
 export interface StatusResult {
 	postgres: string;
@@ -180,7 +180,7 @@ export type GatewayEvent = EventBase &
 				iterations: number;
 				toolCalls: number;
 				cancelled: boolean;
-		  }
+				}
 		| { type: "error"; message: string }
 	);
 

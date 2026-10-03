@@ -6,6 +6,7 @@ These tests verify invariants that should hold for all inputs:
 - Tool schema inference always produces valid JSON Schema
 - Context compression never exceeds original size
 """
+
 from __future__ import annotations
 
 import json
@@ -23,6 +24,7 @@ from ah.tools.base import ToolRegistry
 # ===========================================================================
 # PromptAssembler Properties
 # ===========================================================================
+
 
 class TestPromptAssemblerProperties:
     """Property-based tests for PromptAssembler."""
@@ -84,7 +86,9 @@ class TestPromptAssemblerProperties:
         if query:
             assert query in prompt
 
-    @given(text=st.text(min_size=10, max_size=10000).filter(lambda s: sum(c.isalpha() for c in s) >= 5))
+    @given(
+        text=st.text(min_size=10, max_size=10000).filter(lambda s: sum(c.isalpha() for c in s) >= 5)
+    )
     @settings(max_examples=200)
     def test_estimate_tokens_positive(self, text):
         """Property: Token estimate is always positive for non-trivial text."""
@@ -126,10 +130,18 @@ class TestPromptAssemblerProperties:
         )
 
     @given(
-        chunk_type=st.sampled_from([
-            "user_message", "tool_call", "result", "memory",
-            "heartbeat", "system", "user", "assistant",
-        ]),
+        chunk_type=st.sampled_from(
+            [
+                "user_message",
+                "tool_call",
+                "result",
+                "memory",
+                "heartbeat",
+                "system",
+                "user",
+                "assistant",
+            ]
+        ),
         payload=st.dictionaries(
             keys=st.text(min_size=1, max_size=10),
             values=st.text(min_size=0, max_size=500),
@@ -145,20 +157,30 @@ class TestPromptAssemblerProperties:
         assert len(compressed) <= len(original) + 100
 
     @given(
-        chunk_type=st.sampled_from([
-            "user_message", "tool_call", "result", "memory",
-            "heartbeat", "system", "user", "assistant",
-        ]),
+        chunk_type=st.sampled_from(
+            [
+                "user_message",
+                "tool_call",
+                "result",
+                "memory",
+                "heartbeat",
+                "system",
+                "user",
+                "assistant",
+            ]
+        ),
         content=st.text(min_size=0, max_size=1000),
     )
     @settings(max_examples=100)
     def test_compress_chunk_preserves_content(self, chunk_type, content):
         """Property: Compressed chunk preserves some content."""
         assembler = PromptAssembler()
-        compressed = assembler._compress_chunk({
-            "type": chunk_type,
-            "payload": {"content": content},
-        })
+        compressed = assembler._compress_chunk(
+            {
+                "type": chunk_type,
+                "payload": {"content": content},
+            }
+        )
         # Should be a non-empty string
         assert isinstance(compressed, str)
         assert len(compressed) > 0
@@ -186,8 +208,11 @@ class TestPromptAssemblerProperties:
         mandatory_tokens = assembler._estimate_tokens(mandatory)
 
         big = ContextChunk(
-            id=uuid.uuid4(), session_id=uuid.uuid4(), agent_id="h",
-            chunk_type="memory", payload={"content": (system_prompt + query + " ctx") * 50},
+            id=uuid.uuid4(),
+            session_id=uuid.uuid4(),
+            agent_id="h",
+            chunk_type="memory",
+            payload={"content": (system_prompt + query + " ctx") * 50},
         )
         prompt = assembler.assemble(
             system_prompt=system_prompt,
@@ -226,6 +251,7 @@ class TestPromptAssemblerProperties:
 # Token Counter Properties
 # ===========================================================================
 
+
 class TestTokenCounterProperties:
     """Property-based tests for token counting."""
 
@@ -236,7 +262,9 @@ class TestTokenCounterProperties:
         count = get_token_count(text)
         assert count >= 0
 
-    @given(text=st.text(min_size=10, max_size=1000).filter(lambda s: sum(c.isalpha() for c in s) >= 5))
+    @given(
+        text=st.text(min_size=10, max_size=1000).filter(lambda s: sum(c.isalpha() for c in s) >= 5)
+    )
     @settings(max_examples=100)
     def test_token_count_positive_for_non_empty(self, text):
         """Property: Token count is positive for non-trivial text."""
@@ -267,6 +295,7 @@ class TestTokenCounterProperties:
 # ===========================================================================
 # ToolRegistry Properties
 # ===========================================================================
+
 
 class TestToolRegistryProperties:
     """Property-based tests for ToolRegistry."""
@@ -364,6 +393,7 @@ class TestToolRegistryProperties:
             return kwargs
 
         import asyncio
+
         try:
             result = asyncio.run(reg.execute("echo_tool", **args))
             assert result == args
@@ -409,6 +439,7 @@ class TestToolRegistryProperties:
 # ===========================================================================
 # AsyncTokenBucket Properties
 # ===========================================================================
+
 
 class TestAsyncTokenBucketProperties:
     """Property-based tests for AsyncTokenBucket."""
@@ -468,6 +499,7 @@ class TestAsyncTokenBucketProperties:
 # Validation Properties
 # ===========================================================================
 
+
 class TestValidationProperties:
     """Property-based tests for input validation."""
 
@@ -490,10 +522,12 @@ class TestValidationProperties:
 
     @given(
         messages=st.lists(
-            st.fixed_dictionaries({
-                "role": st.text(min_size=1, max_size=20),
-                "content": st.text(min_size=1, max_size=100),
-            }),
+            st.fixed_dictionaries(
+                {
+                    "role": st.text(min_size=1, max_size=20),
+                    "content": st.text(min_size=1, max_size=100),
+                }
+            ),
             min_size=1,
             max_size=5,
         ),
@@ -548,14 +582,24 @@ class TestValidationProperties:
 # ContextManager Properties (Mocked)
 # ===========================================================================
 
+
 class TestContextManagerProperties:
     """Property-based tests for ContextManager with mocked DB."""
 
     @given(
-        chunk_type=st.sampled_from([
-            "tool_call", "result", "memory", "heartbeat",
-            "system", "user", "assistant", "user_message", "assistant_message",
-        ]),
+        chunk_type=st.sampled_from(
+            [
+                "tool_call",
+                "result",
+                "memory",
+                "heartbeat",
+                "system",
+                "user",
+                "assistant",
+                "user_message",
+                "assistant_message",
+            ]
+        ),
         payload=st.dictionaries(
             keys=st.text(min_size=1, max_size=10),
             values=st.text(min_size=0, max_size=200),
@@ -566,8 +610,15 @@ class TestContextManagerProperties:
         """Property: Added chunk preserves its type."""
         # Just verify the chunk type is valid
         assert chunk_type in [
-            "tool_call", "result", "memory", "heartbeat",
-            "system", "user", "assistant", "user_message", "assistant_message",
+            "tool_call",
+            "result",
+            "memory",
+            "heartbeat",
+            "system",
+            "user",
+            "assistant",
+            "user_message",
+            "assistant_message",
         ]
 
     @given(
@@ -577,6 +628,7 @@ class TestContextManagerProperties:
     def test_batch_size_respected(self, num_chunks):
         """Property: Batch insert handles variable number of chunks."""
         from ah.core.context import ContextManager
+
         cm = ContextManager(batch_size=10)
         assert cm._batch_size == 10
 
@@ -584,6 +636,7 @@ class TestContextManagerProperties:
 # ===========================================================================
 # Model Properties
 # ===========================================================================
+
 
 class TestModelProperties:
     """Property-based tests for data models."""
@@ -597,6 +650,7 @@ class TestModelProperties:
     def test_session_creation(self, title, agent_id, context_budget):
         """Property: Session can be created with various parameters."""
         from ah.core.models import Session
+
         s = Session(
             id=uuid.uuid4(),
             title=title or None,
@@ -614,6 +668,7 @@ class TestModelProperties:
     def test_llm_response_creation(self, content, model):
         """Property: LLMResponse can be created with various content."""
         from ah.core.models import LLMResponse
+
         r = LLMResponse(content=content, model=model)
         assert r.content == content
         assert r.model == model
@@ -628,6 +683,7 @@ class TestModelProperties:
     def test_tool_definition_creation(self, name, description):
         """Property: ToolDefinition can be created."""
         from ah.core.models import ToolDefinition
+
         td = ToolDefinition(
             name=name,
             description=description,

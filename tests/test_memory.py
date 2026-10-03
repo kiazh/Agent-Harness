@@ -1,4 +1,5 @@
 """Tests for the memory system — MemoryEntry, MemoryStore, MemoryConsolidator, etc."""
+
 from __future__ import annotations
 
 import uuid
@@ -20,6 +21,7 @@ from ah.memory import (
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def sample_entry():
@@ -93,6 +95,7 @@ def _make_row(**overrides):
 # ===========================================================================
 # MemoryEntry Tests
 # ===========================================================================
+
 
 class TestMemoryEntry:
     """Tests for the MemoryEntry dataclass."""
@@ -214,6 +217,7 @@ class TestMemoryEntry:
 # MemoryStore Tests
 # ===========================================================================
 
+
 class TestMemoryStore:
     """Tests for MemoryStore CRUD operations."""
 
@@ -291,9 +295,7 @@ class TestMemoryStore:
     async def test_search_by_embedding(self, store, mock_db):
         """Test searching memories by embedding similarity."""
         with patch("ah.memory.store.db", mock_db):
-            mock_db.fetch = AsyncMock(return_value=[
-                {**_make_row(), "similarity": 0.95}
-            ])
+            mock_db.fetch = AsyncMock(return_value=[{**_make_row(), "similarity": 0.95}])
             results = await store.search_by_embedding([0.1] * 1536, limit=5)
             assert len(results) == 1
             entry, similarity = results[0]
@@ -337,9 +339,7 @@ class TestMemoryStore:
     async def test_get_weak_memories(self, store, mock_db):
         """Test getting weak memories for forgetting."""
         with patch("ah.memory.store.db", mock_db):
-            mock_db.fetch = AsyncMock(return_value=[
-                _make_row(importance=0.02)
-            ])
+            mock_db.fetch = AsyncMock(return_value=[_make_row(importance=0.02)])
             entries = await store.get_weak_memories(threshold=0.05)
             assert len(entries) == 1
             assert entries[0].importance < 0.05
@@ -348,6 +348,7 @@ class TestMemoryStore:
 # ===========================================================================
 # ImportanceScorer Tests
 # ===========================================================================
+
 
 class TestImportanceScorer:
     """Tests for the ImportanceScorer."""
@@ -372,24 +373,36 @@ class TestImportanceScorer:
     def test_score_preference_higher_than_transient(self, scorer):
         """Test that preference scores higher than transient."""
         pref = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="pref", category="preference",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="pref",
+            category="preference",
         )
         transient = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="transient", category="transient",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="transient",
+            category="transient",
         )
         assert scorer.score(pref) >= scorer.score(transient)
 
     def test_score_explicitly_important(self, scorer):
         """Test that explicitly important memories score higher."""
         normal = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="normal", category="fact",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="normal",
+            category="fact",
         )
         explicit = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="explicit", category="fact",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="explicit",
+            category="fact",
             explicitly_important=True,
         )
         assert scorer.score(explicit) >= scorer.score(normal)
@@ -397,12 +410,20 @@ class TestImportanceScorer:
     def test_score_with_access_count(self, scorer):
         """Test scoring with access count factor."""
         low_access = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="test", category="fact", access_count=0,
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="test",
+            category="fact",
+            access_count=0,
         )
         high_access = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="test", category="fact", access_count=100,
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="test",
+            category="fact",
+            access_count=100,
         )
         assert scorer.score(high_access) >= scorer.score(low_access)
 
@@ -410,12 +431,19 @@ class TestImportanceScorer:
         """Test scoring with recency factor."""
         now = datetime.utcnow()
         recent = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="test", category="fact", created_at=now,
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="test",
+            category="fact",
+            created_at=now,
         )
         old = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="test", category="fact",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="test",
+            category="fact",
             created_at=now - timedelta(days=60),
         )
         assert scorer.score(recent) >= scorer.score(old)
@@ -423,8 +451,11 @@ class TestImportanceScorer:
     def test_score_deterministic(self, scorer):
         """Test that scoring is deterministic."""
         entry = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test content", category="fact",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test content",
+            category="fact",
         )
         score1 = scorer.score(entry)
         score2 = scorer.score(entry)
@@ -434,9 +465,13 @@ class TestImportanceScorer:
         """Test that all scores are within [0, 1]."""
         for cat in ["preference", "decision", "fact", "event", "transient"]:
             entry = MemoryEntry(
-                id=uuid.uuid4(), session_id=None, agent_id="harness",
-                content="x" * 100, category=cat,
-                importance=0.5, access_count=100,
+                id=uuid.uuid4(),
+                session_id=None,
+                agent_id="harness",
+                content="x" * 100,
+                category=cat,
+                importance=0.5,
+                access_count=100,
                 explicitly_important=True,
             )
             score = scorer.score(entry)
@@ -445,9 +480,13 @@ class TestImportanceScorer:
     def test_score_with_breakdown(self, scorer):
         """Test scoring with factor breakdown."""
         entry = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test", category="preference",
-            explicitly_important=True, access_count=5,
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test",
+            category="preference",
+            explicitly_important=True,
+            access_count=5,
         )
         breakdown = scorer.score_with_breakdown(entry)
         assert "category" in breakdown
@@ -462,6 +501,7 @@ class TestImportanceScorer:
 # ForgettingModel Tests
 # ===========================================================================
 
+
 class TestForgettingModel:
     """Tests for the ForgettingModel (Ebbinghaus forgetting curve)."""
 
@@ -473,8 +513,11 @@ class TestForgettingModel:
     def test_current_strength_basic(self, model):
         """Test basic strength calculation."""
         entry = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test", category="fact",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test",
+            category="fact",
         )
         strength = model.current_strength(entry)
         assert strength >= 0.0
@@ -482,8 +525,11 @@ class TestForgettingModel:
     def test_current_strength_immediate(self, model):
         """Test strength at time 0 (should be ~base_strength)."""
         entry = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test", category="fact",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test",
+            category="fact",
             base_strength=1.0,
         )
         strength = model.current_strength(entry)
@@ -493,26 +539,42 @@ class TestForgettingModel:
         """Test that strength decreases over time."""
         now = datetime.utcnow()
         recent = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test", category="fact",
-            created_at=now, last_accessed=now,
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test",
+            category="fact",
+            created_at=now,
+            last_accessed=now,
         )
         old = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test", category="fact",
-            created_at=now - timedelta(days=30), last_accessed=now - timedelta(days=30),
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test",
+            category="fact",
+            created_at=now - timedelta(days=30),
+            last_accessed=now - timedelta(days=30),
         )
         assert model.current_strength(recent) >= model.current_strength(old)
 
     def test_current_strength_with_access_count(self, model):
         """Test that access count boosts strength."""
         low_access = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test", category="fact", access_count=0,
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test",
+            category="fact",
+            access_count=0,
         )
         high_access = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test", category="fact", access_count=100,
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test",
+            category="fact",
+            access_count=100,
         )
         assert model.current_strength(high_access) >= model.current_strength(low_access)
 
@@ -520,9 +582,13 @@ class TestForgettingModel:
         """Test should_forget decision."""
         # Very old, never accessed, low importance — should forget
         old_weak = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Old", category="transient",
-            importance=0.1, access_count=0,
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Old",
+            category="transient",
+            importance=0.1,
+            access_count=0,
             created_at=datetime.utcnow() - timedelta(days=365),
             last_accessed=datetime.utcnow() - timedelta(days=365),
         )
@@ -530,9 +596,13 @@ class TestForgettingModel:
 
         # Recent, important — should not forget
         recent_important = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Recent", category="preference",
-            importance=0.9, access_count=10,
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Recent",
+            category="preference",
+            importance=0.9,
+            access_count=10,
             created_at=datetime.utcnow(),
             last_accessed=datetime.utcnow(),
         )
@@ -541,8 +611,12 @@ class TestForgettingModel:
     def test_get_decay_rate(self, model):
         """Test decay rate calculation."""
         entry = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test", category="fact", importance=0.5,
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test",
+            category="fact",
+            importance=0.5,
         )
         rate = model.get_decay_rate(entry)
         assert rate > 0
@@ -550,8 +624,12 @@ class TestForgettingModel:
     def test_get_half_life(self, model):
         """Test half-life calculation."""
         entry = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test", category="fact", importance=0.5,
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test",
+            category="fact",
+            importance=0.5,
         )
         half_life = model.get_half_life(entry)
         assert half_life > 0
@@ -559,12 +637,20 @@ class TestForgettingModel:
     def test_high_importance_longer_half_life(self, model):
         """Test that high importance memories have longer half-life."""
         low_imp = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test", category="fact", importance=0.1,
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test",
+            category="fact",
+            importance=0.1,
         )
         high_imp = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test", category="fact", importance=0.9,
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test",
+            category="fact",
+            importance=0.9,
         )
         assert model.get_half_life(high_imp) >= model.get_half_life(low_imp)
 
@@ -572,6 +658,7 @@ class TestForgettingModel:
 # ===========================================================================
 # MemoryRetriever Tests
 # ===========================================================================
+
 
 class TestMemoryRetriever:
     """Tests for the MemoryRetriever."""
@@ -593,8 +680,11 @@ class TestMemoryRetriever:
     async def test_retrieve_by_query(self, retriever, mock_store):
         """Test retrieving memories by text query."""
         entry = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Python is great", category="fact",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Python is great",
+            category="fact",
         )
         # search() returns list[MemoryEntry] for keyword search
         mock_store.search = AsyncMock(return_value=[entry])
@@ -610,8 +700,11 @@ class TestMemoryRetriever:
     async def test_retrieve_by_embedding(self, retriever, mock_store):
         """Test retrieving memories by embedding."""
         entry = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Similar memory", category="fact",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Similar memory",
+            category="fact",
         )
         mock_store.search_by_embedding = AsyncMock(return_value=[(entry, 0.9)])
         retriever.store = mock_store
@@ -635,8 +728,11 @@ class TestMemoryRetriever:
     async def test_retrieve_with_agent_filter(self, retriever, mock_store):
         """Test retrieving with agent filter."""
         entry = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test", category="fact",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test",
+            category="fact",
         )
         mock_store.search = AsyncMock(return_value=[entry])
         retriever.store = mock_store
@@ -650,8 +746,11 @@ class TestMemoryRetriever:
     async def test_retrieve_with_category_filter(self, retriever, mock_store):
         """Test retrieving with category filter."""
         entry = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test", category="preference",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test",
+            category="preference",
         )
         mock_store.search = AsyncMock(return_value=[entry])
         retriever.store = mock_store
@@ -665,8 +764,11 @@ class TestMemoryRetriever:
     async def test_retrieve_updates_access(self, retriever, mock_store):
         """Test that retrieval updates access stats."""
         entry = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Test", category="fact",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Test",
+            category="fact",
         )
         mock_store.search = AsyncMock(return_value=[entry])
         mock_store.update_access = AsyncMock()
@@ -682,12 +784,18 @@ class TestMemoryRetriever:
     async def test_retrieve_hybrid(self, retriever, mock_store):
         """Test hybrid retrieval (text + embedding)."""
         entry1 = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Text match", category="fact",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Text match",
+            category="fact",
         )
         entry2 = MemoryEntry(
-            id=uuid.uuid4(), session_id=None, agent_id="harness",
-            content="Embedding match", category="fact",
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="Embedding match",
+            category="fact",
         )
         mock_store.search = AsyncMock(return_value=[entry1])
         mock_store.search_by_embedding = AsyncMock(return_value=[(entry2, 0.9)])
@@ -707,6 +815,7 @@ class TestMemoryRetriever:
 # MemoryConsolidator Tests
 # ===========================================================================
 
+
 class TestMemoryConsolidator:
     """Tests for the MemoryConsolidator."""
 
@@ -719,25 +828,29 @@ class TestMemoryConsolidator:
     def mock_llm(self):
         """Create a mock LLM provider."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content='[{"content": "User likes Python", "category": "preference", "importance": 0.8, "explicitly_important": false}]',
-            model="test",
-            usage={"total_tokens": 10},
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content='[{"content": "User likes Python", "category": "preference", "importance": 0.8, "explicitly_important": false}]',
+                model="test",
+                usage={"total_tokens": 10},
+            )
+        )
         return provider
 
     @pytest.fixture
     def mock_store(self):
         """Create a mock MemoryStore."""
         store = AsyncMock()
-        store.add = AsyncMock(side_effect=lambda **kwargs: MemoryEntry(
-            id=uuid.uuid4(),
-            session_id=kwargs.get("session_id"),
-            agent_id=kwargs.get("agent_id", "harness"),
-            content=kwargs.get("content", ""),
-            category=kwargs.get("category", "fact"),
-            importance=kwargs.get("importance", 0.5),
-        ))
+        store.add = AsyncMock(
+            side_effect=lambda **kwargs: MemoryEntry(
+                id=uuid.uuid4(),
+                session_id=kwargs.get("session_id"),
+                agent_id=kwargs.get("agent_id", "harness"),
+                content=kwargs.get("content", ""),
+                category=kwargs.get("category", "fact"),
+                importance=kwargs.get("importance", 0.5),
+            )
+        )
         store.search_by_embedding = AsyncMock(return_value=[])
         store.update_access = AsyncMock()
         return store
@@ -765,11 +878,13 @@ class TestMemoryConsolidator:
     async def test_consolidate_from_text_invalid_json(self, consolidator, mock_store):
         """Test consolidating with invalid JSON response."""
         mock_llm = AsyncMock()
-        mock_llm.complete = AsyncMock(return_value=LLMResponse(
-            content="not valid json",
-            model="test",
-            usage={"total_tokens": 5},
-        ))
+        mock_llm.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="not valid json",
+                model="test",
+                usage={"total_tokens": 5},
+            )
+        )
         consolidator.llm = mock_llm
         consolidator.store = mock_store
 
@@ -780,11 +895,13 @@ class TestMemoryConsolidator:
     async def test_consolidate_from_text_empty_response(self, consolidator, mock_store):
         """Test consolidating with empty LLM response."""
         mock_llm = AsyncMock()
-        mock_llm.complete = AsyncMock(return_value=LLMResponse(
-            content="[]",
-            model="test",
-            usage={"total_tokens": 5},
-        ))
+        mock_llm.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="[]",
+                model="test",
+                usage={"total_tokens": 5},
+            )
+        )
         consolidator.llm = mock_llm
         consolidator.store = mock_store
 
@@ -803,6 +920,7 @@ class TestMemoryConsolidator:
 # ===========================================================================
 # Memory Integration Tests
 # ===========================================================================
+
 
 class TestMemoryIntegration:
     """Integration tests for the memory system."""

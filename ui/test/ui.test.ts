@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { type Component, Container, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { helpText, parseCommand } from "../src/commands.ts";
 import { Footer, formatArgs, ToolCard } from "../src/components.ts";
-import { SLASH_COMMANDS } from "../src/features.ts";
+import { SLASH_COMMANDS } from "../src/features/index.ts";
 import type { GatewayEvent } from "../src/protocol.ts";
 import { Transcript } from "../src/transcript.ts";
 

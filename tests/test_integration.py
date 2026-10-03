@@ -6,6 +6,7 @@ These tests verify component interactions with real dependencies where feasible:
 - Provider + HTTP mocking
 - Session + Context + Agent full flow
 """
+
 from __future__ import annotations
 
 import json
@@ -33,6 +34,7 @@ from ah.tools.base import ToolRegistry
 # ===========================================================================
 # FakeProvider — Deterministic provider for testing
 # ===========================================================================
+
 
 class FakeProvider(LLMProvider):
     """Deterministic provider for testing — no API calls.
@@ -67,6 +69,7 @@ class FakeProvider(LLMProvider):
 # Fixtures
 # ===========================================================================
 
+
 @pytest.fixture
 def temp_dir():
     """Create a temporary directory for file tests."""
@@ -87,31 +90,41 @@ def mock_session():
 @pytest.fixture
 def simple_fake_provider():
     """Create a FakeProvider with a simple text response."""
-    return FakeProvider([
-        LLMResponse(content="Test response", model="fake", usage={"total_tokens": 10}),
-    ])
+    return FakeProvider(
+        [
+            LLMResponse(content="Test response", model="fake", usage={"total_tokens": 10}),
+        ]
+    )
 
 
 @pytest.fixture
 def tool_call_fake_provider():
     """Create a FakeProvider that returns a tool call then final answer."""
-    return FakeProvider([
-        LLMResponse(
-            content="",
-            model="fake",
-            usage={"total_tokens": 5},
-            tool_calls=[{
-                "id": "call_1",
-                "function": {"name": "read_file", "arguments": json.dumps({"path": "/tmp/test"})},
-            }],
-        ),
-        LLMResponse(content="File content", model="fake", usage={"total_tokens": 5}),
-    ])
+    return FakeProvider(
+        [
+            LLMResponse(
+                content="",
+                model="fake",
+                usage={"total_tokens": 5},
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": json.dumps({"path": "/tmp/test"}),
+                        },
+                    }
+                ],
+            ),
+            LLMResponse(content="File content", model="fake", usage={"total_tokens": 5}),
+        ]
+    )
 
 
 # ===========================================================================
 # Agent + Real Tools Integration Tests
 # ===========================================================================
+
 
 class TestAgentWithRealTools:
     """Integration tests for agent loop with real tools."""
@@ -122,25 +135,29 @@ class TestAgentWithRealTools:
         test_file = temp_dir / "test.txt"
         test_file.write_text("secret content for testing", encoding="utf-8")
 
-        provider = FakeProvider([
-            LLMResponse(
-                content="",
-                model="fake",
-                usage={"total_tokens": 5},
-                tool_calls=[{
-                    "id": "call_1",
-                    "function": {
-                        "name": "read_file",
-                        "arguments": json.dumps({"path": str(test_file)}),
-                    },
-                }],
-            ),
-            LLMResponse(
-                content="The file contains: secret content for testing",
-                model="fake",
-                usage={"total_tokens": 5},
-            ),
-        ])
+        provider = FakeProvider(
+            [
+                LLMResponse(
+                    content="",
+                    model="fake",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": json.dumps({"path": str(test_file)}),
+                            },
+                        }
+                    ],
+                ),
+                LLMResponse(
+                    content="The file contains: secret content for testing",
+                    model="fake",
+                    usage={"total_tokens": 5},
+                ),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -165,24 +182,32 @@ class TestAgentWithRealTools:
         """Test that agent actually executes write_file tool."""
         test_file = temp_dir / "output.txt"
 
-        provider = FakeProvider([
-            LLMResponse(
-                content="",
-                model="fake",
-                usage={"total_tokens": 5},
-                tool_calls=[{
-                    "id": "call_1",
-                    "function": {
-                        "name": "write_file",
-                        "arguments": json.dumps({
-                            "path": str(test_file),
-                            "content": "written by agent",
-                        }),
-                    },
-                }],
-            ),
-            LLMResponse(content="File written successfully", model="fake", usage={"total_tokens": 5}),
-        ])
+        provider = FakeProvider(
+            [
+                LLMResponse(
+                    content="",
+                    model="fake",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "write_file",
+                                "arguments": json.dumps(
+                                    {
+                                        "path": str(test_file),
+                                        "content": "written by agent",
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                LLMResponse(
+                    content="File written successfully", model="fake", usage={"total_tokens": 5}
+                ),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -212,21 +237,25 @@ class TestAgentWithRealTools:
         (temp_dir / "file1.txt").write_text("content1")
         (temp_dir / "file2.txt").write_text("content2")
 
-        provider = FakeProvider([
-            LLMResponse(
-                content="",
-                model="fake",
-                usage={"total_tokens": 5},
-                tool_calls=[{
-                    "id": "call_1",
-                    "function": {
-                        "name": "list_files",
-                        "arguments": json.dumps({"path": str(temp_dir)}),
-                    },
-                }],
-            ),
-            LLMResponse(content="Found 2 files", model="fake", usage={"total_tokens": 5}),
-        ])
+        provider = FakeProvider(
+            [
+                LLMResponse(
+                    content="",
+                    model="fake",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "list_files",
+                                "arguments": json.dumps({"path": str(temp_dir)}),
+                            },
+                        }
+                    ],
+                ),
+                LLMResponse(content="Found 2 files", model="fake", usage={"total_tokens": 5}),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -248,21 +277,25 @@ class TestAgentWithRealTools:
 
     async def test_agent_executes_real_terminal_command(self, mock_session):
         """Test that agent actually executes terminal tool."""
-        provider = FakeProvider([
-            LLMResponse(
-                content="",
-                model="fake",
-                usage={"total_tokens": 5},
-                tool_calls=[{
-                    "id": "call_1",
-                    "function": {
-                        "name": "terminal",
-                        "arguments": json.dumps({"command": "echo hello"}),
-                    },
-                }],
-            ),
-            LLMResponse(content="Command executed", model="fake", usage={"total_tokens": 5}),
-        ])
+        provider = FakeProvider(
+            [
+                LLMResponse(
+                    content="",
+                    model="fake",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "terminal",
+                                "arguments": json.dumps({"command": "echo hello"}),
+                            },
+                        }
+                    ],
+                ),
+                LLMResponse(content="Command executed", model="fake", usage={"total_tokens": 5}),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -287,39 +320,47 @@ class TestAgentWithRealTools:
         """Test agent executing multiple tools in sequence."""
         test_file = temp_dir / "multi.txt"
 
-        provider = FakeProvider([
-            # First: write file
-            LLMResponse(
-                content="",
-                model="fake",
-                usage={"total_tokens": 5},
-                tool_calls=[{
-                    "id": "call_1",
-                    "function": {
-                        "name": "write_file",
-                        "arguments": json.dumps({
-                            "path": str(test_file),
-                            "content": "test content",
-                        }),
-                    },
-                }],
-            ),
-            # Second: read file
-            LLMResponse(
-                content="",
-                model="fake",
-                usage={"total_tokens": 5},
-                tool_calls=[{
-                    "id": "call_2",
-                    "function": {
-                        "name": "read_file",
-                        "arguments": json.dumps({"path": str(test_file)}),
-                    },
-                }],
-            ),
-            # Third: final answer
-            LLMResponse(content="Done", model="fake", usage={"total_tokens": 5}),
-        ])
+        provider = FakeProvider(
+            [
+                # First: write file
+                LLMResponse(
+                    content="",
+                    model="fake",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "write_file",
+                                "arguments": json.dumps(
+                                    {
+                                        "path": str(test_file),
+                                        "content": "test content",
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                ),
+                # Second: read file
+                LLMResponse(
+                    content="",
+                    model="fake",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_2",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": json.dumps({"path": str(test_file)}),
+                            },
+                        }
+                    ],
+                ),
+                # Third: final answer
+                LLMResponse(content="Done", model="fake", usage={"total_tokens": 5}),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -346,14 +387,17 @@ class TestAgentWithRealTools:
 # Agent + Mocked DB Integration Tests
 # ===========================================================================
 
+
 class TestAgentWithMockedDB:
     """Integration tests for agent with mocked database."""
 
     async def test_agent_stores_context_chunks(self, mock_session):
         """Test that agent stores context chunks during execution."""
-        provider = FakeProvider([
-            LLMResponse(content="Test response", model="fake", usage={"total_tokens": 10}),
-        ])
+        provider = FakeProvider(
+            [
+                LLMResponse(content="Test response", model="fake", usage={"total_tokens": 10}),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -371,9 +415,11 @@ class TestAgentWithMockedDB:
 
     async def test_agent_retrieves_recent_context(self, mock_session):
         """Test that agent retrieves recent context for prompt assembly."""
-        provider = FakeProvider([
-            LLMResponse(content="Test response", model="fake", usage={"total_tokens": 10}),
-        ])
+        provider = FakeProvider(
+            [
+                LLMResponse(content="Test response", model="fake", usage={"total_tokens": 10}),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -381,9 +427,11 @@ class TestAgentWithMockedDB:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
-                mock_cm.get_recent_context = AsyncMock(return_value=[
-                    {"type": "user_message", "payload": {"content": "previous"}, "tokens": 1},
-                ])
+                mock_cm.get_recent_context = AsyncMock(
+                    return_value=[
+                        {"type": "user_message", "payload": {"content": "previous"}, "tokens": 1},
+                    ]
+                )
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
                 await agent.run(mock_session.id, "test message", verbose=False)
@@ -392,9 +440,11 @@ class TestAgentWithMockedDB:
 
     async def test_agent_updates_session_activity(self, mock_session):
         """Test that agent updates session activity after completion."""
-        provider = FakeProvider([
-            LLMResponse(content="Test response", model="fake", usage={"total_tokens": 10}),
-        ])
+        provider = FakeProvider(
+            [
+                LLMResponse(content="Test response", model="fake", usage={"total_tokens": 10}),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -414,38 +464,45 @@ class TestAgentWithMockedDB:
 # Session + Context Integration Tests
 # ===========================================================================
 
+
 class TestSessionContextIntegration:
     """Integration tests for session and context managers."""
 
     async def test_session_crud_with_mock_db(self):
         """Test session CRUD operations with mocked database."""
         mock_db = AsyncMock()
-        mock_db.fetchrow = AsyncMock(return_value={
-            "id": uuid.uuid4(),
-            "title": "Test Session",
-            "agent_id": "harness",
-            "status": "active",
-            "state_msgpack": b"\x80",
-            "goal": "Test goal",
-            "model": "gpt-4",
-            "provider": "openai",
-            "context_budget": 8000,
-            "created_at": datetime.utcnow(),
-            "last_activity": datetime.utcnow(),
-        })
-        mock_db.fetch = AsyncMock(return_value=[{
-            "id": uuid.uuid4(),
-            "title": "Test Session",
-            "agent_id": "harness",
-            "status": "active",
-            "state_msgpack": b"\x80",
-            "goal": "Test goal",
-            "model": "gpt-4",
-            "provider": "openai",
-            "context_budget": 8000,
-            "created_at": datetime.utcnow(),
-            "last_activity": datetime.utcnow(),
-        }])
+        mock_db.fetchrow = AsyncMock(
+            return_value={
+                "id": uuid.uuid4(),
+                "title": "Test Session",
+                "agent_id": "harness",
+                "status": "active",
+                "state_msgpack": b"\x80",
+                "goal": "Test goal",
+                "model": "gpt-4",
+                "provider": "openai",
+                "context_budget": 8000,
+                "created_at": datetime.utcnow(),
+                "last_activity": datetime.utcnow(),
+            }
+        )
+        mock_db.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": uuid.uuid4(),
+                    "title": "Test Session",
+                    "agent_id": "harness",
+                    "status": "active",
+                    "state_msgpack": b"\x80",
+                    "goal": "Test goal",
+                    "model": "gpt-4",
+                    "provider": "openai",
+                    "context_budget": 8000,
+                    "created_at": datetime.utcnow(),
+                    "last_activity": datetime.utcnow(),
+                }
+            ]
+        )
         mock_db.execute = AsyncMock(return_value="UPDATE 1")
 
         with patch("ah.core.session.db", mock_db):
@@ -478,28 +535,34 @@ class TestSessionContextIntegration:
         mock_db = AsyncMock()
         session_id = uuid.uuid4()
 
-        mock_db.fetchrow = AsyncMock(return_value={
-            "id": uuid.uuid4(),
-            "session_id": session_id,
-            "agent_id": "harness",
-            "chunk_type": "user_message",
-            "payload_msgpack": msgpack.packb({"content": "hello"}, use_bin_type=True),
-            "token_count": 5,
-            "embedding": None,
-            "created_at": datetime.utcnow(),
-            "accessed_at": None,
-        })
-        mock_db.fetch = AsyncMock(return_value=[{
-            "id": uuid.uuid4(),
-            "session_id": session_id,
-            "agent_id": "harness",
-            "chunk_type": "user_message",
-            "payload_msgpack": msgpack.packb({"content": "hello"}, use_bin_type=True),
-            "token_count": 5,
-            "embedding": None,
-            "created_at": datetime.utcnow(),
-            "accessed_at": None,
-        }])
+        mock_db.fetchrow = AsyncMock(
+            return_value={
+                "id": uuid.uuid4(),
+                "session_id": session_id,
+                "agent_id": "harness",
+                "chunk_type": "user_message",
+                "payload_msgpack": msgpack.packb({"content": "hello"}, use_bin_type=True),
+                "token_count": 5,
+                "embedding": None,
+                "created_at": datetime.utcnow(),
+                "accessed_at": None,
+            }
+        )
+        mock_db.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": uuid.uuid4(),
+                    "session_id": session_id,
+                    "agent_id": "harness",
+                    "chunk_type": "user_message",
+                    "payload_msgpack": msgpack.packb({"content": "hello"}, use_bin_type=True),
+                    "token_count": 5,
+                    "embedding": None,
+                    "created_at": datetime.utcnow(),
+                    "accessed_at": None,
+                }
+            ]
+        )
         mock_db.fetchval = AsyncMock(return_value=150)
         mock_db.execute = AsyncMock(return_value="DELETE 5")
 
@@ -539,20 +602,22 @@ class TestSessionContextIntegration:
         session_id = uuid.uuid4()
 
         mock_db.executemany = AsyncMock()
-        mock_db.fetch = AsyncMock(return_value=[
-            {
-                "id": uuid.uuid4(),
-                "session_id": session_id,
-                "agent_id": "harness",
-                "chunk_type": "user_message",
-                "payload_msgpack": msgpack.packb({"content": f"msg {i}"}, use_bin_type=True),
-                "token_count": 5,
-                "embedding": None,
-                "created_at": datetime.utcnow(),
-                "accessed_at": None,
-            }
-            for i in range(5)
-        ])
+        mock_db.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": uuid.uuid4(),
+                    "session_id": session_id,
+                    "agent_id": "harness",
+                    "chunk_type": "user_message",
+                    "payload_msgpack": msgpack.packb({"content": f"msg {i}"}, use_bin_type=True),
+                    "token_count": 5,
+                    "embedding": None,
+                    "created_at": datetime.utcnow(),
+                    "accessed_at": None,
+                }
+                for i in range(5)
+            ]
+        )
 
         with patch("ah.core.context.db", mock_db):
             chunks = [
@@ -573,6 +638,7 @@ class TestSessionContextIntegration:
 # Provider + HTTP Mocking Integration Tests
 # ===========================================================================
 
+
 class TestProviderHTTPIntegration:
     """Integration tests for providers with mocked HTTP."""
 
@@ -586,12 +652,14 @@ class TestProviderHTTPIntegration:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
-                "choices": [{
-                    "message": {
-                        "content": "Test response",
-                        "tool_calls": [],
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Test response",
+                            "tool_calls": [],
+                        }
                     }
-                }],
+                ],
                 "model": "test-model",
                 "usage": {
                     "prompt_tokens": 10,
@@ -677,6 +745,7 @@ class TestProviderHTTPIntegration:
 # Full Flow Integration Tests
 # ===========================================================================
 
+
 class TestFullFlowIntegration:
     """Full flow integration tests: session → context → agent → response."""
 
@@ -685,25 +754,29 @@ class TestFullFlowIntegration:
         test_file = temp_dir / "flow_test.txt"
         test_file.write_text("integration test content", encoding="utf-8")
 
-        provider = FakeProvider([
-            LLMResponse(
-                content="",
-                model="fake",
-                usage={"total_tokens": 5},
-                tool_calls=[{
-                    "id": "call_1",
-                    "function": {
-                        "name": "read_file",
-                        "arguments": json.dumps({"path": str(test_file)}),
-                    },
-                }],
-            ),
-            LLMResponse(
-                content="The file says: integration test content",
-                model="fake",
-                usage={"total_tokens": 5},
-            ),
-        ])
+        provider = FakeProvider(
+            [
+                LLMResponse(
+                    content="",
+                    model="fake",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": json.dumps({"path": str(test_file)}),
+                            },
+                        }
+                    ],
+                ),
+                LLMResponse(
+                    content="The file says: integration test content",
+                    model="fake",
+                    usage={"total_tokens": 5},
+                ),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -765,9 +838,11 @@ class TestFullFlowIntegration:
 
     async def test_agent_with_streaming(self, mock_session):
         """Test agent with streaming output."""
-        provider = FakeProvider([
-            LLMResponse(content="Streamed response", model="fake", usage={"total_tokens": 10}),
-        ])
+        provider = FakeProvider(
+            [
+                LLMResponse(content="Streamed response", model="fake", usage={"total_tokens": 10}),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -791,6 +866,7 @@ class TestFullFlowIntegration:
 # Tool Registry Integration Tests
 # ===========================================================================
 
+
 class TestToolRegistryIntegration:
     """Integration tests for tool registry."""
 
@@ -798,25 +874,29 @@ class TestToolRegistryIntegration:
         """Test registering and executing multiple tools."""
         reg = ToolRegistry()
 
-        @reg.register(parameters={
-            "type": "object",
-            "properties": {
-                "a": {"type": "integer"},
-                "b": {"type": "integer"},
-            },
-            "required": ["a", "b"],
-        })
+        @reg.register(
+            parameters={
+                "type": "object",
+                "properties": {
+                    "a": {"type": "integer"},
+                    "b": {"type": "integer"},
+                },
+                "required": ["a", "b"],
+            }
+        )
         async def add(a: int, b: int) -> int:
             return a + b
 
-        @reg.register(parameters={
-            "type": "object",
-            "properties": {
-                "a": {"type": "integer"},
-                "b": {"type": "integer"},
-            },
-            "required": ["a", "b"],
-        })
+        @reg.register(
+            parameters={
+                "type": "object",
+                "properties": {
+                    "a": {"type": "integer"},
+                    "b": {"type": "integer"},
+                },
+                "required": ["a", "b"],
+            }
+        )
         async def multiply(a: int, b: int) -> int:
             return a * b
 
@@ -832,14 +912,16 @@ class TestToolRegistryIntegration:
         """Test tool argument validation."""
         reg = ToolRegistry()
 
-        @reg.register(parameters={
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer"},
-                "y": {"type": "string"},
-            },
-            "required": ["x", "y"],
-        })
+        @reg.register(
+            parameters={
+                "type": "object",
+                "properties": {
+                    "x": {"type": "integer"},
+                    "y": {"type": "string"},
+                },
+                "required": ["x", "y"],
+            }
+        )
         async def strict_tool(x: int, y: str) -> str:
             return f"{y}: {x}"
 
@@ -876,6 +958,7 @@ class TestToolRegistryIntegration:
 # Container Integration Tests
 # ===========================================================================
 
+
 class TestContainerIntegration:
     """Integration tests for the dependency injection container."""
 
@@ -900,6 +983,7 @@ class TestContainerIntegration:
 # ===========================================================================
 # Real Database Tests (Skipped if PostgreSQL not available)
 # ===========================================================================
+
 
 class TestRealDatabase:
     """Integration tests with real PostgreSQL database.
@@ -1001,9 +1085,13 @@ class TestRealDatabase:
             session = await session_manager.create(title="Agent Flow Test")
 
             # Create provider
-            provider = FakeProvider([
-                LLMResponse(content="Real DB response", model="fake", usage={"total_tokens": 10}),
-            ])
+            provider = FakeProvider(
+                [
+                    LLMResponse(
+                        content="Real DB response", model="fake", usage={"total_tokens": 10}
+                    ),
+                ]
+            )
 
             # Run agent
             agent = ReActAgent(provider=provider, max_iterations=5)

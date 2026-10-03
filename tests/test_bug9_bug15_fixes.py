@@ -1,4 +1,5 @@
 """Tests for Bug 9 (task reference) and Bug 15 (lazy config loading) fixes."""
+
 import asyncio
 import importlib
 import sys
@@ -16,6 +17,7 @@ def _get_config_module():
     the module's ``__getattr__`` returns it.  Use ``sys.modules`` instead.
     """
     import ah.core.config  # noqa: F401 — ensure it's imported
+
     return sys.modules["ah.core.config"]
 
 
@@ -173,7 +175,9 @@ class TestLazyConfigLoading:
 
     def test_config_load_called_only_on_first_access(self):
         """Config.load() must be called exactly once, on first access."""
-        with patch.object(self._config_module.Config, "load", wraps=self._config_module.Config.load) as mock_load:
+        with patch.object(
+            self._config_module.Config, "load", wraps=self._config_module.Config.load
+        ) as mock_load:
             # Access config multiple times
             _ = self._config_module.config
             _ = self._config_module.config

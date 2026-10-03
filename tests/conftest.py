@@ -1,4 +1,5 @@
 """Shared test fixtures and global state isolation."""
+
 import asyncio
 import os
 
@@ -59,22 +60,27 @@ def reset_singletons():
     Instead, clear their state in place.
     """
     from ah.db.connection import db
+
     db._pool = None
     # Never let tests touch the developer database: use the isolated test DB,
     # or no DSN at all (DB-backed tests then skip).
     db.dsn = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL", "")
 
     from ah.core.context import context_manager
+
     context_manager._recent_cache.clear()
     context_manager._pending.clear()
 
     from ah.core.session import session_manager
+
     session_manager._cache.clear()
 
     from ah.tools.base import registry
+
     registry._result_cache.clear()
 
     from ah.rag.pipeline import RAGPipeline
+
     RAGPipeline._search_cache.clear()
 
     yield

@@ -34,7 +34,9 @@ async def new_session(h: Harness, title: str = "feature test") -> str:
 async def add_turn(sid: str, user: str, assistant: str) -> None:
     session_id = uuid.UUID(sid)
     await context_manager.add_chunk(session_id, "harness", "user_message", {"content": user}, 5)
-    await context_manager.add_chunk(session_id, "harness", "assistant_message", {"content": assistant}, 5)
+    await context_manager.add_chunk(
+        session_id, "harness", "assistant_message", {"content": assistant}, 5
+    )
 
 
 def result(response: dict) -> dict:
@@ -53,7 +55,9 @@ class TestSessions:
     async def test_rename_goal_search_fork_delete(self, h):
         tag = uuid.uuid4().hex[:8]
         sid = await new_session(h)
-        renamed = result(await h.call("session.rename", {"sessionId": sid, "title": f"zebra {tag}"}))
+        renamed = result(
+            await h.call("session.rename", {"sessionId": sid, "title": f"zebra {tag}"})
+        )
         assert renamed["session"]["title"] == f"zebra {tag}"
 
         goal = result(await h.call("session.setGoal", {"sessionId": sid, "goal": "ship it"}))
@@ -63,7 +67,9 @@ class TestSessions:
         assert sid in {s["id"] for s in found}
 
         await add_turn(sid, "hello", "hi there")
-        fork = result(await h.call("session.fork", {"sessionId": sid, "title": "branch"}))["session"]
+        fork = result(await h.call("session.fork", {"sessionId": sid, "title": "branch"}))[
+            "session"
+        ]
         assert fork["id"] != sid and fork["title"] == "branch"
         history = result(await h.call("session.resume", {"sessionId": fork["id"]}))["history"]
         assert [e["content"] for e in history] == ["hello", "hi there"]
@@ -115,7 +121,9 @@ class TestMemory:
     async def test_add_list_search_forget(self, h):
         tag = uuid.uuid4().hex[:10]
         added = result(
-            await h.call("memory.add", {"content": f"User prefers kelp {tag}", "category": "preference"})
+            await h.call(
+                "memory.add", {"content": f"User prefers kelp {tag}", "category": "preference"}
+            )
         )["memory"]
         assert added["category"] == "preference"
 
@@ -141,12 +149,16 @@ class TestMemory:
         keep = await memory_approval_gate.submit(content="keep this fact", category="fact")
         drop = await memory_approval_gate.submit(content="drop this fact", category="fact")
 
-        pending_ids = {p["id"] for p in result(await h.call("memory.pending", {"limit": 500}))["pending"]}
+        pending_ids = {
+            p["id"] for p in result(await h.call("memory.pending", {"limit": 500}))["pending"]
+        }
         assert {str(keep.id), str(drop.id)} <= pending_ids
 
         approved = result(await h.call("memory.approve", {"id": str(keep.id)}))["memory"]
         assert approved["content"] == "keep this fact"
-        assert result(await h.call("memory.reject", {"id": str(drop.id), "note": "nope"})) == {"rejected": True}
+        assert result(await h.call("memory.reject", {"id": str(drop.id), "note": "nope"})) == {
+            "rejected": True
+        }
 
         again = await h.call("memory.approve", {"id": str(keep.id)})
         assert again["error"]["code"] == NOT_FOUND
@@ -169,7 +181,9 @@ class TestSkills:
         source.write_text("# Deploying\nRun the migrations first.", encoding="utf-8")
 
         learned = result(
-            await h.call("skills.learn", {"source": str(source), "name": "deploying", "triggers": ["deploy"]})
+            await h.call(
+                "skills.learn", {"source": str(source), "name": "deploying", "triggers": ["deploy"]}
+            )
         )["skill"]
         assert learned["name"] == "deploying" and learned["triggers"] == ["deploy"]
 
@@ -203,11 +217,17 @@ class TestConfigProfilesStatus:
 
     async def test_profiles(self, h):
         user = f"user-{uuid.uuid4().hex[:8]}"
-        created = result(await h.call("profile.get", {"userId": user, "displayName": "Kia"}))["profile"]
+        created = result(await h.call("profile.get", {"userId": user, "displayName": "Kia"}))[
+            "profile"
+        ]
         assert created["userId"] == user and created["displayName"] == "Kia"
-        updated = result(await h.call("profile.set", {"userId": user, "key": "tone", "value": "concise"}))
+        updated = result(
+            await h.call("profile.set", {"userId": user, "key": "tone", "value": "concise"})
+        )
         assert updated["profile"]["preferences"] == {"tone": "concise"}
-        assert user in {p["userId"] for p in result(await h.call("profile.list", {"limit": 500}))["profiles"]}
+        assert user in {
+            p["userId"] for p in result(await h.call("profile.list", {"limit": 500}))["profiles"]
+        }
 
     async def test_status(self, h):
         status = result(await h.call("status"))

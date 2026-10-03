@@ -6,6 +6,7 @@ These tests inject failures to validate that the agent recovers gracefully:
 - Context failures (corrupted data, missing chunks)
 - Database failures (connection drops, slow queries)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,6 +23,7 @@ from ah.tools.base import ToolRegistry
 # ===========================================================================
 # Fixtures
 # ===========================================================================
+
 
 @pytest.fixture
 def mock_session():
@@ -43,18 +45,21 @@ def temp_dir(tmp_path):
 # LLM Failure Chaos Tests
 # ===========================================================================
 
+
 class TestLLMChaos:
     """Chaos tests for LLM failures."""
 
     async def test_agent_handles_empty_llm_response(self, mock_session):
         """Agent should handle empty LLM response gracefully."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="",
-            model="test-model",
-            usage={"total_tokens": 0},
-            tool_calls=[],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="",
+                model="test-model",
+                usage={"total_tokens": 0},
+                tool_calls=[],
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -74,18 +79,22 @@ class TestLLMChaos:
     async def test_agent_handles_malformed_tool_json(self, mock_session):
         """Agent should not crash on invalid tool call JSON."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="",
-            model="test-model",
-            usage={"total_tokens": 5},
-            tool_calls=[{
-                "id": "call_1",
-                "function": {
-                    "name": "read_file",
-                    "arguments": "not valid json{{{",
-                },
-            }],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="",
+                model="test-model",
+                usage={"total_tokens": 5},
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "not valid json{{{",
+                        },
+                    }
+                ],
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -105,18 +114,22 @@ class TestLLMChaos:
     async def test_agent_handles_missing_tool_name(self, mock_session):
         """Agent should handle tool call missing 'name' field."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="",
-            model="test-model",
-            usage={"total_tokens": 5},
-            tool_calls=[{
-                "id": "call_1",
-                "function": {
-                    "name": "",
-                    "arguments": "{}",
-                },
-            }],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="",
+                model="test-model",
+                usage={"total_tokens": 5},
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "function": {
+                            "name": "",
+                            "arguments": "{}",
+                        },
+                    }
+                ],
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -135,18 +148,22 @@ class TestLLMChaos:
     async def test_agent_handles_nonexistent_tool(self, mock_session):
         """Agent should handle non-existent tool gracefully."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="",
-            model="test-model",
-            usage={"total_tokens": 5},
-            tool_calls=[{
-                "id": "call_1",
-                "function": {
-                    "name": "nonexistent_tool_xyz",
-                    "arguments": "{}",
-                },
-            }],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="",
+                model="test-model",
+                usage={"total_tokens": 5},
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "function": {
+                            "name": "nonexistent_tool_xyz",
+                            "arguments": "{}",
+                        },
+                    }
+                ],
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -205,12 +222,14 @@ class TestLLMChaos:
     async def test_agent_handles_malformed_llm_response(self, mock_session):
         """Agent should handle completely malformed LLM response."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content=None,  # type: ignore
-            model="test-model",
-            usage={"total_tokens": 0},
-            tool_calls=None,  # type: ignore
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content=None,  # type: ignore
+                model="test-model",
+                usage={"total_tokens": 0},
+                tool_calls=None,  # type: ignore
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -232,12 +251,14 @@ class TestLLMChaos:
     async def test_agent_handles_very_long_llm_response(self, mock_session):
         """Agent should handle very long LLM response."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="x" * 100000,
-            model="test-model",
-            usage={"total_tokens": 25000},
-            tool_calls=[],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="x" * 100000,
+                model="test-model",
+                usage={"total_tokens": 25000},
+                tool_calls=[],
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -256,12 +277,14 @@ class TestLLMChaos:
     async def test_agent_handles_unicode_in_llm_response(self, mock_session):
         """Agent should handle unicode in LLM response."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="你好世界 🎉 émojis",
-            model="test-model",
-            usage={"total_tokens": 5},
-            tool_calls=[],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="你好世界 🎉 émojis",
+                model="test-model",
+                usage={"total_tokens": 5},
+                tool_calls=[],
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -282,6 +305,7 @@ class TestLLMChaos:
 # Tool Failure Chaos Tests
 # ===========================================================================
 
+
 class TestToolChaos:
     """Chaos tests for tool failures."""
 
@@ -301,20 +325,44 @@ class TestToolChaos:
             return "success"
 
         provider = AsyncMock()
-        provider.complete = AsyncMock(side_effect=[
-            # First call: tool that fails
-            LLMResponse(content="", model="test", usage={"total_tokens": 5}, tool_calls=[{
-                "id": "call_1",
-                "function": {"name": "flaky_tool", "arguments": json.dumps({"should_fail": "true"})},
-            }]),
-            # Second call: tool that succeeds
-            LLMResponse(content="", model="test", usage={"total_tokens": 5}, tool_calls=[{
-                "id": "call_2",
-                "function": {"name": "flaky_tool", "arguments": json.dumps({"should_fail": "false"})},
-            }]),
-            # Third call: final answer
-            LLMResponse(content="Recovered from failure", model="test", usage={"total_tokens": 5}),
-        ])
+        provider.complete = AsyncMock(
+            side_effect=[
+                # First call: tool that fails
+                LLMResponse(
+                    content="",
+                    model="test",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "flaky_tool",
+                                "arguments": json.dumps({"should_fail": "true"}),
+                            },
+                        }
+                    ],
+                ),
+                # Second call: tool that succeeds
+                LLMResponse(
+                    content="",
+                    model="test",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_2",
+                            "function": {
+                                "name": "flaky_tool",
+                                "arguments": json.dumps({"should_fail": "false"}),
+                            },
+                        }
+                    ],
+                ),
+                # Third call: final answer
+                LLMResponse(
+                    content="Recovered from failure", model="test", usage={"total_tokens": 5}
+                ),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -341,15 +389,19 @@ class TestToolChaos:
             return "done"
 
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="",
-            model="test",
-            usage={"total_tokens": 5},
-            tool_calls=[{
-                "id": "call_1",
-                "function": {"name": "slow_tool", "arguments": "{}"},
-            }],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="",
+                model="test",
+                usage={"total_tokens": 5},
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "function": {"name": "slow_tool", "arguments": "{}"},
+                    }
+                ],
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -378,13 +430,22 @@ class TestToolChaos:
             return None
 
         provider = AsyncMock()
-        provider.complete = AsyncMock(side_effect=[
-            LLMResponse(content="", model="test", usage={"total_tokens": 5}, tool_calls=[{
-                "id": "call_1",
-                "function": {"name": "none_tool", "arguments": "{}"},
-            }]),
-            LLMResponse(content="Done", model="test", usage={"total_tokens": 5}),
-        ])
+        provider.complete = AsyncMock(
+            side_effect=[
+                LLMResponse(
+                    content="",
+                    model="test",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "function": {"name": "none_tool", "arguments": "{}"},
+                        }
+                    ],
+                ),
+                LLMResponse(content="Done", model="test", usage={"total_tokens": 5}),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -409,13 +470,22 @@ class TestToolChaos:
             return "x" * 1000000
 
         provider = AsyncMock()
-        provider.complete = AsyncMock(side_effect=[
-            LLMResponse(content="", model="test", usage={"total_tokens": 5}, tool_calls=[{
-                "id": "call_1",
-                "function": {"name": "huge_tool", "arguments": "{}"},
-            }]),
-            LLMResponse(content="Done", model="test", usage={"total_tokens": 5}),
-        ])
+        provider.complete = AsyncMock(
+            side_effect=[
+                LLMResponse(
+                    content="",
+                    model="test",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "function": {"name": "huge_tool", "arguments": "{}"},
+                        }
+                    ],
+                ),
+                LLMResponse(content="Done", model="test", usage={"total_tokens": 5}),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -440,13 +510,25 @@ class TestToolChaos:
             return x * 2
 
         provider = AsyncMock()
-        provider.complete = AsyncMock(side_effect=[
-            LLMResponse(content="", model="test", usage={"total_tokens": 5}, tool_calls=[{
-                "id": "call_1",
-                "function": {"name": "strict_tool", "arguments": json.dumps({"x": "not_an_int"})},
-            }]),
-            LLMResponse(content="Error handled", model="test", usage={"total_tokens": 5}),
-        ])
+        provider.complete = AsyncMock(
+            side_effect=[
+                LLMResponse(
+                    content="",
+                    model="test",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "strict_tool",
+                                "arguments": json.dumps({"x": "not_an_int"}),
+                            },
+                        }
+                    ],
+                ),
+                LLMResponse(content="Error handled", model="test", usage={"total_tokens": 5}),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -467,18 +549,21 @@ class TestToolChaos:
 # Context Failure Chaos Tests
 # ===========================================================================
 
+
 class TestContextChaos:
     """Chaos tests for context failures."""
 
     async def test_agent_handles_context_overflow(self, mock_session):
         """Agent should handle context overflow gracefully."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="test",
-            model="test",
-            usage={"total_tokens": 10},
-            tool_calls=[],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="test",
+                model="test",
+                usage={"total_tokens": 10},
+                tool_calls=[],
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -487,10 +572,16 @@ class TestContextChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 # Simulate context overflow by returning huge context
-                mock_cm.get_recent_context = AsyncMock(return_value=[
-                    {"type": "user_message", "payload": {"content": "x" * 10000}, "tokens": 2500}
-                    for _ in range(100)
-                ])
+                mock_cm.get_recent_context = AsyncMock(
+                    return_value=[
+                        {
+                            "type": "user_message",
+                            "payload": {"content": "x" * 10000},
+                            "tokens": 2500,
+                        }
+                        for _ in range(100)
+                    ]
+                )
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
                 response = await agent.run(mock_session.id, "test", verbose=False)
@@ -500,12 +591,14 @@ class TestContextChaos:
     async def test_agent_handles_corrupted_context(self, mock_session):
         """Agent should handle corrupted context data."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="test",
-            model="test",
-            usage={"total_tokens": 10},
-            tool_calls=[],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="test",
+                model="test",
+                usage={"total_tokens": 10},
+                tool_calls=[],
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -514,11 +607,13 @@ class TestContextChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 # Return corrupted context
-                mock_cm.get_recent_context = AsyncMock(return_value=[
-                    {"type": "unknown", "payload": None},
-                    {"type": "user_message"},  # Missing payload
-                    {},  # Empty dict
-                ])
+                mock_cm.get_recent_context = AsyncMock(
+                    return_value=[
+                        {"type": "unknown", "payload": None},
+                        {"type": "user_message"},  # Missing payload
+                        {},  # Empty dict
+                    ]
+                )
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
                 response = await agent.run(mock_session.id, "test", verbose=False)
@@ -542,18 +637,21 @@ class TestContextChaos:
 # Database Failure Chaos Tests
 # ===========================================================================
 
+
 class TestDatabaseChaos:
     """Chaos tests for database failures."""
 
     async def test_agent_handles_db_connection_drop(self, mock_session):
         """Agent should handle database connection drop gracefully."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="test",
-            model="test",
-            usage={"total_tokens": 10},
-            tool_calls=[],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="test",
+                model="test",
+                usage={"total_tokens": 10},
+                tool_calls=[],
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -561,10 +659,12 @@ class TestDatabaseChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 # First call succeeds, second fails
-                mock_cm.add_chunk = AsyncMock(side_effect=[
-                    None,  # First call succeeds
-                    Exception("Connection lost"),  # Second call fails
-                ])
+                mock_cm.add_chunk = AsyncMock(
+                    side_effect=[
+                        None,  # First call succeeds
+                        Exception("Connection lost"),  # Second call fails
+                    ]
+                )
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -579,12 +679,14 @@ class TestDatabaseChaos:
     async def test_agent_handles_slow_db(self, mock_session):
         """Agent should handle slow database queries."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="test",
-            model="test",
-            usage={"total_tokens": 10},
-            tool_calls=[],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="test",
+                model="test",
+                usage={"total_tokens": 10},
+                tool_calls=[],
+            )
+        )
 
         async def slow_add_chunk(*args, **kwargs):
             await asyncio.sleep(0.1)  # Simulate slow query
@@ -607,12 +709,14 @@ class TestDatabaseChaos:
     async def test_agent_handles_db_pool_exhaustion(self, mock_session):
         """Agent should handle database pool exhaustion."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="test",
-            model="test",
-            usage={"total_tokens": 10},
-            tool_calls=[],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="test",
+                model="test",
+                usage={"total_tokens": 10},
+                tool_calls=[],
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -634,6 +738,7 @@ class TestDatabaseChaos:
 # Streaming Chaos Tests
 # ===========================================================================
 
+
 class TestStreamingChaos:
     """Chaos tests for streaming failures."""
 
@@ -643,6 +748,7 @@ class TestStreamingChaos:
 
         async def interrupted_stream(*args, **kwargs):
             from ah.core.models import StreamEvent
+
             yield StreamEvent(type="text", content="partial")
             raise Exception("Stream interrupted")
 
@@ -673,12 +779,16 @@ class TestStreamingChaos:
 
         async def malformed_stream(*args, **kwargs):
             from ah.core.models import StreamEvent
+
             yield StreamEvent(type="text", content="data: {invalid json}\n\n")
-            yield StreamEvent(type="done", response=LLMResponse(
-                content="recovered",
-                model="test",
-                usage={},
-            ))
+            yield StreamEvent(
+                type="done",
+                response=LLMResponse(
+                    content="recovered",
+                    model="test",
+                    usage={},
+                ),
+            )
 
         provider.stream_complete = malformed_stream
 
@@ -703,18 +813,21 @@ class TestStreamingChaos:
 # Concurrent Chaos Tests
 # ===========================================================================
 
+
 class TestConcurrentChaos:
     """Chaos tests for concurrent operations."""
 
     async def test_concurrent_agent_runs(self, mock_session):
         """Multiple agent runs should not interfere with each other."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="test",
-            model="test",
-            usage={"total_tokens": 10},
-            tool_calls=[],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="test",
+                model="test",
+                usage={"total_tokens": 10},
+                tool_calls=[],
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -727,10 +840,9 @@ class TestConcurrentChaos:
                 agent = ReActAgent(provider=provider, max_iterations=5)
 
                 # Run multiple agents concurrently
-                results = await asyncio.gather(*[
-                    agent.run(mock_session.id, f"test {i}", verbose=False)
-                    for i in range(5)
-                ])
+                results = await asyncio.gather(
+                    *[agent.run(mock_session.id, f"test {i}", verbose=False) for i in range(5)]
+                )
 
                 assert len(results) == 5
                 for r in results:
@@ -746,15 +858,22 @@ class TestConcurrentChaos:
             return "done"
 
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="",
-            model="test",
-            usage={"total_tokens": 5},
-            tool_calls=[{
-                "id": "call_1",
-                "function": {"name": "concurrent_tool", "arguments": json.dumps({"delay": 0.01})},
-            }],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="",
+                model="test",
+                usage={"total_tokens": 5},
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "function": {
+                            "name": "concurrent_tool",
+                            "arguments": json.dumps({"delay": 0.01}),
+                        },
+                    }
+                ],
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -768,10 +887,9 @@ class TestConcurrentChaos:
                     agent = ReActAgent(provider=provider, max_iterations=5)
 
                     # Run multiple agents concurrently
-                    results = await asyncio.gather(*[
-                        agent.run(mock_session.id, f"test {i}", verbose=False)
-                        for i in range(3)
-                    ])
+                    results = await asyncio.gather(
+                        *[agent.run(mock_session.id, f"test {i}", verbose=False) for i in range(3)]
+                    )
 
                     assert len(results) == 3
 
@@ -779,6 +897,7 @@ class TestConcurrentChaos:
 # ===========================================================================
 # Recovery Tests
 # ===========================================================================
+
 
 class TestRecoveryChaos:
     """Tests for agent recovery after failures."""
@@ -794,25 +913,57 @@ class TestRecoveryChaos:
             return "success"
 
         provider = AsyncMock()
-        provider.complete = AsyncMock(side_effect=[
-            # First: tool fails
-            LLMResponse(content="", model="test", usage={"total_tokens": 5}, tool_calls=[{
-                "id": "call_1",
-                "function": {"name": "sometimes_fails", "arguments": json.dumps({"fail_count": 2})},
-            }]),
-            # Second: tool fails again
-            LLMResponse(content="", model="test", usage={"total_tokens": 5}, tool_calls=[{
-                "id": "call_2",
-                "function": {"name": "sometimes_fails", "arguments": json.dumps({"fail_count": 1})},
-            }]),
-            # Third: tool succeeds
-            LLMResponse(content="", model="test", usage={"total_tokens": 5}, tool_calls=[{
-                "id": "call_3",
-                "function": {"name": "sometimes_fails", "arguments": json.dumps({"fail_count": 0})},
-            }]),
-            # Fourth: final answer
-            LLMResponse(content="Finally succeeded", model="test", usage={"total_tokens": 5}),
-        ])
+        provider.complete = AsyncMock(
+            side_effect=[
+                # First: tool fails
+                LLMResponse(
+                    content="",
+                    model="test",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "sometimes_fails",
+                                "arguments": json.dumps({"fail_count": 2}),
+                            },
+                        }
+                    ],
+                ),
+                # Second: tool fails again
+                LLMResponse(
+                    content="",
+                    model="test",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_2",
+                            "function": {
+                                "name": "sometimes_fails",
+                                "arguments": json.dumps({"fail_count": 1}),
+                            },
+                        }
+                    ],
+                ),
+                # Third: tool succeeds
+                LLMResponse(
+                    content="",
+                    model="test",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_3",
+                            "function": {
+                                "name": "sometimes_fails",
+                                "arguments": json.dumps({"fail_count": 0}),
+                            },
+                        }
+                    ],
+                ),
+                # Fourth: final answer
+                LLMResponse(content="Finally succeeded", model="test", usage={"total_tokens": 5}),
+            ]
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -838,15 +989,19 @@ class TestRecoveryChaos:
             raise RuntimeError("Always fails")
 
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="",
-            model="test",
-            usage={"total_tokens": 5},
-            tool_calls=[{
-                "id": "call_1",
-                "function": {"name": "always_fails", "arguments": "{}"},
-            }],
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="",
+                model="test",
+                usage={"total_tokens": 5},
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "function": {"name": "always_fails", "arguments": "{}"},
+                    }
+                ],
+            )
+        )
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)

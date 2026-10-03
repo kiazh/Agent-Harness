@@ -1,4 +1,5 @@
 """Comprehensive tests for AgentHarness."""
+
 import asyncio
 import os
 import subprocess
@@ -45,6 +46,7 @@ from ah.tools.file import list_files, read_file, write_file
 # Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def temp_dir():
     """Create a temporary directory for file tests."""
@@ -87,6 +89,7 @@ def mock_db():
 # ============================================================================
 # 1. Unit Tests — Pure Functions
 # ============================================================================
+
 
 class TestPromptAssembler:
     """Tests for PromptAssembler."""
@@ -169,10 +172,12 @@ class TestPromptAssembler:
     def test_compress_chunk_tool_call(self):
         """Test compressing tool_call chunk."""
         assembler = PromptAssembler()
-        result = assembler._compress_chunk({
-            "type": "tool_call",
-            "payload": {"tool": "read_file", "args": {"path": "/tmp/test"}},
-        })
+        result = assembler._compress_chunk(
+            {
+                "type": "tool_call",
+                "payload": {"tool": "read_file", "args": {"path": "/tmp/test"}},
+            }
+        )
         assert "tool_call" in result
         assert "read_file" in result
         assert "path=/tmp/test" in result
@@ -180,20 +185,24 @@ class TestPromptAssembler:
     def test_compress_chunk_user_message(self):
         """Test compressing user_message chunk."""
         assembler = PromptAssembler()
-        result = assembler._compress_chunk({
-            "type": "user_message",
-            "payload": {"content": "hello world"},
-        })
+        result = assembler._compress_chunk(
+            {
+                "type": "user_message",
+                "payload": {"content": "hello world"},
+            }
+        )
         assert "user_message" in result
         assert "hello world" in result
 
     def test_compress_chunk_result(self):
         """Test compressing result chunk."""
         assembler = PromptAssembler()
-        result = assembler._compress_chunk({
-            "type": "result",
-            "payload": {"status": "ok", "result": "success"},
-        })
+        result = assembler._compress_chunk(
+            {
+                "type": "result",
+                "payload": {"status": "ok", "result": "success"},
+            }
+        )
         assert "ok" in result
         assert "success" in result
 
@@ -201,70 +210,84 @@ class TestPromptAssembler:
         """Test that long results are truncated."""
         assembler = PromptAssembler()
         long_result = "x" * 300
-        result = assembler._compress_chunk({
-            "type": "result",
-            "payload": {"status": "ok", "result": long_result},
-        })
+        result = assembler._compress_chunk(
+            {
+                "type": "result",
+                "payload": {"status": "ok", "result": long_result},
+            }
+        )
         assert "..." in result
         assert len(result) < 250
 
     def test_compress_chunk_memory(self):
         """Test compressing memory chunk."""
         assembler = PromptAssembler()
-        result = assembler._compress_chunk({
-            "type": "memory",
-            "payload": {"content": "remembered"},
-        })
+        result = assembler._compress_chunk(
+            {
+                "type": "memory",
+                "payload": {"content": "remembered"},
+            }
+        )
         assert "memory" in result
         assert "remembered" in result
 
     def test_compress_chunk_heartbeat(self):
         """Test compressing heartbeat chunk."""
         assembler = PromptAssembler()
-        result = assembler._compress_chunk({
-            "type": "heartbeat",
-            "payload": {"prompt": "check status"},
-        })
+        result = assembler._compress_chunk(
+            {
+                "type": "heartbeat",
+                "payload": {"prompt": "check status"},
+            }
+        )
         assert "heartbeat" in result
         assert "check status" in result
 
     def test_compress_chunk_system(self):
         """Test compressing system chunk."""
         assembler = PromptAssembler()
-        result = assembler._compress_chunk({
-            "type": "system",
-            "payload": {"message": "system message"},
-        })
+        result = assembler._compress_chunk(
+            {
+                "type": "system",
+                "payload": {"message": "system message"},
+            }
+        )
         assert "system" in result
         assert "system message" in result
 
     def test_compress_chunk_user(self):
         """Test compressing user chunk."""
         assembler = PromptAssembler()
-        result = assembler._compress_chunk({
-            "type": "user",
-            "payload": {"content": "user input"},
-        })
+        result = assembler._compress_chunk(
+            {
+                "type": "user",
+                "payload": {"content": "user input"},
+            }
+        )
         assert "user" in result
         assert "user input" in result
 
     def test_compress_chunk_assistant(self):
         """Test compressing assistant chunk."""
         assembler = PromptAssembler()
-        result = assembler._compress_chunk({
-            "type": "assistant",
-            "payload": {"content": "assistant response"},
-        })
+        result = assembler._compress_chunk(
+            {
+                "type": "assistant",
+                "payload": {"content": "assistant response"},
+            }
+        )
         assert "assistant" in result
         assert "assistant response" in result
 
     def test_compress_chunk_unknown(self):
         """Test compressing unknown chunk type."""
         assembler = PromptAssembler()
-        result = assembler._compress_chunk({
-            "type": "unknown_type",
-            "payload": {"data": "value"},
-        })
+        result = assembler._compress_chunk(
+            {
+                "type": "unknown_type",
+                "payload": {"data": "value"},
+            }
+        )
         assert "unknown_type" in result
 
     def test_estimate_tokens(self):
@@ -463,6 +486,7 @@ class TestSkillParser:
     def test_parse_simple_yaml_basic(self):
         """Test simple YAML parsing with basic key-value."""
         import yaml
+
         yaml_text = "name: test\ndescription: A test\nversion: 1.0.0"
         result = yaml.safe_load(yaml_text)
         assert result["name"] == "test"
@@ -472,6 +496,7 @@ class TestSkillParser:
     def test_parse_simple_yaml_list(self):
         """Test simple YAML parsing with list values."""
         import yaml
+
         yaml_text = "name: test\ntriggers:\n  - one\n  - two\n  - three"
         result = yaml.safe_load(yaml_text)
         assert result["name"] == "test"
@@ -480,12 +505,14 @@ class TestSkillParser:
     def test_parse_simple_yaml_empty(self):
         """Test simple YAML parsing with empty input."""
         import yaml
+
         result = yaml.safe_load("")
         assert result is None or result == {}
 
     def test_parse_simple_yaml_mixed(self):
         """Test simple YAML parsing with mixed content."""
         import yaml
+
         yaml_text = "name: test\ndescription: A test\ntriggers:\n  - a\n  - b\nversion: 1.0"
         result = yaml.safe_load(yaml_text)
         assert result["name"] == "test"
@@ -670,6 +697,7 @@ class TestDataclasses:
 # 2. Edge Case Tests
 # ============================================================================
 
+
 class TestEdgeCases:
     """Edge case tests for various inputs."""
 
@@ -703,7 +731,7 @@ class TestEdgeCases:
         """Test PromptAssembler with special characters."""
         assembler = PromptAssembler(session_budget=8000)
         prompt = assembler.assemble(
-            system_prompt="System <prompt> & \"quotes\"",
+            system_prompt='System <prompt> & "quotes"',
             goal="Goal with\ttabs\nand\nnewlines",
             recent_chunks=[],
             retrieved_chunks=[],
@@ -781,12 +809,14 @@ class TestEdgeCases:
 # 3. Error Handling Tests
 # ============================================================================
 
+
 class TestErrorHandling:
     """Tests for error handling."""
 
     def test_read_file_not_found(self, temp_dir):
         """Test read_file with non-existent file."""
         from ah.core.exceptions import ToolError
+
         with patch("ah.tools.file._BASE_DIR", temp_dir):
             with pytest.raises(ToolError, match="File not found"):
                 asyncio.run(read_file(str(temp_dir / "nonexistent.txt")))
@@ -794,6 +824,7 @@ class TestErrorHandling:
     def test_read_file_directory(self, temp_dir):
         """Test read_file with directory path."""
         from ah.core.exceptions import ToolError
+
         with patch("ah.tools.file._BASE_DIR", temp_dir):
             with pytest.raises(ToolError, match="Not a file"):
                 asyncio.run(read_file(str(temp_dir)))
@@ -801,12 +832,14 @@ class TestErrorHandling:
     def test_write_file_invalid_path(self):
         """Test write_file with invalid path."""
         from ah.core.exceptions import ToolError
+
         with pytest.raises(ToolError, match="escapes the allowed base directory"):
             asyncio.run(write_file("/some/path/test.txt", "content"))
 
     def test_list_files_not_found(self, temp_dir):
         """Test list_files with non-existent directory."""
         from ah.core.exceptions import ToolError
+
         with patch("ah.tools.file._BASE_DIR", temp_dir):
             with pytest.raises(ToolError, match="Directory not found"):
                 asyncio.run(list_files(str(temp_dir / "nonexistent")))
@@ -814,6 +847,7 @@ class TestErrorHandling:
     def test_list_files_file_path(self, temp_dir):
         """Test list_files with file path instead of directory."""
         from ah.core.exceptions import ToolError
+
         test_file = temp_dir / "test.txt"
         test_file.write_text("content")
         with patch("ah.tools.file._BASE_DIR", temp_dir):
@@ -824,6 +858,7 @@ class TestErrorHandling:
         """Test terminal with invalid command."""
         from ah.core.exceptions import ValidationError
         from ah.tools.terminal import terminal as terminal_fn
+
         with pytest.raises(ValidationError, match="not in the allowlist"):
             asyncio.run(terminal_fn("this_command_does_not_exist_12345"))
 
@@ -831,6 +866,7 @@ class TestErrorHandling:
         """Test terminal with timeout."""
         from ah.core.exceptions import ToolError
         from ah.tools.terminal import terminal as terminal_fn
+
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="test", timeout=1)
             with pytest.raises(ToolError, match="timed out"):
@@ -874,6 +910,7 @@ class TestErrorHandling:
 # ============================================================================
 # 4. Integration Tests — Mocked Database
 # ============================================================================
+
 
 class TestSessionManagerMocked:
     """Tests for SessionManager with mocked database."""
@@ -955,6 +992,7 @@ class TestContextManagerMocked:
     def mock_chunk_row(self):
         """Create a mock context chunk row."""
         import msgpack
+
         return {
             "id": uuid.uuid4(),
             "session_id": uuid.uuid4(),
@@ -1022,6 +1060,7 @@ class TestContextManagerMocked:
 # 5. CLI Tests
 # ============================================================================
 
+
 class TestCLI:
     """Tests for CLI commands using typer's CliRunner."""
 
@@ -1054,14 +1093,20 @@ class TestCLI:
             mock_db.pool = None
             result = runner.invoke(app, ["status"])
             # CLI should handle DB errors gracefully (either exit non-zero or show error)
-            assert result.exit_code != 0 or "error" in result.output.lower() or "unavailable" in result.output.lower()
+            assert (
+                result.exit_code != 0
+                or "error" in result.output.lower()
+                or "unavailable" in result.output.lower()
+            )
 
     def test_chat_no_message(self):
         """Test chat command without message."""
         runner = CliRunner()
-        with patch("ah.cli.db") as mock_db, \
-             patch("ah.cli.session_manager") as mock_sm, \
-             patch("ah.cli.context_manager") as mock_cm:
+        with (
+            patch("ah.cli.db") as mock_db,
+            patch("ah.cli.session_manager") as mock_sm,
+            patch("ah.cli.context_manager") as mock_cm,
+        ):
             mock_db.connect = AsyncMock()
             mock_db.close = AsyncMock()
             mock_sm.create = AsyncMock(return_value=Session(id=uuid.uuid4()))
@@ -1080,8 +1125,7 @@ class TestCLI:
     def test_sessions_command_no_db(self):
         """Test sessions command without database."""
         runner = CliRunner()
-        with patch("ah.cli.db") as mock_db, \
-             patch("ah.core.session.db") as mock_session_db:
+        with patch("ah.cli.db") as mock_db, patch("ah.core.session.db") as mock_session_db:
             mock_db.connect = AsyncMock()
             mock_db.close = AsyncMock()
             mock_session_db.fetch = AsyncMock(return_value=[])
@@ -1092,9 +1136,11 @@ class TestCLI:
     def test_context_command_no_args(self):
         """Test context command without arguments."""
         runner = CliRunner()
-        with patch("ah.cli.db") as mock_db, \
-             patch("ah.core.session.db") as mock_session_db, \
-             patch("ah.core.context.db") as mock_context_db:
+        with (
+            patch("ah.cli.db") as mock_db,
+            patch("ah.core.session.db") as mock_session_db,
+            patch("ah.core.context.db") as mock_context_db,
+        ):
             mock_db.connect = AsyncMock()
             mock_db.close = AsyncMock()
             mock_session_db.fetchrow = AsyncMock(return_value=None)
@@ -1114,6 +1160,7 @@ class TestCLI:
 # 6. Provider Tests — Mocked HTTP
 # ============================================================================
 
+
 class TestOpenRouterProvider:
     """Tests for OpenRouterProvider with mocked HTTP."""
 
@@ -1128,12 +1175,14 @@ class TestOpenRouterProvider:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "choices": [{
-                "message": {
-                    "content": "Test response",
-                    "tool_calls": [],
+            "choices": [
+                {
+                    "message": {
+                        "content": "Test response",
+                        "tool_calls": [],
+                    }
                 }
-            }],
+            ],
             "model": "test-model",
             "usage": {
                 "prompt_tokens": 10,
@@ -1154,18 +1203,22 @@ class TestOpenRouterProvider:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "choices": [{
-                "message": {
-                    "content": "",
-                    "tool_calls": [{
-                        "id": "call_1",
-                        "function": {
-                            "name": "test_tool",
-                            "arguments": '{"x": 1}',
-                        },
-                    }],
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "function": {
+                                    "name": "test_tool",
+                                    "arguments": '{"x": 1}',
+                                },
+                            }
+                        ],
+                    }
                 }
-            }],
+            ],
             "model": "test-model",
             "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         }
@@ -1243,12 +1296,14 @@ class TestOllamaProvider:
         mock_response.json.return_value = {
             "message": {
                 "content": "",
-                "tool_calls": [{
-                    "function": {
-                        "name": "test_tool",
-                        "arguments": {"x": 1},
-                    },
-                }],
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "test_tool",
+                            "arguments": {"x": 1},
+                        },
+                    }
+                ],
             },
             "model": "llama3.1",
             "prompt_eval_count": 10,
@@ -1313,6 +1368,7 @@ class TestProviderFactory:
 # 7. Agent Tests — Mocked Provider
 # ============================================================================
 
+
 class TestReActAgent:
     """Tests for ReActAgent with mocked provider."""
 
@@ -1320,11 +1376,13 @@ class TestReActAgent:
     def mock_provider(self):
         """Create a mock LLM provider."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(return_value=LLMResponse(
-            content="Test response",
-            model="test-model",
-            usage={"total_tokens": 10},
-        ))
+        provider.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="Test response",
+                model="test-model",
+                usage={"total_tokens": 10},
+            )
+        )
         return provider
 
     @pytest.fixture
@@ -1360,13 +1418,15 @@ class TestReActAgent:
             content="",
             model="test-model",
             usage={"total_tokens": 5},
-            tool_calls=[{
-                "id": "call_1",
-                "function": {
-                    "name": "read_file",
-                    "arguments": '{"path": "/tmp/test"}',
-                },
-            }],
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path": "/tmp/test"}',
+                    },
+                }
+            ],
         )
         final_response = LLMResponse(
             content="Final answer",
@@ -1407,13 +1467,15 @@ class TestReActAgent:
             content="",
             model="test-model",
             usage={"total_tokens": 5},
-            tool_calls=[{
-                "id": "call_1",
-                "function": {
-                    "name": "read_file",
-                    "arguments": '{"path": "/tmp/test"}',
-                },
-            }],
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path": "/tmp/test"}',
+                    },
+                }
+            ],
         )
         mock_provider.complete = AsyncMock(return_value=tool_call_response)
 
@@ -1435,6 +1497,7 @@ class TestReActAgent:
 # ============================================================================
 # 8. Built-in Tools Tests
 # ============================================================================
+
 
 class TestBuiltinTools:
     """Tests for built-in tools."""
@@ -1520,6 +1583,7 @@ class TestBuiltinTools:
 # 9. Database Schema Tests
 # ============================================================================
 
+
 class TestDatabaseSchema:
     """Tests for database schema and connection."""
 
@@ -1563,6 +1627,7 @@ class TestDatabaseSchema:
 # 10. System Prompt Tests
 # ============================================================================
 
+
 class TestSystemPrompt:
     """Tests for system prompt."""
 
@@ -1580,6 +1645,7 @@ class TestSystemPrompt:
 # ============================================================================
 # 11. LLMProvider Base Class Tests
 # ============================================================================
+
 
 class TestLLMProviderBase:
     """Tests for LLMProvider base class."""
@@ -1600,6 +1666,7 @@ class TestLLMProviderBase:
 # ============================================================================
 # 12. Skill Telemetry Tests
 # ============================================================================
+
 
 class TestSkillTelemetry:
     """Tests for skill usage telemetry."""
@@ -1655,6 +1722,7 @@ class TestSkillTelemetry:
 # 13. Skill Provenance Tests
 # ============================================================================
 
+
 class TestSkillProvenance:
     """Tests for skill provenance tracking."""
 
@@ -1703,6 +1771,7 @@ class TestSkillProvenance:
 # ============================================================================
 # 14. Skill Curator Tests
 # ============================================================================
+
 
 class TestSkillCurator:
     """Tests for skill curator."""
@@ -1786,6 +1855,7 @@ class TestSkillCurator:
 # 15. Skill Hub Tests
 # ============================================================================
 
+
 class TestSkillHub:
     """Tests for skill hub."""
 
@@ -1855,6 +1925,7 @@ class TestSkillHub:
 # ============================================================================
 # 16. CLI Command Tests — learn, curator, hub
 # ============================================================================
+
 
 class TestCLISkillCommands:
     """Tests for new CLI commands."""

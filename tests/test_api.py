@@ -1,4 +1,5 @@
 """Tests for the FastAPI HTTP API (ah.api)."""
+
 from __future__ import annotations
 
 import os
@@ -73,9 +74,7 @@ class TestAuth:
 
     async def test_auth_acceptance_with_key(self, client, auth_headers):
         # Mock the DB call so we only test auth passes (not 401)
-        with patch(
-            "ah.api.app.session_manager.list_sessions", new_callable=AsyncMock
-        ) as mock_list:
+        with patch("ah.api.app.session_manager.list_sessions", new_callable=AsyncMock) as mock_list:
             mock_list.return_value = []
             resp = await client.get("/sessions", headers=auth_headers)
             assert resp.status_code != 401
@@ -90,9 +89,7 @@ class TestSessions:
 
         with patch("ah.api.app.session_manager.create", new_callable=AsyncMock) as mock_create:
             mock_create.return_value = mock_session
-            resp = await client.post(
-                "/sessions", headers=auth_headers, json={"title": "New Test"}
-            )
+            resp = await client.post("/sessions", headers=auth_headers, json={"title": "New Test"})
             assert resp.status_code == 200
             data = resp.json()
             assert "session" in data
@@ -101,9 +98,7 @@ class TestSessions:
     async def test_list_sessions(self, client, auth_headers):
         mock_sessions = [make_session(title="Session 1"), make_session(title="Session 2")]
 
-        with patch(
-            "ah.api.app.session_manager.list_sessions", new_callable=AsyncMock
-        ) as mock_list:
+        with patch("ah.api.app.session_manager.list_sessions", new_callable=AsyncMock) as mock_list:
             mock_list.return_value = mock_sessions
             resp = await client.get("/sessions", headers=auth_headers)
             assert resp.status_code == 200
@@ -120,9 +115,7 @@ class TestSessions:
                 "ah.api.app.context_manager.get_chunks", new_callable=AsyncMock
             ) as mock_chunks:
                 mock_chunks.return_value = []
-                resp = await client.get(
-                    f"/sessions/{mock_session.id}", headers=auth_headers
-                )
+                resp = await client.get(f"/sessions/{mock_session.id}", headers=auth_headers)
                 assert resp.status_code == 200
                 data = resp.json()
                 assert "session" in data
@@ -151,9 +144,7 @@ class TestPromptSSE:
                 yield StreamEvent(type="text", content="Hello")
                 yield StreamEvent(
                     type="done",
-                    response=AgentResponse(
-                        content="Hello", tokens_used=10, iterations=1
-                    ),
+                    response=AgentResponse(content="Hello", tokens_used=10, iterations=1),
                 )
 
         with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
@@ -253,9 +244,7 @@ class TestJobs:
 
         with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_session
-            with patch(
-                "ah.core.scheduler.job_store.create", new_callable=AsyncMock
-            ) as mock_create:
+            with patch("ah.core.scheduler.job_store.create", new_callable=AsyncMock) as mock_create:
                 mock_create.return_value = mock_job
                 resp = await client.post(
                     f"/sessions/{mock_session.id}/jobs",
@@ -273,13 +262,9 @@ class TestJobs:
 
         with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_session
-            with patch(
-                "ah.core.scheduler.job_store.list", new_callable=AsyncMock
-            ) as mock_list:
+            with patch("ah.core.scheduler.job_store.list", new_callable=AsyncMock) as mock_list:
                 mock_list.return_value = [mock_job]
-                resp = await client.get(
-                    f"/sessions/{mock_session.id}/jobs", headers=auth_headers
-                )
+                resp = await client.get(f"/sessions/{mock_session.id}/jobs", headers=auth_headers)
                 assert resp.status_code == 200
                 data = resp.json()
                 assert "jobs" in data
@@ -302,9 +287,7 @@ class TestAgents:
             "source": "builtin",
         }
 
-        with patch(
-            "ah.core.agent_def.agent_registry.list", new_callable=AsyncMock
-        ) as mock_list:
+        with patch("ah.core.agent_def.agent_registry.list", new_callable=AsyncMock) as mock_list:
             mock_list.return_value = [mock_agent]
             resp = await client.get("/agents", headers=auth_headers)
             assert resp.status_code == 200
