@@ -7,7 +7,6 @@ class that the terminal UI drives via JSON-RPC.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import uuid
@@ -15,7 +14,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -79,7 +78,8 @@ class _RpcGateway:
     def __init__(self) -> None:
         self._responses: dict[int, dict[str, Any]] = {}
         self._next_id = 0
-        self._gateway = Gateway(self._capture)
+        self._gateway = Gateway(self._capture, owns_db=False)
+        self._gateway._db_ready = db.connected
 
     def _capture(self, frame: dict[str, Any]) -> None:
         rid = frame.get("id")
@@ -249,7 +249,7 @@ def create_app() -> FastAPI:
             raise HTTPException(404, "session not found")
         from ah.memory.store import memory_store
 
-        memories = await memory_store.search(limit=limit)
+        memories = await memory_store.search(session_id=sid, limit=limit)
         return {
             "memories": [
                 {
@@ -263,7 +263,7 @@ def create_app() -> FastAPI:
                 }
                 for m in memories
             ],
-            "total": await memory_store.count(),
+            "total": await memory_store.count(session_id=sid),
         }
 
     @app.post("/sessions/{session_id}/jobs", dependencies=[Depends(require_api_key)])
@@ -322,6 +322,8 @@ def create_app() -> FastAPI:
     @app.post("/rpc", dependencies=[Depends(require_api_key)])
     async def rpc_dispatch(req: RpcRequest) -> dict[str, Any]:
         """Generic JSON-RPC dispatch to any gateway feature method."""
+        if req.method in {"prompt.submit", "prompt.cancel", "shutdown"}:
+            raise HTTPException(400, "use the session prompt stream for turns")
         gw = _RpcGateway()
         try:
             result = await gw.call(req.method, req.params)

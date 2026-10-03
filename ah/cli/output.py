@@ -11,8 +11,6 @@ from contextlib import contextmanager
 from typing import Any
 
 from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
 from rich.table import Table
 
 from ah.core.config import SECRET_KEYS

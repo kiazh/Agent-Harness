@@ -143,6 +143,7 @@ export class App implements FeatureHost {
 		this.transcript.replay(history);
 		this.sessionTokens = 0;
 		this.footer.tokens = 0;
+		this.setRunning(this.inFlight.has(session.id));
 		this.tui.requestRender();
 	}
 
@@ -263,13 +264,19 @@ export class App implements FeatureHost {
 		// A turn's events may arrive after the user switched sessions, so match
 		// against in-flight turns, not just the current session.
 		if (!this.inFlight.has(event.sessionId)) return;
+		if (event.sessionId !== this.current?.id) {
+			if (event.type === "message.complete") this.inFlight.delete(event.sessionId);
+			this.setRunning(this.current ? this.inFlight.has(this.current.id) : false);
+			this.tui.requestRender();
+			return;
+		}
 		const summary = this.transcript.apply(event);
 		if (event.type === "usage") this.footer.tokens = this.sessionTokens + event.tokens;
 		if (summary) {
 			this.inFlight.delete(event.sessionId);
 			this.sessionTokens += summary.tokens;
 			this.footer.tokens = this.sessionTokens;
-			if (this.inFlight.size === 0) this.setRunning(false);
+			this.setRunning(this.inFlight.has(event.sessionId));
 		}
 		this.tui.requestRender();
 	}

@@ -218,3 +218,21 @@ test("events for sessions with no in-flight turn are ignored", async () => {
 
 	await app.exit();
 });
+
+test("late events from a previous session do not enter the current transcript", async () => {
+	const { app, client } = makeApp(SESSION_A);
+	await app.start();
+	await (app as unknown as { prompt: (text: string) => Promise<void> }).prompt("hello");
+	app.switchTo(SESSION_B, []);
+
+	const internal = app as unknown as { transcript: { apply: (event: GatewayEvent) => unknown } };
+	let applied = 0;
+	internal.transcript.apply = () => {
+		applied++;
+		return undefined;
+	};
+	client.emit(ev({ type: "message.delta", text: "from A" }));
+	client.emit(ev({ type: "message.complete", text: "from A", tokens: 3, iterations: 1, toolCalls: 0, cancelled: false }));
+	assert.equal(applied, 0);
+	await app.exit();
+});

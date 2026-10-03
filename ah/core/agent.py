@@ -156,15 +156,21 @@ class BaseReActAgent:
         """
         last_exception: Exception | None = None
         for attempt in range(4):  # 1 initial + 3 retries
+            emitted = False
             try:
                 async for event in self.provider.stream_complete(
                     messages=messages,
                     tools=tools,
                 ):
+                    emitted = True
                     yield event
                 return  # Success — exit retry loop
             except Exception as e:
                 last_exception = e
+                # Once a delta reached the caller, replaying the request would
+                # duplicate text (and could repeat a tool call).
+                if emitted:
+                    raise
                 if attempt < 3:
                     delay = 2**attempt  # 1s, 2s, 4s
                     logger.warning(
@@ -353,8 +359,10 @@ class BaseReActAgent:
 
             raw_args = function_data.get("arguments", "{}")
             try:
-                tool_args = json.loads(raw_args)
-            except json.JSONDecodeError as e:
+                tool_args = raw_args if isinstance(raw_args, dict) else json.loads(raw_args)
+                if not isinstance(tool_args, dict):
+                    raise ValueError("tool arguments must be an object")
+            except (TypeError, ValueError) as e:
                 logger.error(
                     "Failed to parse tool arguments for '%s': %s (raw: %s)",
                     tool_name,
@@ -368,9 +376,20 @@ class BaseReActAgent:
                     error=str(e),
                     raw_args=raw_args,
                 )
-                self._append_tool_messages(
-                    messages, response, tc, f"Error: invalid JSON in tool arguments: {e}"
+                self._append_tool_messages(messages, response, tc, f"Error: invalid tool arguments: {e}")
+                continue
+
+            if self.allowed_tools is not None and tool_name not in self.allowed_tools:
+                result_str = f"Error: tool '{tool_name}' is not allowed for agent '{self.agent_id}'"
+                audit_log(
+                    "tool_call_denied",
+                    session_id=str(session_id),
+                    tool_name=tool_name,
+                    agent_id=self.agent_id,
                 )
+                yield StreamEvent(type="tool_call", tool_name=tool_name, tool_args=tool_args)
+                yield StreamEvent(type="tool_result", tool_name=tool_name, tool_result=result_str)
+                self._append_tool_messages(messages, response, tc, result_str)
                 continue
 
             yield StreamEvent(type="tool_call", tool_name=tool_name, tool_args=tool_args)

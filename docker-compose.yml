@@ -23,11 +23,13 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/agentharness
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      AGENT_HARNESS_API_KEY: ${AGENT_HARNESS_API_KEY:?Set AGENT_HARNESS_API_KEY in .env}
+    ports:
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./ah:/app/ah:ro
-    stdin_open: true
-    tty: true
-    command: ["chat"]
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ah init && exec ah serve --host 0.0.0.0 --port 8000"]
 
 volumes:
   pgdata:

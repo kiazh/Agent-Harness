@@ -571,7 +571,23 @@ async def agents_run(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
             results = await orchestrator.run_sequential(steps, parent_session_id=parent)
     except AgentNotFoundError as e:
         raise RpcError(NOT_FOUND, str(e)) from None
-    return {"results": [_delegation(r) for r in results]}
+    serialized = []
+    for (agent, task), result in zip(steps, results):
+        if isinstance(result, BaseException):
+            serialized.append(
+                {
+                    "agent": agent,
+                    "task": task,
+                    "response": f"{type(result).__name__}: {result}",
+                    "sessionId": None,
+                    "tokens": 0,
+                    "iterations": 0,
+                    "status": "error",
+                }
+            )
+        else:
+            serialized.append(_delegation(result))
+    return {"results": serialized}
 
 
 async def agents_history(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:

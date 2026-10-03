@@ -229,7 +229,9 @@ class SessionManager:
 
         return new_session
 
-    async def list_sessions(self, status: str | None = None, limit: int = 20) -> list[Session]:
+    async def list_sessions(
+        self, status: str | None = None, limit: int = 20, offset: int = 0
+    ) -> list[Session]:
         """List sessions (column projection: exclude state_msgpack for efficiency)."""
         if status:
             rows = await db.fetch(
@@ -237,21 +239,23 @@ class SessionManager:
                 SELECT id, title, agent_id, status, goal, model, provider, context_budget, created_at, last_activity
                 FROM sessions
                 WHERE status = $1
-                ORDER BY last_activity DESC
-                LIMIT $2
+                ORDER BY last_activity DESC, id DESC
+                LIMIT $2 OFFSET $3
                 """,
                 status,
                 limit,
+                offset,
             )
         else:
             rows = await db.fetch(
                 """
                 SELECT id, title, agent_id, status, goal, model, provider, context_budget, created_at, last_activity
                 FROM sessions
-                ORDER BY last_activity DESC
-                LIMIT $1
+                ORDER BY last_activity DESC, id DESC
+                LIMIT $1 OFFSET $2
                 """,
                 limit,
+                offset,
             )
         return [self._row_to_session(r) for r in rows]
 

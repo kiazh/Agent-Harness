@@ -10,15 +10,13 @@ work with shell=False. Fix: remove 'cd' from the allowlist.
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import AsyncMock
 
 import asyncpg
+import pytest
 
 from ah.rag.search import HybridSearch
 from ah.tools.terminal import ALLOWED_COMMANDS, terminal
-
 
 # ===========================================================================
 # Bug 12: ILIKE fallback produces hex from payload_msgpack::text

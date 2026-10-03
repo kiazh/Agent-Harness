@@ -105,6 +105,8 @@ class AsyncTokenBucket:
 
     async def acquire(self, tokens: int = 1) -> None:
         """Acquire tokens, waiting if necessary."""
+        if self.rate == 0:
+            return  # A zero configured limit disables throttling.
         while True:
             async with self._lock:
                 now = time.monotonic()
@@ -121,6 +123,8 @@ class AsyncTokenBucket:
 def _get_rate_limiter() -> AsyncTokenBucket:
     """Build a rate limiter from configuration."""
     calls_per_minute = int(config.get("rate_limit_calls_per_minute"))
+    if calls_per_minute < 0:
+        raise ValidationError("rate_limit_calls_per_minute must be non-negative")
     return AsyncTokenBucket(rate=calls_per_minute / 60.0, capacity=calls_per_minute)
 
 

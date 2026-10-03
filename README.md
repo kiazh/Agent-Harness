@@ -50,6 +50,11 @@ In the UI: Enter sends, Shift+Enter adds a line, Esc stops a reply, `/` opens co
 autocomplete (`/new`, `/sessions`, `/resume`, `/model`, `/provider`, `/clear`, `/exit`),
 Tab completes file paths, Ctrl+C exits.
 
+For the HTTP API with Docker Compose, set `AGENT_HARNESS_API_KEY` in `.env` and run
+`docker compose up --build`. Compose initializes the schema and serves the API at
+`http://127.0.0.1:8000` (health check: `/health`). The terminal UI requires the
+local Node.js setup above.
+
 ## Architecture
 
 ```

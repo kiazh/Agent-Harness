@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_HEARTBEAT_PROMPT = "Continue working toward your current goal. If it is done, say so."
 MIN_INTERVAL_SECONDS = 10
+RUN_LEASE_SECONDS = 300
 
 
 @dataclass
@@ -146,7 +147,11 @@ class JobStore:
             f"""
             UPDATE jobs
             SET enabled = $2,
-                next_run_at = CASE WHEN $2 THEN now() + (interval_seconds || ' seconds')::interval ELSE next_run_at END
+                next_run_at = CASE
+                    WHEN $2 AND status <> 'running'
+                    THEN now() + (interval_seconds || ' seconds')::interval
+                    ELSE next_run_at
+                END
             WHERE id = $1
             RETURNING {_COLUMNS}
             """,
@@ -168,10 +173,12 @@ class JobStore:
         now = now or datetime.now(UTC)
         row = await db.fetchrow(
             f"""
-            UPDATE jobs SET status = 'running', last_run_at = $1
+            UPDATE jobs
+            SET status = 'running', last_run_at = $1,
+                next_run_at = $1 + ($2 * interval '1 second')
             WHERE id = (
                 SELECT id FROM jobs
-                WHERE enabled AND status <> 'running' AND next_run_at <= $1
+                WHERE enabled AND next_run_at <= $1
                 ORDER BY next_run_at ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
@@ -179,8 +186,21 @@ class JobStore:
             RETURNING {_COLUMNS}
             """,
             now,
+            RUN_LEASE_SECONDS,
         )
         return _row_to_job(row) if row else None
+
+    async def renew_lease(self, job_id: uuid.UUID) -> None:
+        """Keep an active run from being reclaimed while it is executing."""
+        await db.execute(
+            """
+            UPDATE jobs
+            SET next_run_at = now() + ($2 * interval '1 second')
+            WHERE id = $1 AND status = 'running'
+            """,
+            job_id,
+            RUN_LEASE_SECONDS,
+        )
 
     async def finish(self, job_id: uuid.UUID, *, error: str | None = None) -> None:
         """Record a run outcome and schedule the next run from now."""
@@ -249,32 +269,55 @@ class JobRunner:
         if job is None:
             return False
         error: str | None = None
+        lease_task = asyncio.create_task(self._keep_lease(job.id))
         try:
             await self._execute(job)
+        except asyncio.CancelledError:
+            error = "cancelled"
+            raise
         except Exception as e:
             logger.exception("Job %s (%s) failed", job.name, job.id)
             error = f"{type(e).__name__}: {e}"
         finally:
+            lease_task.cancel()
+            await asyncio.gather(lease_task, return_exceptions=True)
             await self._store.finish(job.id, error=error)
         return True
+
+    async def _keep_lease(self, job_id: uuid.UUID) -> None:
+        while True:
+            await asyncio.sleep(RUN_LEASE_SECONDS / 3)
+            try:
+                await self._store.renew_lease(job_id)
+            except Exception:
+                logger.exception("Could not renew lease for job %s", job_id)
 
     async def _execute(self, job: Job) -> None:
         if job.session_id is None:
             raise RuntimeError("job has no session")
         prompt = job.prompt or DEFAULT_HEARTBEAT_PROMPT
-        agent = self._build_agent(job.agent_name)
+        agent = await self._build_agent(job.agent_name)
         await agent.run(job.session_id, prompt, verbose=False)
 
-    def _build_agent(self, agent_name: str):
+    async def _build_agent(self, agent_name: str):
         if self._agent_factory is not None:
             return self._agent_factory(agent_name)
         from ah.core.agent import ReActAgent
+        from ah.core.agent_def import agent_registry
         from ah.core.provider import get_provider
 
+        definition = await agent_registry.get(agent_name)
+        if definition is None:
+            raise ValueError(f"no agent named {agent_name!r}")
         return ReActAgent(
-            provider=get_provider(provider=config.get("provider"), model=config.get("model")),
-            max_iterations=config.get("max_iterations"),
+            provider=get_provider(
+                provider=definition.provider or config.get("provider"),
+                model=definition.model or config.get("model"),
+            ),
+            max_iterations=definition.max_iterations,
             agent_id=agent_name,
+            system_prompt=definition.system_prompt or None,
+            allowed_tools=definition.tools or None,
         )
 
 

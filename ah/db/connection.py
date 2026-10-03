@@ -93,6 +93,11 @@ class Database:
             self._pool = None
 
     @property
+    def connected(self) -> bool:
+        """Whether this Database currently owns a connection pool."""
+        return self._pool is not None
+
+    @property
     def pool(self) -> asyncpg.Pool:
         if self._pool is None:
             raise DatabaseError("Database not connected. Call connect() first.")

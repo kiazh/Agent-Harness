@@ -103,6 +103,19 @@ class HybridSearch:
 
         return fused[:k]
 
+    async def search_dense(
+        self,
+        session_id: uuid.UUID,
+        query_embedding: list[float],
+        db: Any,
+        top_k: int | None = None,
+    ) -> list[SearchResult]:
+        """Return dense vector matches without the keyword search or RRF."""
+        matches = await self._dense_search(
+            session_id, query_embedding, top_k or self._final_top_k, db
+        )
+        return [SearchResult(chunk=chunk, score=score, dense_score=score) for chunk, score in matches]
+
     async def _dense_search(
         self,
         session_id: uuid.UUID,

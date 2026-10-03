@@ -75,65 +75,67 @@ class PromptAssembler:
     ) -> str:
         """Assemble a prompt within the token budget.
 
-        Strategy:
-        1. Always include system prompt + goal + query
-        2. Add recent chunks (compressed)
-        3. Fill remaining budget with retrieved chunks by relevance
+        Keep the system instructions and current query first, then use any
+        remaining space for the goal, recent activity, and retrieved context.
         """
-        parts = []
-        used_tokens = 0
+        budget = max(1, self.session_budget)
+        sections: dict[str, str] = {}
+        order = ("system", "goal", "recent", "retrieved", "query")
 
-        # System prompt (always included)
-        parts.append(system_prompt)
-        used_tokens += self._estimate_tokens(system_prompt)
+        def render() -> str:
+            return "\n".join(sections[key] for key in order if sections.get(key))
 
-        # Goal
-        if goal:
-            goal_text = f"\n\n## Current Goal\n{goal}"
-            parts.append(goal_text)
-            used_tokens += self._estimate_tokens(goal_text)
+        def add(key: str, value: str, cap: int | None = None) -> None:
+            if not value:
+                return
+            encoding = _token_counter._encoding
+            encoded = encoding.encode(value) if encoding is not None else None
 
-        # Current query
+            def prefix(tokens: int) -> str:
+                if encoded is not None:
+                    return encoding.decode(encoded[:tokens])
+                return value[: tokens * 4]
+
+            value_tokens = len(encoded) if encoded is not None else max(1, (len(value) + 3) // 4)
+            upper = min(value_tokens, cap) if cap is not None else value_tokens
+            if upper == value_tokens:
+                sections[key] = value
+                if self._estimate_tokens(render()) <= budget:
+                    return
+            lower = 0
+            # Joining sections can change token boundaries, so measure the
+            # final prompt while searching for the longest fitting prefix.
+            while lower < upper:
+                middle = (lower + upper + 1) // 2
+                sections[key] = prefix(middle)
+                if self._estimate_tokens(render()) <= budget:
+                    lower = middle
+                else:
+                    upper = middle - 1
+            if lower:
+                sections[key] = prefix(lower)
+            else:
+                sections.pop(key, None)
+
         query_text = f"\n\n## Current Query\n{query}"
-        parts.append(query_text)
-        used_tokens += self._estimate_tokens(query_text)
-
-        # Recent chunks (last 3 actions, compressed)
+        # Reserve up to half the budget for the user's current request.
+        system_cap = max(1, budget - min(self._estimate_tokens(query_text), budget // 2))
+        add("system", system_prompt, system_cap)
+        add("query", query_text)
+        if goal:
+            add("goal", f"\n\n## Current Goal\n{goal}")
         if recent_chunks:
-            recent_text = "\n\n## Recent Activity\n"
-            for chunk_data in recent_chunks[:3]:
-                compressed = self._compress_chunk(chunk_data)
-                recent_text += compressed + "\n"
-            parts.append(recent_text)
-            used_tokens += self._estimate_tokens(recent_text)
-
-        # Retrieved chunks (fill remaining budget)
-        remaining = self.session_budget - used_tokens
-        if retrieved_chunks and remaining > 100:
-            retrieved_text = "\n\n## Relevant Context\n"
-            remaining -= self._estimate_tokens(retrieved_text)
-            for chunk, sim in retrieved_chunks:
-                compressed = self._compress_chunk(
-                    {
-                        "type": chunk.chunk_type,
-                        "payload": chunk.payload,
-                    }
-                )
-                chunk_tokens = self._estimate_tokens(compressed) + 1  # +1 for newline
-                if chunk_tokens > remaining:
-                    # Token-accurate truncation (char-based slicing overshoots
-                    # the budget for code and non-Latin text).
-                    retrieved_text += (
-                        truncate_to_tokens(compressed, max(0, remaining - 2)) + "...\n"
-                    )
-                    break
-                retrieved_text += compressed + "\n"
-                remaining -= chunk_tokens
-                if remaining < 50:
-                    break
-            parts.append(retrieved_text)
-
-        return "\n".join(parts)
+            recent = "\n\n## Recent Activity\n" + "\n".join(
+                self._compress_chunk(chunk) for chunk in reversed(recent_chunks[:3])
+            )
+            add("recent", recent)
+        if retrieved_chunks:
+            relevant = "\n\n## Relevant Context\n" + "\n".join(
+                self._compress_chunk({"type": chunk.chunk_type, "payload": chunk.payload})
+                for chunk, _score in retrieved_chunks
+            )
+            add("retrieved", relevant)
+        return render()
 
     def _compress_chunk(self, chunk_data: dict[str, Any]) -> str:
         """Compress a context chunk into minimal text for the LLM."""
@@ -155,6 +157,9 @@ class PromptAssembler:
             return f"  -> {status}: {result}"
         elif chunk_type == "memory":
             return f"[memory] {payload.get('content', '')}"
+        elif chunk_type == "document":
+            source = payload.get("source", payload.get("metadata", {}).get("source", ""))
+            return f"[document: {source}] {payload.get('text', '')}"
         elif chunk_type == "heartbeat":
             return f"[heartbeat] {payload.get('prompt', '')}"
         elif chunk_type == "system":

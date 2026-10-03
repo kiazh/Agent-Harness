@@ -50,8 +50,8 @@ class RAGPipeline:
         results = await pipeline.search("query", session_id)
     """
 
-    # TTL cache for search results: (session_id, query_hash) -> (timestamp, results)
-    _search_cache: dict[tuple, tuple[float, list[SearchResult]]] = {}
+    # Each pipeline owns its own search cache so different embedders and
+    # retrieval settings cannot reuse one another's results.
     _search_cache_ttl: float = 300.0  # 5 minutes
     _search_cache_max_size: int = 256
 
@@ -65,6 +65,7 @@ class RAGPipeline:
         config: RAGConfig | None = None,
     ) -> None:
         self._config = config or RAGConfig()
+        self._search_cache: dict[tuple, tuple[float, list[SearchResult]]] = {}
         self._embedder = embedder or OpenAIEmbedder()
         self._chunker = chunker or RecursiveCharacterTextSplitter(
             chunk_size=self._config.chunk_size,
@@ -211,7 +212,7 @@ class RAGPipeline:
         )
 
         # Check TTL cache
-        cache_key = (session_id, hashlib.sha256(query.encode()).hexdigest())
+        cache_key = (session_id, hashlib.sha256(query.encode()).hexdigest(), k, rerank)
         now = time.monotonic()
         if cache_key in self._search_cache:
             cached_time, cached_results = self._search_cache[cache_key]
@@ -236,10 +237,9 @@ class RAGPipeline:
             )
         else:
             # Dense-only search
-            results = await self._search.search(
+            results = await self._search.search_dense(
                 session_id=session_id,
                 query_embedding=query_embedding,
-                query_text=query,
                 db=db,
                 top_k=k * 2,
             )

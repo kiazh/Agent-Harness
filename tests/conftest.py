@@ -79,10 +79,6 @@ def reset_singletons():
 
     registry._result_cache.clear()
 
-    from ah.rag.pipeline import RAGPipeline
-
-    RAGPipeline._search_cache.clear()
-
     yield
 
 

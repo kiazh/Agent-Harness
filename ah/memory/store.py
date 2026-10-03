@@ -98,6 +98,7 @@ class MemoryStore:
         category: str | None = None,
         limit: int = 20,
         offset: int = 0,
+        session_id: uuid.UUID | None = None,
     ) -> list[MemoryEntry]:
         """Search memories with optional filters (fully parameterized)."""
         conditions = []
@@ -112,6 +113,11 @@ class MemoryStore:
         if category is not None:
             conditions.append(f"category = ${param_idx}")
             params.append(category)
+            param_idx += 1
+
+        if session_id is not None:
+            conditions.append(f"session_id = ${param_idx}")
+            params.append(session_id)
             param_idx += 1
 
         where_clause = " AND ".join(conditions) if conditions else "TRUE"
@@ -236,9 +242,22 @@ class MemoryStore:
             return await self.search(agent_id=agent_id, limit=limit, offset=offset)
         return await self.search(limit=limit, offset=offset)
 
-    async def count(self, agent_id: str | None = None) -> int:
-        """Count memories, optionally filtered by agent."""
-        if agent_id:
+    async def count(
+        self, agent_id: str | None = None, session_id: uuid.UUID | None = None
+    ) -> int:
+        """Count memories, optionally filtered by agent and session."""
+        if agent_id is not None and session_id is not None:
+            result = await db.fetchval(
+                "SELECT COUNT(*) FROM memories WHERE agent_id = $1 AND session_id = $2",
+                agent_id,
+                session_id,
+            )
+        elif session_id is not None:
+            result = await db.fetchval(
+                "SELECT COUNT(*) FROM memories WHERE session_id = $1",
+                session_id,
+            )
+        elif agent_id is not None:
             result = await db.fetchval(
                 "SELECT COUNT(*) FROM memories WHERE agent_id = $1",
                 agent_id,

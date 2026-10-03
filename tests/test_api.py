@@ -217,6 +217,8 @@ class TestMemory:
                     data = resp.json()
                     assert "memories" in data
                     assert "total" in data
+                    mock_search.assert_awaited_once_with(session_id=mock_session.id, limit=20)
+                    mock_count.assert_awaited_once_with(session_id=mock_session.id)
 
 
 # ─── jobs ────────────────────────────────────────────────────────────────────

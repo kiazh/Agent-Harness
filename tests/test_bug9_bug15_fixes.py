@@ -1,7 +1,6 @@
 """Tests for Bug 9 (task reference) and Bug 15 (lazy config loading) fixes."""
 
 import asyncio
-import importlib
 import sys
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch

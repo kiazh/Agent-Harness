@@ -12,7 +12,6 @@ import pytest
 
 from ah.gateway.errors import INVALID_PARAMS, RpcError
 
-
 # ─── Bug 7: agents_save built-in name protection ──────────────────────────────
 
 

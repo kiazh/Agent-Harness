@@ -127,9 +127,11 @@ class Gateway:
         self,
         write: Writer,
         agent_factory: Callable[[str, str], StreamingAgent] = _default_agent_factory,
+        owns_db: bool = True,
     ) -> None:
         self._write = write
         self._agent_factory = agent_factory
+        self._owns_db = owns_db
         self.model: str = config.get("model")
         self.provider: str = config.get("provider")
         self.closing = False
@@ -209,9 +211,9 @@ class Gateway:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        if self._db_ready:
+        if self._db_ready and self._owns_db:
             await db.close()
-            self._db_ready = False
+        self._db_ready = False
 
     def _start_job_runner(self) -> None:
         """Run scheduled jobs in the background while the gateway is up.
@@ -287,8 +289,20 @@ class Gateway:
         limit = params.get("limit", 20)
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 200:
             raise RpcError(INVALID_PARAMS, "limit must be an integer between 1 and 200")
-        sessions = await session_manager.list_sessions(limit=limit)
-        return {"sessions": [session_to_dict(s) for s in sessions]}
+        cursor = params.get("cursor")
+        if cursor is None:
+            offset = 0
+        elif isinstance(cursor, str) and cursor.isascii() and cursor.isdigit():
+            offset = int(cursor)
+        else:
+            raise RpcError(INVALID_PARAMS, "cursor must be a non-negative integer string")
+        sessions = await session_manager.list_sessions(limit=limit + 1, offset=offset)
+        result: dict[str, Any] = {
+            "sessions": [session_to_dict(s) for s in sessions[:limit]],
+        }
+        if len(sessions) > limit:
+            result["nextCursor"] = str(offset + limit)
+        return result
 
     async def _session_resume(self, params: dict[str, Any]) -> dict[str, Any]:
         self.require_db()
