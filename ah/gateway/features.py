@@ -492,14 +492,14 @@ async def agents_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 async def agents_save(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     gw.require_db()
-    from ah.core.agent_def import AgentDef, agent_registry
+    from ah.core.agent_def import BUILTIN_AGENTS, AgentDef, agent_registry
 
     tools = params.get("tools", [])
     if not isinstance(tools, list) or not all(isinstance(t, str) for t in tools):
         raise RpcError(INVALID_PARAMS, "tools must be a list of strings")
     name = _str(params, "name", max_len=100)
-    if name in ("orchestrator", "delegate-tool"):
-        raise RpcError(INVALID_PARAMS, f"{name!r} is a reserved name")
+    if name in BUILTIN_AGENTS:
+        raise RpcError(INVALID_PARAMS, f"{name!r} is a built-in agent and cannot be saved")
     saved = await agent_registry.save(
         AgentDef(
             name=name,

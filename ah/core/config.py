@@ -247,9 +247,30 @@ class Config:
     @classmethod
     def reset(cls) -> None:
         """Reset the global config singleton."""
-        global config
-        config = cls()
+        global _config
+        _config = None
 
 
-# Global singleton
-config = Config.load()
+# Lazy singleton: the config is only loaded on first access, not at import
+# time.  This avoids side-effects (file I/O, env-var reads) when the module
+# is merely imported (e.g. by tests or by tools that only need DEFAULTS).
+_config: Config | None = None
+
+
+def get_config() -> Config:
+    """Return the global config singleton, loading it on first call."""
+    global _config
+    if _config is None:
+        _config = Config.load()
+    return _config
+
+
+def __getattr__(name: str) -> Any:
+    """PEP 562 module-level __getattr__ for lazy config access.
+
+    ``from ah.core.config import config`` continues to work, but the actual
+    Config.load() call is deferred until the attribute is first accessed.
+    """
+    if name == "config":
+        return get_config()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

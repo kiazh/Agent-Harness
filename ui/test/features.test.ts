@@ -275,6 +275,39 @@ test("/delegate runs one step through agents.run", async () => {
 	assert.match(host.markdown.at(-1)!, /found X/);
 });
 
+test("/resume with no args delegates to the sessions command (named reference)", async () => {
+	const host = new FakeHost();
+	host.responses["session.list"] = { sessions: [] };
+	await run("/resume", host);
+	// Should call session.list with limit=50 (sessions command), not limit=200 (resolveSessionId)
+	const call = host.calls.at(-1)!;
+	assert.equal(call.method, "session.list");
+	assert.equal(call.params.limit, 50);
+});
+
+test("/resume with a prefix resolves via paginated session.list", async () => {
+	const host = new FakeHost();
+	const oldSessionId = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+	// First page: no match, has nextCursor
+	host.responses["session.list"] = (p: Record<string, unknown>) => {
+		if (p.cursor) {
+			// Second page: contains the match
+			return { sessions: [{ id: oldSessionId }] };
+		}
+		return { sessions: [{ id: "dddddddd-dddd-dddd-dddd-dddddddddddd" }], nextCursor: "page2" };
+	};
+	host.responses["session.resume"] = { session: { ...SESSION, id: oldSessionId }, history: [] };
+	await run("/resume cccc", host);
+	// Should have made two session.list calls (pagination)
+	const listCalls = host.calls.filter((c) => c.method === "session.list");
+	assert.equal(listCalls.length, 2, "paginates through all sessions");
+	assert.equal(listCalls[0]!.params.cursor, undefined);
+	assert.equal(listCalls[1]!.params.cursor, "page2");
+	// Should have resolved the prefix and resumed
+	const resumeCall = host.calls.find((c) => c.method === "session.resume")!;
+	assert.equal(resumeCall.params.sessionId, oldSessionId);
+});
+
 test("format helpers", () => {
 	assert.equal(resolvePrefix("ab", ["abc", "xyz"], "thing"), "abc");
 	assert.throws(() => resolvePrefix("a", ["abc", "abd"], "thing"), /matches 2 things/);

@@ -99,8 +99,12 @@ export class Transcript {
 				if (!this.wroteText && event.text) {
 					this.container.addChild(new AssistantMessage(event.text));
 				}
-				if (event.cancelled) this.addNotice("Stopped.", "warning");
-				for (const card of this.tools.values()) card.complete("(interrupted)", true);
+				if (event.cancelled) {
+					this.addNotice("Stopped.", "warning");
+					for (const card of this.tools.values()) card.complete("(interrupted)", true);
+				} else {
+					for (const card of this.tools.values()) card.complete("", false);
+				}
 				this.tools.clear();
 				this.current = undefined;
 				return { tokens: event.tokens, cancelled: event.cancelled };

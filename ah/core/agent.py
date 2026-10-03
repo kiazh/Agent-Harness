@@ -71,6 +71,11 @@ class BaseReActAgent:
         self.rag_pipeline = rag_pipeline
         # None = every registered tool; a list restricts the agent to those names.
         self.allowed_tools = allowed_tools
+        # Keep strong references to background consolidation tasks so the
+        # event loop's weakref-only tracking never lets them be GC'd
+        # mid-execution (the classic "Task was destroyed but it is pending"
+        # bug).  A done-callback discards each task once it finishes.
+        self._consolidation_tasks: set[asyncio.Task] = set()
 
     def _tool_defs(self) -> list[ToolDefinition]:
         """Tool definitions offered to the model, honoring the allow-list."""
@@ -428,7 +433,9 @@ class BaseReActAgent:
         """
         if not self.memory_consolidator:
             return
-        asyncio.create_task(self._consolidate_memories(session_id))
+        task = asyncio.create_task(self._consolidate_memories(session_id))
+        self._consolidation_tasks.add(task)
+        task.add_done_callback(self._consolidation_tasks.discard)
 
     async def _consolidate_memories(self, session_id: uuid.UUID) -> None:
         """Consolidate session context into long-term memories.

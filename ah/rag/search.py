@@ -146,7 +146,7 @@ class HybridSearch:
     ) -> list[tuple[ContextChunk, float]]:
         """BM25 search using PostgreSQL full-text search (tsvector + GIN).
 
-        Falls back to ILIKE if search_text column is not available.
+        Returns empty results if search_text column is not available.
         """
         # Try FTS first
         try:
@@ -167,22 +167,10 @@ class HybridSearch:
                 top_k,
             )
         except asyncpg.UndefinedColumnError:
-            # search_text column doesn't exist — fall back to ILIKE
-            logger.debug("search_text column not found, falling back to ILIKE")
-            rows = await db.fetch(
-                """
-                SELECT id, session_id, agent_id, chunk_type, payload_msgpack,
-                       token_count, embedding, created_at, accessed_at,
-                       0.5 AS rank
-                FROM context_chunks
-                WHERE session_id = $1
-                  AND payload_msgpack::text ILIKE $2
-                LIMIT $3
-                """,
-                session_id,
-                f"%{query_text}%",
-                top_k,
-            )
+            # search_text column doesn't exist — no fallback possible
+            # (casting bytea to text produces hex, not readable text)
+            logger.warning("search_text column not found, skipping BM25 search")
+            rows = []
 
         results = []
         for row in rows:

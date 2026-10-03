@@ -49,6 +49,8 @@ export class App implements FeatureHost {
 	private version = "";
 	private current: SessionInfo | undefined;
 	private running = false;
+	/** Session ids of turns that are still in flight (prompt submitted, no message.complete yet). */
+	private readonly inFlight = new Set<string>();
 	private sessionTokens = 0;
 	private overlay: OverlayHandle | undefined;
 	private exiting = false;
@@ -239,12 +241,14 @@ export class App implements FeatureHost {
 		}
 		this.transcript.addUser(text);
 		this.setRunning(true);
+		this.inFlight.add(this.current.id);
 		this.tui.requestRender();
 		await this.client.request("prompt.submit", { sessionId: this.current.id, text });
 	}
 
 	private cancel(): void {
 		if (!this.current) return;
+		this.setRunning(false);
 		this.client.request("prompt.cancel", { sessionId: this.current.id }).catch(() => {});
 	}
 
@@ -256,13 +260,16 @@ export class App implements FeatureHost {
 
 	// ─── gateway ────────────────────────────────────────────────────────────
 	private onEvent(event: GatewayEvent): void {
-		if (!this.current || event.sessionId !== this.current.id) return;
+		// A turn's events may arrive after the user switched sessions, so match
+		// against in-flight turns, not just the current session.
+		if (!this.inFlight.has(event.sessionId)) return;
 		const summary = this.transcript.apply(event);
 		if (event.type === "usage") this.footer.tokens = this.sessionTokens + event.tokens;
 		if (summary) {
+			this.inFlight.delete(event.sessionId);
 			this.sessionTokens += summary.tokens;
 			this.footer.tokens = this.sessionTokens;
-			this.setRunning(false);
+			if (this.inFlight.size === 0) this.setRunning(false);
 		}
 		this.tui.requestRender();
 	}

@@ -201,9 +201,10 @@ class TestGatewayAgents:
         assert (await h.call("agents.delete", {"name": name}))["result"] == {"deleted": True}
         assert (await h.call("agents.delete", {"name": name}))["error"]["code"] == NOT_FOUND
 
-    async def test_cannot_delete_builtin_or_use_reserved_name(self, h):
+    async def test_cannot_delete_builtin_or_save_builtin_name(self, h):
         assert (await h.call("agents.delete", {"name": "harness"}))["error"]["code"] == INVALID_PARAMS
-        assert (await h.call("agents.save", {"name": "orchestrator"}))["error"]["code"] == INVALID_PARAMS
+        assert (await h.call("agents.save", {"name": "harness"}))["error"]["code"] == INVALID_PARAMS
+        assert (await h.call("agents.save", {"name": "coder"}))["error"]["code"] == INVALID_PARAMS
 
     async def test_run_sequential_and_history(self, h):
         parent = (await h.call("session.create", {"title": "orchestration"}))["result"]["session"]["id"]

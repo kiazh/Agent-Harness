@@ -144,7 +144,8 @@ class Orchestrator:
                         parent_session_id=parent_session_id,
                     )
                     for agent_name, task in tasks
-                )
+                ),
+                return_exceptions=True,
             )
         )
 

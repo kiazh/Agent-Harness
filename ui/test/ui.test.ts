@@ -99,6 +99,20 @@ test("cancelling marks unfinished tools and says so", () => {
 	assert.match(out, /Stopped\./);
 });
 
+test("a normal completion does not mark unfinished tools as interrupted", () => {
+	const view = new Container();
+	const transcript = new Transcript(view, new FakeSpinner());
+	transcript.apply(ev({ type: "message.start" }));
+	transcript.apply(ev({ type: "tool.start", id: "1", name: "terminal", args: { command: "pytest" } }));
+	const summary = transcript.apply(
+		ev({ type: "message.complete", text: "", tokens: 10, iterations: 1, toolCalls: 1, cancelled: false }),
+	);
+	assert.equal(summary?.cancelled, false);
+	const out = plain(view);
+	assert.doesNotMatch(out, /\(interrupted\)/, "unfinished tool is not marked interrupted on normal completion");
+	assert.doesNotMatch(out, /Stopped\./, "no cancellation notice on normal completion");
+});
+
 test("replay renders stored history", () => {
 	const view = new Container();
 	const transcript = new Transcript(view, new FakeSpinner());

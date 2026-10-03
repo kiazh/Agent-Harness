@@ -27,7 +27,6 @@ ALLOWED_COMMANDS = frozenset(
         "pytest",
         "echo",
         "pwd",
-        "cd",
         "mkdir",
         "touch",
         "head",

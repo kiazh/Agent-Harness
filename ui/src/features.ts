@@ -78,8 +78,20 @@ function requireArgs(args: string, usage: string): string {
 async function resolveSessionId(host: FeatureHost, idOrPrefix: string): Promise<string> {
 	const wanted = idOrPrefix.trim().toLowerCase();
 	if (/^[0-9a-f-]{36}$/.test(wanted)) return wanted;
-	const { sessions } = await host.request<SessionListResult>("session.list", { limit: 200 });
-	return resolvePrefix(wanted, sessions.map((s) => s.id), "session");
+	// Paginate through all sessions: a prefix must resolve even when the
+	// matching session is older than the most recent page.
+	let cursor: string | undefined;
+	const ids: string[] = [];
+	for (;;) {
+		const { sessions, nextCursor } = await host.request<SessionListResult & { nextCursor?: string }>("session.list", {
+			limit: 200,
+			...(cursor ? { cursor } : {}),
+		});
+		ids.push(...sessions.map((s) => s.id));
+		if (!nextCursor) break;
+		cursor = nextCursor;
+	}
+	return resolvePrefix(wanted, ids, "session");
 }
 
 async function openSession(host: FeatureHost, id: string): Promise<void> {
@@ -116,6 +128,16 @@ function formatValue(value: unknown): string {
 
 // ─── sessions ─────────────────────────────────────────────────────────────────
 
+const sessionsCommand: Command = {
+	name: "sessions",
+	description: "Pick a recent session to resume",
+	async run(_args, host) {
+		const { sessions } = await host.request<SessionListResult>("session.list", { limit: 50 });
+		if (!sessions.length) host.print("No sessions yet.");
+		else await pickAndOpen(host, "Resume a session", sessions);
+	},
+};
+
 const sessionCommands: Command[] = [
 	{
 		name: "new",
@@ -126,21 +148,13 @@ const sessionCommands: Command[] = [
 			host.switchTo(session, []);
 		},
 	},
-	{
-		name: "sessions",
-		description: "Pick a recent session to resume",
-		async run(_args, host) {
-			const { sessions } = await host.request<SessionListResult>("session.list", { limit: 50 });
-			if (!sessions.length) host.print("No sessions yet.");
-			else await pickAndOpen(host, "Resume a session", sessions);
-		},
-	},
+	sessionsCommand,
 	{
 		name: "resume",
 		description: "Resume a session by id (prefix ok)",
 		argumentHint: "<id>",
 		async run(args, host) {
-			if (!args) return sessionCommands[1]!.run("", host);
+			if (!args) return sessionsCommand.run("", host);
 			await openSession(host, await resolveSessionId(host, args));
 		},
 	},
