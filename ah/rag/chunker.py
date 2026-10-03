@@ -111,7 +111,9 @@ class RecursiveCharacterTextSplitter:
 
         return chunks
 
-    def split_code(self, text: str, language: str = "python", metadata: dict[str, Any] | None = None) -> list[Chunk]:
+    def split_code(
+        self, text: str, language: str = "python", metadata: dict[str, Any] | None = None
+    ) -> list[Chunk]:
         """Split code on function/class boundaries.
 
         Falls back to recursive splitting if no code structure is found.
@@ -124,7 +126,10 @@ class RecursiveCharacterTextSplitter:
 
         # Simple heuristic: split on function/class definitions
         if language in ("python", "javascript", "typescript", "java", "go", "rust"):
-            pattern = re.compile(r"^(\s*(?:def|class|function|func|pub fn|pub async fn|async fn)\s+\w+)", re.MULTILINE)
+            pattern = re.compile(
+                r"^(\s*(?:def|class|function|func|pub fn|pub async fn|async fn)\s+\w+)",
+                re.MULTILINE,
+            )
             matches = list(pattern.finditer(text))
 
             if len(matches) > 1:
@@ -143,11 +148,13 @@ class RecursiveCharacterTextSplitter:
                             sub_chunks = self.split_text(code_block, block_meta)
                             chunks.extend(sub_chunks)
                         else:
-                            chunks.append(Chunk(
-                                text=code_block,
-                                metadata=block_meta,
-                                token_count=self._estimate_tokens(code_block),
-                            ))
+                            chunks.append(
+                                Chunk(
+                                    text=code_block,
+                                    metadata=block_meta,
+                                    token_count=self._estimate_tokens(code_block),
+                                )
+                            )
 
         if not chunks:
             # Fallback to recursive splitting
@@ -198,11 +205,13 @@ class RecursiveCharacterTextSplitter:
             else:
                 # Current part doesn't fit
                 if current_text:
-                    chunks.append(Chunk(
-                        text=current_text,
-                        metadata=dict(metadata),
-                        token_count=self._estimate_tokens(current_text),
-                    ))
+                    chunks.append(
+                        Chunk(
+                            text=current_text,
+                            metadata=dict(metadata),
+                            token_count=self._estimate_tokens(current_text),
+                        )
+                    )
 
                 # If the part itself is too large, recurse with next separator
                 if self._estimate_tokens(part) > self.chunk_size and remaining:
@@ -213,11 +222,13 @@ class RecursiveCharacterTextSplitter:
                     current_text = part
 
         if current_text:
-            chunks.append(Chunk(
-                text=current_text,
-                metadata=dict(metadata),
-                token_count=self._estimate_tokens(current_text),
-            ))
+            chunks.append(
+                Chunk(
+                    text=current_text,
+                    metadata=dict(metadata),
+                    token_count=self._estimate_tokens(current_text),
+                )
+            )
 
         return chunks
 
@@ -227,12 +238,14 @@ class RecursiveCharacterTextSplitter:
         # Approximate: 1 token ≈ 4 chars
         char_size = size * 4
         for i in range(0, len(text), char_size):
-            chunk_text = text[i:i + char_size]
-            chunks.append(Chunk(
-                text=chunk_text,
-                metadata=dict(metadata),
-                token_count=self._estimate_tokens(chunk_text),
-            ))
+            chunk_text = text[i : i + char_size]
+            chunks.append(
+                Chunk(
+                    text=chunk_text,
+                    metadata=dict(metadata),
+                    token_count=self._estimate_tokens(chunk_text),
+                )
+            )
         return chunks
 
     def _apply_overlap(self, chunks: list[Chunk]) -> list[Chunk]:
@@ -254,17 +267,19 @@ class RecursiveCharacterTextSplitter:
                 for sep in ["\n\n", "\n", ". ", " "]:
                     idx = overlap_text.find(sep)
                     if idx >= 0:
-                        overlap_text = overlap_text[idx + len(sep):]
+                        overlap_text = overlap_text[idx + len(sep) :]
                         break
                 merged = overlap_text + current_text
             else:
                 merged = prev_text + current_text
 
-            result.append(Chunk(
-                text=merged,
-                metadata=chunks[i].metadata,
-                token_count=self._estimate_tokens(merged),
-            ))
+            result.append(
+                Chunk(
+                    text=merged,
+                    metadata=chunks[i].metadata,
+                    token_count=self._estimate_tokens(merged),
+                )
+            )
 
         return result
 

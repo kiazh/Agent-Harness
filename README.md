@@ -14,7 +14,7 @@ Most agent frameworks are black boxes. AgentHarness is built to be understood �
 - **RAG pipeline**: Document indexing, chunking, embedding, hybrid search (BM25 + dense + RRF), reranking
 - **Tool registry**: Decorator-based with JSON Schema inference, input validation, caching
 - **Skills system**: SKILL.md parser with YAML frontmatter, trigger matching
-- **Interactive REPL**: prompt_toolkit with autocomplete, slash commands, streaming
+- **Terminal UI**: TypeScript app on [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi) (MIT) — streaming Markdown, tool cards, slash-command and file autocomplete, session picker — driving the Python agent through a JSON-RPC gateway
 - **Configuration**: YAML file + environment variable overrides + per-session overrides
 - **Metrics**: Latency histograms, throughput counters, error rates, token usage tracking
 - **Security**: No shell injection, no path traversal, no SSRF, rate limiting, audit logging, PII redaction
@@ -26,37 +26,48 @@ Most agent frameworks are black boxes. AgentHarness is built to be understood �
 
 ## Quick Start
 
+Requires Python 3.11+, Node.js 22.19+ and PostgreSQL with pgvector.
+
 ```bash
-# Setup
+# Python side
 python -m venv .venv
-source .venv/Scripts/activate  # Windows
-pip install -e .
+.venv\Scripts\activate          # Windows  (source .venv/bin/activate elsewhere)
+pip install -e ".[dev]"
 
-# Configure
-export OPENROUTER_API_KEY=sk-or-...
-export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness
+# Terminal UI dependencies (pinned, no install scripts)
+npm install --ignore-scripts --prefix ui
 
-# Run
-ah doctor       # check deps
-ah init         # create database schema
-ah chat "hello"  # one-shot chat
-ah repl          # interactive REPL
-ah status       # list sessions
-ah context      # view context chunks
+# Configure: copy .env.example to .env and set DATABASE_URL and OPENROUTER_API_KEY
+ah doctor        # check everything is wired up
+ah init          # create the database schema
+
+ah               # open the interactive UI (also: ah repl, ah chat -i)
+ah chat "hello"  # one-shot reply, no UI
+ah sessions      # list sessions
 ```
+
+In the UI: Enter sends, Shift+Enter adds a line, Esc stops a reply, `/` opens command
+autocomplete (`/new`, `/sessions`, `/resume`, `/model`, `/provider`, `/clear`, `/exit`),
+Tab completes file paths, Ctrl+C exits.
 
 ## Architecture
 
 ```
-CLI (Typer) → ReActAgent → LLMProvider (OpenRouter/Ollama)
-                  ↓
-         PostgreSQL (asyncpg)
-         ├── sessions
-         ├── context_chunks (MessagePack + pgvector)
-         ├── memories (pgvector)
-         ├── pending_memories (approval gate)
-         └── user_profiles
+ah (Typer CLI) ──launches──> ui/  TypeScript terminal UI (pi-tui)
+                                └──spawns──> python -m ah.gateway   JSON-RPC 2.0 over stdio
+                                                └─> ReActAgent → LLMProvider (OpenRouter/Ollama)
+                                                       ↓
+                                              PostgreSQL (asyncpg + pgvector)
+                                              ├── sessions
+                                              ├── context_chunks (MessagePack + pgvector)
+                                              ├── memories (pgvector)
+                                              ├── pending_memories (approval gate)
+                                              └── user_profiles
 ```
+
+The UI and the agent only share the protocol in
+[`communications/ui-gateway-protocol.md`](communications/ui-gateway-protocol.md), the same split
+Hermes Agent (`ui-tui` ↔ `tui_gateway`) and opencode use.
 
 ## Roadmap
 
@@ -65,7 +76,7 @@ CLI (Typer) → ReActAgent → LLMProvider (OpenRouter/Ollama)
 | 1: Foundation | CLI, PG connection, context CRUD, LLM provider, ReAct loop | Done |
 | 2: Context Efficiency | MessagePack, pgvector, prompt assembler | Done |
 | 3: Memory & RAG | Long-term memory, RAG pipeline, hybrid search | Done |
-| 4: Interactive REPL | prompt_toolkit REPL, slash commands, config system | Done |
+| 4: Interactive UI | TypeScript terminal UI (pi-tui) + JSON-RPC gateway, slash commands, config system | Done |
 | 5: Multi-Agent | Subagent system, orchestration | Pending |
 | 6: Production | Web API, scheduler, plugins, observability | Pending |
 | 7: Advanced | LangGraph, TUI, cost optimization | Pending |
@@ -82,7 +93,8 @@ CLI (Typer) → ReActAgent → LLMProvider (OpenRouter/Ollama)
 | YAML parsing | PyYAML | Robust frontmatter parsing |
 | Caching | cachetools (TTLCache) | LRU session cache |
 | CLI | Typer | Type-hint-driven |
-| REPL | prompt_toolkit | Autocomplete, history |
+| Terminal UI | TypeScript + @earendil-works/pi-tui (Node 22.19+) | Differential rendering, flicker-free, editor + autocomplete |
+| UI ↔ agent | JSON-RPC 2.0 over stdio | Same split as Hermes / opencode |
 | Provider | OpenRouter | Multi-model, OpenAI-compatible |
 | Local LLM | Ollama (optional) | Free, self-hosted |
 
@@ -94,8 +106,12 @@ agent-harness/
 │   ├── __init__.py
 │   ├── __main__.py
 │   ├── cli/
-│   │   ├── __init__.py      # Typer CLI (31 commands: chat, repl, status, sessions, sessions-search, export, fork, delete, context, compress, skills, learn, curator, hub, doctor, init, version, config, config-set, memory-list, memory-search, memory-forget, memory-pending, memory-approve, memory-reject, memory-approve-all, memory-reject-all, memory-stats, user-profile, user-profile-update, user-profile-list)
-│   │   └── interactive.py   # Interactive REPL (prompt_toolkit)
+│   │   ├── __init__.py      # Typer CLI: `ah` opens the UI; admin commands (chat, sessions, context, compress, skills, memory-*, user-profile-*, doctor, init, config, ...)
+│   │   ├── launcher.py      # Starts the TypeScript UI (checks Node + ui/ deps)
+│   │   └── output.py        # Plain Rich tables/status lines for admin commands
+│   ├── gateway/
+│   │   ├── __main__.py      # `python -m ah.gateway`: stdio JSON-RPC server (protocol on private fds)
+│   │   └── server.py        # Gateway: sessions, prompt streaming, cancel, config
 │   ├── core/
 │   │   ├── agent.py         # ReActAgent + BaseReActAgent (Template Method)
 │   │   ├── assembler.py     # PromptAssembler + TokenCounter (tiktoken)
@@ -139,8 +155,10 @@ agent-harness/
 │       ├── rag.py           # index_document, search_documents
 │       ├── registry.py      # Re-export for backward compat
 │       └── terminal.py      # terminal (allowlist + SSRF protection)
-├── tests/                  # 436 tests
-├── skills/                 # Bundled skills (20 SKILL.md files)
+├── ui/                     # TypeScript terminal UI (pi-tui): src/ app, gateway client, widgets; test/
+├── communications/         # Design notes, incl. the UI ↔ gateway protocol
+├── tests/                  # Python test suite (pytest)
+├── skills/                 # Bundled skills (SKILL.md files)
 ├── docs/
 ├── pyproject.toml
 └── README.md
@@ -160,14 +178,14 @@ agent-harness/
 ## Development
 
 ```bash
-# Run tests
+# Python: tests (DB-backed tests use AGENT_HARNESS_TEST_DATABASE_URL, never DATABASE_URL)
 pytest
+ruff check ah/ tests/
 
-# Lint
-ruff check ah/
-
-# Format
-ruff format ah/
+# Terminal UI
+cd ui
+npm run typecheck
+npm test            # set AH_TEST_PYTHON + AGENT_HARNESS_TEST_DATABASE_URL to include the live-gateway test
 ```
 
 ## License

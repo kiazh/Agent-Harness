@@ -1,4 +1,5 @@
 """Prompt assembly and token counting."""
+
 from __future__ import annotations
 
 import logging
@@ -112,15 +113,19 @@ class PromptAssembler:
             retrieved_text = "\n\n## Relevant Context\n"
             remaining -= self._estimate_tokens(retrieved_text)
             for chunk, sim in retrieved_chunks:
-                compressed = self._compress_chunk({
-                    "type": chunk.chunk_type,
-                    "payload": chunk.payload,
-                })
+                compressed = self._compress_chunk(
+                    {
+                        "type": chunk.chunk_type,
+                        "payload": chunk.payload,
+                    }
+                )
                 chunk_tokens = self._estimate_tokens(compressed) + 1  # +1 for newline
                 if chunk_tokens > remaining:
                     # Token-accurate truncation (char-based slicing overshoots
                     # the budget for code and non-Latin text).
-                    retrieved_text += truncate_to_tokens(compressed, max(0, remaining - 2)) + "...\n"
+                    retrieved_text += (
+                        truncate_to_tokens(compressed, max(0, remaining - 2)) + "...\n"
+                    )
                     break
                 retrieved_text += compressed + "\n"
                 remaining -= chunk_tokens

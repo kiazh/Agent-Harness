@@ -12,6 +12,7 @@ Patterns covered:
 - Credit card numbers
 - SSN patterns
 """
+
 from __future__ import annotations
 
 import re
@@ -28,6 +29,7 @@ __all__ = [
 
 class RedactionPattern(NamedTuple):
     """A named regex pattern for secret detection."""
+
     name: str
     pattern: re.Pattern[str]
     replacement: str
@@ -36,6 +38,7 @@ class RedactionPattern(NamedTuple):
 @dataclass
 class RedactionResult:
     """Result of a redaction operation."""
+
     text: str
     redactions: list[str] = field(default_factory=list)
 
@@ -60,7 +63,9 @@ _PATTERNS: list[RedactionPattern] = [
     ),
     RedactionPattern(
         name="cohere_api_key",
-        pattern=re.compile(r"cohere_api_key\s*[=:]\s*['\"]?([a-zA-Z0-9\-_]{20,})['\"]?", re.IGNORECASE),
+        pattern=re.compile(
+            r"cohere_api_key\s*[=:]\s*['\"]?([a-zA-Z0-9\-_]{20,})['\"]?", re.IGNORECASE
+        ),
         replacement="cohere_api_key=[REDACTED_COHERE_KEY]",
     ),
     RedactionPattern(

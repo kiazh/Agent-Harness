@@ -9,13 +9,14 @@ The approval gate also integrates secret redaction: any secrets detected
 in memory content are redacted before the content is shown to the user
 for review.
 """
+
 from __future__ import annotations
 
 import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from ah.core.provider import audit_log
@@ -33,8 +34,9 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
-class ApprovalStatus(str, Enum):
+class ApprovalStatus(StrEnum):
     """Status of a pending memory approval."""
+
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
@@ -221,9 +223,7 @@ class MemoryApprovalGate:
             return None
 
         if row["status"] != ApprovalStatus.PENDING.value:
-            logger.warning(
-                "Pending memory %s already %s", pending_id, row["status"]
-            )
+            logger.warning("Pending memory %s already %s", pending_id, row["status"])
             return None
 
         # Step 2: Create the actual memory entry
@@ -289,9 +289,7 @@ class MemoryApprovalGate:
             return False
 
         if row["status"] != ApprovalStatus.PENDING.value:
-            logger.warning(
-                "Pending memory %s already %s", pending_id, row["status"]
-            )
+            logger.warning("Pending memory %s already %s", pending_id, row["status"])
             return False
 
         now = datetime.utcnow()

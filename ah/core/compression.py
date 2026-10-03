@@ -5,6 +5,7 @@ Provides:
 - RollingCompaction: monitors token usage and triggers compression when threshold exceeded
 - CompressionConfig: configurable threshold and target ratio
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -14,8 +15,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from ah.core.models import ContextChunk
 from ah.core.assembler import get_token_count
+from ah.core.models import ContextChunk
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ class CompressionConfig:
         preserve_recent: Number of most-recent chunks to always preserve uncompressed.
         llm_summarize: Whether to use LLM for summarization (falls back to truncation if False).
     """
+
     enabled: bool = True
     threshold: float = 0.8
     target_ratio: float = 0.5
@@ -68,6 +70,7 @@ class CompressionResult:
         compression_ratio: Ratio of compressed to original tokens (0.0-1.0).
         method: Compression method used ("llm_summarize" or "truncate").
     """
+
     compressed_chunks: list[ContextChunk]
     original_count: int
     original_tokens: int
@@ -237,8 +240,7 @@ class ContextCompressor:
             summary_prompt = (
                 "Summarize the following conversation context concisely. "
                 "Preserve key facts, decisions, and tool results. "
-                "Keep it under 200 words.\n\n"
-                + "\n".join(text_parts)
+                "Keep it under 200 words.\n\n" + "\n".join(text_parts)
             )
 
             response = await llm_provider.complete(

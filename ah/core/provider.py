@@ -1,4 +1,5 @@
 """LLM provider abstraction — OpenRouter, Ollama, OpenAI-compatible."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,14 +7,19 @@ import json
 import logging
 import re
 import time
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
 
 import httpx
 
 from ah.core.config import config
 from ah.core.exceptions import ValidationError
 from ah.core.metrics import metrics
-from ah.core.models import LLMResponse, StreamEvent, ToolDefinition  # noqa: F401 — re-exported for backward compat
+from ah.core.models import (  # noqa: F401 — re-exported for backward compat
+    LLMResponse,
+    StreamEvent,
+    ToolDefinition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +30,7 @@ _audit_logger = logging.getLogger("ah.audit")
 _audit_logger.setLevel(logging.INFO)
 if not _audit_logger.handlers:
     _handler = logging.StreamHandler()
-    _handler.setFormatter(logging.Formatter(
-        "%(asctime)s [AUDIT] %(message)s"
-    ))
+    _handler.setFormatter(logging.Formatter("%(asctime)s [AUDIT] %(message)s"))
     _audit_logger.addHandler(_handler)
 
 
@@ -37,7 +41,12 @@ def _sanitize_value(value: Any) -> Any:
         sanitized = re.sub(r"sk-[a-zA-Z0-9]{20,}", "[REDACTED_KEY]", sanitized)
         sanitized = re.sub(r"sk-ant-[a-zA-Z0-9\-_]{20,}", "[REDACTED_KEY]", sanitized)
         sanitized = re.sub(r"sk-or-[a-zA-Z0-9]{20,}", "[REDACTED_KEY]", sanitized)
-        sanitized = re.sub(r"(Bearer\s+)[a-zA-Z0-9\-._~+/]+=*", r"\1[REDACTED_TOKEN]", sanitized, flags=re.IGNORECASE)
+        sanitized = re.sub(
+            r"(Bearer\s+)[a-zA-Z0-9\-._~+/]+=*",
+            r"\1[REDACTED_TOKEN]",
+            sanitized,
+            flags=re.IGNORECASE,
+        )
         sanitized = re.sub(
             r"(password|passwd|pwd)\s*[=:]\s*['\"]?([^\s'\"]{4,})['\"]?",
             r"\1=[REDACTED_PASSWORD]",
@@ -204,7 +213,9 @@ class OpenRouterProvider(LLMProvider):
 
     BASE_URL = "https://openrouter.ai/api/v1"
 
-    def __init__(self, api_key: str | None = None, model: str = "anthropic/claude-3.5-sonnet") -> None:
+    def __init__(
+        self, api_key: str | None = None, model: str = "anthropic/claude-3.5-sonnet"
+    ) -> None:
         self.api_key = api_key or config.get("openrouter_api_key") or ""
         if not self.api_key:
             raise ValidationError("OPENROUTER_API_KEY not set")
@@ -329,7 +340,9 @@ class OpenRouterProvider(LLMProvider):
         if tools:
             payload["tools"] = _tools_payload(tools)
 
-        audit_log("llm_stream_start", provider="openrouter", model=model, message_count=len(messages))
+        audit_log(
+            "llm_stream_start", provider="openrouter", model=model, message_count=len(messages)
+        )
 
         content_parts: list[str] = []
         tool_calls_by_index: dict[int, dict[str, str]] = {}
@@ -384,14 +397,16 @@ class OpenRouterProvider(LLMProvider):
         tool_calls: list[dict] = []
         for idx in sorted(tool_calls_by_index.keys()):
             tc = tool_calls_by_index[idx]
-            tool_calls.append({
-                "id": tc["id"],
-                "type": "function",
-                "function": {
-                    "name": tc["name"],
-                    "arguments": tc["arguments"],
-                },
-            })
+            tool_calls.append(
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": tc["arguments"],
+                    },
+                }
+            )
 
         full_content = "".join(content_parts)
         usage = {
@@ -400,7 +415,9 @@ class OpenRouterProvider(LLMProvider):
             "total_tokens": stream_usage.get("total_tokens", 0),
         }
 
-        audit_log("llm_stream_complete", provider="openrouter", model=model, tool_calls=len(tool_calls))
+        audit_log(
+            "llm_stream_complete", provider="openrouter", model=model, tool_calls=len(tool_calls)
+        )
 
         yield StreamEvent(
             type="done",
@@ -466,7 +483,12 @@ class OllamaProvider(LLMProvider):
         if tools:
             payload["tools"] = _tools_payload(tools)
 
-        audit_log("llm_call_start", provider="ollama", model=model or self.model, message_count=len(messages))
+        audit_log(
+            "llm_call_start",
+            provider="ollama",
+            model=model or self.model,
+            message_count=len(messages),
+        )
 
         start = time.monotonic()
         try:
@@ -546,7 +568,12 @@ class OllamaProvider(LLMProvider):
         if tools:
             payload["tools"] = _tools_payload(tools)
 
-        audit_log("llm_stream_start", provider="ollama", model=model or self.model, message_count=len(messages))
+        audit_log(
+            "llm_stream_start",
+            provider="ollama",
+            model=model or self.model,
+            message_count=len(messages),
+        )
 
         content_parts: list[str] = []
         tool_calls: list[dict] = []
@@ -576,12 +603,19 @@ class OllamaProvider(LLMProvider):
                     if data.get("done"):
                         break
         except Exception as e:
-            audit_log("llm_stream_error", provider="ollama", model=model or self.model, error=str(e))
+            audit_log(
+                "llm_stream_error", provider="ollama", model=model or self.model, error=str(e)
+            )
             raise
 
         full_content = "".join(content_parts)
 
-        audit_log("llm_stream_complete", provider="ollama", model=model or self.model, tool_calls=len(tool_calls))
+        audit_log(
+            "llm_stream_complete",
+            provider="ollama",
+            model=model or self.model,
+            tool_calls=len(tool_calls),
+        )
 
         yield StreamEvent(
             type="done",

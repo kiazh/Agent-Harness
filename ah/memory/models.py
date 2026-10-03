@@ -1,9 +1,10 @@
 """Memory domain models — typed dataclasses for long-term memory."""
+
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ah.core.exceptions import ValidationError
 
@@ -17,11 +18,11 @@ def age_days(dt: datetime | None, now: datetime | None = None) -> float:
     """
     if dt is None:
         return 0.0
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
+        now = now.replace(tzinfo=UTC)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return max(0.0, (now - dt).total_seconds() / 86400.0)
 
 

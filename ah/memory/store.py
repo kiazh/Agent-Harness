@@ -3,6 +3,7 @@
 Follows the same patterns as ContextManager: asyncpg, typed dataclasses,
 structured logging, and audit logging.
 """
+
 from __future__ import annotations
 
 import logging
@@ -254,6 +255,7 @@ class MemoryStore:
         )
         # Parse "DELETE N" format
         from ah.db.connection import parse_command_count
+
         return parse_command_count(result)
 
     async def evict_weak_memories(
@@ -311,6 +313,7 @@ class MemoryStore:
                     count - max_memories,
                 )
             from ah.db.connection import parse_command_count
+
             return parse_command_count(result)
         else:
             # Evict by importance threshold
@@ -326,6 +329,7 @@ class MemoryStore:
                     threshold,
                 )
             from ah.db.connection import parse_command_count
+
             return parse_command_count(result)
 
     async def get_weak_memories(

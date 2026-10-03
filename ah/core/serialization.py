@@ -4,6 +4,7 @@ Eliminates code duplication across context.py, pipeline.py, and store.py
 for embedding string conversion, msgpack payload packing, and row-to-model
 mapping.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -80,9 +81,7 @@ def str_to_embedding(embedding_str: str | Any) -> list[float]:
         try:
             result.append(float(part))
         except ValueError as e:
-            raise ValueError(
-                f"Invalid embedding value '{part}' in '{embedding_str}'"
-            ) from e
+            raise ValueError(f"Invalid embedding value '{part}' in '{embedding_str}'") from e
     return result
 
 

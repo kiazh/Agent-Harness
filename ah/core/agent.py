@@ -1,4 +1,5 @@
 """ReAct agent loop — Thought → Action → Observation."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +7,8 @@ import json
 import logging
 import time
 import uuid
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
 
 from rich.console import Console
 
@@ -110,7 +112,7 @@ class BaseReActAgent:
             except Exception as e:
                 last_exception = e
                 if attempt < 3:
-                    delay = 2 ** attempt  # 1s, 2s, 4s
+                    delay = 2**attempt  # 1s, 2s, 4s
                     logger.warning(
                         "LLM call failed (attempt %d/%d): %s — retrying in %ds",
                         attempt + 1,
@@ -148,7 +150,7 @@ class BaseReActAgent:
             except Exception as e:
                 last_exception = e
                 if attempt < 3:
-                    delay = 2 ** attempt  # 1s, 2s, 4s
+                    delay = 2**attempt  # 1s, 2s, 4s
                     logger.warning(
                         "LLM stream failed (attempt %d/%d): %s — retrying in %ds",
                         attempt + 1,
@@ -218,6 +220,7 @@ class BaseReActAgent:
                 )
                 # Convert retrieved memories to ContextChunk-like tuples for assembler
                 from ah.core.models import ContextChunk
+
                 for rm in retrieved_memories:
                     m = rm.memory
                     chunk = ContextChunk(
@@ -262,16 +265,20 @@ class BaseReActAgent:
         content: str,
     ) -> None:
         """Append the assistant tool-call turn and its tool result to *messages*."""
-        messages.append({
-            "role": "assistant",
-            "content": response.content,
-            "tool_calls": [tc],
-        })
-        messages.append({
-            "role": "tool",
-            "content": content,
-            "tool_call_id": tc.get("id", ""),
-        })
+        messages.append(
+            {
+                "role": "assistant",
+                "content": response.content,
+                "tool_calls": [tc],
+            }
+        )
+        messages.append(
+            {
+                "role": "tool",
+                "content": content,
+                "tool_call_id": tc.get("id", ""),
+            }
+        )
 
     async def _execute_tool_calls(
         self,
@@ -334,7 +341,9 @@ class BaseReActAgent:
             except json.JSONDecodeError as e:
                 logger.error(
                     "Failed to parse tool arguments for '%s': %s (raw: %s)",
-                    tool_name, e, raw_args,
+                    tool_name,
+                    e,
+                    raw_args,
                 )
                 audit_log(
                     "tool_call_invalid_args",
@@ -391,11 +400,13 @@ class BaseReActAgent:
                 },
                 token_count=len(result_str) // 4,
             )
-            tool_calls_made.append({
-                "tool": tool_name,
-                "args": tool_args,
-                "result_preview": result_str[:200],
-            })
+            tool_calls_made.append(
+                {
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "result_preview": result_str[:200],
+                }
+            )
             self._append_tool_messages(messages, response, tc, result_str[:1000])
 
     def _schedule_memory_consolidation(self, session_id: uuid.UUID) -> None:
@@ -541,9 +552,7 @@ class ReActAgent(BaseReActAgent):
                 )
 
             # Execute tool calls
-            await self._execute_tool_calls(
-                response, messages, tool_calls_made, session_id, verbose
-            )
+            await self._execute_tool_calls(response, messages, tool_calls_made, session_id, verbose)
 
         # Max iterations reached
         audit_log(

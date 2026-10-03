@@ -1,4 +1,5 @@
 """Domain models — typed dataclasses for the agent harness."""
+
 from __future__ import annotations
 
 import uuid

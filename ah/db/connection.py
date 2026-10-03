@@ -1,10 +1,11 @@
 """PostgreSQL connection pool using asyncpg."""
+
 from __future__ import annotations
 
 import logging
 import os
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 import asyncpg
 
@@ -37,7 +38,12 @@ class Database:
     """Manages asyncpg connection pool."""
 
     def __init__(self, dsn: str | None = None) -> None:
-        self.dsn = dsn or config.get("database_url") or os.environ.get("DATABASE_URL") or "postgresql://postgres@127.0.0.1:5432/agentharness"
+        self.dsn = (
+            dsn
+            or config.get("database_url")
+            or os.environ.get("DATABASE_URL")
+            or "postgresql://postgres@127.0.0.1:5432/agentharness"
+        )
         self._pool: asyncpg.Pool | None = None
 
     async def connect(self) -> None:
@@ -52,6 +58,7 @@ class Database:
 
         # Parse DSN to extract host/port, bypassing DNS resolution on Windows
         from urllib.parse import urlparse
+
         parsed = urlparse(self.dsn)
         host = parsed.hostname or "127.0.0.1"
         port = parsed.port or 5432
@@ -61,6 +68,7 @@ class Database:
 
         # Use IP address directly to bypass getaddrinfo on Windows
         import ipaddress
+
         try:
             ip = ipaddress.ip_address(host)
             host_arg = str(ip)
@@ -99,6 +107,7 @@ class Database:
     async def execute(self, query: str, *args) -> str:
         """Execute a query."""
         import time
+
         start = time.monotonic()
         try:
             async with self.acquire() as conn:
@@ -114,6 +123,7 @@ class Database:
     async def executemany(self, query: str, args: list) -> None:
         """Execute *query* once per argument tuple in *args* (single round trip batch)."""
         import time
+
         start = time.monotonic()
         try:
             async with self.acquire() as conn:
@@ -126,6 +136,7 @@ class Database:
     async def fetch(self, query: str, *args) -> list[asyncpg.Record]:
         """Fetch rows."""
         import time
+
         start = time.monotonic()
         try:
             async with self.acquire() as conn:
@@ -141,6 +152,7 @@ class Database:
     async def fetchrow(self, query: str, *args) -> asyncpg.Record | None:
         """Fetch a single row."""
         import time
+
         start = time.monotonic()
         try:
             async with self.acquire() as conn:
@@ -156,6 +168,7 @@ class Database:
     async def fetchval(self, query: str, *args):
         """Fetch a single value."""
         import time
+
         start = time.monotonic()
         try:
             async with self.acquire() as conn:

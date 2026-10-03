@@ -3,21 +3,19 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ah.memory import (
-    MemoryEntry,
-    MemoryStore,
-    MemoryConsolidator,
-    ImportanceScorer,
-    ForgettingModel,
-    MemoryRetriever,
-)
-from ah.memory.models import RetrievedMemory
 from ah.core.models import LLMResponse
-
+from ah.memory import (
+    ForgettingModel,
+    ImportanceScorer,
+    MemoryConsolidator,
+    MemoryEntry,
+    MemoryRetriever,
+    MemoryStore,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -811,7 +809,7 @@ class TestMemoryIntegration:
 
     async def test_full_lifecycle(self, mock_db):
         """Test the full memory lifecycle: add → retrieve → score → forget."""
-        from ah.memory import MemoryStore, ImportanceScorer, ForgettingModel
+        from ah.memory import ForgettingModel, ImportanceScorer, MemoryStore
 
         store = MemoryStore()
         scorer = ImportanceScorer()

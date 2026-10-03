@@ -1,22 +1,23 @@
 """Context chunks — token-efficient storage, retrieval, and prompt assembly."""
+
 from __future__ import annotations
 
 import logging
 import uuid
 from collections import OrderedDict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import asyncpg
 import msgpack
 
-from ah.db.connection import db
 from ah.core.models import ContextChunk
 from ah.core.serialization import (
     embedding_to_str,
     payload_to_msgpack,
     row_to_chunk,
 )
+from ah.db.connection import db
 
 logger = logging.getLogger(__name__)
 
@@ -109,15 +110,17 @@ class ContextManager:
             embedding_str = None
             if c.get("embedding") is not None:
                 embedding_str = embedding_to_str(c["embedding"])
-            records.append((
-                c["session_id"],
-                c["agent_id"],
-                c["chunk_type"],
-                payload_msgpack,
-                c.get("token_count", 0),
-                embedding_str,
-                _search_text_for(c["payload"]),
-            ))
+            records.append(
+                (
+                    c["session_id"],
+                    c["agent_id"],
+                    c["chunk_type"],
+                    payload_msgpack,
+                    c.get("token_count", 0),
+                    embedding_str,
+                    _search_text_for(c["payload"]),
+                )
+            )
 
         # Assign ids client-side so the batch insert can be a single
         # executemany() *and* we can still fetch back exactly the rows we
@@ -216,11 +219,13 @@ class ContextManager:
         results = []
         for r in rows:
             payload = msgpack.unpackb(r["payload_msgpack"], raw=False)
-            results.append({
-                "type": r["chunk_type"],
-                "payload": payload,
-                "tokens": r["token_count"],
-            })
+            results.append(
+                {
+                    "type": r["chunk_type"],
+                    "payload": payload,
+                    "tokens": r["token_count"],
+                }
+            )
 
         # Cache the results with the limit they were fetched at
         self._recent_cache[session_id] = (limit, results)
@@ -277,20 +282,22 @@ class ContextManager:
         """
         records = []
         for c in chunks:
-            created = c.created_at or datetime.now(timezone.utc)
+            created = c.created_at or datetime.now(UTC)
             if created.tzinfo is None:
-                created = created.replace(tzinfo=timezone.utc)
-            records.append((
-                uuid.uuid4(),
-                session_id,
-                c.agent_id,
-                c.chunk_type,
-                payload_to_msgpack(c.payload),
-                c.token_count,
-                embedding_to_str(c.embedding) if c.embedding is not None else None,
-                _search_text_for(c.payload),
-                created,
-            ))
+                created = created.replace(tzinfo=UTC)
+            records.append(
+                (
+                    uuid.uuid4(),
+                    session_id,
+                    c.agent_id,
+                    c.chunk_type,
+                    payload_to_msgpack(c.payload),
+                    c.token_count,
+                    embedding_to_str(c.embedding) if c.embedding is not None else None,
+                    _search_text_for(c.payload),
+                    created,
+                )
+            )
 
         async with db.acquire() as conn:
             async with conn.transaction():
@@ -314,6 +321,7 @@ class ContextManager:
             session_id,
         )
         from ah.db.connection import parse_command_count
+
         return parse_command_count(result)
 
     async def get_token_usage(self, session_id: uuid.UUID) -> int:
@@ -352,7 +360,9 @@ class ContextManager:
             session_id,
         )
 
-        if (max_tokens is None or total_tokens <= max_tokens) and            (max_chunks is None or total_chunks <= max_chunks):
+        if (max_tokens is None or total_tokens <= max_tokens) and (
+            max_chunks is None or total_chunks <= max_chunks
+        ):
             return 0
 
         # Get chunks to evict (oldest first, preserving recent and tool pairs)

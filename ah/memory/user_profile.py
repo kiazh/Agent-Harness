@@ -3,6 +3,7 @@
 Stores user preferences, interaction history, and derived insights.
 Persisted to the database via the user_profiles table.
 """
+
 from __future__ import annotations
 
 import asyncio

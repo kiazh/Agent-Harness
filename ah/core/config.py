@@ -3,6 +3,7 @@
 Config file: ~/.agent-harness/config.yaml
 Environment variables: AGENT_HARNESS_<KEY> override file values.
 """
+
 from __future__ import annotations
 
 import logging
@@ -21,9 +22,10 @@ DEFAULT_CONFIG_PATH = Path.home() / ".agent-harness" / "config.yaml"
 # Secrets live in the environment (.env), never in config.yaml.
 SECRET_KEYS = frozenset({"openrouter_api_key", "openai_api_key", "cohere_api_key", "database_url"})
 
-# Load .env from the current directory (or a parent) before the config
-# singleton below is built, so its values take effect at startup. Existing
-# real environment variables win over .env.
+# Load the nearest .env before the config singleton below is built. With no
+# path, python-dotenv searches upward from this file's directory, so the
+# repository's .env is found no matter which directory `ah` is run from.
+# Real environment variables always win over .env values.
 load_dotenv(override=False)
 
 # Sensible defaults for all settings

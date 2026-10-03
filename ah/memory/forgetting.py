@@ -7,12 +7,12 @@ Where:
     λ_effective = base_lambda × (1 - importance)
     base_lambda = ln(2) / half_life_days
 """
+
 from __future__ import annotations
 
 import math
 
 from ah.memory.models import MemoryEntry, age_days
-
 
 # Default half-life in days
 DEFAULT_HALF_LIFE_DAYS = 14.0
@@ -55,7 +55,9 @@ class ForgettingModel:
 
         return decay_component + access_component
 
-    def should_forget(self, memory: MemoryEntry, threshold: float = DEFAULT_EVICTION_THRESHOLD) -> bool:
+    def should_forget(
+        self, memory: MemoryEntry, threshold: float = DEFAULT_EVICTION_THRESHOLD
+    ) -> bool:
         """Decide whether a memory should be evicted.
 
         Returns True if the memory's current strength is below the threshold.

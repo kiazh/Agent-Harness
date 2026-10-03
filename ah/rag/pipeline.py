@@ -141,15 +141,17 @@ class RAGPipeline:
             }
             payload_msgpack = payload_to_msgpack(payload)
             embedding_str = embedding_to_str(embedding)
-            records.append((
-                session_id,
-                agent_id,
-                "document",
-                payload_msgpack,
-                chunk.token_count,
-                embedding_str,
-                search_text,
-            ))
+            records.append(
+                (
+                    session_id,
+                    agent_id,
+                    "document",
+                    payload_msgpack,
+                    chunk.token_count,
+                    embedding_str,
+                    search_text,
+                )
+            )
 
         if not records:
             return []

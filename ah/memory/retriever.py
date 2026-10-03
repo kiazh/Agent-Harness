@@ -2,6 +2,7 @@
 
 Pipeline: dense vector search + sparse keyword search → merge → re-rank → top-K
 """
+
 from __future__ import annotations
 
 import json
@@ -98,7 +99,8 @@ class MemoryRetriever:
         if date_range:
             start, end = date_range
             candidates = [
-                rm for rm in candidates
+                rm
+                for rm in candidates
                 if rm.memory.created_at and start <= rm.memory.created_at <= end
             ]
 
@@ -130,10 +132,7 @@ class MemoryRetriever:
             category=category,
             limit=limit,
         )
-        retrieved = [
-            RetrievedMemory(memory=m, score=s, source="dense")
-            for m, s in results
-        ]
+        retrieved = [RetrievedMemory(memory=m, score=s, source="dense") for m, s in results]
         # Update access (batch)
         ids_to_update = [rm.memory.id for rm in retrieved]
         if ids_to_update:
@@ -321,22 +320,116 @@ Return ONLY the JSON array, no other text."""
         Removes stop words and short tokens.
         """
         stop_words = {
-            "a", "an", "the", "is", "are", "was", "were", "be", "been",
-            "being", "have", "has", "had", "do", "does", "did", "will",
-            "would", "could", "should", "may", "might", "can", "this",
-            "that", "these", "those", "i", "you", "he", "she", "it",
-            "we", "they", "what", "which", "who", "whom", "when",
-            "where", "why", "how", "all", "each", "every", "both",
-            "few", "more", "most", "other", "some", "such", "no",
-            "not", "only", "own", "same", "so", "than", "too",
-            "very", "just", "and", "but", "if", "or", "because",
-            "as", "until", "while", "of", "at", "by", "for",
-            "with", "about", "against", "between", "into", "through",
-            "during", "before", "after", "above", "below", "to",
-            "from", "up", "down", "in", "out", "on", "off", "over",
-            "under", "again", "further", "then", "once", "here",
-            "there", "tell", "me", "my", "your", "his", "her",
-            "its", "our", "their",
+            "a",
+            "an",
+            "the",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "being",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "can",
+            "this",
+            "that",
+            "these",
+            "those",
+            "i",
+            "you",
+            "he",
+            "she",
+            "it",
+            "we",
+            "they",
+            "what",
+            "which",
+            "who",
+            "whom",
+            "when",
+            "where",
+            "why",
+            "how",
+            "all",
+            "each",
+            "every",
+            "both",
+            "few",
+            "more",
+            "most",
+            "other",
+            "some",
+            "such",
+            "no",
+            "not",
+            "only",
+            "own",
+            "same",
+            "so",
+            "than",
+            "too",
+            "very",
+            "just",
+            "and",
+            "but",
+            "if",
+            "or",
+            "because",
+            "as",
+            "until",
+            "while",
+            "of",
+            "at",
+            "by",
+            "for",
+            "with",
+            "about",
+            "against",
+            "between",
+            "into",
+            "through",
+            "during",
+            "before",
+            "after",
+            "above",
+            "below",
+            "to",
+            "from",
+            "up",
+            "down",
+            "in",
+            "out",
+            "on",
+            "off",
+            "over",
+            "under",
+            "again",
+            "further",
+            "then",
+            "once",
+            "here",
+            "there",
+            "tell",
+            "me",
+            "my",
+            "your",
+            "his",
+            "her",
+            "its",
+            "our",
+            "their",
         }
 
         # Tokenize and filter

@@ -1,4 +1,5 @@
 """Entry point for `python -m ah`."""
+
 import logging
 
 from ah.cli import app

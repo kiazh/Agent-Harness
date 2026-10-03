@@ -1,4 +1,5 @@
 """Memory tools — remember() and recall() for agent tool use."""
+
 from __future__ import annotations
 
 import logging
@@ -6,8 +7,8 @@ import uuid
 
 from ah.core.exceptions import ToolError, ValidationError
 from ah.core.provider import audit_log
-from ah.memory.store import memory_store
 from ah.memory.retriever import MemoryRetriever
+from ah.memory.store import memory_store
 from ah.tools.base import registry
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,9 @@ async def remember(
         # Validate category
         valid_categories = {"preference", "decision", "fact", "event", "transient"}
         if category not in valid_categories:
-            raise ValidationError(f"Invalid category '{category}'. Must be one of: {valid_categories}")
+            raise ValidationError(
+                f"Invalid category '{category}'. Must be one of: {valid_categories}"
+            )
 
         # Clamp importance
         importance = max(0.0, min(1.0, importance))
@@ -72,7 +75,7 @@ async def remember(
             try:
                 sid = uuid.UUID(session_id)
             except ValueError:
-                raise ValidationError(f"Invalid session_id '{session_id}'")
+                raise ValidationError(f"Invalid session_id '{session_id}'") from None
 
         # Create and store memory
         entry = await memory_store.add(
@@ -92,11 +95,13 @@ async def remember(
             importance=importance,
         )
 
-        return f"Memory stored: [{entry.id}] ({category}, importance={importance:.2f}) {content[:100]}"
+        return (
+            f"Memory stored: [{entry.id}] ({category}, importance={importance:.2f}) {content[:100]}"
+        )
 
     except Exception as e:
         logger.error("Failed to store memory: %s", e)
-        raise ToolError(f"Error storing memory: {e}")
+        raise ToolError(f"Error storing memory: {e}") from e
 
 
 @registry.register(
@@ -164,4 +169,4 @@ async def recall(
 
     except Exception as e:
         logger.error("Failed to recall memories: %s", e)
-        raise ToolError(f"Error recalling memories: {e}")
+        raise ToolError(f"Error recalling memories: {e}") from e

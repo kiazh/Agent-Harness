@@ -10,16 +10,15 @@ from __future__ import annotations
 
 import json
 import uuid
-from unittest.mock import AsyncMock, patch
 
 import pytest
-from hypothesis import given, settings, strategies as st
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from ah.core.assembler import PromptAssembler, get_token_count
 from ah.core.models import ContextChunk
 from ah.core.provider import AsyncTokenBucket, _validate_messages, _validate_params
 from ah.tools.base import ToolRegistry
-
 
 # ===========================================================================
 # PromptAssembler Properties
@@ -175,7 +174,6 @@ class TestPromptAssemblerProperties:
         """Property: optional (retrieved) context never pushes the prompt past
         the budget. System prompt, goal and query are always included, so the
         bound is max(budget, mandatory tokens)."""
-        from ah.core.models import ContextChunk
 
         assembler = PromptAssembler(session_budget=budget)
         mandatory = assembler.assemble(
@@ -566,8 +564,6 @@ class TestContextManagerProperties:
     @settings(max_examples=50)
     def test_add_chunk_preserves_type(self, chunk_type, payload):
         """Property: Added chunk preserves its type."""
-        from ah.core.context import ContextManager
-        cm = ContextManager()
         # Just verify the chunk type is valid
         assert chunk_type in [
             "tool_call", "result", "memory", "heartbeat",

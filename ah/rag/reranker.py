@@ -137,11 +137,13 @@ class CohereReranker(Reranker):
 
         results = []
         for item in data.get("results", []):
-            results.append(RerankResult(
-                index=item["index"],
-                score=item["relevance_score"],
-                text=documents[item["index"]],
-            ))
+            results.append(
+                RerankResult(
+                    index=item["index"],
+                    score=item["relevance_score"],
+                    text=documents[item["index"]],
+                )
+            )
 
         # Sort by score descending
         results.sort(key=lambda r: r.score, reverse=True)

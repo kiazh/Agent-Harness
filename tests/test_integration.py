@@ -8,7 +8,6 @@ These tests verify component interactions with real dependencies where feasible:
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import tempfile
@@ -19,17 +18,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.core.models import LLMResponse, Session, AgentResponse, StreamEvent
 from ah.core.agent import ReActAgent
-from ah.core.context import ContextManager, context_manager
-from ah.core.session import SessionManager, session_manager
+from ah.core.context import context_manager
+from ah.core.models import LLMResponse, Session, StreamEvent
 from ah.core.provider import LLMProvider
-from ah.tools.base import ToolRegistry, registry
-from ah.tools import builtins  # noqa: F401
-from ah.tools import file  # noqa: F401
-from ah.tools import terminal  # noqa: F401
-from ah.tools.file import read_file, write_file, list_files
-
+from ah.core.session import session_manager
+from ah.tools import (
+    builtins,  # noqa: F401
+    file,  # noqa: F401
+    terminal,  # noqa: F401
+)
+from ah.tools.base import ToolRegistry
 
 # ===========================================================================
 # FakeProvider — Deterministic provider for testing
@@ -910,7 +909,7 @@ class TestRealDatabase:
 
     async def test_real_session_crud(self):
         """Test session CRUD with real database."""
-        from ah.db.connection import Database, db
+        from ah.db.connection import db
 
         try:
             await db.connect()
@@ -947,7 +946,7 @@ class TestRealDatabase:
 
     async def test_real_context_crud(self):
         """Test context chunk CRUD with real database."""
-        from ah.db.connection import Database, db
+        from ah.db.connection import db
 
         try:
             await db.connect()
@@ -990,7 +989,7 @@ class TestRealDatabase:
 
     async def test_real_agent_flow(self):
         """Test full agent flow with real database."""
-        from ah.db.connection import Database, db
+        from ah.db.connection import db
 
         try:
             await db.connect()

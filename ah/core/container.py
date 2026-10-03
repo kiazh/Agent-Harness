@@ -1,20 +1,21 @@
 """Dependency injection container — wires up all singletons for production or testing."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
 from ah.core.context import ContextManager, context_manager
-from ah.core.session import SessionManager, session_manager
 from ah.core.provider import LLMProvider, get_provider
+from ah.core.session import SessionManager, session_manager
 from ah.db.connection import Database, db
+from ah.memory.consolidator import MemoryConsolidator
+from ah.memory.forgetting import ForgettingModel
+from ah.memory.retriever import MemoryRetriever
+from ah.memory.scorer import ImportanceScorer
+from ah.memory.store import MemoryStore
 from ah.rag.pipeline import RAGPipeline
 from ah.skills.registry import SkillRegistry, skill_registry
 from ah.tools.base import ToolRegistry, registry
-from ah.memory.store import MemoryStore
-from ah.memory.scorer import ImportanceScorer
-from ah.memory.forgetting import ForgettingModel
-from ah.memory.retriever import MemoryRetriever
-from ah.memory.consolidator import MemoryConsolidator
 
 
 @dataclass
@@ -186,11 +187,11 @@ class Container:
         SkillRegistry.reset()
 
         # Replace our references with the fresh global singletons
-        from ah.db.connection import db as fresh_db
-        from ah.core.session import session_manager as fresh_session_manager
         from ah.core.context import context_manager as fresh_context_manager
-        from ah.tools.base import registry as fresh_tool_registry
+        from ah.core.session import session_manager as fresh_session_manager
+        from ah.db.connection import db as fresh_db
         from ah.skills.registry import skill_registry as fresh_skill_registry
+        from ah.tools.base import registry as fresh_tool_registry
 
         self._db = fresh_db
         self._session_manager = fresh_session_manager

@@ -7,8 +7,9 @@ import inspect
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, get_type_hints
+from typing import Any, get_type_hints
 
 from ah.core.exceptions import ToolError, ValidationError
 from ah.core.models import ToolDefinition
@@ -51,9 +52,9 @@ class ToolRegistry:
 
     def register(
         self,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
-        parameters: Optional[dict] = None,
+        name: str | None = None,
+        description: str | None = None,
+        parameters: dict | None = None,
     ) -> Callable:
         """Decorator to register a function as a tool.
 
@@ -62,6 +63,7 @@ class ToolRegistry:
             def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
                 ...
         """
+
         def decorator(func: Callable) -> Callable:
             tool_name = name or func.__name__
             tool_desc = description or (func.__doc__ or "").strip().split("\n")[0]
@@ -77,6 +79,7 @@ class ToolRegistry:
             # Invalidate definitions cache when a new tool is registered
             self._definitions_cache = None
             return func
+
         return decorator
 
     def _infer_schema(self, func: Callable) -> dict:
@@ -149,8 +152,8 @@ class ToolRegistry:
         for req_param in required:
             if req_param not in kwargs:
                 raise ValidationError(
-                                    f"Tool '{tool.name}' missing required parameter: '{req_param}'"
-                                )
+                    f"Tool '{tool.name}' missing required parameter: '{req_param}'"
+                )
 
         # Check for unknown parameters
         allowed_params = set(properties.keys())
@@ -158,9 +161,9 @@ class ToolRegistry:
         unknown_params = provided_params - allowed_params
         if unknown_params:
             raise ValidationError(
-                            f"Tool '{tool.name}' received unknown parameters: {unknown_params}. "
-                            f"Allowed: {allowed_params}"
-                        )
+                f"Tool '{tool.name}' received unknown parameters: {unknown_params}. "
+                f"Allowed: {allowed_params}"
+            )
 
         # Type checking
         type_map = {
@@ -180,9 +183,9 @@ class ToolRegistry:
                 python_type = type_map[expected_type]
                 if not isinstance(param_value, python_type):
                     raise ValidationError(
-                                            f"Tool '{tool.name}' parameter '{param_name}' expected type "
-                                            f"'{expected_type}', got '{type(param_value).__name__}'"
-                                        )
+                        f"Tool '{tool.name}' parameter '{param_name}' expected type "
+                        f"'{expected_type}', got '{type(param_value).__name__}'"
+                    )
 
     async def execute(self, name: str, **kwargs) -> Any:
         """Execute a tool by name with input validation and TTL caching."""
@@ -244,7 +247,7 @@ class ToolRegistry:
         """Alias for list_tools."""
         return self.list_tools()
 
-    def get_tool(self, name: str) -> Optional[Tool]:
+    def get_tool(self, name: str) -> Tool | None:
         """Get a tool by name."""
         return self._tools.get(name)
 

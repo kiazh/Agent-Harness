@@ -72,9 +72,7 @@ class OpenAIEmbedder(Embedder):
                 logger.info("Using OpenRouter for embeddings (no OPENAI_API_KEY set)")
 
         if not self.api_key:
-            raise ProviderError(
-                "No API key found. Set OPENAI_API_KEY or OPENROUTER_API_KEY."
-            )
+            raise ProviderError("No API key found. Set OPENAI_API_KEY or OPENROUTER_API_KEY.")
 
         self._model = model
         self._base_url = base_url.rstrip("/")

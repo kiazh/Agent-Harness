@@ -1,8 +1,15 @@
-"""AgentHarness tools — registry and built-in tools."""
+"""AgentHarness tools — registry and built-in tools.
 
+Importing this package registers every built-in tool with ``registry``.
+"""
+
+from ah.tools import (
+    builtins,  # noqa: F401 — web_search, web_extract, search_files
+    file,  # noqa: F401 — read_file, write_file, list_files
+    memory,  # noqa: F401 — remember, recall
+    rag,  # noqa: F401 — index_document, search_documents
+    terminal,  # noqa: F401 — terminal
+)
 from ah.tools.base import Tool, ToolRegistry, registry
-from ah.tools import builtins  # noqa: F401 — registers all built-in tools
-from ah.tools import memory  # noqa: F401 — registers remember, recall
-from ah.tools import rag  # noqa: F401 — registers index_document, search_documents
 
-__all__ = ["Tool", "ToolRegistry", "registry", "builtins", "memory", "rag"]
+__all__ = ["Tool", "ToolRegistry", "registry", "builtins", "file", "terminal", "memory", "rag"]

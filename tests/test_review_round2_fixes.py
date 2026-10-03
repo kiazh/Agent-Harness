@@ -10,12 +10,10 @@ Covers:
 """
 from __future__ import annotations
 
-import ast
 import inspect
-import re
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -185,7 +183,7 @@ class TestCLIUUIDValidation:
         return inspect.getsource(getattr(cli_mod, func_name))
 
     def test_export_uses_parse_uuid(self):
-        assert "_parse_uuid" in self._source("export")
+        assert "_resolve_session" in self._source("export")
         assert "uuid.UUID(" not in self._source("export")
 
     def test_context_uses_parse_uuid(self):
@@ -193,8 +191,11 @@ class TestCLIUUIDValidation:
         assert "uuid.UUID(" not in self._source("context")
 
     def test_compress_uses_parse_uuid(self):
-        assert "_parse_uuid" in self._source("compress")
+        assert "_resolve_session" in self._source("compress")
         assert "uuid.UUID(" not in self._source("compress")
+
+    def test_resolve_session_uses_parse_uuid(self):
+        assert "_parse_uuid" in self._source("_resolve_session")
 
     def test_parse_uuid_rejects_garbage(self):
         from ah.cli import _parse_uuid
@@ -209,6 +210,7 @@ class TestCLIUUIDValidation:
 
     def test_export_command_invalid_uuid_exits_nonzero(self):
         from typer.testing import CliRunner
+
         import ah.cli as cli_mod
         runner = CliRunner()
         with patch.object(cli_mod.db, "connect", new_callable=AsyncMock), \
@@ -219,6 +221,7 @@ class TestCLIUUIDValidation:
 
     def test_context_command_invalid_uuid_exits_nonzero(self):
         from typer.testing import CliRunner
+
         import ah.cli as cli_mod
         runner = CliRunner()
         with patch.object(cli_mod.db, "connect", new_callable=AsyncMock), \
@@ -229,6 +232,7 @@ class TestCLIUUIDValidation:
 
     def test_compress_command_invalid_uuid_exits_nonzero(self):
         from typer.testing import CliRunner
+
         import ah.cli as cli_mod
         runner = CliRunner()
         with patch.object(cli_mod.db, "connect", new_callable=AsyncMock), \
@@ -277,111 +281,3 @@ class TestSharedToolExecutionHelper:
         assert "_execute_tool_calls" in base
         assert "_execute_tool_calls_stream" in base
         assert "_prepare_context" in base
-
-
-# ===========================================================================
-# Fix 6: Large files split into packages
-# ===========================================================================
-
-class TestLargeFileSplits:
-    """visual.py and animations.py are now packages with focused submodules."""
-
-    def test_visual_is_package(self):
-        assert (AH / "cli" / "visual" / "__init__.py").exists()
-        assert not (AH / "cli" / "visual.py").exists()
-
-    def test_animations_is_package(self):
-        assert (AH / "cli" / "animations" / "__init__.py").exists()
-        assert not (AH / "cli" / "animations.py").exists()
-
-    @pytest.mark.parametrize("mod", ["colors", "panels", "tables", "banners"])
-    def test_visual_submodules_exist(self, mod):
-        assert (AH / "cli" / "visual" / f"{mod}.py").exists()
-
-    @pytest.mark.parametrize("mod", ["spinners", "loaders", "transitions", "runner"])
-    def test_animations_submodules_exist(self, mod):
-        assert (AH / "cli" / "animations" / f"{mod}.py").exists()
-
-    @pytest.mark.parametrize("mod", ["colors", "themes", "panels", "tables",
-                                     "styles", "banners", "detection",
-                                     "integrations", "context"])
-    def test_visual_submodules_importable(self, mod):
-        import importlib
-        importlib.import_module(f"ah.cli.visual.{mod}")
-
-    @pytest.mark.parametrize("mod", ["_base", "spinners", "loaders",
-                                     "transitions", "runner"])
-    def test_animations_submodules_importable(self, mod):
-        import importlib
-        importlib.import_module(f"ah.cli.animations.{mod}")
-
-    def test_visual_init_is_small(self):
-        lines = (AH / "cli" / "visual" / "__init__.py").read_text(
-            encoding="utf-8").count("\n")
-        assert lines < 400, f"visual/__init__.py should be a thin facade, got {lines}"
-
-    def test_animations_init_is_small(self):
-        lines = (AH / "cli" / "animations" / "__init__.py").read_text(
-            encoding="utf-8").count("\n")
-        assert lines < 400, f"animations/__init__.py should be a thin facade, got {lines}"
-
-    def test_no_submodule_exceeds_1000_lines(self):
-        for pkg in ("visual", "animations"):
-            for f in (AH / "cli" / pkg).glob("*.py"):
-                n = f.read_text(encoding="utf-8").count("\n")
-                assert n < 1000, f"{f.name} has {n} lines"
-
-    def test_public_api_preserved_visual(self):
-        import ah.cli.visual as v
-        for name in ["VisualContext", "ThemeName", "ColorScheme", "PanelStyles",
-                     "TableStyles", "PromptStyles", "StatusIndicators", "StatusLevel",
-                     "THEMES", "BANNER_LOGO", "BANNER_HERO", "detect_light_mode",
-                     "detect_light_mode_osc", "detect_no_color", "get_visual_context",
-                     "get_default_visual", "tint", "contrast_ratio",
-                     "relative_luminance", "parse_color", "hex_to_rgb", "rgb_to_hex",
-                     "gamut_map_bisection", "generate_prompt_toolkit_style",
-                     "generate_syntax_highlight_rules"]:
-            assert hasattr(v, name), f"visual missing {name}"
-
-    def test_public_api_preserved_animations(self):
-        import ah.cli.animations as a
-        for name in ["Spinner", "SquareLoader", "ThinkingAnimation", "KawaiiSpinner",
-                     "ProgressBar", "StreamingAnimation", "ToolExecutionAnimation",
-                     "ErrorAnimation", "SuccessAnimation", "FadeTransition",
-                     "KnightRiderScanner", "BackgroundPulse", "FlashMessage",
-                     "ScrollAccelerator", "AnimationRunner", "FrameAnimation",
-                     "get_spinner", "get_progress_bar", "get_thinking_animation",
-                     "get_streaming_animation", "get_tool_animation",
-                     "get_error_animation", "get_success_animation",
-                     "get_fade_transition", "get_animation_runner",
-                     "get_knight_rider_scanner", "get_background_pulse",
-                     "get_kawaii_spinner", "get_flash_message", "get_scroll_accelerator",
-                     "should_animate", "is_tty", "PRIMARY", "SECONDARY", "SUCCESS",
-                     "WARNING", "ERROR", "INFO", "MUTED", "TEXT", "SPINNER_FRAMES",
-                     "THINKING_VERBS"]:
-            assert hasattr(a, name), f"animations missing {name}"
-
-    def test_animation_factories_work(self):
-        """Convenience factories must be usable (regression: missing imports)."""
-        from rich.console import Console
-        from ah.cli.animations import (
-            get_spinner, get_progress_bar, get_thinking_animation,
-            get_streaming_animation, get_tool_animation, get_error_animation,
-            get_success_animation, get_fade_transition, get_animation_runner,
-        )
-        console = Console(force_terminal=False)
-        assert get_spinner(console, label="x") is not None
-        assert get_progress_bar(console, total=10) is not None
-        assert get_thinking_animation(console) is not None
-        assert get_streaming_animation(console) is not None
-        assert get_tool_animation(console, "read_file") is not None
-        assert get_error_animation(console, "oops") is not None
-        assert get_success_animation(console, "done") is not None
-        assert get_fade_transition(console) is not None
-        assert get_animation_runner(console) is not None
-
-    def test_visual_context_usable(self):
-        from ah.cli.visual import VisualContext
-        viz = VisualContext(no_color=True)
-        viz.panel("hello", style="info")
-        viz.status("success", "active")

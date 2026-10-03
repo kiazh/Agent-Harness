@@ -1,4 +1,5 @@
 """Built-in tools — web search, web extract, and file search."""
+
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +8,6 @@ import logging
 import re
 import socket
 from pathlib import Path
-from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -147,7 +147,9 @@ async def web_extract(url: str) -> str:
 
     # SSRF validation
     if not _is_safe_url(url):
-        raise ValidationError(f"URL rejected by security policy (private/internal address or invalid protocol): {url}")
+        raise ValidationError(
+            f"URL rejected by security policy (private/internal address or invalid protocol): {url}"
+        )
 
     try:
         # The fetch is performed by the Jina Reader proxy, so the URL is passed
@@ -165,17 +167,18 @@ async def web_extract(url: str) -> str:
             return resp.text[:5000]
         raise ToolError(f"HTTP {resp.status_code} for {url}")
     except httpx.TimeoutException:
-        raise ToolError(f"Request timed out for {url}")
+        raise ToolError(f"Request timed out for {url}") from None
     except httpx.HTTPError as e:
-        raise ToolError(f"HTTP error for {url}: {e}")
+        raise ToolError(f"HTTP error for {url}: {e}") from e
     except Exception as e:
-        raise ToolError(f"Error extracting URL: {e}")
+        raise ToolError(f"Error extracting URL: {e}") from e
 
 
 def _resolve_path(path: str, base_dir: str | None = None) -> Path:
     """Resolve a path and ensure it stays within the base directory."""
     # Use the same base directory as file.py for consistency
     from ah.tools.file import _BASE_DIR
+
     base = Path(base_dir or _BASE_DIR).resolve()
     # Handle absolute paths directly
     p = Path(path)
@@ -186,17 +189,17 @@ def _resolve_path(path: str, base_dir: str | None = None) -> Path:
     try:
         resolved.relative_to(base)
     except ValueError:
-        raise ValueError(f"Path '{path}' escapes base directory '{base}'")
+        raise ValueError(f"Path '{path}' escapes base directory '{base}'") from None
     return resolved
 
 
 @registry.register(description="Search file contents with regex")
-async def search_files(pattern: str, path: str = ".", file_glob: Optional[str] = None) -> str:
+async def search_files(pattern: str, path: str = ".", file_glob: str | None = None) -> str:
     """Search file contents using regex pattern."""
     try:
         dir_path = _resolve_path(path)
     except ValueError as e:
-        raise ToolError(f"{e}")
+        raise ToolError(f"{e}") from e
     if not dir_path.exists():
         raise ToolError(f"Path not found: {path}")
 
@@ -208,12 +211,13 @@ async def search_files(pattern: str, path: str = ".", file_glob: Optional[str] =
     glob_pattern = file_glob or "*"
     matches = []
     try:
+
         def _search():
             for f in dir_path.glob(glob_pattern):
                 if not f.is_file():
                     continue
                 try:
-                    with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                    with open(f, encoding="utf-8", errors="replace") as fh:
                         for i, line in enumerate(fh, 1):
                             if regex.search(line):
                                 matches.append(f"{f}:{i}: {line.strip()}")
@@ -221,6 +225,7 @@ async def search_files(pattern: str, path: str = ".", file_glob: Optional[str] =
                                     return
                 except OSError:
                     continue
+
         await asyncio.to_thread(_search)
     except Exception as e:
         raise ToolError(f"Error searching files: {e}") from e

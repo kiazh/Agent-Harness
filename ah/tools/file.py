@@ -1,4 +1,5 @@
 """File tools — read_file, write_file, list_files."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,8 +7,8 @@ import logging
 import os
 from pathlib import Path
 
-from ah.core.exceptions import ToolError
 from ah.core.config import config
+from ah.core.exceptions import ToolError
 from ah.tools.base import registry
 
 logger = logging.getLogger(__name__)
@@ -28,9 +29,7 @@ def _resolve_path(path: str) -> Path:
 
     # Ensure the resolved path is within the allowed root
     if not candidate.is_relative_to(_BASE_DIR):
-        raise ValueError(
-            f"Path '{path}' escapes the allowed base directory '{_BASE_DIR}'"
-        )
+        raise ValueError(f"Path '{path}' escapes the allowed base directory '{_BASE_DIR}'")
 
     return candidate
 
@@ -42,7 +41,10 @@ def _resolve_path(path: str) -> Path:
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "Path to the file to read"},
-            "offset": {"type": "integer", "description": "Line number to start reading from (1-indexed)"},
+            "offset": {
+                "type": "integer",
+                "description": "Line number to start reading from (1-indexed)",
+            },
             "limit": {"type": "integer", "description": "Maximum number of lines to read"},
         },
         "required": ["path"],
@@ -57,21 +59,23 @@ async def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
     try:
         file_path = _resolve_path(path)
     except ValueError as e:
-        raise ToolError(f"{e}")
+        raise ToolError(f"{e}") from e
 
     if not file_path.exists():
         raise ToolError(f"File not found: {path}")
     if not file_path.is_file():
         raise ToolError(f"Not a file: {path}")
     try:
+
         def _read():
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
             end = offset + limit - 1
-            return "".join(lines[offset - 1:end])
+            return "".join(lines[offset - 1 : end])
+
         return await asyncio.to_thread(_read)
     except Exception as e:
-        raise ToolError(f"Error reading file: {e}")
+        raise ToolError(f"Error reading file: {e}") from e
 
 
 @registry.register(
@@ -91,17 +95,19 @@ async def write_file(path: str, content: str) -> str:
     try:
         file_path = _resolve_path(path)
     except ValueError as e:
-        raise ToolError(f"{e}")
+        raise ToolError(f"{e}") from e
 
     try:
+
         def _write():
             file_path.parent.mkdir(parents=True, exist_ok=True)
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
             return f"Successfully wrote {len(content)} characters to {path}"
+
         return await asyncio.to_thread(_write)
     except Exception as e:
-        raise ToolError(f"Error writing file: {e}")
+        raise ToolError(f"Error writing file: {e}") from e
 
 
 @registry.register(
@@ -111,7 +117,10 @@ async def write_file(path: str, content: str) -> str:
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "Directory path to list"},
-            "pattern": {"type": "string", "description": "Glob pattern to filter files (e.g., '*.py')"},
+            "pattern": {
+                "type": "string",
+                "description": "Glob pattern to filter files (e.g., '*.py')",
+            },
         },
         "required": ["path"],
     },
@@ -121,13 +130,14 @@ async def list_files(path: str = ".", pattern: str = "*") -> str:
     try:
         dir_path = _resolve_path(path)
     except ValueError as e:
-        raise ToolError(f"{e}")
+        raise ToolError(f"{e}") from e
 
     if not dir_path.exists():
         raise ToolError(f"Directory not found: {path}")
     if not dir_path.is_dir():
         raise ToolError(f"Not a directory: {path}")
     try:
+
         def _list():
             files = list(dir_path.glob(pattern))
             if not files:
@@ -140,6 +150,7 @@ async def list_files(path: str = ".", pattern: str = "*") -> str:
                 elif f.is_dir():
                     lines.append(f"{f.relative_to(dir_path)}/ (dir)")
             return "\n".join(lines)
+
         return await asyncio.to_thread(_list)
     except Exception as e:
-        raise ToolError(f"Error listing files: {e}")
+        raise ToolError(f"Error listing files: {e}") from e

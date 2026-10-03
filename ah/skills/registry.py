@@ -1,8 +1,10 @@
 """Skill system — registry, SKILL.md parser, trigger matching, telemetry, curator, hub."""
+
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -12,6 +14,18 @@ from typing import Any
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# Defaults are anchored to the project root, not the current directory, so the
+# same skills are found no matter where `ah` is launched. Override with env vars.
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def default_skills_dir() -> Path:
+    return Path(os.environ.get("AGENT_HARNESS_SKILLS_DIR") or _PROJECT_ROOT / "skills")
+
+
+def default_hub_dir() -> Path:
+    return Path(os.environ.get("AGENT_HARNESS_SKILL_HUB_DIR") or _PROJECT_ROOT / ".skill-hub")
 
 
 @dataclass
@@ -56,21 +70,21 @@ class SkillParser:
     @staticmethod
     def _validate_content(content: str, source_path: str = "") -> str:
         """Validate skill content for prompt injection attempts.
-        
+
         Returns the content if safe, raises ValueError if suspicious patterns found.
         """
         if len(content) > SkillParser.MAX_CONTENT_SIZE:
             raise ValueError(
                 f"Skill content exceeds maximum size of {SkillParser.MAX_CONTENT_SIZE} characters"
             )
-        
+
         for pattern in SkillParser._PROMPT_INJECTION_PATTERNS:
             if pattern.search(content):
                 raise ValueError(
                     f"Skill content contains potential prompt injection pattern "
                     f"(matched: {pattern.pattern[:30]}...)"
                 )
-        
+
         return content
 
     @staticmethod
@@ -121,8 +135,8 @@ class SkillParser:
 class SkillRegistry:
     """Load, match, and manage skills."""
 
-    def __init__(self, skills_dir: str | Path = "skills") -> None:
-        self.skills_dir = Path(skills_dir)
+    def __init__(self, skills_dir: str | Path | None = None) -> None:
+        self.skills_dir = Path(skills_dir) if skills_dir is not None else default_skills_dir()
         self._skills: dict[str, Skill] = {}
 
     def load_all(self) -> None:
@@ -192,7 +206,9 @@ class SkillRegistry:
             "name": skill.name,
             "usage_count": skill.usage_count,
             "view_count": skill.view_count,
-            "last_activity_at": skill.last_activity_at.isoformat() if skill.last_activity_at else None,
+            "last_activity_at": skill.last_activity_at.isoformat()
+            if skill.last_activity_at
+            else None,
             "source": skill.source,
             "source_type": skill.source_type,
         }
@@ -398,8 +414,7 @@ class SkillCurator:
             "total_views": total_views,
             "stale_skills": stale,
             "top_skills": [
-                {"name": s.name, "usage_count": s.usage_count}
-                for s in self.get_top_skills(5)
+                {"name": s.name, "usage_count": s.usage_count} for s in self.get_top_skills(5)
             ],
         }
 
@@ -407,14 +422,19 @@ class SkillCurator:
 class SkillHub:
     """Community-curated skill sharing — publish, discover, install skills."""
 
-    def __init__(self, registry: SkillRegistry, hub_dir: str | Path = ".skill-hub") -> None:
+    def __init__(self, registry: SkillRegistry, hub_dir: str | Path | None = None) -> None:
         self.registry = registry
-        self.hub_dir = Path(hub_dir)
+        self.hub_dir = Path(hub_dir) if hub_dir is not None else default_hub_dir()
         self.hub_dir.mkdir(parents=True, exist_ok=True)
 
     def _hub_file(self, name: str) -> Path:
         """Return the hub JSON path for *name*, rejecting path traversal."""
-        if not name or any(sep in name for sep in ("/", "\\")) or name in (".", "..") or ".." in name:
+        if (
+            not name
+            or any(sep in name for sep in ("/", "\\"))
+            or name in (".", "..")
+            or ".." in name
+        ):
             raise ValueError(f"Invalid skill name: {name!r}")
         path = (self.hub_dir / f"{name}.json").resolve()
         if not path.is_relative_to(self.hub_dir.resolve()):
@@ -460,9 +480,11 @@ class SkillHub:
         query_lower = query.lower()
         results = []
         for entry in self.list_hub():
-            if (query_lower in entry.get("name", "").lower()
+            if (
+                query_lower in entry.get("name", "").lower()
                 or query_lower in entry.get("description", "").lower()
-                or any(query_lower in t.lower() for t in entry.get("tags", []))):
+                or any(query_lower in t.lower() for t in entry.get("tags", []))
+            ):
                 results.append(entry)
         return results
 

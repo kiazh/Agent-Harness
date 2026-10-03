@@ -27,6 +27,8 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/agentharness_test
+      # tests/conftest.py points the database singleton at this (never at DATABASE_URL)
+      AGENT_HARNESS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/agentharness_test
 
     steps:
       - name: Checkout repository
@@ -69,3 +71,26 @@ jobs:
           verbose: true
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install UI dependencies (lockfile, no lifecycle scripts)
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test

@@ -13,16 +13,12 @@ Tests all 9 security fixes:
 """
 from __future__ import annotations
 
-import re
 import uuid
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-
-from ah.core.models import LLMResponse
-
 
 # ===========================================================================
 # Fix 1 & 3: SSRF + Path Traversal in 'ah learn'
@@ -79,7 +75,6 @@ class TestLearnSSRFAndPathTraversal:
 
     def test_learn_command_validates_url(self, tmp_path):
         """ah learn: URL source should be validated."""
-        from ah.cli import app
         # The learn command imports _is_safe_url from builtins
         # This test verifies the import works
         from ah.tools.builtins import _is_safe_url
@@ -215,6 +210,7 @@ class TestParameterizedSQL:
     def test_search_uses_parameterized_queries(self):
         """Search should use $1, $2 parameters, not string interpolation."""
         import inspect
+
         from ah.memory.store import MemoryStore
         source = inspect.getsource(MemoryStore.search)
         # Should contain parameterized query patterns
@@ -226,6 +222,7 @@ class TestParameterizedSQL:
     def test_search_by_embedding_uses_parameterized_queries(self):
         """Embedding search should use parameterized queries."""
         import inspect
+
         from ah.memory.store import MemoryStore
         source = inspect.getsource(MemoryStore.search_by_embedding)
         assert "$1" in source

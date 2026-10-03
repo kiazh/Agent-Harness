@@ -8,20 +8,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ah.rag import (
-    Embedder,
-    OpenAIEmbedder,
-    RecursiveCharacterTextSplitter,
     Chunk,
-    RAGPipeline,
-    HybridSearch,
-    Reranker,
     CohereReranker,
+    Embedder,
     FileLoader,
+    HybridSearch,
+    OpenAIEmbedder,
+    RAGPipeline,
+    RecursiveCharacterTextSplitter,
+    Reranker,
     SearchResult,
 )
-from ah.rag.reranker import IdentityReranker, RerankResult
 from ah.rag.loaders import Document
-
+from ah.rag.reranker import IdentityReranker, RerankResult
 
 # ---------------------------------------------------------------------------
 # Fixtures

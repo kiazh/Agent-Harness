@@ -2,29 +2,25 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.memory.redaction import (
-    SecretRedactor,
-    RedactionResult,
-    redact_secrets,
-    _PATTERNS,
-)
 from ah.memory.approval import (
     ApprovalStatus,
-    PendingMemory,
     MemoryApprovalGate,
-    memory_approval_gate,
+    PendingMemory,
+)
+from ah.memory.redaction import (
+    RedactionResult,
+    SecretRedactor,
+    redact_secrets,
 )
 from ah.memory.user_profile import (
     UserProfile,
     UserProfileStore,
-    user_profile_store,
 )
-
 
 # ===========================================================================
 # SecretRedactor Tests
@@ -238,8 +234,8 @@ class TestMemoryApprovalGate:
             mock_memory.add = AsyncMock(return_value=MagicMock(id=uuid.uuid4()))
             with patch("ah.memory.store.memory_store", mock_memory):
                 mock_db.execute = AsyncMock(return_value="UPDATE 1")
-                result = await gate.approve(uuid.uuid4())
-                # Result may be None if mock isn't perfect, but shouldn't error
+                # The mock may yield None; this only checks approve() doesn't raise.
+                await gate.approve(uuid.uuid4())
 
     async def test_reject_pending(self, gate, mock_db):
         with patch("ah.memory.approval.db", mock_db):

@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from ah.core.config import config
-
 from ah.core.exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
@@ -33,27 +32,77 @@ class FileLoader:
     """
 
     # Supported text extensions
-    TEXT_EXTENSIONS = frozenset({
-        ".txt", ".md", ".markdown", ".rst",
-        ".py", ".js", ".ts", ".jsx", ".tsx",
-        ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
-        ".csv", ".tsv",
-        ".html", ".htm", ".xml", ".svg",
-        ".css", ".scss", ".less",
-        ".sh", ".bash", ".zsh",
-        ".sql", ".r", ".rb", ".go", ".rs", ".java", ".c", ".cpp", ".h",
-        ".dockerfile", ".makefile", ".cmake",
-        ".log", ".env",
-    })
+    TEXT_EXTENSIONS = frozenset(
+        {
+            ".txt",
+            ".md",
+            ".markdown",
+            ".rst",
+            ".py",
+            ".js",
+            ".ts",
+            ".jsx",
+            ".tsx",
+            ".json",
+            ".yaml",
+            ".yml",
+            ".toml",
+            ".ini",
+            ".cfg",
+            ".csv",
+            ".tsv",
+            ".html",
+            ".htm",
+            ".xml",
+            ".svg",
+            ".css",
+            ".scss",
+            ".less",
+            ".sh",
+            ".bash",
+            ".zsh",
+            ".sql",
+            ".r",
+            ".rb",
+            ".go",
+            ".rs",
+            ".java",
+            ".c",
+            ".cpp",
+            ".h",
+            ".dockerfile",
+            ".makefile",
+            ".cmake",
+            ".log",
+            ".env",
+        }
+    )
 
     # Code extensions for structure-aware chunking
-    CODE_EXTENSIONS = frozenset({
-        ".py", ".js", ".ts", ".jsx", ".tsx",
-        ".java", ".go", ".rs", ".c", ".cpp", ".h", ".rb", ".r",
-    })
+    CODE_EXTENSIONS = frozenset(
+        {
+            ".py",
+            ".js",
+            ".ts",
+            ".jsx",
+            ".tsx",
+            ".java",
+            ".go",
+            ".rs",
+            ".c",
+            ".cpp",
+            ".h",
+            ".rb",
+            ".r",
+        }
+    )
 
     def __init__(self, base_dir: str | Path | None = None) -> None:
-        self._base_dir = Path(base_dir) if base_dir else Path(config.get("agent_harness_home") or os.getcwd()).resolve()
+        self._base_dir = (
+            Path(base_dir)
+            if base_dir
+            else Path(config.get("agent_harness_home") or os.getcwd()).resolve()
+        )
 
     def load(self, path: str | Path) -> Document:
         """Load a file and return a Document.
@@ -113,7 +162,7 @@ class FileLoader:
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
         except Exception as e:
-            raise ValidationError(f"Failed to read {file_path}: {e}")
+            raise ValidationError(f"Failed to read {file_path}: {e}") from e
 
         metadata = {
             "filename": file_path.name,
@@ -138,8 +187,8 @@ class FileLoader:
             import PyPDF2
         except ImportError:
             raise ValidationError(
-                            "PDF support requires PyPDF2. Install with: pip install PyPDF2"
-                        )
+                "PDF support requires PyPDF2. Install with: pip install PyPDF2"
+            ) from None
 
         try:
             with open(file_path, "rb") as f:
@@ -149,7 +198,7 @@ class FileLoader:
                     text_parts.append(page.extract_text() or "")
                 content = "\n\n".join(text_parts)
         except Exception as e:
-            raise ValidationError(f"Failed to read PDF {file_path}: {e}")
+            raise ValidationError(f"Failed to read PDF {file_path}: {e}") from e
 
         metadata = {
             "filename": file_path.name,
@@ -170,6 +219,6 @@ class FileLoader:
         candidate = (self._base_dir / str(path)).resolve()
         if not candidate.is_relative_to(self._base_dir):
             raise ValidationError(
-                            f"Path '{path}' escapes the allowed base directory '{self._base_dir}'"
-                        )
+                f"Path '{path}' escapes the allowed base directory '{self._base_dir}'"
+            )
         return candidate

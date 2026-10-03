@@ -1,4 +1,5 @@
 """Tool registry — re-exports from base for backward compatibility."""
+
 import logging
 
 from ah.tools.base import Tool, ToolRegistry, registry

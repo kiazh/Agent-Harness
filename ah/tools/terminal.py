@@ -1,4 +1,5 @@
 """Terminal tool — execute shell commands securely."""
+
 from __future__ import annotations
 
 import asyncio
@@ -16,10 +17,25 @@ logger = logging.getLogger(__name__)
 
 # Allowlist of safe commands — intentionally narrow
 # Removed: python, pip, npm, node, curl, wget, rm, cp, mv (command injection risk)
-ALLOWED_COMMANDS = frozenset({
-    "git", "ls", "cat", "grep", "find", "pytest",
-    "echo", "pwd", "cd", "mkdir", "touch", "head", "tail", "wc", "diff",
-})
+ALLOWED_COMMANDS = frozenset(
+    {
+        "git",
+        "ls",
+        "cat",
+        "grep",
+        "find",
+        "pytest",
+        "echo",
+        "pwd",
+        "cd",
+        "mkdir",
+        "touch",
+        "head",
+        "tail",
+        "wc",
+        "diff",
+    }
+)
 
 # Characters that could be used for command injection
 DANGEROUS_CHARS = frozenset(";|&$()`<>\\\n")
@@ -51,7 +67,10 @@ def _validate_workdir(workdir: str) -> None:
         "type": "object",
         "properties": {
             "command": {"type": "string", "description": "Shell command to execute"},
-            "timeout": {"type": "integer", "description": "Timeout in seconds (default 60, max 300)"},
+            "timeout": {
+                "type": "integer",
+                "description": "Timeout in seconds (default 60, max 300)",
+            },
             "workdir": {"type": "string", "description": "Working directory for the command"},
         },
         "required": ["command"],
@@ -73,7 +92,7 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
     try:
         args = shlex.split(command)
     except ValueError as e:
-        raise ValidationError(f"Failed to parse command: {e}")
+        raise ValidationError(f"Failed to parse command: {e}") from e
 
     if not args:
         raise ValidationError("Empty command")
@@ -92,6 +111,7 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
             subprocess.run,
             args,
             shell=False,
+            stdin=subprocess.DEVNULL,  # never block on (or inherit) our stdin
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -106,8 +126,8 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
             output = f"(exit code {result.returncode}, no output)"
         return output
     except subprocess.TimeoutExpired:
-        raise ToolError(f"Command timed out after {timeout}s")
+        raise ToolError(f"Command timed out after {timeout}s") from None
     except FileNotFoundError:
-        raise ToolError(f"Command not found: {args[0]}")
+        raise ToolError(f"Command not found: {args[0]}") from None
     except Exception as e:
-        raise ToolError(f"Error executing command: {e}")
+        raise ToolError(f"Error executing command: {e}") from e

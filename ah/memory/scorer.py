@@ -6,11 +6,10 @@ Implements the research-backed heuristic:
 Factors: category base importance, explicit importance, recency boost,
 access frequency boost.
 """
+
 from __future__ import annotations
 
-
 from ah.memory.models import MemoryEntry, age_days
-
 
 # Category-based base importance weights (from research)
 CATEGORY_WEIGHTS: dict[str, float] = {

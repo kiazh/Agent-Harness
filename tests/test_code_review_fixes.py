@@ -8,10 +8,9 @@ Covers:
 5. Dead code removal (fetchval_cached, execute_prepared, fetch_prepared)
 6. Naming consistency (usage_count, not use_count)
 """
-import asyncio
 import inspect
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -21,8 +20,7 @@ from ah.core.provider import _validate_messages, _validate_params
 from ah.core.session import SessionManager
 from ah.db.connection import Database
 from ah.memory.retriever import MemoryRetriever
-from ah.skills.registry import Skill, SkillRegistry, SkillCurator, SkillHub
-
+from ah.skills.registry import Skill, SkillCurator, SkillHub, SkillRegistry
 
 # ============================================================================
 # 1. TTLCache Docstring Fix
@@ -431,10 +429,7 @@ class TestNamingConsistency:
 
     def test_skill_hub_publish_uses_usage_count(self):
         """SkillHub.publish should serialize usage_count."""
-        import json
         import tempfile
-        from pathlib import Path
-        from ah.skills.registry import SkillHub
 
         registry = SkillRegistry()
         registry._skills["test"] = Skill(

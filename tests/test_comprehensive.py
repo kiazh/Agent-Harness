@@ -1,29 +1,27 @@
 """Comprehensive tests for AgentHarness."""
 import asyncio
-import json
 import os
 import subprocess
 import tempfile
 import uuid
-from dataclasses import fields
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, mock_open
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import pytest_asyncio
 from typer.testing import CliRunner
 
-# Import all modules to ensure clean imports
-import ah
-from ah.core.context import ContextManager, context_manager
+from ah.cli import app
+from ah.core.agent import SYSTEM_PROMPT, ReActAgent
 from ah.core.assembler import PromptAssembler
+
+# Import all modules to ensure clean imports
+from ah.core.context import context_manager
 from ah.core.models import (
     AgentResponse,
     ContextChunk,
     LLMResponse,
     Session,
-    StreamEvent,
     ToolDefinition,
 )
 from ah.core.provider import (
@@ -32,17 +30,16 @@ from ah.core.provider import (
     OpenRouterProvider,
     get_provider,
 )
-from ah.core.session import SessionManager, session_manager
-from ah.core.agent import ReActAgent, SYSTEM_PROMPT
-from ah.db.connection import Database, db
-from ah.skills.registry import Skill, SkillParser, SkillRegistry, SkillCurator, SkillHub, skill_registry
-from ah.tools.base import Tool, ToolRegistry, registry
-from ah.tools import builtins  # noqa: F401 — registers web_search, web_extract, search_files
-from ah.tools import file  # noqa: F401 — registers read_file, write_file, list_files
-from ah.tools import terminal  # noqa: F401 — registers terminal
-from ah.tools.file import read_file, write_file, list_files
-from ah.cli import app
-
+from ah.core.session import session_manager
+from ah.db.connection import Database
+from ah.skills.registry import SkillCurator, SkillHub, SkillParser, SkillRegistry, skill_registry
+from ah.tools import (
+    builtins,  # noqa: F401 — registers web_search, web_extract, search_files
+    file,  # noqa: F401 — registers read_file, write_file, list_files
+    terminal,  # noqa: F401 — registers terminal
+)
+from ah.tools.base import ToolRegistry
+from ah.tools.file import list_files, read_file, write_file
 
 # ============================================================================
 # Fixtures
@@ -1482,6 +1479,7 @@ class TestBuiltinTools:
         with patch("ah.tools.file._BASE_DIR", temp_dir):
             result = asyncio.run(write_file(str(test_file), "test content"))
         assert test_file.exists()
+        assert "Successfully wrote" in result
 
     def test_list_files_success(self, temp_dir):
         """Test listing files."""
@@ -1918,7 +1916,6 @@ class TestCLISkillCommands:
 
     def test_learn_command_file(self, temp_dir, monkeypatch):
         """Test learn command from file."""
-        from ah.skills.registry import skill_registry
 
         # Write learned skills to a temp dir, never the repo's real skills/.
         monkeypatch.setattr(skill_registry, "skills_dir", temp_dir / "skills")

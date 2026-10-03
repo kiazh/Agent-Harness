@@ -2,6 +2,7 @@
 
 Pipeline: raw chunks → LLM extraction → importance scoring → dedup → write
 """
+
 from __future__ import annotations
 
 import json
@@ -29,6 +30,7 @@ MAX_CHUNKS_PER_CONSOLIDATION = 100
 def _normalize(text: str) -> str:
     """Normalize memory content for duplicate detection."""
     return " ".join(str(text).lower().split()).strip(" .!?")
+
 
 # System prompt for memory extraction
 EXTRACTION_SYSTEM_PROMPT = """You are a memory extraction system. Given a conversation, extract durable memories that would be useful in future conversations.
@@ -110,7 +112,9 @@ class MemoryConsolidator:
         candidates_without_embedding = [c for c in eligible if not c.embedding]
 
         # Existing memories are needed by both dedup paths; fetch once.
-        existing_memories = await self.store.search(agent_id=agent_id, limit=1000) if eligible else []
+        existing_memories = (
+            await self.store.search(agent_id=agent_id, limit=1000) if eligible else []
+        )
 
         # Batch check for duplicates
         if candidates_with_embedding:

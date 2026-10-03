@@ -1,112 +1,58 @@
-"""AgentHarness CLI — `ah` command."""
+"""AgentHarness CLI — the ``ah`` command.
+
+``ah`` with no subcommand (also ``ah repl`` and ``ah chat -i``) launches the
+TypeScript terminal UI in ``ui/``, which drives the agent through the Python
+gateway (``python -m ah.gateway``). Every other subcommand is a one-shot admin
+command rendered with Rich.
+"""
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import uuid
-from pathlib import Path
-from typing import Optional
 
 import typer
+from rich.markup import escape
 from rich.table import Table
-from rich.text import Text
 
-from ah import __version__
+import ah.tools  # noqa: F401 — registers all built-in tools
+from ah import __version__, services
+from ah.cli import output
+from ah.cli.launcher import launch_ui
+from ah.cli.output import console
 from ah.core.agent import ReActAgent
+from ah.core.config import config
 from ah.core.context import context_manager
 from ah.core.provider import get_provider
 from ah.core.session import session_manager
-from ah.core.config import config
 from ah.db.connection import db
-from ah.tools import builtins  # noqa: F401 — registers built-in tools
-from ah.cli.visual import get_default_visual
-from ah.cli.animations import (
-    SquareLoader,
-    get_spinner,
-    get_thinking_animation,
-    get_streaming_animation,
-    get_tool_animation,
-    get_animation_runner,
-    SUCCESS,
-    WARNING,
-    ERROR,
-    INFO,
-    MUTED,
-)
 
 logger = logging.getLogger(__name__)
 
 app = typer.Typer(
     name="ah",
-    help="AgentHarness — self-hosted multi-agent AI orchestration framework",
-    no_args_is_help=True,
+    help="AgentHarness — self-hosted AI agent framework. Run `ah` to open the interactive UI.",
+    invoke_without_command=True,
 )
-viz = get_default_visual()
-console = viz.console
 
 
-def _gradient_color(idx: int, total: int, start_hex: str, end_hex: str) -> str:
-    """Interpolate between two hex colors for gradient effect."""
-    def hex_to_rgb(h: str) -> tuple[int, int, int]:
-        h = h.lstrip('#')
-        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-    def rgb_to_hex(r: int, g: int, b: int) -> str:
-        return f"#{r:02X}{g:02X}{b:02X}"
-    r1, g1, b1 = hex_to_rgb(start_hex)
-    r2, g2, b2 = hex_to_rgb(end_hex)
-    t = idx / max(total - 1, 1)
-    r = int(r1 + (r2 - r1) * t)
-    g = int(g1 + (g2 - g1) * t)
-    b = int(b1 + (b2 - b1) * t)
-    return rgb_to_hex(r, g, b)
-
-
-def _print_banner():
-    """Print the ASCII art banner with gradient colors."""
-    # Agent line — gradient from cyan to blue
-    agent_lines = [
-        "  █████╗  ██████╗ ███████╗███╗   ██╗████████╗",
-        " ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝",
-        " ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║",
-        " ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║",
-        " ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║",
-        " ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝",
-    ]
-    # Harness line — gradient from purple to magenta
-    harness_lines = [
-        "  ██╗  ██╗ █████╗ ██████╗ ███╗   ██╗███████╗███████╗███████╗",
-        "  ██║  ██║██╔══██╗██╔══██╗████╗  ██║██╔════╝██╔════╝██╔════╝",
-        "  ███████║███████║██████╔╝██╔██╗ ██║█████╗  ███████╗███████╗",
-        "  ██╔══██║██╔══██║██╔══██╗██║╚██╗██║██╔══╝  ╚════██║╚════██║",
-        "  ██║  ██║██║  ██║██║  ██║██║ ╚████║███████╗███████║███████║",
-        "  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝╚══════╝",
-    ]
-
-    banner_text = Text()
-    # Agent gradient: #00D4FF → #3B82F6
-    for i, line in enumerate(agent_lines):
-        color = _gradient_color(i, len(agent_lines), "#00D4FF", "#3B82F6")
-        banner_text.append(line + "\n", style=f"bold {color}")
-    banner_text.append("\n")
-    # Harness gradient: #7C3AED → #EC4899
-    for i, line in enumerate(harness_lines):
-        color = _gradient_color(i, len(harness_lines), "#7C3AED", "#EC4899")
-        banner_text.append(line + "\n", style=f"bold {color}")
-    banner_text.append("\n")
-    banner_text.append("  Self-hosted Multi-Agent AI Orchestration\n", style="dim")
-    banner_text.append(f"  v{__version__}", style="dim")
-
-    console.print(banner_text)
+@app.callback()
+def main(ctx: typer.Context) -> None:
+    """Open the interactive UI when no subcommand is given."""
+    if ctx.invoked_subcommand is None:
+        raise typer.Exit(launch_ui())
 
 
 def _run(coro):
-    """Run async coroutine from sync Typer command."""
+    """Run an async coroutine from a sync Typer command."""
     import concurrent.futures
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coro).result()
 
 
-def _parse_uuid(s: str) -> "uuid.UUID | None":
+def _parse_uuid(s: str) -> uuid.UUID | None:
     """Parse a UUID string, returning None if invalid."""
     try:
         return uuid.UUID(s)
@@ -114,165 +60,108 @@ def _parse_uuid(s: str) -> "uuid.UUID | None":
         return None
 
 
-def _print_colored(message: str, color: str = "white", bold: bool = False, icon: str = ""):
-    """Print a color-coded message with optional icon."""
-    style = color
-    if bold:
-        style = f"bold {color}"
-    if icon:
-        console.print(f"{icon} {message}", style=style)
-    else:
-        console.print(message, style=style)
-
-
-def _print_success(message: str, icon: str = "✓"):
-    """Print a success message in green."""
-    _print_colored(message, color=SUCCESS, bold=True, icon=icon)
-
-
-def _print_error(message: str, icon: str = "✗"):
-    """Print an error message in red."""
-    _print_colored(message, color=ERROR, bold=True, icon=icon)
-
-
-def _print_warning(message: str, icon: str = "⚠"):
-    """Print a warning message in yellow."""
-    _print_colored(message, color=WARNING, bold=True, icon=icon)
-
-
-def _print_info(message: str, icon: str = "ℹ"):
-    """Print an info message in blue."""
-    _print_colored(message, color=INFO, icon=icon)
-
-
-def _print_muted(message: str):
-    """Print a muted/dimmed message."""
-    console.print(message, style=MUTED)
+async def _resolve_session(session_id: str | None):
+    """Return the named session, or the last active one; exit with a message otherwise."""
+    if session_id:
+        sid = _parse_uuid(session_id)
+        if sid is None:
+            output.error(f"Invalid session ID: {session_id}")
+            raise typer.Exit(1)
+        session = await session_manager.get(sid)
+        if session is None:
+            output.error(f"Session {session_id} not found", "Use `ah sessions` to list sessions.")
+            raise typer.Exit(1)
+        return session
+    session = await session_manager.get_last_active()
+    if session is None:
+        output.error("No active sessions.", "Start one with `ah`.")
+        raise typer.Exit(1)
+    return session
 
 
 @app.command()
 def chat(
     message: str = typer.Argument(None, help="Message to send to the agent"),
     continue_: bool = typer.Option(False, "--continue", "-c", help="Continue last session"),
-    session_id: Optional[str] = typer.Option(None, "--session", "-s", help="Resume specific session"),
-    model: str = typer.Option(None, "--model", "-m", help="Model to use (e.g., anthropic/claude-3.5-sonnet)"),
-    provider: str = typer.Option("openrouter", "--provider", "-p", help="LLM provider (openrouter, ollama)"),
-    verbose: bool = typer.Option(True, "--verbose/--quiet", "-v/-q", help="Show tool calls and reasoning"),
-    interactive: bool = typer.Option(False, "--interactive", "-i", help="Launch interactive REPL mode"),
-    tui: bool = typer.Option(False, "--tui", help="Launch the pi-style TUI (ported terminal UI)"),
+    session_id: str | None = typer.Option(None, "--session", "-s", help="Resume specific session"),
+    model: str = typer.Option(
+        None, "--model", "-m", help="Model to use (e.g., anthropic/claude-3.5-sonnet)"
+    ),
+    provider: str = typer.Option(
+        "openrouter", "--provider", "-p", help="LLM provider (openrouter, ollama)"
+    ),
+    verbose: bool = typer.Option(True, "--verbose/--quiet", "-v/-q", help="Show tool calls"),
+    interactive: bool = typer.Option(False, "--interactive", "-i", help="Open the interactive UI"),
 ):
-    """Chat with the agent. Creates a new session or continues an existing one."""
-
-    if tui:
-        from ah.cli.tui.screen import run_tui
-        _run(run_tui(model=model, provider=provider, verbose=verbose, session_id=session_id))
-        return
-
+    """Send one message to the agent (or open the UI with -i)."""
     if interactive:
-        from ah.cli.interactive_win import run_repl
-        _run(run_repl(model=model, provider=provider, verbose=verbose, session_id=session_id))
-        return
+        raise typer.Exit(launch_ui(model=model, provider=provider, session_id=session_id))
 
     # Guard before any I/O: message is required, and slicing it for the
     # session title (message[:50]) would raise TypeError on None.
     if not message:
-        console.print("[yellow]No message provided. Use: ah chat \"your message\"[/yellow]")
+        console.print('[yellow]No message provided. Use: ah chat "your message"[/yellow]')
         raise typer.Exit(1)
 
     async def _chat():
         await db.connect()
         try:
-            # Determine session
             if continue_:
                 session = await session_manager.get_last_active()
                 if not session:
-                    viz.error("No active session to continue.", title="Error", suggestion="Use `ah sessions` to list available sessions.")
+                    output.error(
+                        "No active session to continue.", "Use `ah sessions` to list sessions."
+                    )
                     raise typer.Exit(1)
-                _print_muted(f"Continuing session: {session.id}")
+                output.muted(f"Continuing session: {session.id}")
             elif session_id:
                 sid = _parse_uuid(session_id)
                 if sid is None:
-                    console.print(f"[red]Invalid session ID: {session_id}[/red]")
+                    output.error(f"Invalid session ID: {session_id}")
                     raise typer.Exit(1)
                 session = await session_manager.get(sid)
                 if not session:
-                    viz.error(f"Session {session_id} not found", title="Error", suggestion="Use `ah sessions` to list available sessions.")
+                    output.error(
+                        f"Session {session_id} not found", "Use `ah sessions` to list sessions."
+                    )
                     raise typer.Exit(1)
-                _print_muted(f"Resuming session: {session.id}")
+                output.muted(f"Resuming session: {session.id}")
             else:
-                session = await session_manager.create(
-                    title=message[:50] if message else None,
-                    goal=message[:100] if message else None,
-                )
-                _print_muted(f"New session: {session.id}")
+                session = await session_manager.create(title=message[:50], goal=message[:100])
+                output.muted(f"New session: {session.id}")
 
-            # Create LLM provider
             try:
                 llm = get_provider(provider=provider, model=model)
             except ValueError as e:
-                viz.error(f"Provider error: {e}", title="Error", suggestion="Check your provider configuration with `ah config`.")
-                raise typer.Exit(1)
+                output.error(
+                    f"Provider error: {e}", "Check your provider configuration with `ah config`."
+                )
+                raise typer.Exit(1) from None
 
-            # Create agent and run
             agent = ReActAgent(provider=llm)
             if verbose:
-                _print_muted(f"Model: {llm.model} ({provider})")
-                console.print()
+                output.muted(f"Model: {llm.model} ({provider})")
+            console.print()
 
-            # Stream response with animations
-            response_text = ""
-            tool_calls_count = 0
-            tokens_used = 0
-
-            # Create animation runner for this turn
-            runner = get_animation_runner(console)
-
-            # Start thinking animation with braille spinner
-            thinking = get_thinking_animation(console, spinner_type="dots")
-            runner.add("thinking", thinking)
-
-            # Start streaming display with green style
-            stream = get_streaming_animation(console, style="green")
-            runner.add_streaming("stream", stream)
-
-            # Start the animations
-            runner.start_all()
-
-            async for event in agent.run_stream(session.id, message, verbose=verbose):
+            final = None
+            async for event in agent.run_stream(session.id, message, verbose=False):
                 if event.type == "text":
-                    response_text += event.content
-                    stream.add_token(event.content)
-                elif event.type == "tool_call":
-                    tool_calls_count += 1
-                    if verbose:
-                        tool_anim = get_tool_animation(console, event.tool_name)
-                        tool_anim.start()
-                        runner.add(f"tool_{tool_calls_count}", tool_anim)
-                elif event.type == "tool_result":
-                    if verbose:
-                        tool_key = f"tool_{tool_calls_count}"
-                        if tool_key in runner._animations:
-                            runner.complete(tool_key)
-                        preview = str(event.tool_result)[:100].replace("\n", " ")
-                        stream.add_token(f"\n  ← {preview}\n")
-                elif event.type == "token_usage":
-                    tokens_used = event.tokens_used
+                    console.out(event.content, end="", highlight=False)
+                elif event.type == "tool_call" and verbose:
+                    console.print(f"\n[yellow]→ {escape(event.tool_name)}[/yellow]")
+                elif event.type == "tool_result" and verbose:
+                    preview = str(event.tool_result)[:120].replace("\n", " ")
+                    console.print(f"[dim]  ← {escape(preview)}[/dim]")
                 elif event.type == "done":
-                    response_text = event.response.content
-                    tool_calls_count = len(event.response.tool_calls)
-                    tokens_used = event.response.tokens_used
-                    stream.set_text(response_text)
-
-            # Stop all animations
-            runner.stop_all()
-
+                    final = event.response
             console.print()
-            viz.print_response_panel(response_text, title="Agent")
-            console.print()
-            if verbose:
-                _print_muted(f"Iterations: {event.response.iterations} | Tool calls: {tool_calls_count} | Tokens: {tokens_used}")
-            _print_muted(f"Session ID: {session.id}")
 
+            if final is not None and verbose:
+                output.muted(
+                    f"Iterations: {final.iterations} | Tool calls: {len(final.tool_calls)} "
+                    f"| Tokens: {final.tokens_used}"
+                )
+            output.muted(f"Session ID: {session.id}")
         finally:
             await db.close()
 
@@ -283,78 +172,43 @@ def chat(
 def repl(
     model: str = typer.Option(None, "--model", "-m", help="Model to use"),
     provider: str = typer.Option(None, "--provider", "-p", help="LLM provider"),
-    verbose: bool = typer.Option(None, "--verbose/--quiet", "-v/-q", help="Show tool calls and reasoning"),
-    session_id: Optional[str] = typer.Option(None, "--session", "-s", help="Resume specific session"),
-    tui: bool = typer.Option(False, "--tui", help="Launch the pi-style TUI (ported terminal UI)"),
+    session_id: str | None = typer.Option(None, "--session", "-s", help="Resume specific session"),
 ):
-    """Launch interactive REPL mode."""
-    if tui:
-        from ah.cli.tui.screen import run_tui
-        _run(run_tui(model=model, provider=provider, verbose=verbose, session_id=session_id))
-        return
-    from ah.cli.interactive_win import run_repl
-    _run(run_repl(model=model, provider=provider, verbose=verbose, session_id=session_id))
-
-
-@app.command(name="tui")
-def tui_cmd(
-    model: str = typer.Option(None, "--model", "-m", help="Model to use"),
-    provider: str = typer.Option(None, "--provider", "-p", help="LLM provider"),
-    verbose: bool = typer.Option(None, "--verbose/--quiet", "-v/-q", help="Show tool calls and reasoning"),
-    session_id: Optional[str] = typer.Option(None, "--session", "-s", help="Resume specific session"),
-    skin: str = typer.Option("dark", "--skin", help="Theme: dark or light"),
-):
-    """Launch the pi-style TUI (ported from earendil-works/pi, MIT)."""
-    from ah.cli.tui.screen import run_tui
-    _run(run_tui(model=model, provider=provider, verbose=verbose, session_id=session_id, skin=skin))
+    """Open the interactive UI (same as running `ah` with no arguments)."""
+    raise typer.Exit(launch_ui(model=model, provider=provider, session_id=session_id))
 
 
 @app.command()
 def status():
-    """Show AgentHarness status and recent sessions."""
+    """Show AgentHarness status: database, sessions, tools and API key."""
 
     async def _status():
-        # Animated spinner while checking status
-        spinner = get_spinner(console, label="Checking status...", spinner_type="dots")
-        spinner.start()
-
-        await db.connect()
         try:
-            # Check DB
             try:
+                await db.connect()
                 version = await db.fetchval("SELECT version()")
-                viz.print_status_line("PostgreSQL", f"connected ({version.split(',')[0]})", "success")
             except Exception as e:
-                viz.print_status_line("PostgreSQL", f"connection failed ({e})", "error")
-                spinner.stop()
-                return
+                output.status_line("PostgreSQL", f"connection failed ({e})", "error")
+                raise typer.Exit(1) from None
+            output.status_line("PostgreSQL", f"connected ({version.split(',')[0]})", "success")
+            output.status_line("Sessions", str(await db.fetchval("SELECT COUNT(*) FROM sessions")))
+            output.status_line(
+                "Context chunks", str(await db.fetchval("SELECT COUNT(*) FROM context_chunks"))
+            )
 
-            # Count sessions
-            count = await db.fetchval("SELECT COUNT(*) FROM sessions")
-            viz.print_status_line("Sessions", str(count), "info")
-
-            # Count context chunks
-            chunks = await db.fetchval("SELECT COUNT(*) FROM context_chunks")
-            viz.print_status_line("Context chunks", str(chunks), "info")
-
-            # Check tools
             from ah.tools.base import registry
+
             tools = registry.list_tools()
-            viz.print_status_line("Tools", f"{len(tools)} registered", "info")
+            output.status_line("Tools", f"{len(tools)} registered")
             for t in tools:
                 console.print(f"    [dim]•[/dim] {t}")
 
-            # Check config
-            from ah.core.config import config
             if config.get("openrouter_api_key"):
-                viz.print_status_line("OpenRouter API key", "set", "success")
+                output.status_line("OpenRouter API key", "set", "success")
             else:
-                viz.print_status_line("OpenRouter API key", "not set", "warning")
-
-            spinner.stop()
+                output.status_line("OpenRouter API key", "not set", "warning")
             console.print()
-            _print_muted("Run `ah chat \"your message\"` to start.")
-
+            output.muted("Run `ah` to open the interactive UI.")
         finally:
             await db.close()
 
@@ -364,7 +218,9 @@ def status():
 @app.command(name="sessions")
 def list_sessions(
     limit: int = typer.Option(10, "--limit", "-n", help="Number of sessions to show"),
-    status_filter: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status (active, idle, archived)"),
+    status_filter: str | None = typer.Option(
+        None, "--status", "-s", help="Filter by status (active, idle, archived)"
+    ),
 ):
     """List recent sessions."""
 
@@ -377,7 +233,7 @@ def list_sessions(
                 console.print("[yellow]No sessions found.[/yellow]")
                 return
 
-            viz.print_sessions_table(sessions)
+            output.sessions_table(sessions)
         finally:
             await db.close()
 
@@ -400,7 +256,7 @@ def sessions_search(
                 console.print(f"[yellow]No sessions found for '{query}'[/yellow]")
                 return
 
-            viz.print_sessions_table(sessions)
+            output.sessions_table(sessions)
         finally:
             await db.close()
 
@@ -410,76 +266,26 @@ def sessions_search(
 @app.command()
 def export(
     filename: str = typer.Argument(..., help="Output markdown filename"),
-    session_id: Optional[str] = typer.Option(None, "--session", "-s", help="Session ID to export (default: last active)"),
+    session_id: str | None = typer.Option(
+        None, "--session", "-s", help="Session ID to export (default: last active)"
+    ),
 ):
     """Export a conversation as markdown."""
 
     async def _export():
         await db.connect()
         try:
-            if session_id:
-                sid = _parse_uuid(session_id)
-                if sid is None:
-                    console.print(f"[red]Invalid session ID: {session_id}[/red]")
-                    raise typer.Exit(1)
-            else:
-                session = await session_manager.get_last_active()
-                if not session:
-                    console.print("[yellow]No active sessions.[/yellow]")
-                    return
-                sid = session.id
-
-            session = await session_manager.get(sid)
-            if not session:
-                console.print(f"[red]Session {session_id} not found[/red]")
-                raise typer.Exit(1)
-
-            chunks = await context_manager.get_chunks(sid, limit=1000)
-
-            lines = [
-                f"# Session: {session.title or '(untitled)'}",
-                "",
-                f"**ID:** {session.id}",
-                f"**Status:** {session.status}",
-                f"**Agent:** {session.agent_id}",
-                f"**Goal:** {session.goal or '(none)'}",
-                f"**Created:** {session.created_at.strftime('%Y-%m-%d %H:%M:%S')}",
-                f"**Last Activity:** {session.last_activity.strftime('%Y-%m-%d %H:%M:%S')}",
-                "",
-                "## Conversation",
-                "",
-            ]
-
-            for chunk in reversed(chunks):
-                if chunk.chunk_type == "user_message":
-                    content = chunk.payload.get("content", "")
-                    lines.append(f"### User")
-                    lines.append("")
-                    lines.append(content)
-                    lines.append("")
-                elif chunk.chunk_type == "assistant_message":
-                    content = chunk.payload.get("content", "")
-                    lines.append(f"### Assistant")
-                    lines.append("")
-                    lines.append(content)
-                    lines.append("")
-                elif chunk.chunk_type == "tool_call":
-                    tool = chunk.payload.get("tool", "unknown")
-                    args = chunk.payload.get("args", {})
-                    result_preview = chunk.payload.get("result_preview", "")
-                    lines.append(f"**Tool:** `{tool}({args})`")
-                    if result_preview:
-                        lines.append(f"**Result:** {result_preview[:200]}")
-                    lines.append("")
-
+            session = await _resolve_session(session_id)
+            text = await services.export_markdown(session)
             from ah.tools.file import _resolve_path
+
             try:
                 output_path = _resolve_path(filename)
             except ValueError as e:
-                console.print(f"[red]Path traversal blocked:[/red] {e}")
-                raise typer.Exit(1)
-            output_path.write_text("\n".join(lines), encoding="utf-8")
-            _print_success(f"Exported session {session.id} to {filename}")
+                output.error(f"Path traversal blocked: {e}")
+                raise typer.Exit(1) from None
+            output_path.write_text(text, encoding="utf-8")
+            output.success(f"Exported session {session.id} to {filename}")
         finally:
             await db.close()
 
@@ -489,7 +295,7 @@ def export(
 @app.command()
 def fork(
     session_id: str = typer.Argument(..., help="Session ID to fork"),
-    title: Optional[str] = typer.Option(None, "--title", "-t", help="Title for the forked session"),
+    title: str | None = typer.Option(None, "--title", "-t", help="Title for the forked session"),
 ):
     """Fork a session — create a new session with copied state and context."""
 
@@ -501,8 +307,8 @@ def fork(
                 console.print(f"[red]Invalid session ID: {session_id}[/red]")
                 raise typer.Exit(1)
             new_session = await session_manager.fork(sid, title=title)
-            _print_success(f"Forked session {session_id} → {new_session.id}")
-            _print_muted(f"Title: {new_session.title or '(untitled)'}")
+            output.success(f"Forked session {session_id} → {new_session.id}")
+            output.muted(f"Title: {new_session.title or '(untitled)'}")
         finally:
             await db.close()
 
@@ -529,7 +335,9 @@ def delete(
                 raise typer.Exit(1)
 
             if not force:
-                console.print(f"[yellow]About to delete session {session_id} ({session.title or 'untitled'})[/yellow]")
+                console.print(
+                    f"[yellow]About to delete session {session_id} ({session.title or 'untitled'})[/yellow]"
+                )
                 console.print("[yellow]This will permanently remove all context chunks.[/yellow]")
                 confirm = typer.confirm("Are you sure?")
                 if not confirm:
@@ -584,7 +392,7 @@ def context(
                 console.print("[yellow]No context chunks found.[/yellow]")
                 return
 
-            viz.print_context_table(chunks, sid)
+            output.context_table(chunks, sid)
 
             total_tokens = await context_manager.get_token_usage(sid)
             console.print(f"\n[dim]Total tokens: {total_tokens}[/dim]")
@@ -603,79 +411,20 @@ def compress(
     async def _compress():
         await db.connect()
         try:
-            if session_id:
-                sid = _parse_uuid(session_id)
-                if sid is None:
-                    console.print(f"[red]Invalid session ID: {session_id}[/red]")
-                    raise typer.Exit(1)
-            else:
-                session = await session_manager.get_last_active()
-                if not session:
-                    console.print("[yellow]No active sessions.[/yellow]")
-                    return
-                sid = session.id
-
-            session = await session_manager.get(sid)
-            if not session:
-                console.print(f"[red]Session {session_id} not found[/red]")
-                raise typer.Exit(1)
-
-            from ah.core.compression import ContextCompressor, CompressionConfig
-
-            chunks = await context_manager.get_chunks(sid, limit=1000)
-            if not chunks:
-                console.print("[yellow]No context chunks to compress.[/yellow]")
-                return
-
-            total_tokens = await context_manager.get_token_usage(sid)
-            _print_muted(f"Session: {session.id}")
-            _print_muted(f"Current context: {len(chunks)} chunks, {total_tokens} tokens")
-
-            # Animated loader during compression
-            loader = SquareLoader(console, "Compressing context...", width=30)
-            loader.start()
-
-            comp_config = CompressionConfig(
-                enabled=config.get("compression_enabled"),
-                threshold=config.get("compression_threshold"),
-                target_ratio=config.get("compression_target_ratio"),
-                preserve_recent=config.get("compression_preserve_recent"),
-                llm_summarize=config.get("compression_llm_summarize"),
-            )
-
-            compressor = ContextCompressor(config=comp_config)
-
-            # Try to get LLM provider for summarization
-            llm_provider = None
-            if comp_config.llm_summarize:
-                try:
-                    llm_provider = get_provider(provider=config.get("provider"), model=config.get("model"))
-                except Exception:
-                    llm_provider = None
-
-            result = compressor.compress(
-                chunks=chunks,
-                session_id=sid,
-                agent_id=session.agent_id,
-                llm_provider=llm_provider,
-            )
-
-            loader.complete()
-
-            if result.original_count == 0:
+            session = await _resolve_session(session_id)
+            total_tokens = await context_manager.get_token_usage(session.id)
+            output.muted(f"Session: {session.id} ({total_tokens} tokens)")
+            with output.spinner("Compressing context..."):
+                result = await services.compress_session(session)
+            if result is None:
                 console.print("[yellow]Nothing to compress (not enough chunks).[/yellow]")
                 return
-
-            # Atomically replace old chunks with compressed ones (order-preserving)
-            await context_manager.replace_chunks(sid, result.compressed_chunks)
-
-            _print_success(
+            output.success(
                 f"Context compressed: "
                 f"{result.original_count} chunks → {len(result.compressed_chunks)} chunks, "
                 f"{result.original_tokens} → {result.compressed_tokens} tokens "
                 f"({result.compression_ratio:.1%} ratio, method: {result.method})"
             )
-
         finally:
             await db.close()
 
@@ -686,88 +435,34 @@ def compress(
 def skills_list():
     """List all loaded skills."""
     from ah.skills.registry import skill_registry
+
     skill_registry.load_all()
     all_skills = skill_registry.list_skills()
     if not all_skills:
         console.print("[yellow]No skills found.[/yellow]")
         return
-    viz.print_skills_table(all_skills)
+    output.skills_table(all_skills)
 
 
 @app.command(name="learn")
 def learn(
     source: str = typer.Argument(..., help="Source to learn from (file path, URL, or skill name)"),
-    name: Optional[str] = typer.Option(None, "--name", "-n", help="Name for the new skill"),
-    description: Optional[str] = typer.Option(None, "--description", "-d", help="Description for the new skill"),
-    triggers: Optional[str] = typer.Option(None, "--triggers", "-t", help="Comma-separated trigger words"),
+    name: str | None = typer.Option(None, "--name", "-n", help="Name for the new skill"),
+    description: str | None = typer.Option(
+        None, "--description", "-d", help="Description for the new skill"
+    ),
+    triggers: str | None = typer.Option(
+        None, "--triggers", "-t", help="Comma-separated trigger words"
+    ),
 ):
-    """Learn a new skill from a source (file, URL, or existing skill).
-
-    Extracts reusable knowledge from the source and creates a new skill.
-    """
-    from ah.skills.registry import skill_registry
-    from ah.tools.builtins import _is_safe_url
-    skill_registry.load_all()
-
-    # Determine source type
-    source_path = Path(source)
-    if source_path.exists() and source_path.is_file():
-        # Local CLI run by the file's owner, so any readable file is allowed.
-        # (The previous `".." in source` string check was not a real boundary:
-        # it rejected legitimate relative paths but allowed absolute ones.)
-        resolved = source_path.resolve()
-        try:
-            content = resolved.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            console.print(f"[red]Cannot learn from binary or non-UTF-8 file:[/red] {resolved.name}")
-            raise typer.Exit(1) from None
-        except OSError as e:
-            console.print(f"[red]Cannot read file:[/red] {e}")
-            raise typer.Exit(1) from None
-        skill_name = name or resolved.stem
-        skill_description = description or f"Skill learned from {resolved.name}"
-        trigger_list = [t.strip() for t in triggers.split(",")] if triggers else []
-    elif source.startswith("http://") or source.startswith("https://"):
-        # Learn from URL — SSRF protection
-        if not _is_safe_url(source):
-            console.print(f"[red]URL rejected by security policy (private/internal address or invalid protocol):[/red] {source}")
-            raise typer.Exit(1)
-        import httpx
-        try:
-            resp = httpx.get(source, timeout=30)
-            resp.raise_for_status()
-            content = resp.text
-        except Exception as e:
-            console.print(f"[red]Failed to fetch URL:[/red] {e}")
-            raise typer.Exit(1)
-        skill_name = name or source.split("/")[-1].split(".")[0]
-        skill_description = description or f"Skill learned from {source}"
-        trigger_list = [t.strip() for t in triggers.split(",")] if triggers else []
-    else:
-        # Try to find existing skill
-        existing = skill_registry.get(source)
-        if existing:
-            content = existing.content
-            skill_name = name or f"{existing.name}-learned"
-            skill_description = description or f"Skill derived from {existing.name}"
-            trigger_list = [t.strip() for t in triggers.split(",")] if triggers else existing.triggers[:]
-        else:
-            console.print(f"[red]Source not found:[/red] {source}")
-            console.print("[dim]Provide a file path, URL, or existing skill name.[/dim]")
-            raise typer.Exit(1)
-
-    # Create the skill
+    """Learn a new skill from a source (file, URL, or existing skill)."""
+    trigger_list = [t.strip() for t in triggers.split(",") if t.strip()] if triggers else None
     try:
-        skill = skill_registry.create_skill(
-            name=skill_name,
-            description=skill_description,
-            content=content,
-            triggers=trigger_list,
-            source=source,
-            source_type="learned",
+        skill = services.learn_skill(
+            source, name=name, description=description, triggers=trigger_list
         )
-    except ValueError as e:
-        console.print(f"[red]Skill rejected:[/red] {e}")
+    except services.ServiceError as e:
+        output.error(str(e))
         raise typer.Exit(1) from None
     console.print(f"[green]Skill '{skill.name}' created successfully![/green]")
     console.print(f"  Description: {skill.description}")
@@ -777,10 +472,14 @@ def learn(
 
 @app.command(name="curator")
 def curator(
-    action: str = typer.Argument("report", help="Action: report, archive, cleanup, stale, unused, top"),
+    action: str = typer.Argument(
+        "report", help="Action: report, archive, cleanup, stale, unused, top"
+    ),
     days: int = typer.Option(30, "--days", "-d", help="Days threshold for stale skills"),
     limit: int = typer.Option(10, "--limit", "-n", help="Number of results to show"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done without doing it"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be done without doing it"
+    ),
 ):
     """Run skill curator — background maintenance for skills.
 
@@ -792,7 +491,8 @@ def curator(
         unused   — List never-used skills
         top      — Show most frequently used skills
     """
-    from ah.skills.registry import skill_registry, SkillCurator
+    from ah.skills.registry import SkillCurator, skill_registry
+
     skill_registry.load_all()
     curator = SkillCurator(skill_registry)
 
@@ -806,9 +506,9 @@ def curator(
         console.print(f"  Total uses: {report['total_uses']}")
         console.print(f"  Total views: {report['total_views']}")
         console.print(f"  Stale skills: {report['stale_skills']}")
-        if report['top_skills']:
+        if report["top_skills"]:
             console.print("\n[bold]Top skills:[/bold]")
-            for s in report['top_skills']:
+            for s in report["top_skills"]:
                 console.print(f"  {s['name']}: {s['usage_count']} uses")
 
     elif action == "archive":
@@ -867,10 +567,10 @@ def curator(
 @app.command(name="hub")
 def hub(
     action: str = typer.Argument("list", help="Action: list, search, publish, install, telemetry"),
-    query: Optional[str] = typer.Option(None, "--query", "-q", help="Search query"),
-    name: Optional[str] = typer.Option(None, "--name", "-n", help="Skill name"),
-    author: Optional[str] = typer.Option(None, "--author", "-a", help="Author name for publish"),
-    tags: Optional[str] = typer.Option(None, "--tags", "-t", help="Comma-separated tags for publish"),
+    query: str | None = typer.Option(None, "--query", "-q", help="Search query"),
+    name: str | None = typer.Option(None, "--name", "-n", help="Skill name"),
+    author: str | None = typer.Option(None, "--author", "-a", help="Author name for publish"),
+    tags: str | None = typer.Option(None, "--tags", "-t", help="Comma-separated tags for publish"),
 ):
     """Skill hub — community-curated skill sharing.
 
@@ -881,7 +581,8 @@ def hub(
         install   — Install a skill from the hub
         telemetry — Show hub skill telemetry
     """
-    from ah.skills.registry import skill_registry, SkillHub
+    from ah.skills.registry import SkillHub, skill_registry
+
     skill_registry.load_all()
     hub = SkillHub(skill_registry)
 
@@ -917,7 +618,9 @@ def hub(
         console.print(f"[bold]Search results for '{query}' ({len(results)}):[/bold]")
         for s in results:
             console.print(f"\n  [cyan]{s['name']}[/cyan] — {s.get('description', '')[:80]}")
-            console.print(f"    Author: {s.get('author', 'unknown')} | Tags: {', '.join(s.get('tags', []))}")
+            console.print(
+                f"    Author: {s.get('author', 'unknown')} | Tags: {', '.join(s.get('tags', []))}"
+            )
 
     elif action == "publish":
         if not name:
@@ -929,7 +632,7 @@ def hub(
             console.print(f"[green]Published '{entry['name']}' to hub.[/green]")
         except ValueError as e:
             console.print(f"[red]{e}[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
 
     elif action == "install":
         if not name:
@@ -942,7 +645,7 @@ def hub(
             console.print(f"  Triggers: {', '.join(skill.triggers)}")
         except ValueError as e:
             console.print(f"[red]{e}[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
 
     elif action == "telemetry":
         telemetry = hub.get_hub_telemetry()
@@ -972,95 +675,85 @@ def hub(
 @app.command()
 def doctor():
     """Check AgentHarness dependencies and configuration."""
+    import importlib.util
+    import shutil
+    import sys
+
+    from ah.cli.launcher import MIN_NODE_VERSION, _node_version, ui_dir
+
     console.print("[bold]AgentHarness Doctor[/bold]\n")
 
-    # Python version
-    import sys
-    py_ok = sys.version_info >= (3, 11)
-    py_icon = "✓" if py_ok else "✗"
-    py_color = "green" if py_ok else "red"
-    console.print(f"  Python: {sys.version.split()[0]} [{py_color}]{py_icon}[/{py_color}]{'' if py_ok else ' (need 3.11+)'}")
+    def check(label: str, ok: bool, detail: str = "", hint: str = "") -> None:
+        mark = "[green]✓[/green]" if ok else "[red]✗[/red]"
+        console.print(f"  {label}: {mark} {detail}".rstrip())
+        if not ok and hint:
+            console.print(f"      {hint}", style="dim")
 
-    # Dependencies with spinner
-    deps = ["typer", "rich", "asyncpg", "httpx", "msgpack", "prompt_toolkit"]
-    spinner = get_spinner(console, label="Checking dependencies...", spinner_type="dots")
-    spinner.start()
-    for dep in deps:
-        try:
-            __import__(dep)
-            console.print(f"  {dep}: [green]✓ ok[/green]")
-        except ImportError:
-            console.print(f"  {dep}: [red]✗ missing[/red]")
-    spinner.stop()
+    check(
+        "Python", sys.version_info >= (3, 11), sys.version.split()[0], "Python 3.11+ is required."
+    )
+    for dep in ("typer", "rich", "asyncpg", "httpx", "msgpack", "yaml", "tiktoken", "dotenv"):
+        check(dep, importlib.util.find_spec(dep) is not None, "", "Run: pip install -e .")
 
-    # Database with loader
-    loader = SquareLoader(console, "Connecting to database...", width=25)
-    loader.start()
+    node = shutil.which("node")
+    node_version = _node_version(node) if node else None
+    wanted = ".".join(map(str, MIN_NODE_VERSION))
+    check(
+        "Node.js",
+        node_version is not None and node_version >= MIN_NODE_VERSION,
+        ".".join(map(str, node_version)) if node_version else "not found",
+        f"Node.js {wanted}+ is required for the interactive UI.",
+    )
+    ui_deps = ui_dir() / "node_modules" / "@earendil-works" / "pi-tui"
+    check(
+        "UI dependencies",
+        ui_deps.exists(),
+        "",
+        f'Run: npm install --ignore-scripts --prefix "{ui_dir()}"',
+    )
+
+    check("OPENROUTER_API_KEY", bool(config.get("openrouter_api_key")), "", "Set it in .env.")
+    check("DATABASE_URL", bool(config.get("database_url")), "", "Set it in .env.")
 
     async def _check_db():
         try:
             await db.connect()
-            loader.set_progress(0.5)
             version = await db.fetchval("SELECT version()")
-            loader.complete()
-            console.print(f"  PostgreSQL: [green]✓ connected[/green] ({version.split(',')[0]})")
+            check("PostgreSQL", True, f"({version.split(',')[0]})")
         except Exception as e:
-            loader.error()
-            console.print(f"  PostgreSQL: [red]✗ failed[/red] ({e})")
+            check("PostgreSQL", False, f"({e})", "Is PostgreSQL running and DATABASE_URL correct?")
         finally:
             await db.close()
 
     _run(_check_db())
-
-    # Environment
-    from ah.core.config import config
-    if config.get("openrouter_api_key"):
-        console.print("  OPENROUTER_API_KEY: [green]✓ set[/green]")
-    else:
-        console.print("  OPENROUTER_API_KEY: [yellow]⚠ not set[/yellow]")
-
-    if config.get("database_url"):
-        console.print("  DATABASE_URL: [green]✓ set[/green]")
-    else:
-        console.print("  DATABASE_URL: [yellow]⚠ not set (using default)[/yellow]")
-
     console.print()
-    _print_muted("Run `ah chat \"hello\"` to test the agent.")
+    output.muted("Run `ah` to open the interactive UI.")
 
 
 @app.command()
 def init(
-    db_url: Optional[str] = typer.Option(None, "--db-url", help="PostgreSQL connection URL"),
+    db_url: str | None = typer.Option(None, "--db-url", help="PostgreSQL connection URL"),
 ):
-    """Initialize AgentHarness — set up database schema."""
+    """Initialize AgentHarness — create the database schema."""
 
     async def _init():
         if db_url:
             db.dsn = db_url
-
         console.print("[bold]Initializing AgentHarness...[/bold]")
         console.print(f"  Database: {db.dsn.split('@')[-1]}")
-
-        # Animated loader during initialization
-        loader = SquareLoader(console, "Creating schema...", width=30)
-        loader.start()
-
         try:
-            await db.connect()
-            loader.set_progress(0.5)
-            await db.initialize_schema()
-            loader.complete()
+            with output.spinner("Creating schema..."):
+                await db.connect()
+                await db.initialize_schema()
             console.print("  Schema: [green]✓ created[/green]")
         except Exception as e:
-            loader.error()
             console.print(f"  Schema: [red]✗ failed[/red] ({e})")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         finally:
             await db.close()
-
         console.print()
-        _print_success("AgentHarness initialized!")
-        _print_muted("Run `ah chat \"hello\"` to start.")
+        output.success("AgentHarness initialized!")
+        output.muted("Run `ah` to open the interactive UI.")
 
     _run(_init())
 
@@ -1068,15 +761,16 @@ def init(
 @app.command()
 def version():
     """Show AgentHarness version."""
-    _print_banner()
+    console.print(f"[bold cyan]AgentHarness[/bold cyan] v{__version__}")
 
 
 # ─── Config commands ─────────────────────────────────────────────────────────
 
+
 @app.command(name="config")
 def config_show():
     """Show current configuration."""
-    viz.print_config_table(config.to_dict())
+    output.config_table(config.to_dict())
 
 
 @app.command(name="config-set")
@@ -1099,10 +793,11 @@ def config_set(
 
 # ─── Memory commands ────────────────────────────────────────────────────────
 
+
 @app.command(name="memory-list")
 def memory_list(
     limit: int = typer.Option(20, "--limit", "-n", help="Number of memories to show"),
-    category: Optional[str] = typer.Option(None, "--category", "-c", help="Filter by category"),
+    category: str | None = typer.Option(None, "--category", "-c", help="Filter by category"),
 ):
     """List all memories."""
 
@@ -1110,13 +805,14 @@ def memory_list(
         await db.connect()
         try:
             from ah.memory.store import memory_store
+
             memories = await memory_store.search(category=category, limit=limit)
 
             if not memories:
                 console.print("[yellow]No memories found.[/yellow]")
                 return
 
-            viz.print_memory_table(memories)
+            output.memory_table(memories)
         finally:
             await db.close()
 
@@ -1134,6 +830,7 @@ def memory_search(
         await db.connect()
         try:
             from ah.memory.retriever import MemoryRetriever
+
             retriever = MemoryRetriever(top_k=limit)
             results = await retriever.retrieve(query=query)
 
@@ -1144,7 +841,9 @@ def memory_search(
             console.print(f"[bold]Search results for '{query}'[/bold]")
             for i, rm in enumerate(results, 1):
                 m = rm.memory
-                console.print(f"\n  [{i}] [cyan]({m.category}, importance={m.importance:.2f}, score={rm.score:.3f})[/cyan]")
+                console.print(
+                    f"\n  [{i}] [cyan]({m.category}, importance={m.importance:.2f}, score={rm.score:.3f})[/cyan]"
+                )
                 console.print(f"      {m.content[:200]}")
             console.print()
         finally:
@@ -1163,6 +862,7 @@ def memory_forget(
         await db.connect()
         try:
             from ah.memory.store import memory_store
+
             mid = _parse_uuid(memory_id)
             if mid is None:
                 console.print(f"[red]Invalid memory ID: {memory_id}[/red]")
@@ -1180,6 +880,7 @@ def memory_forget(
 
 # ─── Memory Approval Commands ──────────────────────────────────────────────
 
+
 @app.command(name="memory-pending")
 def memory_pending(
     limit: int = typer.Option(20, "--limit", "-n", help="Number of pending memories to show"),
@@ -1189,7 +890,8 @@ def memory_pending(
     async def _memory_pending():
         await db.connect()
         try:
-            from ah.memory.approval import memory_approval_gate, ApprovalStatus
+            from ah.memory.approval import ApprovalStatus, memory_approval_gate
+
             pending = await memory_approval_gate.list_pending(
                 status=ApprovalStatus.PENDING,
                 limit=limit,
@@ -1233,15 +935,20 @@ def memory_approve(
         await db.connect()
         try:
             from ah.memory.approval import memory_approval_gate
+
             pid = _parse_uuid(pending_id)
             if pid is None:
                 console.print(f"[red]Invalid pending memory ID: {pending_id}[/red]")
                 raise typer.Exit(1)
             memory = await memory_approval_gate.approve(pid, review_note=note)
             if memory:
-                console.print(f"[green]Pending memory {pending_id} approved → memory {memory.id}[/green]")
+                console.print(
+                    f"[green]Pending memory {pending_id} approved → memory {memory.id}[/green]"
+                )
             else:
-                console.print(f"[yellow]Pending memory {pending_id} not found or already reviewed.[/yellow]")
+                console.print(
+                    f"[yellow]Pending memory {pending_id} not found or already reviewed.[/yellow]"
+                )
         finally:
             await db.close()
 
@@ -1259,6 +966,7 @@ def memory_reject(
         await db.connect()
         try:
             from ah.memory.approval import memory_approval_gate
+
             pid = _parse_uuid(pending_id)
             if pid is None:
                 console.print(f"[red]Invalid pending memory ID: {pending_id}[/red]")
@@ -1267,7 +975,9 @@ def memory_reject(
             if rejected:
                 console.print(f"[green]Pending memory {pending_id} rejected.[/green]")
             else:
-                console.print(f"[yellow]Pending memory {pending_id} not found or already reviewed.[/yellow]")
+                console.print(
+                    f"[yellow]Pending memory {pending_id} not found or already reviewed.[/yellow]"
+                )
         finally:
             await db.close()
 
@@ -1276,7 +986,7 @@ def memory_reject(
 
 @app.command(name="memory-approve-all")
 def memory_approve_all(
-    agent_id: Optional[str] = typer.Option(None, "--agent", "-a", help="Filter by agent ID"),
+    agent_id: str | None = typer.Option(None, "--agent", "-a", help="Filter by agent ID"),
 ):
     """Approve all pending memories."""
 
@@ -1284,6 +994,7 @@ def memory_approve_all(
         await db.connect()
         try:
             from ah.memory.approval import memory_approval_gate
+
             count = await memory_approval_gate.approve_all(agent_id=agent_id)
             console.print(f"[green]Approved {count} pending memories.[/green]")
         finally:
@@ -1294,7 +1005,7 @@ def memory_approve_all(
 
 @app.command(name="memory-reject-all")
 def memory_reject_all(
-    agent_id: Optional[str] = typer.Option(None, "--agent", "-a", help="Filter by agent ID"),
+    agent_id: str | None = typer.Option(None, "--agent", "-a", help="Filter by agent ID"),
     note: str = typer.Option("", "--note", "-n", help="Review note"),
 ):
     """Reject all pending memories."""
@@ -1303,6 +1014,7 @@ def memory_reject_all(
         await db.connect()
         try:
             from ah.memory.approval import memory_approval_gate
+
             count = await memory_approval_gate.reject_all(agent_id=agent_id, review_note=note)
             console.print(f"[green]Rejected {count} pending memories.[/green]")
         finally:
@@ -1319,6 +1031,7 @@ def memory_stats():
         await db.connect()
         try:
             from ah.memory.approval import memory_approval_gate
+
             stats = await memory_approval_gate.get_stats()
 
             table = Table(title="Memory Approval Stats")
@@ -1337,6 +1050,7 @@ def memory_stats():
 
 # ─── User Profile Commands ──────────────────────────────────────────────────
 
+
 @app.command(name="user-profile")
 def user_profile_cmd(
     user_id: str = typer.Argument(..., help="User ID to look up or create"),
@@ -1348,12 +1062,13 @@ def user_profile_cmd(
         await db.connect()
         try:
             from ah.memory.user_profile import user_profile_store
+
             profile = await user_profile_store.get_or_create(
                 user_id=user_id,
                 display_name=display_name,
             )
 
-            console.print(f"[bold]User Profile[/bold]")
+            console.print("[bold]User Profile[/bold]")
             console.print(f"  ID: {profile.id}")
             console.print(f"  User ID: {profile.user_id}")
             console.print(f"  Display Name: {profile.display_name or '(none)'}")
@@ -1361,17 +1076,17 @@ def user_profile_cmd(
             console.print(f"  Created: {profile.created_at.strftime('%Y-%m-%d %H:%M')}")
 
             if profile.preferences:
-                console.print(f"\n  [bold]Preferences:[/bold]")
+                console.print("\n  [bold]Preferences:[/bold]")
                 for key, value in profile.preferences.items():
                     console.print(f"    {key}: {value}")
 
             if profile.topics:
-                console.print(f"\n  [bold]Top Topics:[/bold]")
+                console.print("\n  [bold]Top Topics:[/bold]")
                 for topic, count in profile.get_top_topics():
                     console.print(f"    {topic}: {count}")
 
             if profile.last_topics:
-                console.print(f"\n  [bold]Recent Topics:[/bold]")
+                console.print("\n  [bold]Recent Topics:[/bold]")
                 console.print(f"    {', '.join(profile.last_topics[:5])}")
         finally:
             await db.close()
@@ -1391,19 +1106,18 @@ def user_profile_update(
         await db.connect()
         try:
             from ah.memory.user_profile import user_profile_store
+
             profile = await user_profile_store.get_by_user_id(user_id)
             if not profile:
                 console.print(f"[red]User profile not found for '{user_id}'[/red]")
                 raise typer.Exit(1)
 
             profile.set_preference(key, value)
-            updated = await user_profile_store.update_preferences(
-                profile.id, profile.preferences
-            )
+            updated = await user_profile_store.update_preferences(profile.id, profile.preferences)
             if updated:
                 console.print(f"[green]Updated {key} = {value} for {user_id}[/green]")
             else:
-                console.print(f"[red]Failed to update profile[/red]")
+                console.print("[red]Failed to update profile[/red]")
                 raise typer.Exit(1)
         finally:
             await db.close()
@@ -1421,6 +1135,7 @@ def user_profile_list(
         await db.connect()
         try:
             from ah.memory.user_profile import user_profile_store
+
             profiles = await user_profile_store.list_all(limit=limit)
 
             if not profiles:

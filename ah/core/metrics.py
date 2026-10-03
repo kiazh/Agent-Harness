@@ -7,8 +7,9 @@ import logging
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Generator
+from typing import Any
 
 logger = logging.getLogger("ah.metrics")
 
@@ -25,11 +26,27 @@ class JsonFormatter(logging.Formatter):
         }
         for key, value in record.__dict__.items():
             if key not in {
-                "name", "msg", "args", "levelname", "levelno", "pathname",
-                "filename", "module", "lineno", "funcName", "created",
-                "msecs", "relativeCreated", "thread", "threadName",
-                "processName", "process", "getMessage", "exc_info",
-                "exc_text", "stack_info",
+                "name",
+                "msg",
+                "args",
+                "levelname",
+                "levelno",
+                "pathname",
+                "filename",
+                "module",
+                "lineno",
+                "funcName",
+                "created",
+                "msecs",
+                "relativeCreated",
+                "thread",
+                "threadName",
+                "processName",
+                "process",
+                "getMessage",
+                "exc_info",
+                "exc_text",
+                "stack_info",
             }:
                 log_data[key] = value
         return json.dumps(log_data, default=str)
@@ -60,7 +77,7 @@ class MetricsCollector:
             # Cap the list size to prevent unbounded memory growth
             if len(latencies) > self._MAX_LATENCY_SAMPLES:
                 # Keep the most recent half to preserve recent latency data
-                self._latencies[operation] = latencies[-self._MAX_LATENCY_SAMPLES // 2:]
+                self._latencies[operation] = latencies[-self._MAX_LATENCY_SAMPLES // 2 :]
 
     def increment_counter(self, operation: str, value: int = 1) -> None:
         """Increment a throughput counter."""
@@ -72,9 +89,7 @@ class MetricsCollector:
         with self._lock:
             self._errors[operation] += 1
 
-    def record_tokens(
-        self, session_id: str, prompt_tokens: int, completion_tokens: int
-    ) -> None:
+    def record_tokens(self, session_id: str, prompt_tokens: int, completion_tokens: int) -> None:
         """Record token usage for a session."""
         with self._lock:
             tu = self._token_usage[session_id]
@@ -99,9 +114,7 @@ class MetricsCollector:
         if session_id and (prompt_tokens or completion_tokens):
             self.record_tokens(session_id, prompt_tokens, completion_tokens)
 
-    def record_db_call(
-        self, operation: str, duration_ms: float, is_error: bool = False
-    ) -> None:
+    def record_db_call(self, operation: str, duration_ms: float, is_error: bool = False) -> None:
         """Record a database call with timing."""
         self.record_latency(f"db.{operation}", duration_ms)
         self.increment_counter(f"db.{operation}.calls")
@@ -160,18 +173,14 @@ class MetricsCollector:
         """Get all metrics as a dictionary."""
         with self._lock:
             operations = (
-                set(self._latencies.keys())
-                | set(self._counters.keys())
-                | set(self._errors.keys())
+                set(self._latencies.keys()) | set(self._counters.keys()) | set(self._errors.keys())
             )
             return {
                 "latencies": {op: self.get_latency_stats(op) for op in operations},
                 "counters": dict(self._counters),
                 "errors": dict(self._errors),
                 "error_rates": {op: self.get_error_rate(op) for op in operations},
-                "token_usage": {
-                    sid: dict(tu) for sid, tu in self._token_usage.items()
-                },
+                "token_usage": {sid: dict(tu) for sid, tu in self._token_usage.items()},
             }
 
     def reset(self) -> None:

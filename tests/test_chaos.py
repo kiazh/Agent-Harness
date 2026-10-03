@@ -11,17 +11,13 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ah.core.models import LLMResponse, Session, AgentResponse
 from ah.core.agent import ReActAgent
-from ah.core.context import context_manager
-from ah.core.session import session_manager
-from ah.tools.base import ToolRegistry, registry
-
+from ah.core.models import LLMResponse, Session
+from ah.tools.base import ToolRegistry
 
 # ===========================================================================
 # Fixtures
@@ -170,7 +166,7 @@ class TestLLMChaos:
     async def test_agent_handles_llm_timeout(self, mock_session):
         """Agent should handle LLM timeout gracefully."""
         provider = AsyncMock()
-        provider.complete = AsyncMock(side_effect=asyncio.TimeoutError("LLM timeout"))
+        provider.complete = AsyncMock(side_effect=TimeoutError("LLM timeout"))
 
         with patch("ah.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)

@@ -1,6 +1,5 @@
 """Basic tests for AgentHarness."""
 
-import asyncio
 import pytest
 
 
@@ -12,10 +11,12 @@ def test_import():
 
 def test_tool_registry():
     """Test tool registry has built-in tools."""
+    from ah.tools import (
+        builtins,  # noqa: F401 — registers web_search, web_extract, search_files
+        file,  # noqa: F401 — registers read_file, write_file, list_files
+        terminal,  # noqa: F401 — registers terminal
+    )
     from ah.tools.base import registry
-    from ah.tools import builtins  # noqa: F401 — registers web_search, web_extract, search_files
-    from ah.tools import file  # noqa: F401 — registers read_file, write_file, list_files
-    from ah.tools import terminal  # noqa: F401 — registers terminal
 
     tools = registry.list_tools()
     assert "read_file" in tools
@@ -29,8 +30,9 @@ def test_tool_registry():
 
 def test_session_dataclass():
     """Test Session dataclass creation."""
-    from ah.core.models import Session
     import uuid
+
+    from ah.core.models import Session
 
     s = Session(id=uuid.uuid4(), title="test", agent_id="harness")
     assert s.status == "active"
@@ -39,8 +41,9 @@ def test_session_dataclass():
 
 def test_context_chunk_dataclass():
     """Test ContextChunk dataclass creation."""
-    from ah.core.models import ContextChunk
     import uuid
+
+    from ah.core.models import ContextChunk
 
     c = ContextChunk(
         id=uuid.uuid4(),
@@ -89,7 +92,6 @@ async def test_database_connection():
 async def test_session_crud():
     """Test session CRUD operations (requires PostgreSQL)."""
     from ah.core.session import session_manager
-    import uuid
 
     try:
         from ah.db.connection import db

@@ -1,4 +1,5 @@
 """Session manager — create, resume, and track agent sessions."""
+
 from __future__ import annotations
 
 import asyncio
@@ -9,8 +10,8 @@ import asyncpg
 import msgpack
 from cachetools import TTLCache
 
-from ah.db.connection import db
 from ah.core.models import Session
+from ah.db.connection import db
 
 __all__ = ["Session", "SessionManager", "session_manager"]
 
@@ -145,6 +146,15 @@ class SessionManager:
         )
         await self._cache_invalidate(session_id)
 
+    async def set_title(self, session_id: uuid.UUID, title: str) -> None:
+        """Rename a session."""
+        await db.execute(
+            "UPDATE sessions SET title = $2 WHERE id = $1",
+            session_id,
+            title,
+        )
+        await self._cache_invalidate(session_id)
+
     async def set_status(self, session_id: uuid.UUID, status: str) -> None:
         """Update session status."""
         await db.execute(
@@ -170,6 +180,7 @@ class SessionManager:
         )
         await self._cache_invalidate(session_id)
         from ah.db.connection import parse_command_count
+
         return parse_command_count(result) > 0
 
     async def search(self, query: str, limit: int = 20) -> list[Session]:
@@ -203,11 +214,12 @@ class SessionManager:
             context_budget=source.context_budget,
         )
 
-        # Copy context chunks from source to new session
+        # Copy context chunks, keeping their timestamps: a single INSERT ... SELECT
+        # would otherwise stamp every copy with the same now(), scrambling order.
         await db.execute(
             """
-            INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
-            SELECT $2, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text
+            INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, created_at, accessed_at)
+            SELECT $2, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, created_at, accessed_at
             FROM context_chunks
             WHERE session_id = $1
             """,
@@ -217,9 +229,7 @@ class SessionManager:
 
         return new_session
 
-    async def list_sessions(
-        self, status: str | None = None, limit: int = 20
-    ) -> list[Session]:
+    async def list_sessions(self, status: str | None = None, limit: int = 20) -> list[Session]:
         """List sessions (column projection: exclude state_msgpack for efficiency)."""
         if status:
             rows = await db.fetch(
