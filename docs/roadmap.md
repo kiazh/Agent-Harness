@@ -1,16 +1,16 @@
 # AgentHarness Roadmap
 
-**Last updated:** 2026-10-01  
+**Last updated:** 2026-10-03  
 **Current version:** 0.1.0  
-**Test status:** 436 tests passing
+**Test status:** 672 tests passing on Windows (one platform-specific test deselected)
 
 ---
 
 ## Executive Summary
 
-AgentHarness has completed Phases 1-4: a working ReAct loop, async PostgreSQL with pgvector, MessagePack context storage, decorator-based tool registry, skills system, long-term memory with LLM-based extraction and hybrid retrieval, RAG pipeline with hybrid search and reranking, interactive REPL with prompt_toolkit, configuration system, and 436 passing tests. The architecture is clean with proper separation of concerns (models, assembler, container, context, provider, session, memory, rag).
+AgentHarness has completed Phases 1-5: a working ReAct loop, PostgreSQL context and memory, a RAG pipeline, a TypeScript terminal UI with a JSON-RPC gateway, and multi-agent delegation with YAML definitions and session context handoff. The Windows test run passes 672 tests, with one platform-specific test deselected.
 
-The next phase focuses on **multi-agent orchestration, production hardening, and advanced features**.
+The next roadmap phase focuses on **production hardening**.
 
 ---
 
@@ -246,10 +246,10 @@ tui/ -> interactive.py
 ## Success Criteria
 
 ### Phase 5 (Multi-Agent)
-- [ ] Agent definitions in YAML
-- [ ] Sequential and parallel orchestration
-- [ ] `delegate()` tool working
-- [ ] Context handoff between agents
+- [x] Agent definitions in YAML (`agents/*.yaml`, configurable with `AGENT_HARNESS_AGENTS_DIR`)
+- [x] Sequential and parallel orchestration
+- [x] `delegate()` tool working
+- [x] Context handoff between agents
 
 ### Phase 6 (Production)
 - [ ] FastAPI server with SSE streaming

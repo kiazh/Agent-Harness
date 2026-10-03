@@ -402,7 +402,16 @@ class BaseReActAgent:
 
             start = time.monotonic()
             try:
-                result = await registry.execute(tool_name, **tool_args)
+                if tool_name == "delegate":
+                    from ah.tools.agents import current_session_id
+
+                    token = current_session_id.set(session_id)
+                    try:
+                        result = await registry.execute(tool_name, **tool_args)
+                    finally:
+                        current_session_id.reset(token)
+                else:
+                    result = await registry.execute(tool_name, **tool_args)
             except Exception as e:
                 logger.exception("Tool execution failed for '%s'", tool_name)
                 audit_log(

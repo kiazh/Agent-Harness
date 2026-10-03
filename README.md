@@ -82,9 +82,23 @@ Hermes Agent (`ui-tui` ↔ `tui_gateway`) and opencode use.
 | 2: Context Efficiency | MessagePack, pgvector, prompt assembler | Done |
 | 3: Memory & RAG | Long-term memory, RAG pipeline, hybrid search | Done |
 | 4: Interactive UI | TypeScript terminal UI (pi-tui) + JSON-RPC gateway, slash commands, config system | Done |
-| 5: Multi-Agent | Subagent system, orchestration | Pending |
+| 5: Multi-Agent | Subagent system, orchestration | Done |
 | 6: Production | Web API, scheduler, plugins, observability | Pending |
 | 7: Advanced | LangGraph, TUI, cost optimization | Pending |
+
+### Multi-agent definitions
+
+Add a YAML file under `agents/` (or set `AGENT_HARNESS_AGENTS_DIR` to another
+directory) to define a specialist. See `agents/reviewer.yaml` for an example.
+Supported fields are `name`, `description`, `system_prompt`, `tools`, `model`,
+`provider`, and `max_iterations`. An empty `tools` list grants access to every
+registered tool. Database definitions override YAML definitions with the same
+name; built-in names cannot be replaced by YAML files.
+
+Delegation passes a bounded summary of the parent session's recent messages and
+goal to the child. The child's response is recorded in the parent session, so
+later turns can use it. The `agents.run` gateway method supports sequential and
+parallel steps.
 
 ## Technology Stack
 

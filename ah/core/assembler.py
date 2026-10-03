@@ -152,8 +152,9 @@ class PromptAssembler:
         elif chunk_type in ("result", "assistant_message"):
             status = payload.get("status", "ok")
             result = payload.get("result", payload.get("content", ""))
-            if isinstance(result, str) and len(result) > 200:
-                result = result[:200] + "..."
+            limit = 500 if payload.get("agent") else 200
+            if isinstance(result, str) and len(result) > limit:
+                result = result[:limit] + "..."
             return f"  -> {status}: {result}"
         elif chunk_type == "memory":
             return f"[memory] {payload.get('content', '')}"

@@ -167,6 +167,24 @@ class TestJobStore:
         assert await _claim_specific(job.id) is None
         await job_store.delete(job.id)
 
+    async def test_expired_running_job_is_reclaimed(self):
+        from ah.core.scheduler import job_store
+        from ah.db.connection import db
+
+        sid = await a_session()
+        job = await job_store.create(
+            name="recover", kind="interval", session_id=sid, prompt="go", interval_seconds=60
+        )
+        await db.execute(
+            "UPDATE jobs SET status = 'running', next_run_at = now() - interval '365 days' WHERE id = $1",
+            job.id,
+        )
+        claimed = await _claim_specific(job.id)
+        assert claimed is not None and claimed.status == "running"
+        assert claimed.next_run_at > datetime.now(UTC)
+        await job_store.finish(job.id)
+        await job_store.delete(job.id)
+
 
 @needs_db
 @pytest.mark.usefixtures("connected_db")

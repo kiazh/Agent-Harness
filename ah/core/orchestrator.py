@@ -15,7 +15,9 @@ from dataclasses import dataclass
 
 from ah.core.agent import ReActAgent
 from ah.core.agent_def import AgentDef, agent_registry
+from ah.core.assembler import PromptAssembler, truncate_to_tokens
 from ah.core.config import config
+from ah.core.context import context_manager
 from ah.core.session import session_manager
 from ah.db.connection import db
 
@@ -72,6 +74,8 @@ class Orchestrator:
         if definition is None:
             raise AgentNotFoundError(f"no agent named {agent_name!r}")
 
+        handoff = await self._parent_context(parent_session_id) if parent_session_id else ""
+
         child = await session_manager.create(
             title=f"{agent_name}: {task[:50]}",
             agent_id=agent_name,
@@ -83,7 +87,8 @@ class Orchestrator:
 
         agent = self._agent_factory(definition)
         try:
-            response = await agent.run(child.id, task, verbose=False)
+            child_task = f"{task}\n\n## Parent session context\n{handoff}" if handoff else task
+            response = await agent.run(child.id, child_task, verbose=False)
         except Exception as e:
             logger.exception("Delegation to %s failed", agent_name)
             await self._record_end(
@@ -94,6 +99,14 @@ class Orchestrator:
         await self._record_end(
             message_id, status="complete", response=response.content, tokens=response.tokens_used
         )
+        if parent_session_id is not None:
+            await context_manager.add_chunk(
+                session_id=parent_session_id,
+                agent_id=from_agent,
+                chunk_type="result",
+                payload={"agent": agent_name, "content": f"[{agent_name}] {response.content}"},
+                token_count=len(response.content) // 4,
+            )
         return DelegationResult(
             agent=agent_name,
             task=task,
@@ -103,6 +116,23 @@ class Orchestrator:
             iterations=response.iterations,
             status="complete",
         )
+
+    async def _parent_context(self, session_id: uuid.UUID) -> str:
+        """Pass a bounded summary of recent parent activity to a child agent."""
+        parent = await session_manager.get(session_id)
+        if parent is None:
+            raise ValueError(f"parent session {session_id} not found")
+        recent = await context_manager.get_recent_context(session_id, limit=10)
+        assembler = PromptAssembler()
+        parts = []
+        if parent.goal:
+            parts.append(f"Goal: {parent.goal}")
+        for chunk in reversed(recent):
+            if chunk["type"] in {"user_message", "assistant_message"} or (
+                chunk["type"] == "result" and "agent" in chunk["payload"]
+            ):
+                parts.append(assembler._compress_chunk(chunk))
+        return truncate_to_tokens("\n".join(parts), 1200)
 
     async def run_sequential(
         self,

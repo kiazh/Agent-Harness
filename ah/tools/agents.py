@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import logging
+import uuid
+from contextvars import ContextVar
 
 from ah.core.exceptions import ToolError
 from ah.tools.base import registry
 
 logger = logging.getLogger(__name__)
+
+# Set only while the current agent executes a tool. ContextVar keeps concurrent
+# sessions isolated and avoids accepting a model-supplied parent session ID.
+current_session_id: ContextVar[uuid.UUID | None] = ContextVar("agent_session_id", default=None)
 
 
 @registry.register(
@@ -36,7 +42,9 @@ async def delegate(agent: str, task: str) -> str:
     if not task.strip():
         raise ToolError("task must not be empty")
     try:
-        result = await orchestrator.delegate(agent, task, from_agent="delegate-tool")
+        result = await orchestrator.delegate(
+            agent, task, from_agent="delegate-tool", parent_session_id=current_session_id.get()
+        )
     except AgentNotFoundError as e:
         raise ToolError(f"{e}. Use list_agents to see available agents.") from None
     except Exception as e:

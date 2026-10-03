@@ -228,7 +228,7 @@ export class App implements FeatureHost {
 			try {
 				await this.prompt(text);
 			} catch (error) {
-				this.setRunning(false);
+				this.setRunning(this.current ? this.inFlight.has(this.current.id) : false);
 				this.transcript.addNotice(message(error), "error");
 			}
 		}
@@ -240,11 +240,18 @@ export class App implements FeatureHost {
 			this.transcript.addNotice("Not connected to a session. Try /new.", "warning");
 			return;
 		}
+		const sessionId = this.current.id;
 		this.transcript.addUser(text);
 		this.setRunning(true);
-		this.inFlight.add(this.current.id);
+		this.inFlight.add(sessionId);
 		this.tui.requestRender();
-		await this.client.request("prompt.submit", { sessionId: this.current.id, text });
+		try {
+			await this.client.request("prompt.submit", { sessionId, text });
+		} catch (error) {
+			this.inFlight.delete(sessionId);
+			this.setRunning(this.current ? this.inFlight.has(this.current.id) : false);
+			throw error;
+		}
 	}
 
 	private cancel(): void {

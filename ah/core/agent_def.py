@@ -9,12 +9,25 @@ the rest of the system looks them up.
 from __future__ import annotations
 
 import json
+import logging
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 from ah.db.connection import db
 
 __all__ = ["AgentDef", "AgentRegistry", "agent_registry", "BUILTIN_AGENTS"]
+
+logger = logging.getLogger(__name__)
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def agents_directory() -> Path:
+    """Directory containing local YAML agent definitions."""
+    return Path(os.environ.get("AGENT_HARNESS_AGENTS_DIR") or _PROJECT_ROOT / "agents")
 
 
 @dataclass
@@ -84,7 +97,48 @@ BUILTIN_AGENTS: dict[str, AgentDef] = {
 
 
 class AgentRegistry:
-    """Looks up agent definitions from the ``agents`` table and the built-ins."""
+    """Looks up database, YAML, and built-in definitions in that order."""
+
+    def _file_definitions(self) -> dict[str, AgentDef]:
+        directory = agents_directory()
+        if not directory.is_dir():
+            return {}
+        definitions: dict[str, AgentDef] = {}
+        for path in sorted((*directory.glob("*.yaml"), *directory.glob("*.yml"))):
+            try:
+                data = yaml.safe_load(path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("expected a YAML mapping")
+                name = data.get("name", path.stem)
+                tools = data.get("tools", [])
+                iterations = data.get("max_iterations", 10)
+                if not isinstance(name, str) or not name.strip() or len(name) > 100:
+                    raise ValueError("name must be a non-empty string of at most 100 characters")
+                for key in ("description", "system_prompt"):
+                    if not isinstance(data.get(key, ""), str):
+                        raise ValueError(f"{key} must be a string")
+                if not isinstance(tools, list) or any(not isinstance(t, str) for t in tools):
+                    raise ValueError("tools must be a list of strings")
+                if type(iterations) is not int or not 1 <= iterations <= 50:
+                    raise ValueError("max_iterations must be an integer from 1 to 50")
+                for key in ("model", "provider"):
+                    if data.get(key) is not None and not isinstance(data[key], str):
+                        raise ValueError(f"{key} must be a string")
+                if name in BUILTIN_AGENTS:
+                    raise ValueError("cannot replace a built-in agent")
+                definitions[name] = AgentDef(
+                    name=name,
+                    description=data.get("description", ""),
+                    system_prompt=data.get("system_prompt", ""),
+                    tools=tools,
+                    model=data.get("model"),
+                    provider=data.get("provider"),
+                    max_iterations=iterations,
+                    source="yaml",
+                )
+            except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
+                logger.warning("Skipping agent definition %s: %s", path, exc)
+        return definitions
 
     async def get(self, name: str) -> AgentDef | None:
         row = await db.fetchrow(
@@ -96,7 +150,7 @@ class AgentRegistry:
         )
         if row is not None:
             return self._row_to_def(row)
-        return BUILTIN_AGENTS.get(name)
+        return self._file_definitions().get(name) or BUILTIN_AGENTS.get(name)
 
     async def list(self) -> list[AgentDef]:
         rows = await db.fetch(
@@ -105,7 +159,7 @@ class AgentRegistry:
             FROM agents ORDER BY name
             """
         )
-        defs = {name: d for name, d in BUILTIN_AGENTS.items()}
+        defs = {**BUILTIN_AGENTS, **self._file_definitions()}
         for row in rows:
             d = self._row_to_def(row)
             defs[d.name] = d  # a stored agent overrides a built-in of the same name
