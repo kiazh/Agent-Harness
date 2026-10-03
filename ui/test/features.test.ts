@@ -69,6 +69,80 @@ class FakeHost implements FeatureHost {
 
 const run = (text: string, host: FakeHost) => runCommand(parseCommand(text)!, host);
 
+test("/jobs add schedules an interval job and reports it", async () => {
+	const host = new FakeHost();
+	host.responses["jobs.create"] = (p: Record<string, unknown>) => ({
+		job: {
+			id: "job-abcdef01",
+			name: "interval job",
+			kind: p.kind,
+			sessionId: SESSION.id,
+			agent: "harness",
+			prompt: p.prompt,
+			intervalSeconds: p.intervalSeconds,
+			enabled: true,
+			status: "idle",
+			lastRunAt: null,
+			nextRunAt: null,
+			lastError: null,
+			runCount: 0,
+		},
+	});
+	await run("/jobs add 60 check the news", host);
+	const call = host.calls.at(-1)!;
+	assert.equal(call.method, "jobs.create");
+	assert.equal(call.params.kind, "interval");
+	assert.equal(call.params.intervalSeconds, 60);
+	assert.equal(call.params.prompt, "check the news");
+	assert.equal(host.last().kind, "success");
+});
+
+test("/jobs add rejects a non-numeric interval", async () => {
+	const host = new FakeHost();
+	await run("/jobs add soon do stuff", host);
+	assert.equal(host.last().kind, "error");
+	assert.match(host.last().text, /number of seconds/);
+});
+
+test("/jobs heartbeat defaults to 300s and omits a prompt", async () => {
+	const host = new FakeHost();
+	host.responses["jobs.create"] = (p: Record<string, unknown>) => ({
+		job: {
+			id: "job-11112222",
+			name: "heartbeat job",
+			kind: "heartbeat",
+			sessionId: SESSION.id,
+			agent: "harness",
+			prompt: "...",
+			intervalSeconds: p.intervalSeconds,
+			enabled: true,
+			status: "idle",
+			lastRunAt: null,
+			nextRunAt: null,
+			lastError: null,
+			runCount: 0,
+		},
+	});
+	await run("/jobs heartbeat", host);
+	const call = host.calls.at(-1)!;
+	assert.equal(call.params.kind, "heartbeat");
+	assert.equal(call.params.intervalSeconds, 300);
+	assert.equal(call.params.prompt, undefined);
+});
+
+test("/jobs off resolves an id prefix and disables the job", async () => {
+	const host = new FakeHost();
+	host.responses["jobs.list"] = {
+		jobs: [{ id: "job-abcdef01", intervalSeconds: 60, enabled: true, kind: "interval", runCount: 0, nextRunAt: null }],
+	};
+	host.responses["jobs.setEnabled"] = {};
+	await run("/jobs off job-abc", host);
+	const call = host.calls.at(-1)!;
+	assert.equal(call.method, "jobs.setEnabled");
+	assert.equal(call.params.id, "job-abcdef01");
+	assert.equal(call.params.enabled, false);
+});
+
 test("every command has a description and unique name", () => {
 	const names = SLASH_COMMANDS.map((c) => c.name);
 	assert.equal(new Set(names).size, names.length);

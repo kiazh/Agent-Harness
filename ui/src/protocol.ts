@@ -145,6 +145,22 @@ export interface DelegationResult {
 	status: string;
 }
 
+export interface JobInfo {
+	id: string;
+	name: string;
+	kind: string;
+	sessionId: string | null;
+	agent: string;
+	prompt: string;
+	intervalSeconds: number;
+	enabled: boolean;
+	status: string;
+	lastRunAt: string | null;
+	nextRunAt: string | null;
+	lastError: string | null;
+	runCount: number;
+}
+
 interface EventBase {
 	sessionId: string;
 	turnId: string;

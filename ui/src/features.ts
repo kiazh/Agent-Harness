@@ -14,6 +14,7 @@ import type {
 	ContextResult,
 	DelegationResult,
 	HistoryEntry,
+	JobInfo,
 	MemoryInfo,
 	PendingMemoryInfo,
 	ProfileInfo,
@@ -636,6 +637,93 @@ const delegateCommand: Command = {
 	},
 };
 
+const jobsCommand: Command = {
+	name: "jobs",
+	description: "Scheduled jobs: list, add, heartbeat, on, off, delete",
+	argumentHint: "[list|add|heartbeat|on|off|delete]",
+	getArgumentCompletions: options([
+		["list", "Jobs for this session"],
+		["add", "Repeat a prompt: add <seconds> <prompt>"],
+		["heartbeat", "Nudge an idle session: heartbeat <seconds>"],
+		["on", "Enable a job <id>"],
+		["off", "Disable a job <id>"],
+		["delete", "Remove a job <id>"],
+	]),
+	async run(args, host) {
+		const current = requireSession(host);
+		const [sub, rest] = splitSub(args);
+		switch (sub) {
+			case "":
+			case "list": {
+				const { jobs } = await host.request<{ jobs: JobInfo[] }>("jobs.list", { sessionId: current.id });
+				host.print(
+					jobs.length
+						? table(
+								["ID", "Kind", "Every", "On", "Runs", "Next"],
+								jobs.map((j) => [
+									shortId(j.id),
+									j.kind,
+									`${j.intervalSeconds}s`,
+									j.enabled ? "yes" : "no",
+									String(j.runCount),
+									when(j.nextRunAt),
+								]),
+								40,
+							)
+						: "No scheduled jobs. Add one with /jobs add <seconds> <prompt>.",
+					"plain",
+				);
+				return;
+			}
+			case "add": {
+				const [secondsText, prompt] = splitSub(requireArgs(rest, "/jobs add <seconds> <prompt>"));
+				const seconds = Number.parseInt(secondsText, 10);
+				if (!Number.isFinite(seconds)) throw new Error("First argument must be a number of seconds.");
+				if (!prompt) throw new Error("Usage: /jobs add <seconds> <prompt>");
+				const { job } = await host.request<{ job: JobInfo }>("jobs.create", {
+					sessionId: current.id,
+					kind: "interval",
+					prompt,
+					intervalSeconds: seconds,
+				});
+				host.print(`Scheduled “${job.prompt}” every ${job.intervalSeconds}s (${shortId(job.id)}).`, "success");
+				return;
+			}
+			case "heartbeat": {
+				const seconds = Number.parseInt(rest.trim() || "300", 10);
+				if (!Number.isFinite(seconds)) throw new Error("Usage: /jobs heartbeat <seconds>");
+				const { job } = await host.request<{ job: JobInfo }>("jobs.create", {
+					sessionId: current.id,
+					kind: "heartbeat",
+					intervalSeconds: seconds,
+				});
+				host.print(`Heartbeat every ${job.intervalSeconds}s (${shortId(job.id)}).`, "success");
+				return;
+			}
+			case "on":
+			case "off": {
+				const id = await resolveJobId(host, current.id, requireArgs(rest, `/jobs ${sub} <id>`));
+				await host.request("jobs.setEnabled", { id, enabled: sub === "on" });
+				host.print(`Job ${shortId(id)} ${sub === "on" ? "enabled" : "disabled"}.`, "success");
+				return;
+			}
+			case "delete": {
+				const id = await resolveJobId(host, current.id, requireArgs(rest, "/jobs delete <id>"));
+				await host.request("jobs.delete", { id });
+				host.print(`Deleted job ${shortId(id)}.`, "success");
+				return;
+			}
+			default:
+				throw new Error(`Unknown /jobs option “${sub}”. Try: list, add, heartbeat, on, off, delete.`);
+		}
+	},
+};
+
+async function resolveJobId(host: FeatureHost, sessionId: string, idOrPrefix: string): Promise<string> {
+	const { jobs } = await host.request<{ jobs: JobInfo[] }>("jobs.list", { sessionId });
+	return resolvePrefix(idOrPrefix, jobs.map((j) => j.id), "job");
+}
+
 // ─── app ──────────────────────────────────────────────────────────────────────
 
 const appCommands: Command[] = [
@@ -674,6 +762,7 @@ const COMMANDS: Command[] = [
 	skillsCommand,
 	agentsCommand,
 	delegateCommand,
+	jobsCommand,
 	...settingsCommands,
 	...appCommands,
 ];

@@ -64,6 +64,7 @@ class Harness:
     """Drives a Gateway in-process and records every frame it writes."""
 
     def __init__(self, agent: FakeAgent | None = None) -> None:
+        os.environ["AH_GATEWAY_NO_SCHEDULER"] = "1"  # tests drive the runner directly
         self.frames: list[dict] = []
         self.agent = agent or FakeAgent(scripted_turn())
         self.gateway = Gateway(self.frames.append, agent_factory=lambda model, provider: self.agent)

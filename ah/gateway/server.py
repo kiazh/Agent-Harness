@@ -134,6 +134,7 @@ class Gateway:
         self.provider: str = config.get("provider")
         self.closing = False
         self._db_ready = False
+        self._job_runner = None
         self._turns: dict[str, asyncio.Task[None]] = {}
         self._methods: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] = {
             "initialize": self._initialize,
@@ -199,7 +200,10 @@ class Gateway:
             self._write({"jsonrpc": "2.0", "id": rid, "result": result})
 
     async def close(self) -> None:
-        """Cancel running turns and release the database pool."""
+        """Cancel running turns, stop the job runner, and release the database pool."""
+        if self._job_runner is not None:
+            await self._job_runner.stop()
+            self._job_runner = None
         tasks = [t for t in self._turns.values() if not t.done()]
         for task in tasks:
             task.cancel()
@@ -208,6 +212,18 @@ class Gateway:
         if self._db_ready:
             await db.close()
             self._db_ready = False
+
+    def _start_job_runner(self) -> None:
+        """Run scheduled jobs in the background while the gateway is up.
+
+        Disabled with AH_GATEWAY_NO_SCHEDULER=1 (tests drive the runner directly).
+        """
+        if os.environ.get("AH_GATEWAY_NO_SCHEDULER") or self._job_runner is not None:
+            return
+        from ah.core.scheduler import JobRunner
+
+        self._job_runner = JobRunner()
+        self._job_runner.start()
 
     def _send_error(self, rid: Any, code: int, message: str) -> None:
         self._write({"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}})
@@ -246,6 +262,7 @@ class Gateway:
             except Exception as e:
                 raise RpcError(DATABASE_UNAVAILABLE, f"database unavailable: {e}") from e
             self._db_ready = True
+            self._start_job_runner()
         return {
             "version": __version__,
             "model": self.model,

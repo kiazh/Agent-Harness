@@ -17,7 +17,10 @@ const dsn = process.env.AGENT_HARNESS_TEST_DATABASE_URL;
 const skip = !python || !dsn ? "AH_TEST_PYTHON / AGENT_HARNESS_TEST_DATABASE_URL not set" : false;
 
 function startClient() {
-	const client = new GatewayClient({ python: python!, env: { DATABASE_URL: dsn! } });
+	const client = new GatewayClient({
+		python: python!,
+		env: { DATABASE_URL: dsn!, AH_GATEWAY_NO_SCHEDULER: "1" },
+	});
 	let crashed = false;
 	client.onExit = () => {
 		crashed = true;
@@ -99,6 +102,16 @@ test("slash commands work against the real gateway and database", { skip, timeou
 		assert.match(await run("/skills"), /Name|No skills/);
 		assert.match(await run("/agents"), /harness/);
 		assert.match(await run("/agents show researcher"), /research/i);
+
+		assert.match(await run("/jobs"), /No scheduled jobs/);
+		assert.match(await run("/jobs add 60 check the news"), /Scheduled/);
+		const listed = await run("/jobs");
+		assert.match(listed, /interval/);
+		const jobId = (listed.match(/\b([0-9a-f]{8})\b/) ?? [])[1];
+		assert.ok(jobId, "a job id is shown");
+		assert.match(await run(`/jobs off ${jobId}`), /disabled/);
+		assert.match(await run(`/jobs on ${jobId}`), /enabled/);
+		assert.match(await run(`/jobs delete ${jobId}`), /Deleted/);
 
 		const exported = await run(`/export ${tag}.md`);
 		assert.match(exported, /Exported to/);
