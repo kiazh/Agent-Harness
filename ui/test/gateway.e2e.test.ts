@@ -97,6 +97,8 @@ test("slash commands work against the real gateway and database", { skip, timeou
 		assert.match(await run("/status"), /PostgreSQL/);
 		assert.match(await run("/config"), /max_iterations/);
 		assert.match(await run("/skills"), /Name|No skills/);
+		assert.match(await run("/agents"), /harness/);
+		assert.match(await run("/agents show researcher"), /research/i);
 
 		const exported = await run(`/export ${tag}.md`);
 		assert.match(exported, /Exported to/);

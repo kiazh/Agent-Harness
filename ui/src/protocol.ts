@@ -124,6 +124,27 @@ export interface StatusResult {
 	provider: string;
 }
 
+export interface AgentInfo {
+	name: string;
+	description: string;
+	systemPrompt: string;
+	tools: string[];
+	model: string | null;
+	provider: string | null;
+	maxIterations: number;
+	source: string;
+}
+
+export interface DelegationResult {
+	agent: string;
+	task: string;
+	response: string;
+	sessionId: string;
+	tokens: number;
+	iterations: number;
+	status: string;
+}
+
 interface EventBase {
 	sessionId: string;
 	turnId: string;

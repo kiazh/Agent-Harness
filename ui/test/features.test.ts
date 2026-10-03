@@ -175,6 +175,32 @@ test("argument completions offer subcommands", async () => {
 	assert.equal(await memory.getArgumentCompletions!("search foo"), null);
 });
 
+test("/agents list and show render agent definitions", async () => {
+	const host = new FakeHost();
+	host.responses["agents.list"] = {
+		agents: [
+			{ name: "harness", description: "general", systemPrompt: "", tools: [], model: null, provider: null, maxIterations: 10, source: "builtin" },
+			{ name: "coder", description: "edits code", systemPrompt: "be careful", tools: ["read_file", "write_file"], model: null, provider: null, maxIterations: 10, source: "builtin" },
+		],
+	};
+	await run("/agents", host);
+	assert.match(host.last().text, /harness/);
+	assert.match(host.last().text, /coder/);
+	await run("/agents show coder", host);
+	assert.match(host.last().text, /edits code/);
+	assert.match(host.last().text, /read_file, write_file/);
+});
+
+test("/delegate runs one step through agents.run", async () => {
+	const host = new FakeHost();
+	host.responses["agents.run"] = {
+		results: [{ agent: "researcher", task: "find X", response: "found X", sessionId: "s", tokens: 20, iterations: 1, status: "complete" }],
+	};
+	await run("/delegate researcher find X", host);
+	assert.deepEqual(host.calls[0]!.params.steps, [{ agent: "researcher", task: "find X" }]);
+	assert.match(host.markdown.at(-1)!, /found X/);
+});
+
 test("format helpers", () => {
 	assert.equal(resolvePrefix("ab", ["abc", "xyz"], "thing"), "abc");
 	assert.throws(() => resolvePrefix("a", ["abc", "abd"], "thing"), /matches 2 things/);

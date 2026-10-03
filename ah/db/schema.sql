@@ -137,3 +137,58 @@ CREATE TABLE IF NOT EXISTS user_profiles (
 
 CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_updated ON user_profiles(updated_at DESC);
+
+-- ─── Agents (Phase 5: multi-agent) ──────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS agents (
+    name TEXT PRIMARY KEY,
+    description TEXT NOT NULL DEFAULT '',
+    system_prompt TEXT NOT NULL DEFAULT '',
+    tools JSONB NOT NULL DEFAULT '[]',       -- allowed tool names ([] = all)
+    model TEXT,
+    provider TEXT,
+    max_iterations INT NOT NULL DEFAULT 10,
+    source TEXT NOT NULL DEFAULT 'db',        -- 'db' or 'builtin'
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Messages passed between agents during orchestration.
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
+    from_agent TEXT NOT NULL,
+    to_agent TEXT NOT NULL,
+    task TEXT NOT NULL,
+    response TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'complete', 'error')),
+    tokens_used INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_messages_session ON agent_messages(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_messages_to ON agent_messages(to_agent, status);
+
+-- ─── Scheduled Jobs (Phase 6a: scheduler) ───────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS jobs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('heartbeat', 'interval')),
+    session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
+    agent_name TEXT NOT NULL DEFAULT 'harness',
+    prompt TEXT NOT NULL,
+    interval_seconds INT NOT NULL CHECK (interval_seconds >= 10),
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    status TEXT NOT NULL DEFAULT 'idle' CHECK (status IN ('idle', 'running', 'error')),
+    last_run_at TIMESTAMPTZ,
+    next_run_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_error TEXT,
+    run_count INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- The runner polls for due, enabled jobs by next_run_at.
+CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(next_run_at) WHERE enabled;
+CREATE INDEX IF NOT EXISTS idx_jobs_session ON jobs(session_id);

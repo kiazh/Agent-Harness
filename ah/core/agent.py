@@ -16,7 +16,7 @@ from ah.core.assembler import PromptAssembler
 from ah.core.context import context_manager
 from ah.core.exceptions import SessionNotFoundError
 from ah.core.metrics import metrics
-from ah.core.models import AgentResponse, LLMResponse, StreamEvent
+from ah.core.models import AgentResponse, LLMResponse, StreamEvent, ToolDefinition
 from ah.core.provider import LLMProvider, audit_log, get_provider
 from ah.core.session import Session, session_manager
 from ah.memory.consolidator import MemoryConsolidator
@@ -60,6 +60,7 @@ class BaseReActAgent:
         memory_retriever: MemoryRetriever | None = None,
         memory_consolidator: MemoryConsolidator | None = None,
         rag_pipeline: RAGPipeline | None = None,
+        allowed_tools: list[str] | None = None,
     ) -> None:
         self.provider = provider or get_provider()
         self.max_iterations = max_iterations
@@ -68,6 +69,16 @@ class BaseReActAgent:
         self.memory_retriever = memory_retriever or MemoryRetriever(store=memory_store)
         self.memory_consolidator = memory_consolidator
         self.rag_pipeline = rag_pipeline
+        # None = every registered tool; a list restricts the agent to those names.
+        self.allowed_tools = allowed_tools
+
+    def _tool_defs(self) -> list[ToolDefinition]:
+        """Tool definitions offered to the model, honoring the allow-list."""
+        defs = registry.get_tool_definitions()
+        if self.allowed_tools is None:
+            return defs
+        allowed = set(self.allowed_tools)
+        return [d for d in defs if d.name in allowed]
 
     async def _get_rag_context(
         self,
@@ -492,7 +503,7 @@ class ReActAgent(BaseReActAgent):
                 )
 
             # Get tool definitions
-            tool_defs = registry.get_tool_definitions()
+            tool_defs = self._tool_defs()
 
             # Call LLM with retry
             try:
@@ -626,7 +637,7 @@ class ReActAgent(BaseReActAgent):
                 return
 
             # Get tool definitions
-            tool_defs = registry.get_tool_definitions()
+            tool_defs = self._tool_defs()
 
             # Stream LLM call with retry
             try:
