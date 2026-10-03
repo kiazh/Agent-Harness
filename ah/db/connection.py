@@ -37,7 +37,7 @@ class Database:
     """Manages asyncpg connection pool."""
 
     def __init__(self, dsn: str | None = None) -> None:
-        self.dsn = dsn or config.get("database_url") or ""
+        self.dsn = dsn or config.get("database_url") or os.environ.get("DATABASE_URL") or "postgresql://postgres@127.0.0.1:5432/agentharness"
         self._pool: asyncpg.Pool | None = None
 
     async def connect(self) -> None:

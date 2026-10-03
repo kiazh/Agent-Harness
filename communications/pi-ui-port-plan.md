@@ -155,6 +155,66 @@ A **TypeScript rewrite is NOT recommended** — it discards the Python harness. 
 
 ---
 
+## 7a. DEEPER PASS — source-verified (2026-10-02, second review)
+
+The pi-tui README is only half the story. The **actual coding-agent screen** is built in `packages/coding-agent/src/`, verified from its `index.ts` and `docs/themes.md`. This is what we must match for a true 1:1.
+
+### 7a.1 Real UI components live in the coding-agent, layered on pi-tui
+`packages/coding-agent/src/modes/interactive/components/` exports the concrete widgets that make the pi screen (not in pi-tui):
+- **Messages:** `UserMessageComponent`, `AssistantMessageComponent`, `CustomMessageComponent`, `BranchSummaryMessageComponent`, `CompactionSummaryMessageComponent`, `SkillInvocationMessageComponent`, `ArminComponent`.
+- **Tools:** `ToolExecutionComponent`, `BashExecutionComponent`, `renderDiff` (+ `RenderDiffOptions`), `truncateToVisualLines`.
+- **Chrome:** `FooterComponent` (status/footer line), `DynamicBorder`, `BorderedLoader`, `keyHint`/`keyText`/`rawKeyHint` (the `Ctrl+X hint` affordances).
+- **Dialogs/selectors (overlays):** `ModelSelectorComponent`, `ThemeSelectorComponent`, `SettingsSelectorComponent`, `SessionSelectorComponent`, `TreeSelectorComponent`, `ThinkingSelectorComponent`, `OAuthSelectorComponent`, `LoginDialogComponent`, `ShowImagesSelectorComponent`, `UserMessageSelectorComponent`.
+- **Editors:** `CustomEditor`, `ExtensionEditorComponent`, `ExtensionInputComponent`, `ExtensionSelectorComponent`.
+
+**Implication for us:** our `ah/cli/tui/` port needs an **`ah/cli/tui/widgets/`** layer (coding-agent-equivalent) on top of the primitive components — message cards, tool-execution card, footer, selectors. The pi-tui primitives alone won't look like pi; these widgets are the look.
+
+### 7a.2 The screen entry point
+`modes/interactive/` exports `InteractiveMode` (+ `InteractiveModeOptions`). There are also `runPrintMode` (print/JSON) and `runRpcMode` (RPC). So pi has three run modes; we care about `InteractiveMode`. It composes the transcript (message/tool components) + editor + `FooterComponent` inside the alt-screen `VStack`/`ScrollView` layout from §3.
+
+### 7a.3 Theme system — this is the exact palette source
+`packages/coding-agent/src/modes/interactive/theme/` holds:
+- `theme.ts` — the `Theme` class + helpers: `initTheme`, `getMarkdownTheme`, `getSelectListTheme`, `getSettingsListTheme`, `highlightCode`, `getLanguageFromPath`, and types `ThemeAppearance/ThemeBg/ThemeColor/ThemeStyle/ThemeToken`.
+- `theme-schema.json` — the authoritative list of color roles.
+- Built-in themes: **`system`** (default), **`dark`**, **`light`** — written in **OKHSL** with a `vars` block (reusable values, can reference each other) + a `colors` block (role → color).
+
+**Color roles (from `docs/themes.md`, authoritative token list to port):**
+- General: `accent`, `border*`, `text`, `muted`, `dim`, `success`, `error`, `warning`
+- Selection/fullscreen: `selectedBg`, `searchMatch*`, `scrollbar*` (`scrollbarTrack`→`muted`, `scrollbarThumb`→`text` fallbacks)
+- Messages: `userMessage*`, `customMessage*`, `thinkingText`
+- Tool execution: `toolPendingBg`, `toolSuccessBg`, `toolErrorBg`, `toolTitle`, `toolOutput`
+- Markdown: `md*`
+- Tool diffs: `toolDiff*`
+- Syntax highlighting: `syntax*`
+- Editor modes: `thinking*`, `bashMode`
+- HTML export: `export.pageBg`, `export.cardBg`, `export.infoBg`
+- Color forms accepted: `#rgb`/`#rrggbb`, `oklch(…)`, `okhsl(…)`, 256-index int, var reference, `""` = terminal default.
+- Optional roles inherit: `scrollbarTrack←muted`, `scrollbarThumb←text`, `searchMatchBg←selectedBg`, `searchMatchText←text`, `thinkingMax←thinkingXhigh`; `export.*` derives from `userMessageBg`.
+
+**The `system` theme (default) is a signature behavior:** it queries the terminal's default fg/bg + 16 ANSI colors (OSC escapes), takes each role's hue from an ANSI color (errors←red, links←blue), and sets lightness for a minimum contrast (body text ≥ 4.5:1 WCAG on bg and every panel). Re-queries on light/dark switch. Waits ≤100ms at startup for the terminal to answer, else falls back to ANSI indices.
+
+**Port action:** copy the `dark`, `light`, and `system` theme JSON values verbatim into `ah/cli/tui/themes/` (they're data, OKHSL — our `cli/visual/colors.py` already does OKHSL→sRGB + gamut map). Implement the `system` theme's terminal-query + contrast-placement logic (we have `relative_luminance`/`contrast_ratio` in `colors.py` already). This is the single highest-leverage step for "colors look identical."
+
+### 7a.4 Markdown + syntax highlighting
+pi exports `getMarkdownTheme` and `highlightCode` + `getLanguageFromPath`. The `Markdown` component takes a `MarkdownTheme` (heading/link/code/codeBlock/quote/hr/listBullet/bold/italic/strikethrough/underline + optional `highlightCode`). For 1:1 markdown we must map these theme functions to our Rich Markdown styling (or port pi's renderer). Syntax highlighting in pi is its own `highlightCode(code, lang)`; in Python we'd use Pygments/Rich syntax with a theme matched to pi's `syntax*` tokens.
+
+### 7a.5 Keybindings are configurable + conflict-checked
+pi exports a full `KeybindingsManager` with `TUI_KEYBINDINGS`, `getKeybindings/setKeybindings`, `KeybindingConflict`. Keys use `matchesKey`/`parseKey`/`Key.*` and support the **Kitty keyboard protocol** (`decodeKittyPrintable`, `isKeyRelease`, `isKeyRepeat`, `isKittyProtocolActive`). For v1 we match the default `TUI_KEYBINDINGS` table and the common key subset; full Kitty protocol + user-remap is a later nicety.
+
+### 7a.6 Footer data
+`FooterComponent` is fed by a `FooterDataProvider` (git branch + extension statuses). To match the footer 1:1 we need: git branch, model, token/context usage, mode indicators. AgentHarness already tracks model/provider/tokens in the REPL; we'd add git-branch detection.
+
+### 7a.7 Revised scope statement
+A faithful port is **two layers**, not one:
+1. **Primitive layer** (`ah/cli/tui/`) ≈ pi-tui: terminal/renderer/layout/components/colors/keys/utils. (§4)
+2. **Widget layer** (`ah/cli/tui/widgets/` + themes) ≈ coding-agent `modes/interactive/`: message cards, tool card, footer, selectors, the 3 themes, markdown theme, `InteractiveMode` composition.
+
+Everything here is Python-feasible. Nothing in the deeper pass changes the "yes, Python can do it" verdict — but it **increases the surface area**: the look is defined as much by the coding-agent widget + theme layer as by pi-tui. Budget accordingly.
+
+### 7a.8 Files to copy verbatim vs reimplement (MIT, with attribution)
+- **Copy as data (low risk, high value):** the `dark`/`light`/`system` theme JSON token values; the spinner frame sets; keybinding default table; markdown theme role mapping. (Data/tables, trivially portable.)
+- **Reimplement in Python (logic):** renderer diff loop, layout flex solver, editor, autocomplete/fuzzy, ANSI width/truncate utils, color engine (already have it). Add `# Adapted from earendil-works/pi (MIT)` headers.
+
 ## 8. Open items / inputs needed
 1. Reference screenshots or a running `pi` to extract exact tokens/glyphs/footer format (docs don't give pixel values).
 2. Confirm keyboard-first (defer mouse + inline images) is acceptable for v1 — recommended.
