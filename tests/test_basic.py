@@ -6,7 +6,7 @@ import pytest
 def test_import():
     """Test that all modules import cleanly."""
     import ah
-    assert ah.__version__ == "0.1.0"
+    assert ah.__version__ == "0.2.0"
 
 
 def test_tool_registry():

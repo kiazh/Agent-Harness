@@ -60,6 +60,15 @@ stays UI-agnostic; any future client (web, API server) can speak the same protoc
 | `config.get` | `{}` | `{config, secrets}` — secret values are reported only as `true`/`false` |
 | `profile.get` / `profile.set` / `profile.list` | `{userId, ...}` | `{profile}` / `{profiles}` |
 | `status` | `{}` | `{postgres, sessions, contextChunks, memories, pendingMemories, tools, openrouterKeySet, model, provider}` |
+| `agents.list` | `{}` | `{agents: [agent]}` |
+| `agents.save` | `{name, description?, systemPrompt?, tools?, model?, provider?, maxIterations?}` | `{agent}` |
+| `agents.delete` | `{name}` | `{deleted}` |
+| `agents.run` | `{steps: [{agent, task}], mode?, sessionId?}` | `{results: [{agent, task, response, sessionId, tokens, iterations, status}]}` |
+| `agents.history` | `{sessionId, limit?}` | `{messages}` |
+| `jobs.create` | `{sessionId, kind?, prompt?, intervalSeconds?, name?, agent?}` | `{job}` |
+| `jobs.list` | `{sessionId?, limit?}` | `{jobs}` |
+| `jobs.setEnabled` | `{id, enabled}` | `{job}` |
+| `jobs.delete` | `{id}` | `{deleted}` |
 
 `session` = `{id, title, model, provider, status, lastActivity}`.
 

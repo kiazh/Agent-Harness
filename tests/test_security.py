@@ -61,16 +61,16 @@ class TestLearnSSRFAndPathTraversal:
 
     def test_resolve_path_rejects_traversal(self):
         """Path traversal: .. paths should be rejected."""
-        from ah.tools.file import _resolve_path
+        from ah.tools.file import resolve_path
         with pytest.raises(ValueError):
-            _resolve_path("../../../etc/passwd")
+            resolve_path("../../../etc/passwd")
         with pytest.raises(ValueError):
-            _resolve_path("/etc/passwd")
+            resolve_path("/etc/passwd")
 
     def test_resolve_path_allows_safe_paths(self):
         """Path traversal: safe paths should be allowed."""
-        from ah.tools.file import _resolve_path
-        p = _resolve_path("test.txt")
+        from ah.tools.file import resolve_path
+        p = resolve_path("test.txt")
         assert p.name == "test.txt"
 
     def test_learn_command_validates_url(self, tmp_path):
@@ -90,15 +90,15 @@ class TestExportPathTraversal:
 
     def test_resolve_path_prevents_absolute_escape(self):
         """Export: absolute paths outside base dir should be rejected."""
-        from ah.tools.file import _resolve_path
+        from ah.tools.file import resolve_path
         with pytest.raises(ValueError):
-            _resolve_path("/tmp/evil_export.md")
+            resolve_path("/tmp/evil_export.md")
 
     def test_resolve_path_prevents_relative_escape(self):
         """Export: relative paths with .. should be rejected."""
-        from ah.tools.file import _resolve_path
+        from ah.tools.file import resolve_path
         with pytest.raises(ValueError):
-            _resolve_path("../../etc/shadow")
+            resolve_path("../../etc/shadow")
 
 
 # ===========================================================================

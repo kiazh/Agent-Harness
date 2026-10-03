@@ -21,11 +21,9 @@ __all__ = [
     "console",
     "success",
     "error",
-    "warning",
     "muted",
     "status_line",
     "spinner",
-    "response_panel",
     "sessions_table",
     "context_table",
     "skills_table",
@@ -40,10 +38,6 @@ _LEVEL_STYLES = {"success": "green", "error": "red", "warning": "yellow", "info"
 
 def success(message: str) -> None:
     console.print(f"[bold green]✓[/bold green] {message}")
-
-
-def warning(message: str) -> None:
-    console.print(f"[bold yellow]![/bold yellow] {message}")
 
 
 def muted(message: str) -> None:
@@ -67,17 +61,6 @@ def spinner(label: str) -> Iterator[None]:
     """Show a transient spinner while the body runs (no-op when not a TTY)."""
     with console.status(label, spinner="dots"):
         yield
-
-
-def response_panel(text: str, title: str = "Agent") -> None:
-    console.print(
-        Panel(
-            Markdown(text or "_(no response)_"),
-            title=title,
-            title_align="left",
-            border_style="cyan",
-        )
-    )
 
 
 def _ts(value: Any) -> str:

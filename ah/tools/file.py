@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _BASE_DIR = Path(config.get("agent_harness_home") or os.getcwd()).resolve()
 
 
-def _resolve_path(path: str) -> Path:
+def resolve_path(path: str) -> Path:
     """Resolve *path* relative to the base directory and verify it stays inside.
 
     Returns the resolved :class:`~pathlib.Path` on success.  Raises
@@ -57,7 +57,7 @@ async def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
     if limit < 1:
         raise ToolError(f"limit must be >= 1, got {limit}")
     try:
-        file_path = _resolve_path(path)
+        file_path = resolve_path(path)
     except ValueError as e:
         raise ToolError(f"{e}") from e
 
@@ -93,7 +93,7 @@ async def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
 async def write_file(path: str, content: str) -> str:
     """Write content to a file."""
     try:
-        file_path = _resolve_path(path)
+        file_path = resolve_path(path)
     except ValueError as e:
         raise ToolError(f"{e}") from e
 
@@ -128,7 +128,7 @@ async def write_file(path: str, content: str) -> str:
 async def list_files(path: str = ".", pattern: str = "*") -> str:
     """List files in a directory."""
     try:
-        dir_path = _resolve_path(path)
+        dir_path = resolve_path(path)
     except ValueError as e:
         raise ToolError(f"{e}") from e
 

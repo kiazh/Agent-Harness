@@ -277,10 +277,10 @@ def export(
         try:
             session = await _resolve_session(session_id)
             text = await services.export_markdown(session)
-            from ah.tools.file import _resolve_path
+            from ah.tools.file import resolve_path
 
             try:
-                output_path = _resolve_path(filename)
+                output_path = resolve_path(filename)
             except ValueError as e:
                 output.error(f"Path traversal blocked: {e}")
                 raise typer.Exit(1) from None
