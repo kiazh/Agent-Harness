@@ -39,6 +39,12 @@ DEFAULTS: dict[str, Any] = {
     "temperature": 0.7,
     "max_tokens": 4096,
     "rate_limit_calls_per_minute": 10,
+    # Zero disables a budget. Limits include requests that fail after reaching
+    # the provider; unknown token usage retains its pre-call reservation.
+    "usage_session_token_limit": 0,
+    "usage_session_request_limit": 0,
+    "usage_agent_token_limit": 0,
+    "usage_agent_request_limit": 0,
     "memory_enabled": True,
     "rag_enabled": True,
     "streaming": True,
@@ -94,6 +100,10 @@ class Config:
     temperature: float = 0.7
     max_tokens: int = 4096
     rate_limit_calls_per_minute: int = 10
+    usage_session_token_limit: int = 0
+    usage_session_request_limit: int = 0
+    usage_agent_token_limit: int = 0
+    usage_agent_request_limit: int = 0
     memory_enabled: bool = True
     rag_enabled: bool = True
     streaming: bool = True

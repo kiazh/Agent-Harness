@@ -207,3 +207,25 @@ ALTER TABLE jobs ADD CONSTRAINT jobs_kind_check CHECK (kind IN ('heartbeat', 'in
 -- The runner polls for due, enabled jobs by next_run_at.
 CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(next_run_at) WHERE enabled;
 CREATE INDEX IF NOT EXISTS idx_jobs_session ON jobs(session_id);
+
+-- ─── LLM usage (Phase 7: durable accounting and budgets) ────────────────────
+
+-- Keep usage after a session is deleted so agent-wide budgets and operational
+-- totals do not silently reset. No prompts, completions, or credentials live
+-- in this table.
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL,
+    agent_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('reserved', 'complete', 'error')),
+    reserved_tokens INT NOT NULL CHECK (reserved_tokens >= 0),
+    accounted_tokens INT NOT NULL CHECK (accounted_tokens >= 0),
+    prompt_tokens INT CHECK (prompt_tokens >= 0),
+    completion_tokens INT CHECK (completion_tokens >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_session ON llm_usage(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_agent ON llm_usage(agent_id, created_at DESC);

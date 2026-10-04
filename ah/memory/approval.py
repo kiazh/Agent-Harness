@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -70,7 +70,7 @@ class PendingMemory:
     session_id: uuid.UUID | None = None
     redactions: list[str] = field(default_factory=list)
     status: ApprovalStatus = ApprovalStatus.PENDING
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     reviewed_at: datetime | None = None
     review_note: str = ""
 
@@ -143,7 +143,7 @@ class MemoryApprovalGate:
 
         # Step 2: Create pending entry
         pending_id = uuid.uuid4()
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         await db.execute(
             """
@@ -240,7 +240,7 @@ class MemoryApprovalGate:
         )
 
         # Step 3: Update pending record
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         await db.execute(
             """
             UPDATE pending_memories
@@ -292,7 +292,7 @@ class MemoryApprovalGate:
             logger.warning("Pending memory %s already %s", pending_id, row["status"])
             return False
 
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         await db.execute(
             """
             UPDATE pending_memories

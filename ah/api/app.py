@@ -174,7 +174,8 @@ def create_app() -> FastAPI:
             schema_ready = await db.fetchval(
                 "SELECT to_regclass('sessions') IS NOT NULL "
                 "AND to_regclass('jobs') IS NOT NULL "
-                "AND to_regclass('audit_events') IS NOT NULL"
+                "AND to_regclass('audit_events') IS NOT NULL "
+                "AND to_regclass('llm_usage') IS NOT NULL"
             )
         except Exception:
             raise HTTPException(503, "database unavailable") from None
@@ -184,9 +185,24 @@ def create_app() -> FastAPI:
 
     @app.get("/metrics", dependencies=[Depends(require_api_key)])
     async def prometheus_metrics() -> PlainTextResponse:
+        from ah.core.usage import usage_store
         from ah.observability.metrics import prometheus_text
 
-        return PlainTextResponse(prometheus_text(), media_type="text/plain; version=0.0.4")
+        body = prometheus_text()
+        if db.connected:
+            totals = await usage_store.totals()
+            body += (
+                "# HELP ah_llm_usage_requests_total Durable LLM call attempts.\n"
+                "# TYPE ah_llm_usage_requests_total counter\n"
+                f"ah_llm_usage_requests_total {totals['requests']}\n"
+                "# HELP ah_llm_usage_accounted_tokens_total Known tokens or conservative reservations.\n"
+                "# TYPE ah_llm_usage_accounted_tokens_total counter\n"
+                f"ah_llm_usage_accounted_tokens_total {totals['accounted_tokens']}\n"
+                "# HELP ah_llm_usage_unknown_calls Calls without provider token usage.\n"
+                "# TYPE ah_llm_usage_unknown_calls gauge\n"
+                f"ah_llm_usage_unknown_calls {totals['unknown_calls']}\n"
+            )
+        return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
 
     # ── sessions ────────────────────────────────────────────────────────────
 
@@ -223,6 +239,15 @@ def create_app() -> FastAPI:
             "session": session_to_dict(session),
             "history": history_from_chunks(chunks),
         }
+
+    @app.get("/api/v1/sessions/{session_id}/usage", dependencies=[Depends(require_api_key)])
+    async def get_session_usage(session_id: uuid.UUID, agent: str | None = None) -> dict[str, Any]:
+        from ah.core.usage import usage_store
+
+        session = await session_manager.get(session_id)
+        if session is None:
+            raise HTTPException(404, "session not found")
+        return await usage_store.summary(session_id, agent or session.agent_id)
 
     @app.patch("/api/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])
     async def update_session(session_id: uuid.UUID, req: UpdateSessionRequest) -> dict[str, Any]:

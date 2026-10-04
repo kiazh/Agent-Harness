@@ -263,6 +263,44 @@ def sessions_search(
     _run(_search())
 
 
+@app.command(name="usage")
+def usage_command(
+    session_id: str | None = typer.Option(
+        None, "--session", "-s", help="Session ID (default: last active)"
+    ),
+    agent: str | None = typer.Option(None, "--agent", help="Agent ID (default: session agent)"),
+):
+    """Show durable LLM usage and remaining budgets."""
+
+    async def _usage():
+        from ah.core.usage import usage_store
+
+        await db.connect()
+        try:
+            session = await _resolve_session(session_id)
+            result = await usage_store.summary(session.id, agent or session.agent_id)
+            table = Table(title=f"Usage for {session.id}")
+            table.add_column("Scope")
+            table.add_column("Calls", justify="right")
+            table.add_column("Accounted tokens", justify="right")
+            table.add_column("Unknown calls", justify="right")
+            table.add_column("Calls remaining", justify="right")
+            table.add_column("Tokens remaining", justify="right")
+            for scope in ("session", "agent"):
+                item = result[scope]
+                table.add_row(
+                    scope, str(item["requests"]), str(item["accountedTokens"]),
+                    str(item["unknownCalls"]),
+                    str(item["requestsRemaining"]) if item["requestsRemaining"] is not None else "unlimited",
+                    str(item["tokensRemaining"]) if item["tokensRemaining"] is not None else "unlimited",
+                )
+            console.print(table)
+        finally:
+            await db.close()
+
+    _run(_usage())
+
+
 @app.command()
 def export(
     filename: str = typer.Argument(..., help="Output markdown filename"),

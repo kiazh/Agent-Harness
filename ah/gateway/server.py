@@ -111,6 +111,7 @@ class Gateway:
             "session.create": self._session_create,
             "session.list": self._session_list,
             "session.resume": self._session_resume,
+            "usage.get": self._usage_get,
             "prompt.submit": self._prompt_submit,
             "prompt.cancel": self._prompt_cancel,
             "config.set": self._config_set,
@@ -286,6 +287,16 @@ class Gateway:
         session = await self.get_session(params)
         chunks = await context_manager.get_chunks(session.id, limit=200)
         return {"session": session_to_dict(session), "history": history_from_chunks(chunks)}
+
+    async def _usage_get(self, params: dict[str, Any]) -> dict[str, Any]:
+        self.require_db()
+        session = await self.get_session(params)
+        agent = params.get("agent") or session.agent_id
+        if not isinstance(agent, str) or not 1 <= len(agent) <= 100:
+            raise RpcError(INVALID_PARAMS, "agent must be a non-empty string up to 100 characters")
+        from ah.core.usage import usage_store
+
+        return await usage_store.summary(session.id, agent)
 
     async def _prompt_submit(self, params: dict[str, Any]) -> dict[str, Any]:
         self.require_db()

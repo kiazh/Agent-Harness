@@ -97,7 +97,7 @@ class MemoryConsolidator:
         conversation = self._format_conversation(chunks)
 
         # Step 2: Extract candidate memories via LLM
-        candidates = await self._extract_memories(conversation)
+        candidates = await self._extract_memories(conversation, session_id, agent_id)
         if not candidates:
             logger.debug("No memories extracted from session %s", session_id)
             return []
@@ -204,7 +204,7 @@ class MemoryConsolidator:
 
         Useful for testing or direct memory injection.
         """
-        candidates = await self._extract_memories(text)
+        candidates = await self._extract_memories(text, session_id, agent_id)
         if not candidates:
             return []
 
@@ -258,7 +258,10 @@ class MemoryConsolidator:
 
         return "\n".join(lines)
 
-    async def _extract_memories(self, conversation: str) -> list[MemoryEntry]:
+    async def _extract_memories(
+        self, conversation: str, session_id: uuid.UUID | None = None,
+        agent_id: str = "harness",
+    ) -> list[MemoryEntry]:
         """Use LLM to extract candidate memories from conversation.
 
         Returns list of MemoryEntry objects (not yet persisted).
@@ -268,7 +271,10 @@ class MemoryConsolidator:
             return []
 
         try:
-            response = await self.llm.complete(
+            from ah.core.usage import usage_store
+
+            response = await usage_store.complete_call(
+                self.llm, session_id, agent_id,
                 messages=[
                     {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
                     {"role": "user", "content": conversation},

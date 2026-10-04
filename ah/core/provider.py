@@ -368,6 +368,7 @@ class OpenRouterProvider(LLMProvider):
         content_parts: list[str] = []
         tool_calls_by_index: dict[int, dict[str, str]] = {}
         stream_usage: dict[str, int] = {}
+        resolved_model = model
 
         try:
             async with self.client.stream("POST", "/chat/completions", json=payload) as resp:
@@ -382,6 +383,7 @@ class OpenRouterProvider(LLMProvider):
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    resolved_model = chunk.get("model") or resolved_model
                     # The usage chunk arrives with an empty choices list.
                     if chunk.get("usage"):
                         stream_usage = chunk["usage"]
@@ -444,7 +446,7 @@ class OpenRouterProvider(LLMProvider):
             type="done",
             response=LLMResponse(
                 content=full_content,
-                model=model,
+                model=resolved_model,
                 usage=usage,
                 tool_calls=tool_calls,
             ),

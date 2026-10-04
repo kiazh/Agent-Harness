@@ -1,0 +1,98 @@
+"""Session-related feature handlers."""
+from __future__ import annotations
+
+import uuid
+from typing import TYPE_CHECKING, Any
+
+from ah import services
+from ah.gateway.errors import INVALID_PARAMS, TURN_IN_PROGRESS, RpcError
+from ah.gateway.serializers import session_to_dict
+from ah.core.context import context_manager
+from ah.core.session import session_manager
+
+if TYPE_CHECKING:
+    from ah.gateway.server import Gateway
+
+from ah.gateway.features._common import _int, _str
+
+
+async def session_fork(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    gw.require_db()
+    source = await gw.get_session(params)
+    title = _str(params, "title", required=False, max_len=80) or None
+    return {"session": session_to_dict(await session_manager.fork(source.id, title=title))}
+
+
+async def session_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    gw.require_db()
+    session = await gw.get_session(params)
+    if gw.turn_running(session.id):
+        raise RpcError(TURN_IN_PROGRESS, "stop the running reply before deleting this session")
+    return {"deleted": await session_manager.delete(session.id)}
+
+
+async def session_rename(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    gw.require_db()
+    session = await gw.get_session(params)
+    await session_manager.set_title(session.id, _str(params, "title", max_len=80))
+    return {"session": session_to_dict(await session_manager.get(session.id))}
+
+
+async def session_set_goal(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    gw.require_db()
+    session = await gw.get_session(params)
+    await session_manager.set_goal(session.id, _str(params, "goal", max_len=2000))
+    return {"goal": (await session_manager.get(session.id)).goal}
+
+
+async def session_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    gw.require_db()
+    found = await session_manager.search(
+        _str(params, "query", max_len=200), limit=_int(params, "limit", 20, 1, 200)
+    )
+    return {"sessions": [session_to_dict(s) for s in found]}
+
+
+async def session_export(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    gw.require_db()
+    return {"markdown": await services.export_markdown(await gw.get_session(params))}
+
+
+async def context_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    gw.require_db()
+    session = await gw.get_session(params)
+    chunks = await context_manager.get_chunks(session.id, limit=_int(params, "limit", 20, 1, 1000))
+    return {
+        "chunks": [
+            {
+                "type": c.chunk_type,
+                "agent": c.agent_id,
+                "tokens": c.token_count,
+                "createdAt": c.created_at.isoformat() if c.created_at else None,
+                "preview": c.content[:200] if hasattr(c, "content") else "",
+            }
+            for c in chunks
+        ],
+        "totalTokens": await context_manager.get_token_usage(session.id),
+        "budget": session.context_budget,
+        "goal": session.goal,
+    }
+
+
+async def context_compress(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    gw.require_db()
+    session = await gw.get_session(params)
+    if gw.turn_running(session.id):
+        raise RpcError(TURN_IN_PROGRESS, "stop the running reply before compressing")
+    result = await services.compress_session(session, model=gw.model, provider=gw.provider)
+    if result is None:
+        return {"compressed": False}
+    return {
+        "compressed": True,
+        "originalCount": result.original_count,
+        "newCount": len(result.compressed_chunks),
+        "originalTokens": result.original_tokens,
+        "compressedTokens": result.compressed_tokens,
+        "ratio": round(result.compression_ratio, 3),
+        "method": result.method,
+    }

@@ -131,6 +131,19 @@ class TestSessions:
         resp = await client.get("/sessions/not-a-uuid", headers=auth_headers)
         assert resp.status_code == 400
 
+    async def test_usage_requires_auth_and_returns_summary(self, client, auth_headers):
+        mock_session = make_session(agent_id="harness")
+        path = f"/api/v1/sessions/{mock_session.id}/usage"
+        assert (await client.get(path)).status_code == 401
+        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_session
+            with patch("ah.core.usage.usage_store.summary", new_callable=AsyncMock) as summary:
+                summary.return_value = {"sessionId": str(mock_session.id), "session": {"requests": 2}}
+                resp = await client.get(path, headers=auth_headers)
+                assert resp.status_code == 200
+                assert resp.json()["session"]["requests"] == 2
+                summary.assert_awaited_once_with(mock_session.id, "harness")
+
 
 # ─── prompt SSE ──────────────────────────────────────────────────────────────
 

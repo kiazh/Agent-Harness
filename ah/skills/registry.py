@@ -7,7 +7,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +43,7 @@ class Skill:
     # Provenance fields
     source: str = ""  # Where the skill came from (file path, URL, "builtin", etc.)
     source_type: str = "local"  # "local", "url", "builtin", "hub", "learned"
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -188,14 +188,14 @@ class SkillRegistry:
         skill = self._skills.get(name)
         if skill:
             skill.usage_count += 1
-            skill.last_activity_at = datetime.utcnow()
+            skill.last_activity_at = datetime.now(UTC)
 
     def record_view(self, name: str) -> None:
         """Record that a skill was viewed (listed or inspected)."""
         skill = self._skills.get(name)
         if skill:
             skill.view_count += 1
-            skill.last_activity_at = datetime.utcnow()
+            skill.last_activity_at = datetime.now(UTC)
 
     def get_telemetry(self, name: str) -> dict[str, Any] | None:
         """Get telemetry data for a skill."""
@@ -350,7 +350,7 @@ class SkillCurator:
 
     def archive_stale(self, days: int = 30) -> list[str]:
         """Archive skills that haven't been used in *days* days."""
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(UTC) - timedelta(days=days)
         archived = []
         for skill in self.registry.list_skills():
             if skill.last_activity_at is None:
@@ -365,7 +365,7 @@ class SkillCurator:
 
     def get_stale_skills(self, days: int = 30) -> list[Skill]:
         """Get list of stale skills without modifying them."""
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(UTC) - timedelta(days=days)
         stale = []
         for skill in self.registry.list_skills():
             if skill.last_activity_at is None:
@@ -455,7 +455,7 @@ class SkillHub:
             "version": skill.version,
             "author": author,
             "tags": tags or [],
-            "published_at": datetime.utcnow().isoformat(),
+            "published_at": datetime.now(UTC).isoformat(),
             "usage_count": skill.usage_count,
             "view_count": skill.view_count,
         }

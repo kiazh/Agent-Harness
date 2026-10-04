@@ -113,6 +113,15 @@ runner on startup. Jobs support interval, heartbeat, and five-field UTC cron
 expressions through `cronExpression`. Run `ah init` after upgrading to add the
 cron and audit tables/columns to an existing database.
 
+Run `ah init` after this upgrade to create the durable `llm_usage` table.
+`ah usage --session <id>` and `GET /api/v1/sessions/<id>/usage` show usage
+for a session and its agent; the gateway also exposes `usage.get`. Optional
+`AGENT_HARNESS_USAGE_{SESSION,AGENT}_{TOKEN,REQUEST}_LIMIT` values in `.env`
+set lifetime budgets (0 means unlimited). Each provider attempt counts as a
+request. Calls with missing usage or a provider error keep a conservative
+pre-call token reservation so budgets cannot be bypassed by absent metadata.
+`openrouter/free` never switches to a paid model automatically.
+
 Plugins use Python entry points and are opt-in through `AGENT_HARNESS_PLUGINS`;
 see [plugin documentation](docs/plugins.md). Audit events are written to
 PostgreSQL while the gateway or HTTP server runs. Agent and tool spans use

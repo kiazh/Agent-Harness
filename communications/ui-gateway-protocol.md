@@ -27,6 +27,7 @@ stays UI-agnostic; any future client (web, API server) can speak the same protoc
 | `session.create` | `{title?}` | `{session}` |
 | `session.list` | `{limit?}` | `{sessions: [session]}` |
 | `session.resume` | `{sessionId}` | `{session, history: [{role, content, tool?}]}` |
+| `usage.get` | `{sessionId, agent?}` | `{sessionId, agentId, session, agent}` with calls, accounted tokens, unknown calls, limits, and remaining budgets |
 | `prompt.submit` | `{sessionId, text}` | `{turnId}` — then events stream |
 | `prompt.cancel` | `{sessionId}` | `{cancelled: bool}` |
 | `config.set` | `{key, value, persist?}` | `{model, provider, key, value}` — `model`/`provider` apply to this gateway; any other non-secret setting updates config (saved to `config.yaml` when `persist`). Secrets are rejected. |

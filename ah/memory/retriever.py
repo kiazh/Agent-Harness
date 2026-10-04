@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from ah.core.provider import LLMProvider
+from ah.core.usage import usage_store
 from ah.db.connection import db
 from ah.memory.models import MemoryEntry, RetrievedMemory
 from ah.memory.store import MemoryStore, memory_store
@@ -58,6 +59,7 @@ class MemoryRetriever:
         category: str | None = None,
         date_range: tuple[datetime, datetime] | None = None,
         query_embedding: list[float] | None = None,
+        session_id: uuid.UUID | None = None,
     ) -> list[RetrievedMemory]:
         """Retrieve relevant memories for a query.
 
@@ -106,7 +108,7 @@ class MemoryRetriever:
 
         # Step 5: Re-rank
         if self.rerank and len(candidates) > 1:
-            candidates = await self._rerank(query, candidates)
+            candidates = await self._rerank(query, candidates, session_id, agent_id)
 
         # Update access stats for retrieved memories (batch)
         ids_to_update = [rm.memory.id for rm in candidates[: self.top_k]]
@@ -251,6 +253,8 @@ class MemoryRetriever:
         self,
         query: str,
         candidates: list[RetrievedMemory],
+        session_id: uuid.UUID | None = None,
+        agent_id: str | None = None,
     ) -> list[RetrievedMemory]:
         """Re-rank candidates using LLM (if available) or score-based ranking.
 
@@ -279,7 +283,8 @@ Candidates:
 Return a JSON array of indices in order of relevance (most relevant first).
 Return ONLY the JSON array, no other text."""
 
-            response = await self.llm.complete(
+            response = await usage_store.complete_call(
+                self.llm, session_id, agent_id or "harness",
                 messages=[
                     {"role": "system", "content": "You are a memory re-ranking system."},
                     {"role": "user", "content": rerank_prompt},

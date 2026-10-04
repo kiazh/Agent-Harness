@@ -15,11 +15,12 @@ from rich.console import Console
 
 from ah.core.assembler import PromptAssembler
 from ah.core.context import context_manager
-from ah.core.exceptions import SessionNotFoundError
+from ah.core.exceptions import DatabaseError, SessionNotFoundError, UsageBudgetExceededError
 from ah.core.metrics import metrics
 from ah.core.models import AgentResponse, LLMResponse, StreamEvent, ToolDefinition
 from ah.core.provider import LLMProvider, audit_log, get_provider
 from ah.core.session import Session, session_manager
+from ah.core.usage import usage_store
 from ah.memory.consolidator import MemoryConsolidator
 from ah.memory.retriever import MemoryRetriever
 from ah.memory.store import memory_store
@@ -155,6 +156,7 @@ class BaseReActAgent:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        session_id: uuid.UUID | None = None,
     ):
         """Call provider.complete() with exponential backoff retry.
 
@@ -163,10 +165,11 @@ class BaseReActAgent:
         last_exception: Exception | None = None
         for attempt in range(4):  # 1 initial + 3 retries
             try:
-                return await self.provider.complete(
-                    messages=messages,
-                    tools=tools,
+                return await usage_store.complete_call(
+                    self.provider, session_id, self.agent_id, messages, tools=tools,
                 )
+            except (UsageBudgetExceededError, DatabaseError):
+                raise
             except Exception as e:
                 last_exception = e
                 if attempt < 3:
@@ -191,6 +194,7 @@ class BaseReActAgent:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        session_id: uuid.UUID | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Call provider.stream_complete() with exponential backoff retry.
 
@@ -200,13 +204,27 @@ class BaseReActAgent:
         for attempt in range(4):  # 1 initial + 3 retries
             emitted = False
             try:
-                async for event in self.provider.stream_complete(
-                    messages=messages,
-                    tools=tools,
-                ):
-                    emitted = True
-                    yield event
+                reservation = await self._reserve_usage(session_id, messages, tools)
+                usage = None
+                actual_model = None
+                completed = False
+                try:
+                    async for event in self.provider.stream_complete(
+                        messages=messages, tools=tools,
+                    ):
+                        emitted = True
+                        if event.type == "done" and event.response is not None:
+                            usage = event.response.usage
+                            actual_model = event.response.model
+                            completed = True
+                        yield event
+                finally:
+                    await self._finish_usage(
+                        reservation, usage, failed=not completed, model=actual_model,
+                    )
                 return  # Success — exit retry loop
+            except (UsageBudgetExceededError, DatabaseError):
+                raise
             except Exception as e:
                 last_exception = e
                 # Once a delta reached the caller, replaying the request would
@@ -230,6 +248,32 @@ class BaseReActAgent:
                         e,
                     )
         raise last_exception  # type: ignore[misc]
+
+    async def _reserve_usage(
+        self, session_id: uuid.UUID | None, messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> uuid.UUID | None:
+        if session_id is None:
+            return None
+        model = str(getattr(self.provider, "model", "unknown"))
+        provider_name = type(self.provider).__name__.removesuffix("Provider").lower()
+        try:
+            return await usage_store.reserve(
+                session_id, self.agent_id, provider_name, model, messages, tools, 4096,
+            )
+        except UsageBudgetExceededError:
+            raise
+        except Exception as e:
+            raise DatabaseError("usage accounting unavailable") from e
+
+    async def _finish_usage(
+        self, reservation: uuid.UUID | None, usage: dict[str, Any] | None = None,
+        *, failed: bool = False, model: str | None = None,
+    ) -> None:
+        try:
+            await usage_store.finish(reservation, usage, failed=failed, model=model)
+        except Exception as e:
+            raise DatabaseError("usage accounting unavailable") from e
 
     async def _prepare_context(
         self,
@@ -283,6 +327,7 @@ class BaseReActAgent:
                 retrieved_memories = await self.memory_retriever.retrieve(
                     query=user_message,
                     agent_id=self.agent_id,
+                    session_id=session_id,
                 )
                 # Convert retrieved memories to ContextChunk-like tuples for assembler
                 from ah.core.models import ContextChunk
@@ -593,6 +638,13 @@ class ReActAgent(BaseReActAgent):
                 response = await self._call_llm_with_retry(
                     messages=messages,
                     tools=tool_defs,
+                    session_id=session_id,
+                )
+            except UsageBudgetExceededError as e:
+                audit_log("agent_run_budget_exceeded", session_id=str(session_id), error=str(e))
+                return AgentResponse(
+                    content=str(e), tool_calls=tool_calls_made,
+                    tokens_used=total_tokens, iterations=iteration,
                 )
             except Exception as e:
                 logger.error("LLM call ultimately failed: %s", e)
@@ -729,6 +781,7 @@ class ReActAgent(BaseReActAgent):
                 async for event in self._stream_llm_with_retry(
                     messages=messages,
                     tools=tool_defs,
+                    session_id=session_id,
                 ):
                     if event.type == "text":
                         yield StreamEvent(type="text", content=event.content)
@@ -748,6 +801,16 @@ class ReActAgent(BaseReActAgent):
                 if final_response is None:
                     raise RuntimeError("Stream completed without a final response")
 
+            except UsageBudgetExceededError as e:
+                audit_log("agent_run_budget_exceeded", session_id=str(session_id), error=str(e))
+                yield StreamEvent(
+                    type="done",
+                    response=AgentResponse(
+                        content=str(e), tool_calls=tool_calls_made,
+                        tokens_used=total_tokens, iterations=iteration,
+                    ),
+                )
+                return
             except Exception as e:
                 logger.error("LLM stream ultimately failed: %s", e)
                 audit_log(

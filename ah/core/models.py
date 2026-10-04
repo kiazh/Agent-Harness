@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -21,8 +21,8 @@ class Session:
     model: str | None = None
     provider: str | None = None
     context_budget: int = 8000
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    last_activity: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    last_activity: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
@@ -36,7 +36,7 @@ class ContextChunk:
     payload: dict[str, Any]
     token_count: int = 0
     embedding: list[float] | None = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     accessed_at: datetime | None = None
 
 

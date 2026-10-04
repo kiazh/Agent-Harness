@@ -40,7 +40,7 @@ class MemoryEntry:
     content: str
     category: str  # 'preference', 'decision', 'fact', 'event', 'transient'
     importance: float = 0.5
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_accessed: datetime | None = None
     access_count: int = 0
     embedding: list[float] | None = None

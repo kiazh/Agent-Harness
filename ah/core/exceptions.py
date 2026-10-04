@@ -36,6 +36,10 @@ class ContextBudgetExceededError(AgentHarnessError, RuntimeError):
     """Raised when the context budget is exceeded."""
 
 
+class UsageBudgetExceededError(AgentHarnessError, RuntimeError):
+    """Raised before an LLM call when a persistent usage budget is exhausted."""
+
+
 __all__ = [
     "AgentHarnessError",
     "ToolError",
@@ -44,4 +48,5 @@ __all__ = [
     "ValidationError",
     "SessionNotFoundError",
     "ContextBudgetExceededError",
+    "UsageBudgetExceededError",
 ]
