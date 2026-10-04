@@ -17,6 +17,8 @@ _lock = threading.Lock()
 
 def _read_file(path: str) -> str:
     source = Path(path)
+    if not source.is_file():
+        raise ValueError("secret path must be a file")
     if source.stat().st_size > 8192:
         raise ValueError("secret file is too large")
     return source.read_text(encoding="utf-8").strip()

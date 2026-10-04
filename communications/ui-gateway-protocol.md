@@ -42,6 +42,8 @@ stays UI-agnostic; any future client (web, API server) can speak the same protoc
 | `session.rename` | `{sessionId, title}` | `{session}` |
 | `session.setGoal` | `{sessionId, goal}` | `{goal}` |
 | `session.search` | `{query, limit?}` | `{sessions}` |
+| `session.recall` | `{sessionId, query, limit?}` | `{hits: [{sessionId, chunkId, title, source, preview, score, occurredAt}]}` — agent-scoped evidence search over live + archived chunks |
+| `session.recall.window` | `{sessionId, targetSessionId, chunkId}` | `{messages}` — bounded window around a recall hit (anchored by chunk UUID) |
 | `session.export` | `{sessionId}` | `{markdown}` |
 | `context.get` | `{sessionId, limit?}` | `{chunks[{type, agent, tokens, createdAt, preview}], totalTokens, budget, goal}` |
 | `context.compress` | `{sessionId}` | `{compressed: false}` or `{compressed: true, originalCount, newCount, originalTokens, compressedTokens, ratio, method}` |
@@ -49,6 +51,7 @@ stays UI-agnostic; any future client (web, API server) can speak the same protoc
 | `memory.search` | `{query, category?, limit?}` | `{results}` (memories with `score`) |
 | `memory.add` | `{content, category?, importance?, sessionId?}` | `{memory}` |
 | `memory.forget` | `{id}` | `{deleted}` |
+| `memory.share` | `{sessionId, id, recipientAgent}` | `{status}` — provenance + identity gate enforced before the recipient sees it |
 | `memory.pending` | `{limit?}` | `{pending}` |
 | `memory.approve` / `memory.reject` | `{id, note?}` | `{memory}` / `{rejected}` |
 | `memory.approveAll` / `memory.rejectAll` | `{note?}` | `{count}` |
@@ -58,15 +61,17 @@ stays UI-agnostic; any future client (web, API server) can speak the same protoc
 | `skills.learn` | `{source, name?, description?, triggers?}` | `{skill}` — source is a file, http(s) URL, or skill name |
 | `skills.delete` | `{name}` | `{deleted}` |
 | `skills.curator` | `{days?}` | health report + `unused`, `stale` |
+| `learning.list` | `{sessionId, limit?}` | `{reviews}` — post-turn skill review proposals |
+| `learning.approve` / `learning.reject` | `{sessionId, id}` | `{review}` |
 | `config.get` | `{}` | `{config, secrets}` — secret values are reported only as `true`/`false` |
 | `profile.get` / `profile.set` / `profile.list` | `{userId, ...}` | `{profile}` / `{profiles}` |
 | `status` | `{}` | `{postgres, sessions, contextChunks, memories, pendingMemories, tools, openrouterKeySet, model, provider}` |
 | `agents.list` | `{}` | `{agents: [agent]}` |
 | `agents.save` | `{name, description?, systemPrompt?, tools?, model?, provider?, maxIterations?}` | `{agent}` |
 | `agents.delete` | `{name}` | `{deleted}` |
-| `agents.run` | `{steps: [{agent, task}], mode?, sessionId?}` | `{results: [{agent, task, response, sessionId, tokens, iterations, status}]}` |
+| `agents.run` | `{steps: [{agent, task}], mode?, sessionId?}` (1–16 steps) | `{results: [{agent, task, response, sessionId, tokens, iterations, status}]}` |
 | `agents.history` | `{sessionId, limit?}` | `{messages}` |
-| `jobs.create` | `{sessionId, kind?, prompt?, intervalSeconds?, cronExpression?, name?, agent?}` | `{job}` |
+| `jobs.create` | `{sessionId, kind?, prompt?, intervalSeconds?, cronExpression?, name?, agent?, model?, provider?, noAgent?, scriptPath?}` | `{job}` — `scriptPath` requires `noAgent=true` (no LLM; script must live in `AGENT_HARNESS_SCRIPTS_DIR`) |
 | `jobs.list` | `{sessionId?, limit?}` | `{jobs}` |
 | `jobs.setEnabled` | `{id, enabled}` | `{job}` |
 | `jobs.delete` | `{id}` | `{deleted}` |

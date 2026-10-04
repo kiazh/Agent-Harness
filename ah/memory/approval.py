@@ -20,6 +20,7 @@ from enum import StrEnum
 from typing import Any
 
 from ah.core.provider import audit_log
+from ah.core.serialization import embedding_to_str, str_to_embedding
 from ah.db.connection import db
 from ah.memory.models import MemoryEntry
 from ah.memory.redaction import SecretRedactor
@@ -166,7 +167,7 @@ class MemoryApprovalGate:
             now,
             explicitly_important,
             base_strength,
-            embedding,
+            embedding_to_str(embedding) if embedding is not None else None,
         )
 
         pending = PendingMemory(
@@ -217,7 +218,7 @@ class MemoryApprovalGate:
                     """
                     SELECT id, content, category, importance, agent_id, session_id,
                            redactions, status, created_at, explicitly_important,
-                           base_strength
+                           base_strength, embedding
                     FROM pending_memories WHERE id = $1 FOR UPDATE
                     """,
                     pending_id,
@@ -230,6 +231,9 @@ class MemoryApprovalGate:
                     content=row["content"],
                     category=row["category"],
                     importance=row["importance"],
+                    embedding=str_to_embedding(row["embedding"])
+                    if row.get("embedding") is not None
+                    else None,
                     explicitly_important=row["explicitly_important"],
                     base_strength=row["base_strength"],
                     connection=conn,
@@ -361,7 +365,7 @@ class MemoryApprovalGate:
             rows = await conn.fetch(
                 """
                 SELECT id, content, category, importance, agent_id, session_id,
-                       redactions, created_at, explicitly_important, base_strength
+                       redactions, created_at, explicitly_important, base_strength, embedding
                 FROM pending_memories
                 WHERE status = $1 AND agent_id = $2
                 ORDER BY created_at ASC FOR UPDATE
@@ -373,7 +377,7 @@ class MemoryApprovalGate:
             rows = await conn.fetch(
                 """
                 SELECT id, content, category, importance, agent_id, session_id,
-                       redactions, created_at, explicitly_important, base_strength
+                       redactions, created_at, explicitly_important, base_strength, embedding
                 FROM pending_memories
                 WHERE status = $1
                 ORDER BY created_at ASC FOR UPDATE
@@ -394,6 +398,9 @@ class MemoryApprovalGate:
                 content=row["content"],
                 category=row["category"],
                 importance=row["importance"],
+                embedding=str_to_embedding(row["embedding"])
+                if row.get("embedding") is not None
+                else None,
                 explicitly_important=row["explicitly_important"],
                 base_strength=row["base_strength"],
                 connection=conn,

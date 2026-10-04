@@ -668,13 +668,8 @@ class TestDatabaseChaos:
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
-                # Should not crash
-                try:
-                    response = await agent.run(mock_session.id, "test", verbose=False)
-                    assert response is not None
-                except Exception:
-                    # Acceptable if it raises
-                    pass
+                with pytest.raises(Exception, match="Connection lost"):
+                    await agent.run(mock_session.id, "test", verbose=False)
 
     async def test_agent_handles_slow_db(self, mock_session):
         """Agent should handle slow database queries."""
@@ -727,11 +722,8 @@ class TestDatabaseChaos:
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
-                try:
-                    response = await agent.run(mock_session.id, "test", verbose=False)
-                    assert response is not None
-                except Exception:
-                    pass
+                with pytest.raises(Exception, match="Pool exhausted"):
+                    await agent.run(mock_session.id, "test", verbose=False)
 
 
 # ===========================================================================
@@ -764,14 +756,12 @@ class TestStreamingChaos:
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
                 events = []
-                try:
-                    async for event in agent.run_stream(mock_session.id, "test", verbose=False):
-                        events.append(event)
-                except Exception:
-                    pass
+                async for event in agent.run_stream(mock_session.id, "test", verbose=False):
+                    events.append(event)
 
-                # Should have received at least the partial text
-                assert len(events) >= 0
+                assert any(event.type == "text" and event.content == "partial" for event in events)
+                assert events[-1].type == "done"
+                assert "provider error" in events[-1].response.content.lower()
 
     async def test_agent_handles_stream_malformed_json(self, mock_session):
         """Agent should handle malformed JSON in stream."""

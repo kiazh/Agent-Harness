@@ -48,7 +48,9 @@ class TestEvictionArchivesBeforeDelete:
             for i in range(11)
         ]
         mock_db.fetch = AsyncMock(return_value=rows)
-        mock_db.fetchval = AsyncMock(return_value=1100)  # total tokens
+        mock_db.fetchval = AsyncMock(
+            side_effect=lambda sql, *_: 1100 if "SUM(token_count)" in sql else 11
+        )
         connection = AsyncMock()
         connection.fetchrow.return_value = {"id": uuid.uuid4()}
         connection.transaction = MagicMock()

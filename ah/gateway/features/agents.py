@@ -74,6 +74,8 @@ def _steps(params: dict[str, Any]) -> list[tuple[str, str]]:
     raw = params.get("steps")
     if not isinstance(raw, list) or not raw:
         raise RpcError(INVALID_PARAMS, "steps must be a non-empty list of {agent, task}")
+    if len(raw) > 16:
+        raise RpcError(INVALID_PARAMS, "steps must contain at most 16 delegations")
     steps: list[tuple[str, str]] = []
     for item in raw:
         if (

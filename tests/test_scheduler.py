@@ -139,7 +139,11 @@ class TestJobStore:
 
         from ah.db.connection import db
 
-        await db.execute("UPDATE jobs SET next_run_at = now() WHERE id = $1", job.id)
+        # Sort ahead of any older due jobs left by prior tests in the shared DB.
+        await db.execute(
+            "UPDATE jobs SET next_run_at = now() - interval '100 years' WHERE id = $1",
+            job.id,
+        )
         claimed = await _claim_specific(job.id)
         assert claimed is not None and claimed.status == "running"
         # Already running: our job cannot be claimed again.

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from ah.core.agent import ReActAgent
@@ -24,6 +25,8 @@ from ah.db.connection import db
 __all__ = ["DelegationResult", "Orchestrator", "AgentNotFoundError"]
 
 logger = logging.getLogger(__name__)
+delegation_depth: ContextVar[int] = ContextVar("delegation_depth", default=0)
+delegation_deadline: ContextVar[float | None] = ContextVar("delegation_deadline", default=None)
 
 
 class AgentNotFoundError(Exception):
@@ -45,6 +48,7 @@ class Orchestrator:
     """Runs tasks on named agents and records them in ``agent_messages``."""
 
     MAX_HOP_COUNT = 10  # Maximum delegation depth to prevent circular delegation
+    DELEGATION_TIMEOUT_SECONDS = 120.0
     PROMPT_VERSION = "1.0.0"  # Version of the delegation prompt template
 
     @staticmethod
@@ -136,15 +140,30 @@ class Orchestrator:
         message_id = await self._record_start(parent_session_id, from_agent, agent_name, task)
 
         agent = self._agent_factory(definition)
+        depth_token = delegation_depth.set(_hop_count)
+        loop = asyncio.get_running_loop()
+        deadline_token = delegation_deadline.set(
+            delegation_deadline.get() or loop.time() + self.DELEGATION_TIMEOUT_SECONDS
+        )
         try:
             child_task = self._build_delegation_prompt(agent_name, task, handoff)
-            response = await agent.run(child.id, child_task, verbose=False)
+            response = await asyncio.wait_for(
+                agent.run(child.id, child_task, verbose=False),
+                timeout=max(0, delegation_deadline.get() - loop.time()),
+            )
+        except asyncio.CancelledError:
+            await self._record_end(message_id, status="cancelled", response="cancelled", tokens=0)
+            raise
         except Exception as e:
             logger.exception("Delegation to %s failed", agent_name)
+            detail = "delegation timed out" if isinstance(e, TimeoutError) else str(e)
             await self._record_end(
-                message_id, status="error", response=f"{type(e).__name__}: {e}", tokens=0
+                message_id, status="error", response=f"{type(e).__name__}: {detail}", tokens=0
             )
-            return DelegationResult(agent_name, task, f"Error: {e}", child.id, 0, 0, "error")
+            return DelegationResult(agent_name, task, f"Error: {detail}", child.id, 0, 0, "error")
+        finally:
+            delegation_depth.reset(depth_token)
+            delegation_deadline.reset(deadline_token)
 
         await self._record_end(
             message_id, status="complete", response=response.content, tokens=response.tokens_used

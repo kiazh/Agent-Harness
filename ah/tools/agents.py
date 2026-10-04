@@ -51,7 +51,7 @@ async def active_agent_scope() -> tuple[str, uuid.UUID]:
 )
 async def delegate(agent: str, task: str) -> str:
     """Delegate *task* to *agent* and return its response."""
-    from ah.core.orchestrator import AgentNotFoundError, orchestrator
+    from ah.core.orchestrator import AgentNotFoundError, delegation_depth, orchestrator
 
     if not task.strip():
         raise ToolError("task must not be empty")
@@ -61,7 +61,11 @@ async def delegate(agent: str, task: str) -> str:
         from_agent, parent_session_id = await active_agent_scope()
     try:
         result = await orchestrator.delegate(
-            agent, task, from_agent=from_agent, parent_session_id=parent_session_id
+            agent,
+            task,
+            from_agent=from_agent,
+            parent_session_id=parent_session_id,
+            _hop_count=delegation_depth.get() + 1,
         )
     except AgentNotFoundError as e:
         raise ToolError(f"{e}. Use list_agents to see available agents.") from None

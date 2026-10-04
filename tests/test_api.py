@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from datetime import datetime
@@ -13,7 +14,7 @@ from httpx import ASGITransport, AsyncClient
 # Set a test API key before importing the app
 os.environ["AGENT_HARNESS_API_KEY"] = "test-key-123"
 
-from ah.api.app import create_app
+from ah.api.app import PromptRequest, create_app
 from ah.core.models import AgentResponse, Session, StreamEvent
 
 TEST_API_KEY = "test-key-123"
@@ -186,6 +187,122 @@ class TestPromptSSE:
                         if line.startswith("data: "):
                             lines.append(line[6:])
                     assert len(lines) >= 2  # At least one event + [DONE]
+
+    @pytest.mark.parametrize("stream_fails", [False, True])
+    async def test_prompt_closes_provider_after_stream(self, client, auth_headers, stream_fails):
+        session = make_session()
+
+        class FakeProvider:
+            def __init__(self):
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+        class FakeAgent:
+            def __init__(self):
+                self._learning_tasks = set()
+
+            async def run_stream(self, session_id, user_message, verbose=False):
+                if stream_fails:
+                    raise RuntimeError("stream failed")
+                yield StreamEvent(type="text", content="Hello")
+
+        provider = FakeProvider()
+        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock, return_value=session):
+            with patch("ah.core.provider.get_provider", return_value=provider):
+                with patch("ah.core.agent.ReActAgent", return_value=FakeAgent()):
+                    response = await client.post(
+                        f"/sessions/{session.id}/prompt",
+                        headers=auth_headers,
+                        json={"text": "Hi"},
+                    )
+
+        assert response.status_code == 200
+        assert "data: [DONE]" in response.text
+        assert provider.closed
+
+    async def test_prompt_waits_for_learning_review_before_closing_provider(
+        self, client, auth_headers
+    ):
+        session = make_session()
+        review_done = asyncio.Event()
+
+        class FakeProvider:
+            def __init__(self):
+                self.closed = False
+                self.closed_before_review = False
+
+            async def close(self):
+                self.closed_before_review = not review_done.is_set()
+                self.closed = True
+
+        class FakeAgent:
+            def __init__(self):
+                self._learning_tasks = set()
+
+            async def run_stream(self, session_id, user_message, verbose=False):
+                async def review():
+                    await asyncio.sleep(0)
+                    review_done.set()
+
+                self._learning_tasks.add(asyncio.create_task(review()))
+                yield StreamEvent(type="text", content="Hello")
+
+        provider = FakeProvider()
+        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock, return_value=session):
+            with patch("ah.core.provider.get_provider", return_value=provider):
+                with patch("ah.core.agent.ReActAgent", return_value=FakeAgent()):
+                    response = await client.post(
+                        f"/sessions/{session.id}/prompt",
+                        headers=auth_headers,
+                        json={"text": "Hi"},
+                    )
+
+        assert response.status_code == 200
+        assert provider.closed
+        assert not provider.closed_before_review
+
+    async def test_prompt_closes_provider_when_stream_is_cancelled_during_review(self):
+        session = make_session()
+        review_started = asyncio.Event()
+        release_review = asyncio.Event()
+
+        class FakeProvider:
+            def __init__(self):
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+        class FakeAgent:
+            def __init__(self):
+                self._learning_tasks = set()
+
+            async def run_stream(self, session_id, user_message, verbose=False):
+                async def review():
+                    review_started.set()
+                    await release_review.wait()
+
+                self._learning_tasks.add(asyncio.create_task(review()))
+                yield StreamEvent(type="text", content="Hello")
+
+        app = create_app()
+        prompt = next(route.endpoint for route in app.routes if route.path == "/sessions/{session_id}/prompt")
+        provider = FakeProvider()
+        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock, return_value=session):
+            with patch("ah.core.provider.get_provider", return_value=provider):
+                with patch("ah.core.agent.ReActAgent", return_value=FakeAgent()):
+                    response = await prompt(str(session.id), PromptRequest(text="Hi"))
+                    stream = response.body_iterator
+                    await anext(stream)
+                    next_event = asyncio.create_task(anext(stream))
+                    await review_started.wait()
+                    next_event.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await next_event
+
+        assert provider.closed
 
 
 # ─── context ─────────────────────────────────────────────────────────────────

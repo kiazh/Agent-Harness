@@ -110,7 +110,7 @@ async def test_delegate_tool_uses_isolated_session_context(monkeypatch):
 
     seen = []
 
-    async def fake_delegate(agent, task, *, from_agent, parent_session_id):
+    async def fake_delegate(agent, task, *, from_agent, parent_session_id, _hop_count):
         await asyncio.sleep(0)
         seen.append(parent_session_id)
         return SimpleNamespace(status="complete", response="done")

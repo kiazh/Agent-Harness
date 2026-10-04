@@ -7,6 +7,7 @@ import ipaddress
 import logging
 import re
 import socket
+from html.parser import HTMLParser
 from urllib.parse import urlparse
 
 import httpx
@@ -16,6 +17,39 @@ from ah.core.exceptions import ToolError, ValidationError
 from ah.tools.base import registry
 
 logger = logging.getLogger(__name__)
+
+
+class _DuckDuckGoLinks(HTMLParser):
+    """Collect result anchors regardless of attribute order or extra CSS classes."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.results: list[tuple[str, str]] = []
+        self._url: str | None = None
+        self._title: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "a" or self._url is not None:
+            return
+        values = dict(attrs)
+        if "result__a" in (values.get("class") or "").split() and values.get("href"):
+            self._url = values["href"]
+            self._title = []
+
+    def handle_data(self, data: str) -> None:
+        if self._url is not None:
+            self._title.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._url is not None:
+            self.results.append((self._url, "".join(self._title).strip()))
+            self._url = None
+
+
+def _parse_duckduckgo_results(html: str) -> list[tuple[str, str]]:
+    parser = _DuckDuckGoLinks()
+    parser.feed(html)
+    return parser.results
 
 
 def _is_safe_url(url: str) -> bool:
@@ -101,15 +135,11 @@ async def web_search(query: str, limit: int = 5) -> str:
             headers={"User-Agent": "AgentHarness/0.1"},
         )
         if resp.status_code == 200:
-            results = re.findall(
-                r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>',
-                resp.text,
-            )
+            results = _parse_duckduckgo_results(resp.text)
             if results:
                 lines = [f"Search results for '{query}':"]
                 for url, title in results[:limit]:
-                    title_clean = re.sub(r"<[^>]+>", "", title)
-                    lines.append(f"\n  {title_clean}")
+                    lines.append(f"\n  {title}")
                     lines.append(f"  {url}")
                 return "\n".join(lines)
     except httpx.TimeoutException:

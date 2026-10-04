@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import subprocess
 import sys
 import uuid
 from datetime import UTC, datetime
@@ -438,11 +437,11 @@ async def test_docker_terminal_isolated_command_and_path_check(monkeypatch, tmp_
     monkeypatch.setenv("AGENT_HARNESS_TERMINAL_SANDBOX", "docker")
     seen = []
 
-    def fake_run(args, **kwargs):
+    def fake_run(args, timeout, cwd):
         seen.append(args)
-        return subprocess.CompletedProcess(args, 0, stdout="ok", stderr="")
+        return "ok"
 
-    monkeypatch.setattr(terminal_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(terminal_module, "_run_bounded", fake_run)
     assert await terminal_module.terminal("git status", workdir=str(workdir)) == "ok"
     args = seen[0]
     assert args[:2] == ["docker", "run"]

@@ -74,7 +74,6 @@ class FileLoader:
             ".makefile",
             ".cmake",
             ".log",
-            ".env",
         }
     )
 
@@ -122,9 +121,7 @@ class FileLoader:
         elif ext in self.TEXT_EXTENSIONS:
             return self._load_text(file_path)
         else:
-            # Try to load as text anyway
-            logger.warning("Unknown extension '%s', trying to load as text: %s", ext, path)
-            return self._load_text(file_path)
+            raise ValidationError(f"Unsupported document extension: {ext or '(none)'}")
 
     def load_directory(
         self,
@@ -221,4 +218,14 @@ class FileLoader:
             raise ValidationError(
                 f"Path '{path}' escapes the allowed base directory '{self._base_dir}'"
             )
+        parts = (part.lower() for part in candidate.relative_to(self._base_dir).parts)
+        private_dirs = {".git", ".aws", ".ssh", ".agent-harness", "__pycache__"}
+        private_files = {".env", ".env.local", ".npmrc", ".pypirc", "id_rsa", "id_ed25519"}
+        if any(
+            part in private_dirs
+            or part in private_files
+            or (part.startswith(".env.") and part != ".env.example")
+            for part in parts
+        ):
+            raise ValidationError(f"Path '{path}' is private")
         return candidate

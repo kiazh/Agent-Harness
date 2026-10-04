@@ -181,6 +181,21 @@ test("cancel() sets running=false immediately, before the completion event arriv
 	await app.exit();
 });
 
+test("cancelled turn stays tracked until completion before another prompt is submitted", async () => {
+	const { app, client } = makeApp(SESSION_A);
+	client.responses.set("prompt.cancel", {});
+	await app.start();
+	const prompt = (app as unknown as { prompt: (text: string) => Promise<void> }).prompt.bind(app);
+	await prompt("first");
+	(app as unknown as { cancel: () => void }).cancel();
+	await prompt("too soon");
+	assert.equal(client.requests.filter((item) => item.method === "prompt.submit").length, 1);
+	client.emit(ev({ type: "message.complete", text: "", tokens: 0, iterations: 0, toolCalls: 0, cancelled: true }));
+	await prompt("after completion");
+	assert.equal(client.requests.filter((item) => item.method === "prompt.submit").length, 2);
+	await app.exit();
+});
+
 test("message.complete for a non-current session is still processed (in-flight turn tracking)", async () => {
 	const { app, tui, client } = makeApp(SESSION_A);
 	await app.start();

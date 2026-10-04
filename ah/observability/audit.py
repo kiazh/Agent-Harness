@@ -33,16 +33,25 @@ class AuditPersistence:
         except asyncio.QueueFull:
             logger.error("Audit event queue is full; event was not persisted")
 
-    async def stop(self) -> None:
+    async def stop(self, *, timeout: float = 5.0) -> None:
         if self._owners == 0:
             return
         self._owners -= 1
         if self._owners > 0 or self._task is None:
             return
-        await self._queue.put(None)
-        await self._task
-        self._task = None
-        self._queue = None
+        task = self._task
+        queue = self._queue
+        try:
+            async with asyncio.timeout(timeout):
+                await queue.put(None)
+                await asyncio.shield(task)
+        except TimeoutError:
+            logger.warning("Audit writer did not drain before shutdown; cancelling it")
+            task.cancel()
+            await asyncio.wait({task}, timeout=0.1)
+        finally:
+            self._task = None
+            self._queue = None
 
     async def _run(self) -> None:
         while True:

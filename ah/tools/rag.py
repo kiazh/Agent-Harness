@@ -10,6 +10,7 @@ from typing import Any
 from ah.core.exceptions import ToolError, ValidationError
 from ah.core.provider import audit_log
 from ah.rag.pipeline import RAGPipeline
+from ah.tools.agents import active_agent_scope
 from ah.tools.base import registry
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,10 @@ async def index_document(
     except ValueError:
         raise ValidationError(f"Invalid session_id '{session_id}'") from None
 
+    _, owned_session = await active_agent_scope()
+    if sid != owned_session:
+        raise ToolError("document session does not belong to the active agent session")
+
     pipeline = await get_rag_pipeline()
 
     try:
@@ -118,6 +123,10 @@ async def search_documents(
         sid = uuid.UUID(session_id)
     except ValueError:
         raise ValidationError(f"Invalid session_id '{session_id}'") from None
+
+    _, owned_session = await active_agent_scope()
+    if sid != owned_session:
+        raise ToolError("document session does not belong to the active agent session")
 
     pipeline = await get_rag_pipeline()
 

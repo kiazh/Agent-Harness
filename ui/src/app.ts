@@ -241,6 +241,11 @@ export class App implements FeatureHost {
 			return;
 		}
 		const sessionId = this.current.id;
+		if (this.inFlight.has(sessionId)) {
+			this.transcript.addNotice("The previous turn is still finishing. Try again shortly.", "warning");
+			this.tui.requestRender();
+			return;
+		}
 		this.transcript.addUser(text);
 		this.setRunning(true);
 		this.inFlight.add(sessionId);

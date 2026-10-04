@@ -178,7 +178,8 @@ sandbox, run `docker build -f Dockerfile.sandbox -t agent-harness-tool-sandbox:l
 and set `AGENT_HARNESS_TERMINAL_SANDBOX=docker`. This mode requires Docker on
 the host and is not enabled by the Compose app. `local` is an explicit trusted
 development mode because command allowlists cannot contain Git aliases or
-test runners. Secrets can come from environment
+test runners. Terminal output is capped at 64,000 characters; commands that
+exceed the cap are stopped. Secrets can come from environment
 variables, `*_FILE` mounted secrets, HashiCorp Vault KV
 (`AGENT_HARNESS_SECRET_BACKEND=vault`, `AGENT_HARNESS_VAULT_ADDR`,
 `AGENT_HARNESS_VAULT_PATH`, and a Vault token), or AWS Secrets Manager
@@ -232,6 +233,9 @@ agent-harness/
 │   │   ├── context.py       # ContextManager (CRUD, batch insert, embedding search, archive)
 │   │   ├── cron.py          # Five-field UTC cron parser
 │   │   ├── exceptions.py    # Custom exception hierarchy
+│   │   ├── job_scripts.py   # User-managed scripts for script-only jobs (AGENT_HARNESS_SCRIPTS_DIR)
+│   │   ├── session_recall.py # Agent-scoped transcript evidence discovery
+│   │   ├── text_search.py   # Shared bounded OR-tsquery builder
 │   │   ├── metrics.py       # MetricsCollector (latency, counters, errors, tokens)
 │   │   ├── models.py        # Domain models (Session, ContextChunk, LLMResponse, etc.)
 │   │   ├── orchestrator.py  # Sequential/parallel delegation, agent_messages
@@ -289,6 +293,7 @@ agent-harness/
 │       ├── memory.py        # remember, recall
 │       ├── rag.py           # index_document, search_documents
 │       ├── agents.py        # delegate, list_agents
+│       ├── session_recall.py # session_recall, session_recall_window
 │       ├── registry.py      # Re-export for backward compat
 │       └── terminal.py      # terminal (explicit sandbox opt-in)
 ├── ui/                     # TypeScript terminal UI (pi-tui): src/ app, gateway client, widgets; test/

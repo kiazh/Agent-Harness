@@ -269,6 +269,40 @@ class PersonaMemoryStore:
         )
         return [self._row_to_persona(row) for row in rows]
 
+    async def search_persona_for_facts(
+        self,
+        fact_ids: list[uuid.UUID],
+        persona_id: str | None = None,
+        limit_per_fact: int = 10,
+    ) -> list[PersonaMemory]:
+        """Fetch up to ``limit_per_fact`` interpretations for each fact in one query."""
+        if not fact_ids:
+            return []
+        rows = await db.fetch(
+            """
+            WITH ranked AS (
+                SELECT id, fact_id, persona_id, interpretation,
+                       emotional_valence, emotional_arousal, confidence,
+                       created_at, updated_at,
+                       row_number() OVER (
+                           PARTITION BY fact_id ORDER BY confidence DESC, created_at DESC
+                       ) AS row_num
+                FROM persona_memories
+                WHERE fact_id = ANY($1::uuid[])
+                  AND ($2::text IS NULL OR persona_id = $2)
+            )
+            SELECT id, fact_id, persona_id, interpretation,
+                   emotional_valence, emotional_arousal, confidence,
+                   created_at, updated_at
+            FROM ranked WHERE row_num <= $3
+            ORDER BY fact_id, row_num
+            """,
+            fact_ids,
+            persona_id,
+            limit_per_fact,
+        )
+        return [self._row_to_persona(row) for row in rows]
+
     async def update_persona(
         self,
         persona_id: uuid.UUID,

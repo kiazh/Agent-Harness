@@ -86,6 +86,8 @@ Be concise. Don't over-explain. Get things done."""
 
 # Maximum token budget for a single agent run (fallback, session.context_budget takes precedence)
 MAX_TOKEN_BUDGET = 50_000
+MAX_PENDING_LEARNING_REVIEWS = 16
+_pending_learning_reviews: set[asyncio.Task] = set()
 
 
 class BaseReActAgent:
@@ -635,9 +637,14 @@ class BaseReActAgent:
         """Review successful turns in the background when explicitly enabled."""
         if not config.get("learning_review_enabled"):
             return
+        if len(_pending_learning_reviews) >= MAX_PENDING_LEARNING_REVIEWS:
+            logger.warning("Skipping learning review: process-wide review limit reached")
+            return
         task = asyncio.create_task(self._review_learning(session_id, user_message, response))
         self._learning_tasks.add(task)
+        _pending_learning_reviews.add(task)
         task.add_done_callback(self._learning_tasks.discard)
+        task.add_done_callback(_pending_learning_reviews.discard)
 
     async def _review_learning(
         self, session_id: uuid.UUID, user_message: str, response: AgentResponse

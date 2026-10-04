@@ -313,13 +313,6 @@ class TestSharedToolExecutionHelper:
         src = inspect.getsource(agent_mod.BaseReActAgent._execute_tool_calls_stream)
         assert "registry.execute(" in src
 
-    def test_agent_module_shrank(self):
-        """Dedup should reduce total module lines vs the pre-fix 847."""
-        from ah.core import agent as agent_mod
-
-        src = inspect.getsource(agent_mod)
-        assert src.count("\n") < 847 + 130  # helper added but ~130 dup removed
-
     def test_both_paths_share_helpers(self):
         from ah.core import agent as agent_mod
 

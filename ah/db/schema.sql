@@ -56,6 +56,9 @@ ALTER TABLE context_chunks ADD CONSTRAINT context_chunks_chunk_type_check CHECK 
 CREATE INDEX IF NOT EXISTS idx_context_chunks_session_type_created ON context_chunks(session_id, chunk_type, created_at DESC);
 -- Keep the simple session+created index for queries without chunk_type filter
 CREATE INDEX IF NOT EXISTS idx_context_chunks_session ON context_chunks(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_context_chunks_session_eviction
+    ON context_chunks(session_id,
+        (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz)), id);
 CREATE INDEX IF NOT EXISTS idx_context_chunks_embedding ON context_chunks
     USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
@@ -277,6 +280,8 @@ CREATE TABLE IF NOT EXISTS persona_memories (
 
 CREATE INDEX IF NOT EXISTS idx_persona_memories_fact ON persona_memories(fact_id);
 CREATE INDEX IF NOT EXISTS idx_persona_memories_persona ON persona_memories(persona_id);
+CREATE INDEX IF NOT EXISTS idx_persona_memories_fact_persona_rank
+    ON persona_memories(fact_id, persona_id, confidence DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_persona_memories_valence ON persona_memories(emotional_valence);
 
 -- ─── LLM usage (Phase 7: durable accounting and budgets) ────────────────────

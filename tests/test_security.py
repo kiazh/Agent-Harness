@@ -84,11 +84,15 @@ class TestLearnSSRFAndPathTraversal:
 
     def test_learn_command_validates_url(self, tmp_path):
         """ah learn: URL source should be validated."""
-        # The learn command imports _is_safe_url from builtins
-        # This test verifies the import works
-        from ah.tools.builtins import _is_safe_url
+        from ah.services import ServiceError, learn_skill
 
-        assert callable(_is_safe_url)
+        with (
+            patch("ah.skills.registry.skill_registry.load_all"),
+            patch("httpx.get") as fetch,
+            pytest.raises(ServiceError, match="URL rejected"),
+        ):
+            learn_skill("http://127.0.0.1/private")
+        fetch.assert_not_called()
 
 
 # ===========================================================================
@@ -220,10 +224,11 @@ class TestNoExposedDatabasePort:
 
     def test_no_port_mapping_in_compose(self):
         """docker-compose.yml should not expose PostgreSQL port."""
+        import yaml
+
         compose_path = Path(__file__).parent.parent / "docker-compose.yml"
-        content = compose_path.read_text()
-        # Should not have "5432:5432" port mapping
-        assert "5432:5432" not in content
+        services = yaml.safe_load(compose_path.read_text(encoding="utf-8"))["services"]
+        assert not services["db"].get("ports")
 
 
 # ===========================================================================

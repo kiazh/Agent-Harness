@@ -7,6 +7,7 @@ import logging
 import os
 import shlex
 import subprocess
+import threading
 from pathlib import Path
 
 from ah.core.config import config
@@ -14,6 +15,7 @@ from ah.core.exceptions import ToolError, ValidationError
 from ah.tools.base import registry
 
 logger = logging.getLogger(__name__)
+MAX_OUTPUT_CHARS = 64_000
 
 # Allowlist of safe commands — intentionally narrow
 # Removed: python, pip, npm, node, curl, wget, rm, cp, mv (command injection risk)
@@ -51,6 +53,49 @@ def _validate_workdir(workdir: str) -> None:
         if prefix and resolved.is_relative_to(Path(prefix).resolve()):
             return
     raise ValidationError(f"workdir '{workdir}' is not within allowed paths")
+
+
+def _run_bounded(args: list[str], timeout: int, cwd: str | None) -> str:
+    """Read at most one character past the limit before stopping the child."""
+    with subprocess.Popen(
+        args,
+        shell=False,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=cwd,
+    ) as process:
+        expired = threading.Event()
+
+        def stop_on_timeout() -> None:
+            if process.poll() is None:
+                expired.set()
+                try:
+                    process.kill()
+                except OSError:
+                    pass  # The child may have exited after poll().
+
+        timer = threading.Timer(timeout, stop_on_timeout)
+        timer.daemon = True
+        timer.start()
+        try:
+            assert process.stdout is not None
+            output = process.stdout.read(MAX_OUTPUT_CHARS + 1)
+            truncated = len(output) > MAX_OUTPUT_CHARS
+            if truncated and process.poll() is None:
+                process.kill()
+            process.wait()
+        finally:
+            timer.cancel()
+
+        if expired.is_set():
+            raise subprocess.TimeoutExpired(args, timeout)
+        if truncated:
+            return output[:MAX_OUTPUT_CHARS] + "\n[output truncated]"
+        return output or f"(exit code {process.returncode}, no output)"
 
 
 @registry.register(
@@ -141,26 +186,12 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
             *args,
         ]
 
-    # Execute with shell=False, off the event loop so streaming/UI stay responsive
+    # Execute off the event loop. Stop reading and kill prolific children before
+    # their output can exhaust gateway memory.
     try:
-        result = await asyncio.to_thread(
-            subprocess.run,
-            args,
-            shell=False,
-            stdin=subprocess.DEVNULL,  # never block on (or inherit) our stdin
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=workdir if workdir != "." else None,
+        return await asyncio.to_thread(
+            _run_bounded, args, timeout, workdir if workdir != "." else None
         )
-        output = ""
-        if result.stdout:
-            output += result.stdout
-        if result.stderr:
-            output += ("\n" if output else "") + result.stderr
-        if not output:
-            output = f"(exit code {result.returncode}, no output)"
-        return output
     except subprocess.TimeoutExpired:
         raise ToolError(f"Command timed out after {timeout}s") from None
     except FileNotFoundError:

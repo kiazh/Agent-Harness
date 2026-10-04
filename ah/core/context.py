@@ -488,8 +488,7 @@ class ContextManager:
     ) -> int:
         """Evict old chunks to enforce token/chunk limits.
 
-        Uses LRU eviction based on accessed_at timestamp.
-        Preserves the most recent chunks and tool_call/result pairs.
+        Evicts oldest chunks first while preserving the most recent ten.
         Archives chunks to context_archive before deletion (reversible eviction).
 
         Args:
@@ -515,76 +514,103 @@ class ContextManager:
         ):
             return 0
 
-        # Get chunks to evict (oldest first, preserving recent and tool pairs)
-        # Strategy: evict oldest chunks first, but preserve the most recent 10
-        # and any tool_call/result pairs
-        rows = await db.fetch(
-            """
-            SELECT id, token_count, chunk_type, created_at, payload_msgpack, embedding, agent_id
-            FROM context_chunks
-            WHERE session_id = $1
-            ORDER BY created_at ASC
-            """,
-            session_id,
-        )
-
-        if not rows:
-            return 0
-
-        # Always preserve the most recent 10 chunks
-        preserve_count = min(10, len(rows))
-        evictable = rows[:-preserve_count] if preserve_count > 0 else rows
-
-        # Calculate how many to evict
-        tokens_to_evict = 0
-        chunks_to_evict = 0
-        if max_tokens is not None:
-            tokens_to_evict = total_tokens - max_tokens
-        if max_chunks is not None:
-            chunks_to_evict = total_chunks - max_chunks
-
+        remaining_evictable = max(0, total_chunks - 10)
+        tokens_to_evict = total_tokens - max_tokens if max_tokens is not None else 0
+        chunks_to_evict = total_chunks - max_chunks if max_chunks is not None else 0
         evicted = 0
         tokens_freed = 0
         chunks_freed = 0
+        cursor_time: datetime | None = None
+        cursor_id: uuid.UUID | None = None
 
-        for row in evictable:
-            # Stop when all active eviction targets are met
-            tokens_done = max_tokens is None or tokens_freed >= tokens_to_evict
-            chunks_done = max_chunks is None or chunks_freed >= chunks_to_evict
-            if tokens_done and chunks_done:
+        async def archive_and_delete(conn: asyncpg.Connection, row: Any) -> None:
+            payload_msgpack = row.get("payload_msgpack") or b""
+            embedding_raw = row.get("embedding")
+            embedding = str_to_embedding(embedding_raw) if embedding_raw else None
+            archived = await self.archive_chunk(
+                session_id=session_id,
+                chunk_id=row["id"],
+                payload_msgpack=payload_msgpack,
+                embedding=embedding,
+                archive_reason="evicted",
+                agent_id=row["agent_id"],
+                chunk_type=row["chunk_type"],
+                token_count=row["token_count"],
+                created_at=row["created_at"],
+                connection=conn,
+            )
+            if archived is None:
+                raise RuntimeError("archive insert returned no row")
+            await conn.execute("DELETE FROM context_chunks WHERE id = $1", row["id"])
+
+        while remaining_evictable > 0:
+            page_limit = min(100, remaining_evictable)
+            rows = await db.fetch(
+                """
+                SELECT id, token_count, chunk_type, created_at, payload_msgpack,
+                       embedding, agent_id
+                FROM context_chunks
+                WHERE session_id = $1 AND (
+                    $2::timestamptz IS NULL OR
+                    (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
+                    > ($2, $3::uuid)
+                )
+                ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id
+                LIMIT $4
+                """,
+                session_id,
+                cursor_time,
+                cursor_id,
+                page_limit,
+            )
+            # Some test doubles ignore SQL LIMIT; cap locally as well.
+            page = rows[:page_limit]
+            if not page:
+                break
+            remaining_evictable -= len(page)
+            cursor_time = page[-1]["created_at"] or datetime(1, 1, 1, tzinfo=UTC)
+            cursor_id = page[-1]["id"]
+
+            selected = []
+            selected_tokens = 0
+            for row in page:
+                if (max_tokens is None or tokens_freed + selected_tokens >= tokens_to_evict) and (
+                    max_chunks is None or chunks_freed + len(selected) >= chunks_to_evict
+                ):
+                    break
+                selected.append(row)
+                selected_tokens += row["token_count"]
+            if not selected:
                 break
 
-            # Archive before delete (reversible eviction)
-            # Use .get() for fields that may be absent in test mocks
             try:
-                payload_msgpack = row.get("payload_msgpack") or b""
-                embedding_raw = row.get("embedding")
-                embedding = str_to_embedding(embedding_raw) if embedding_raw else None
                 async with db.acquire() as conn:
                     async with conn.transaction():
-                        archived = await self.archive_chunk(
-                            session_id=session_id,
-                            chunk_id=row["id"],
-                            payload_msgpack=payload_msgpack,
-                            embedding=embedding,
-                            archive_reason="evicted",
-                            agent_id=row["agent_id"],
-                            chunk_type=row["chunk_type"],
-                            token_count=row["token_count"],
-                            created_at=row["created_at"],
-                            connection=conn,
-                        )
-                        if archived is None:
-                            raise RuntimeError("archive insert returned no row")
-                        await conn.execute("DELETE FROM context_chunks WHERE id = $1", row["id"])
-            except Exception as e:
-                # A failed archive must never turn reversible eviction into loss.
-                logger.warning("Failed to archive chunk %s: %s", row["id"], e)
-                continue
+                        for row in selected:
+                            await archive_and_delete(conn, row)
+            except Exception as batch_error:
+                # A bad row must not turn eviction into data loss or block all
+                # other rows; retry individually only on this exceptional path.
+                logger.warning("Batch archive failed for session %s: %s", session_id, batch_error)
+                successful = []
+                for row in selected:
+                    try:
+                        async with db.acquire() as conn:
+                            async with conn.transaction():
+                                await archive_and_delete(conn, row)
+                        successful.append(row)
+                    except Exception as error:
+                        logger.warning("Failed to archive chunk %s: %s", row["id"], error)
+            else:
+                successful = selected
 
-            tokens_freed += row["token_count"]
-            chunks_freed += 1
-            evicted += 1
+            tokens_freed += sum(row["token_count"] for row in successful)
+            chunks_freed += len(successful)
+            evicted += len(successful)
+            if (max_tokens is None or tokens_freed >= tokens_to_evict) and (
+                max_chunks is None or chunks_freed >= chunks_to_evict
+            ):
+                break
 
         if evicted > 0:
             # Invalidate cache

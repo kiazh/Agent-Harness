@@ -137,7 +137,7 @@ class MetricsCollector:
     def get_latency_stats(self, operation: str) -> dict[str, float]:
         """Get latency statistics for an operation."""
         with self._lock:
-            latencies = self._latencies.get(operation, [])
+            latencies = list(self._latencies.get(operation, []))
         if not latencies:
             return {
                 "count": 0,

@@ -1176,40 +1176,11 @@ spec:
 
 ### 8.5 Runtime Secret Injection
 
-```python
-# ah/config.py — production config loader
-import os
-import json
-from pathlib import Path
-
-def load_secrets():
-    """Load secrets from various sources in priority order."""
-    secrets = {}
-
-    # 1. Docker Secrets (/run/secrets/*)
-    secrets_dir = Path("/run/secrets")
-    if secrets_dir.exists():
-        for f in secrets_dir.iterdir():
-            secrets[f.name] = f.read_text().strip()
-
-    # 2. Kubernetes Secrets (mounted as files)
-    k8s_secrets = Path("/etc/agentharness/secrets")
-    if k8s_secrets.exists():
-        for f in k8s_secrets.iterdir():
-            secrets[f.name] = f.read_text().strip()
-
-    # 3. Environment variables (fallback)
-    for key in ["DATABASE_URL", "OPENROUTER_API_KEY", "POSTGRES_PASSWORD"]:
-        if os.environ.get(key):
-            secrets[key.lower().replace("_", "-")] = os.environ[key]
-
-    # 4. .env file (development only)
-    if os.environ.get("ENVIRONMENT") == "development":
-        from dotenv import load_dotenv
-        load_dotenv()
-
-    return secrets
-```
+The current runtime in `ah/security/secrets.py` resolves each named secret from
+the environment variable, then the matching `NAME_FILE` path, then the
+configured Vault or AWS Secrets Manager backend. It does not scan mounted
+secret directories. For a mounted secret, point the matching variable at the
+file, such as `OPENROUTER_API_KEY_FILE=/run/secrets/openrouter-api-key`.
 
 ### 8.6 Secret Rotation Strategy
 

@@ -7,6 +7,7 @@ class that the terminal UI drives via JSON-RPC.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -322,6 +323,8 @@ def create_app() -> FastAPI:
             from ah.core.agent import ReActAgent
             from ah.core.provider import get_provider
 
+            llm = None
+            agent = None
             try:
                 llm = get_provider(
                     provider=session.provider or config.get("provider"),
@@ -340,6 +343,17 @@ def create_app() -> FastAPI:
                 error_data = {"type": "error", "message": "prompt failed; check server logs"}
                 yield f"data: {json.dumps(error_data)}\n\n"
             finally:
+                try:
+                    if agent is not None:
+                        await asyncio.gather(
+                            *getattr(agent, "_learning_tasks", ()), return_exceptions=True
+                        )
+                finally:
+                    if llm is not None:
+                        try:
+                            await llm.close()
+                        except Exception:
+                            logger.exception("Could not close prompt provider for session %s", session_id)
                 yield "data: [DONE]\n\n"
 
         return StreamingResponse(

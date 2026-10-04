@@ -868,7 +868,7 @@ class TestErrorHandling:
         from ah.core.exceptions import ToolError
         from ah.tools.terminal import terminal as terminal_fn
 
-        with patch("subprocess.run") as mock_run:
+        with patch("ah.tools.terminal._run_bounded") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="test", timeout=1)
             with pytest.raises(ToolError, match="timed out"):
                 asyncio.run(terminal_fn("git status", timeout=1))
@@ -929,8 +929,8 @@ class TestSessionManagerMocked:
             "model": "gpt-4",
             "provider": "openai",
             "context_budget": 8000,
-            "created_at": datetime.utcnow(),
-            "last_activity": datetime.utcnow(),
+            "created_at": datetime.now(UTC),
+            "last_activity": datetime.now(UTC),
         }
 
     async def test_create_session(self, mock_session_row):
@@ -1002,7 +1002,7 @@ class TestContextManagerMocked:
             "payload_msgpack": msgpack.packb({"content": "hello"}, use_bin_type=True),
             "token_count": 5,
             "embedding": None,
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(UTC),
             "accessed_at": None,
         }
 

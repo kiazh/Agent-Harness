@@ -58,4 +58,6 @@ async def test_delegate_records_the_actual_parent_agent(monkeypatch):
     finally:
         current_agent_id.reset(agent_token)
         current_session_id.reset(session_token)
-    assert calls == [{"from_agent": "researcher", "parent_session_id": session_id}]
+    assert calls == [
+        {"from_agent": "researcher", "parent_session_id": session_id, "_hop_count": 1}
+    ]

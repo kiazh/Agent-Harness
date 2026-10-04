@@ -19,7 +19,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from ah.core.config import config
@@ -134,9 +134,6 @@ class JobStore:
         if kind == "cron":
             if not cron_expression:
                 raise ValueError("cron_expression is required for cron jobs")
-            next_run = next_cron_time(cron_expression, datetime.now(UTC))
-        else:
-            next_run = datetime.now(UTC) + timedelta(seconds=interval_seconds)
         if model is not None and (
             not isinstance(model, str) or not model.strip() or len(model) > 200
         ):
@@ -157,6 +154,12 @@ class JobStore:
             resolve_script_path(script_path)
         elif script_path is not None:
             raise ValueError("script_path requires no_agent=true")
+        database_now = await db.fetchval("SELECT now()")
+        next_run = (
+            next_cron_time(cron_expression, database_now)
+            if kind == "cron"
+            else database_now + timedelta(seconds=interval_seconds)
+        )
         row = await db.fetchrow(
             f"""
             INSERT INTO jobs (name, kind, session_id, agent_name, prompt, interval_seconds,
@@ -201,7 +204,7 @@ class JobStore:
         if job is None:
             return None
         cron_next = (
-            next_cron_time(job.cron_expression, datetime.now(UTC))
+            next_cron_time(job.cron_expression, await db.fetchval("SELECT now()"))
             if enabled and job.kind == "cron" and job.cron_expression
             else None
         )
@@ -276,7 +279,7 @@ class JobStore:
         if job is None:
             return
         next_run = (
-            next_cron_time(job.cron_expression, datetime.now(UTC))
+            next_cron_time(job.cron_expression, await db.fetchval("SELECT now()"))
             if job.kind == "cron" and job.cron_expression
             else None
         )

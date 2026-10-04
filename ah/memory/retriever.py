@@ -152,14 +152,9 @@ class MemoryRetriever:
                 return candidates
 
             # Fetch persona memories for these facts
-            persona_memories = []
-            for fact_id in fact_ids:
-                mems = await self.persona_store.search_persona(
-                    fact_id=fact_id,
-                    persona_id=agent_id,
-                    limit=10,
-                )
-                persona_memories.extend(mems)
+            persona_memories = await self.persona_store.search_persona_for_facts(
+                fact_ids, agent_id, 10
+            )
 
             if not persona_memories:
                 return candidates

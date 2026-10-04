@@ -78,6 +78,8 @@ class ToolRegistry:
 
         def decorator(func: Callable) -> Callable:
             tool_name = name or func.__name__
+            if tool_name == "__no_tools__":
+                raise ValueError("__no_tools__ is reserved for an empty tool allowlist")
             tool_desc = description or (func.__doc__ or "").strip().split("\n")[0]
             tool_params = parameters or self._infer_schema(func)
             is_async = inspect.iscoroutinefunction(func)

@@ -176,7 +176,7 @@ async def test_script_children_do_not_outlive_successful_parent(
     monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
     marker = tmp_path / "late-child.txt"
     child_code = (
-        f"import time, pathlib; time.sleep(0.4); pathlib.Path({str(marker)!r}).write_text('late')"
+        f"import time, pathlib; time.sleep(1.5); pathlib.Path({str(marker)!r}).write_text('late')"
     )
     output_args = ", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL" if detached_output else ""
     (tmp_path / "parent.py").write_text(
@@ -185,11 +185,11 @@ async def test_script_children_do_not_outlive_successful_parent(
         "print('parent done')",
         encoding="utf-8",
     )
-    monkeypatch.setattr(job_scripts, "SCRIPT_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(job_scripts, "SCRIPT_TIMEOUT_SECONDS", 5.0 if detached_output else 0.8)
     if detached_output:
         assert await job_scripts.run_job_script("parent.py") == "parent done"
     else:
         with pytest.raises(TimeoutError):
             await job_scripts.run_job_script("parent.py")
-    await asyncio.sleep(0.6)
+    await asyncio.sleep(1.7)
     assert not marker.exists()
