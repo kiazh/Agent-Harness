@@ -1,7 +1,7 @@
 # AgentHarness Roadmap
 
 **Last updated:** 2026-10-03  
-**Current version:** 0.1.0  
+**Current version:** 0.2.0
 **Test status:** 688 tests passing on Windows (one platform-specific test deselected)
 
 ---
@@ -60,7 +60,7 @@ ah/
 ├── cli/
 │   ├── __init__.py      # Typer CLI (chat, repl, status, sessions, context, skills, doctor, init, config, memory)
 │   └── interactive.py   # Interactive REPL (prompt_toolkit)
-└── __init__.py          # Version 0.1.0
+└── __init__.py          # Version 0.2.0
 ```
 
 ---

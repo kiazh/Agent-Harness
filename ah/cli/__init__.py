@@ -85,7 +85,7 @@ def chat(
     continue_: bool = typer.Option(False, "--continue", "-c", help="Continue last session"),
     session_id: str | None = typer.Option(None, "--session", "-s", help="Resume specific session"),
     model: str = typer.Option(
-        None, "--model", "-m", help="Model to use (e.g., anthropic/claude-3.5-sonnet)"
+        None, "--model", "-m", help="Model to use (e.g., openrouter/free)"
     ),
     provider: str = typer.Option(
         "openrouter", "--provider", "-p", help="LLM provider (openrouter, ollama)"

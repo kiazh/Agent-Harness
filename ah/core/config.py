@@ -30,7 +30,7 @@ load_dotenv(override=False)
 
 # Sensible defaults for all settings
 DEFAULTS: dict[str, Any] = {
-    "model": "anthropic/claude-3.5-sonnet",
+    "model": "openrouter/free",
     "provider": "openrouter",
     "context_budget": 8000,
     "max_iterations": 10,
@@ -85,7 +85,7 @@ class Config:
     4. Defaults (lowest)
     """
 
-    model: str = "anthropic/claude-3.5-sonnet"
+    model: str = "openrouter/free"
     provider: str = "openrouter"
     context_budget: int = 8000
     max_iterations: int = 10

@@ -23,6 +23,7 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/agentharness
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      AGENT_HARNESS_MODEL: ${AGENT_HARNESS_MODEL:-openrouter/free}
       AGENT_HARNESS_API_KEY: ${AGENT_HARNESS_API_KEY:?Set AGENT_HARNESS_API_KEY in .env}
       PYTHONDONTWRITEBYTECODE: "1"
     read_only: true

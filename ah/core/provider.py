@@ -235,7 +235,7 @@ class OpenRouterProvider(LLMProvider):
     BASE_URL = "https://openrouter.ai/api/v1"
 
     def __init__(
-        self, api_key: str | None = None, model: str = "anthropic/claude-3.5-sonnet"
+        self, api_key: str | None = None, model: str = "openrouter/free"
     ) -> None:
         self.api_key = api_key or config.get("openrouter_api_key") or ""
         if not self.api_key:
@@ -669,7 +669,7 @@ def get_provider(
 ) -> LLMProvider:
     """Factory: return configured provider."""
     if provider == "openrouter":
-        return OpenRouterProvider(model=model or "anthropic/claude-3.5-sonnet")
+        return OpenRouterProvider(model=model or "openrouter/free")
     elif provider == "ollama":
         return OllamaProvider(model=model or "llama3.1")
     else:
