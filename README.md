@@ -83,7 +83,7 @@ Hermes Agent (`ui-tui` ↔ `tui_gateway`) and opencode use.
 | 3: Memory & RAG | Long-term memory, RAG pipeline, hybrid search | Done |
 | 4: Interactive UI | TypeScript terminal UI (pi-tui) + JSON-RPC gateway, slash commands, config system | Done |
 | 5: Multi-Agent | Subagent system, orchestration | Done |
-| 6: Production | Web API, scheduler, plugins, observability | Pending |
+| 6: Production | Web API, scheduler, plugins, observability | Done |
 | 7: Advanced | LangGraph, TUI, cost optimization | Pending |
 
 ### Multi-agent definitions
@@ -99,6 +99,34 @@ Delegation passes a bounded summary of the parent session's recent messages and
 goal to the child. The child's response is recorded in the parent session, so
 later turns can use it. The `agents.run` gateway method supports sequential and
 parallel steps.
+
+### Production API and scheduling
+
+The HTTP server exposes versioned `/api/v1` session, chat (SSE), memory,
+document, and job routes. `/health` is a liveness check, `/ready` checks the
+database, and authenticated `/metrics` exposes Prometheus text. Set
+`AGENT_HARNESS_API_KEY` or `AGENT_HARNESS_API_KEY_FILE`; API requests are limited
+to 120 per minute per transport peer by default (set
+`AGENT_HARNESS_HTTP_RATE_LIMIT` to change it). The HTTP server starts its job
+runner on startup. Jobs support interval, heartbeat, and five-field UTC cron
+expressions through `cronExpression`. Run `ah init` after upgrading to add the
+cron and audit tables/columns to an existing database.
+
+Plugins use Python entry points and are opt-in through `AGENT_HARNESS_PLUGINS`;
+see [plugin documentation](docs/plugins.md). Audit events are written to
+PostgreSQL while the gateway or HTTP server runs. Agent and tool spans use
+OpenTelemetry when an SDK is configured by the host application.
+
+For a read-only Docker terminal sandbox, run
+`docker build -f Dockerfile.sandbox -t agent-harness-tool-sandbox:latest .` and set
+`AGENT_HARNESS_TERMINAL_SANDBOX=docker`. This mode requires Docker on the host
+and is not enabled by the Compose app. Secrets can come from environment
+variables, `*_FILE` mounted secrets, HashiCorp Vault KV
+(`AGENT_HARNESS_SECRET_BACKEND=vault`, `AGENT_HARNESS_VAULT_ADDR`,
+`AGENT_HARNESS_VAULT_PATH`, and a Vault token), or AWS Secrets Manager
+(`AGENT_HARNESS_SECRET_BACKEND=aws`, `AGENT_HARNESS_AWS_SECRET_ID`, and the
+`secrets` package extra). External secret responses should contain keys such
+as `AGENT_HARNESS_API_KEY`, `DATABASE_URL`, and `OPENROUTER_API_KEY`.
 
 ## Technology Stack
 

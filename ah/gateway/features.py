@@ -609,8 +609,8 @@ async def jobs_create(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
     session = await gw.get_session(params)
     kind = params.get("kind", "interval")
-    if kind not in ("heartbeat", "interval"):
-        raise RpcError(INVALID_PARAMS, "kind must be 'heartbeat' or 'interval'")
+    if kind not in ("heartbeat", "interval", "cron"):
+        raise RpcError(INVALID_PARAMS, "kind must be 'heartbeat', 'interval', or 'cron'")
     prompt = (
         _str(params, "prompt", required=kind == "interval", max_len=5000)
         or DEFAULT_HEARTBEAT_PROMPT
@@ -623,6 +623,9 @@ async def jobs_create(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
             prompt=prompt,
             interval_seconds=_int(params, "intervalSeconds", 300, 10, 86_400),
             agent_name=_str(params, "agent", required=False, max_len=100) or "harness",
+            cron_expression=_str(
+                params, "cronExpression", required=kind == "cron", max_len=100
+            ) or None,
         )
     except ValueError as e:
         raise RpcError(INVALID_PARAMS, str(e)) from None

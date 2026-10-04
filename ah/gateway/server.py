@@ -212,6 +212,9 @@ class Gateway:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         if self._db_ready and self._owns_db:
+            from ah.observability.audit import audit_persistence
+
+            await audit_persistence.stop()
             await db.close()
         self._db_ready = False
 
@@ -254,6 +257,9 @@ class Gateway:
 
     # ─── methods ────────────────────────────────────────────────────────────
     async def _initialize(self, params: dict[str, Any]) -> dict[str, Any]:
+        from ah.plugins.loader import load_plugins
+
+        load_plugins()
         if params.get("model"):
             self._set_model(params["model"])
         if params.get("provider"):
@@ -264,6 +270,9 @@ class Gateway:
             except Exception as e:
                 raise RpcError(DATABASE_UNAVAILABLE, f"database unavailable: {e}") from e
             self._db_ready = True
+            from ah.observability.audit import audit_persistence
+
+            audit_persistence.start()
             self._start_job_runner()
         return {
             "version": __version__,

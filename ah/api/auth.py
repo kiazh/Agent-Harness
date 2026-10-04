@@ -9,17 +9,20 @@ The key is read from the ``AGENT_HARNESS_API_KEY`` environment variable (via
 from __future__ import annotations
 
 import hmac
-import os
 
 from fastapi import Header, HTTPException, status
+
+from ah.security.secrets import get_secret
 
 API_KEY_ENV = "AGENT_HARNESS_API_KEY"
 _NO_AUTH = "disabled"
 
 
 def configured_key() -> str | None:
-    key = os.environ.get(API_KEY_ENV, "").strip()
-    return key or None
+    try:
+        return get_secret(API_KEY_ENV)
+    except Exception:
+        return None  # Fail closed if a secret provider is unavailable.
 
 
 def _extract(authorization: str | None, x_api_key: str | None) -> str | None:

@@ -153,6 +153,7 @@ export interface JobInfo {
 	agent: string;
 	prompt: string;
 	intervalSeconds: number;
+	cronExpression?: string | null;
 	enabled: boolean;
 	status: string;
 	lastRunAt: string | null;

@@ -24,12 +24,24 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/agentharness
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       AGENT_HARNESS_API_KEY: ${AGENT_HARNESS_API_KEY:?Set AGENT_HARNESS_API_KEY in .env}
+      PYTHONDONTWRITEBYTECODE: "1"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    tmpfs:
+      - /tmp:rw,nosuid,size=64m
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
       - ./ah:/app/ah:ro
     entrypoint: ["/bin/sh", "-c"]
     command: ["ah init && exec ah serve --host 0.0.0.0 --port 8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   pgdata:

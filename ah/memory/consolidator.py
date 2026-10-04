@@ -15,6 +15,7 @@ from ah.core.provider import LLMProvider, audit_log
 from ah.memory.models import MemoryEntry
 from ah.memory.scorer import ImportanceScorer
 from ah.memory.store import MemoryStore, memory_store
+from ah.plugins.registry import plugin_registry
 
 __all__ = ["MemoryConsolidator"]
 
@@ -100,6 +101,8 @@ class MemoryConsolidator:
         if not candidates:
             logger.debug("No memories extracted from session %s", session_id)
             return []
+
+        await plugin_registry.dispatch("on_memory_extract", candidates)
 
         # Step 3: Score importance
         for candidate in candidates:

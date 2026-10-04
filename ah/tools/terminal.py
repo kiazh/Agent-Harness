@@ -41,6 +41,7 @@ DANGEROUS_CHARS = frozenset(";|&$()`<>\\\n")
 
 # Allowed base directories for workdir
 ALLOWED_WORKDIR_PREFIXES = (
+    str(Path.cwd().resolve()),
     str(Path.home()),
     "/tmp",
     config.get("tmpdir") or "",
@@ -50,11 +51,9 @@ ALLOWED_WORKDIR_PREFIXES = (
 
 def _validate_workdir(workdir: str) -> None:
     """Validate that workdir is within allowed paths. Raises ValidationError if not."""
-    if not workdir or workdir == ".":
-        return
-    resolved = Path(workdir).resolve()
+    resolved = Path(workdir or ".").resolve()
     for prefix in ALLOWED_WORKDIR_PREFIXES:
-        if prefix and str(resolved).startswith(str(Path(prefix).resolve())):
+        if prefix and resolved.is_relative_to(Path(prefix).resolve()):
             return
     raise ValidationError(f"workdir '{workdir}' is not within allowed paths")
 
@@ -103,6 +102,24 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
 
     # Validate workdir
     _validate_workdir(workdir)
+
+    # Docker mode is opt-in. It fails closed when Docker or the image is absent.
+    # The bind mount is read-only and the container has no network or privileges.
+    sandbox = os.environ.get("AGENT_HARNESS_TERMINAL_SANDBOX", "local").lower()
+    if sandbox not in {"local", "docker"}:
+        raise ValidationError("terminal sandbox must be 'local' or 'docker'")
+    if sandbox == "docker":
+        workspace = str(Path(workdir or ".").resolve())
+        image = os.environ.get("AGENT_HARNESS_TERMINAL_IMAGE", "agent-harness-tool-sandbox:latest")
+        args = [
+            "docker", "run", "--rm", "--network", "none", "--read-only",
+            "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+            "--pids-limit", "64", "--memory", "256m", "--cpus", "1",
+            "--user", "65534:65534", "--tmpfs", "/tmp:rw,nosuid,size=64m",
+            "--mount", f"type=bind,src={workspace},dst=/workspace,readonly",
+            "--workdir", "/workspace", "--env", "PYTHONDONTWRITEBYTECODE=1",
+            "--env", "PYTEST_ADDOPTS=-p no:cacheprovider", image, *args,
+        ]
 
     # Execute with shell=False, off the event loop so streaming/UI stay responsive
     try:

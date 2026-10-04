@@ -2,15 +2,15 @@
 
 **Last updated:** 2026-10-03  
 **Current version:** 0.1.0  
-**Test status:** 672 tests passing on Windows (one platform-specific test deselected)
+**Test status:** 688 tests passing on Windows (one platform-specific test deselected)
 
 ---
 
 ## Executive Summary
 
-AgentHarness has completed Phases 1-5: a working ReAct loop, PostgreSQL context and memory, a RAG pipeline, a TypeScript terminal UI with a JSON-RPC gateway, and multi-agent delegation with YAML definitions and session context handoff. The Windows test run passes 672 tests, with one platform-specific test deselected.
+AgentHarness has completed Phases 1-6: a ReAct loop, PostgreSQL context and memory, RAG, a terminal UI and JSON-RPC gateway, multi-agent delegation, and production API, scheduling, observability, plugins, and security controls. The Windows test run passes 688 tests, with one platform-specific test deselected.
 
-The next roadmap phase focuses on **production hardening**.
+The next roadmap phase focuses on **advanced features**.
 
 ---
 
@@ -252,10 +252,10 @@ tui/ -> interactive.py
 - [x] Context handoff between agents
 
 ### Phase 6 (Production)
-- [ ] FastAPI server with SSE streaming
-- [ ] Prometheus metrics endpoint
-- [ ] Heartbeat scheduler
-- [ ] Plugin system with hooks
+- [x] FastAPI server with SSE streaming and versioned routes
+- [x] Prometheus metrics endpoint
+- [x] Heartbeat and UTC cron scheduler
+- [x] Plugin system with lifecycle hooks
 
 ### Phase 7 (Advanced)
 - [ ] LangGraph integration

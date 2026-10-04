@@ -65,7 +65,7 @@ stays UI-agnostic; any future client (web, API server) can speak the same protoc
 | `agents.delete` | `{name}` | `{deleted}` |
 | `agents.run` | `{steps: [{agent, task}], mode?, sessionId?}` | `{results: [{agent, task, response, sessionId, tokens, iterations, status}]}` |
 | `agents.history` | `{sessionId, limit?}` | `{messages}` |
-| `jobs.create` | `{sessionId, kind?, prompt?, intervalSeconds?, name?, agent?}` | `{job}` |
+| `jobs.create` | `{sessionId, kind?, prompt?, intervalSeconds?, cronExpression?, name?, agent?}` | `{job}` |
 | `jobs.list` | `{sessionId?, limit?}` | `{jobs}` |
 | `jobs.setEnabled` | `{id, enabled}` | `{job}` |
 | `jobs.delete` | `{id}` | `{deleted}` |

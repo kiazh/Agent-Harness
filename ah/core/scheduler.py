@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ah.core.config import config
+from ah.core.cron import next_cron_time
 from ah.db.connection import db, parse_command_count
 
 __all__ = ["Job", "JobStore", "JobRunner", "job_store", "DEFAULT_HEARTBEAT_PROMPT"]
@@ -48,6 +49,7 @@ class Job:
     next_run_at: datetime
     last_error: str | None
     run_count: int
+    cron_expression: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -64,12 +66,13 @@ class Job:
             "nextRunAt": self.next_run_at.isoformat() if self.next_run_at else None,
             "lastError": self.last_error,
             "runCount": self.run_count,
+            "cronExpression": self.cron_expression,
         }
 
 
 _COLUMNS = (
     "id, name, kind, session_id, agent_name, prompt, interval_seconds, enabled, "
-    "status, last_run_at, next_run_at, last_error, run_count"
+    "status, last_run_at, next_run_at, last_error, run_count, cron_expression"
 )
 
 
@@ -88,6 +91,7 @@ def _row_to_job(row: Any) -> Job:
         next_run_at=row["next_run_at"],
         last_error=row["last_error"],
         run_count=row["run_count"],
+        cron_expression=row["cron_expression"],
     )
 
 
@@ -103,16 +107,22 @@ class JobStore:
         prompt: str,
         interval_seconds: int,
         agent_name: str = "harness",
+        cron_expression: str | None = None,
     ) -> Job:
-        if kind not in ("heartbeat", "interval"):
-            raise ValueError("kind must be 'heartbeat' or 'interval'")
-        if interval_seconds < MIN_INTERVAL_SECONDS:
+        if kind not in ("heartbeat", "interval", "cron"):
+            raise ValueError("kind must be 'heartbeat', 'interval', or 'cron'")
+        if kind != "cron" and interval_seconds < MIN_INTERVAL_SECONDS:
             raise ValueError(f"interval must be at least {MIN_INTERVAL_SECONDS} seconds")
-        next_run = datetime.now(UTC) + timedelta(seconds=interval_seconds)
+        if kind == "cron":
+            if not cron_expression:
+                raise ValueError("cron_expression is required for cron jobs")
+            next_run = next_cron_time(cron_expression, datetime.now(UTC))
+        else:
+            next_run = datetime.now(UTC) + timedelta(seconds=interval_seconds)
         row = await db.fetchrow(
             f"""
-            INSERT INTO jobs (name, kind, session_id, agent_name, prompt, interval_seconds, next_run_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO jobs (name, kind, session_id, agent_name, prompt, interval_seconds, next_run_at, cron_expression)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING {_COLUMNS}
             """,
             name,
@@ -122,6 +132,7 @@ class JobStore:
             prompt,
             interval_seconds,
             next_run,
+            cron_expression,
         )
         return _row_to_job(row)
 
@@ -143,11 +154,21 @@ class JobStore:
         return [_row_to_job(r) for r in rows]
 
     async def set_enabled(self, job_id: uuid.UUID, enabled: bool) -> Job | None:
+        job = await self.get(job_id)
+        if job is None:
+            return None
+        cron_next = (
+            next_cron_time(job.cron_expression, datetime.now(UTC))
+            if enabled and job.kind == "cron" and job.cron_expression
+            else None
+        )
         row = await db.fetchrow(
             f"""
             UPDATE jobs
             SET enabled = $2,
                 next_run_at = CASE
+                    WHEN $2 AND status <> 'running' AND kind = 'cron'
+                    THEN $3
                     WHEN $2 AND status <> 'running'
                     THEN now() + (interval_seconds || ' seconds')::interval
                     ELSE next_run_at
@@ -157,6 +178,7 @@ class JobStore:
             """,
             job_id,
             enabled,
+            cron_next,
         )
         return _row_to_job(row) if row else None
 
@@ -170,23 +192,26 @@ class JobStore:
         ``FOR UPDATE SKIP LOCKED`` lets multiple runners coexist without
         double-executing a job.
         """
-        now = now or datetime.now(UTC)
+        # Use the database clock in production. Its timestamp also governs
+        # next_run_at, so client/server clock skew cannot hide a due job.
+        clock = "$1" if now is not None else "now()"
+        lease = "$2" if now is not None else "$1"
+        params = (now, RUN_LEASE_SECONDS) if now is not None else (RUN_LEASE_SECONDS,)
         row = await db.fetchrow(
             f"""
             UPDATE jobs
-            SET status = 'running', last_run_at = $1,
-                next_run_at = $1 + ($2 * interval '1 second')
+            SET status = 'running', last_run_at = {clock},
+                next_run_at = {clock} + ({lease} * interval '1 second')
             WHERE id = (
                 SELECT id FROM jobs
-                WHERE enabled AND next_run_at <= $1
+                WHERE enabled AND next_run_at <= {clock}
                 ORDER BY next_run_at ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
             )
             RETURNING {_COLUMNS}
             """,
-            now,
-            RUN_LEASE_SECONDS,
+            *params,
         )
         return _row_to_job(row) if row else None
 
@@ -204,18 +229,28 @@ class JobStore:
 
     async def finish(self, job_id: uuid.UUID, *, error: str | None = None) -> None:
         """Record a run outcome and schedule the next run from now."""
+        job = await self.get(job_id)
+        if job is None:
+            return
+        next_run = (
+            next_cron_time(job.cron_expression, datetime.now(UTC))
+            if job.kind == "cron" and job.cron_expression
+            else None
+        )
         await db.execute(
             """
             UPDATE jobs
             SET status = $2,
                 last_error = $3,
                 run_count = run_count + 1,
-                next_run_at = now() + (interval_seconds || ' seconds')::interval
+                next_run_at = CASE WHEN kind = 'cron' THEN $4
+                    ELSE now() + (interval_seconds || ' seconds')::interval END
             WHERE id = $1
             """,
             job_id,
             "error" if error else "idle",
             error,
+            next_run,
         )
 
 

@@ -8,6 +8,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from functools import wraps
 from typing import Any
 
 from rich.console import Console
@@ -22,12 +23,53 @@ from ah.core.session import Session, session_manager
 from ah.memory.consolidator import MemoryConsolidator
 from ah.memory.retriever import MemoryRetriever
 from ah.memory.store import memory_store
+from ah.observability.tracing import span
+from ah.plugins.registry import plugin_registry
 from ah.rag.pipeline import RAGPipeline
 from ah.tools.base import registry
 
 logger = logging.getLogger(__name__)
 
 console = Console()
+
+
+def instrument_run(func):
+    @wraps(func)
+    async def wrapper(self, session_id, user_message, verbose=True):
+        start = time.monotonic()
+        with span("agent.run", agent_id=self.agent_id, session_id=str(session_id)):
+            try:
+                response = await func(self, session_id, user_message, verbose)
+            except Exception:
+                metrics.record_error("agent.run")
+                raise
+        metrics.record_latency("agent.run", (time.monotonic() - start) * 1000)
+        metrics.increment_counter("agent.run.calls")
+        session = await session_manager.get(session_id)
+        await plugin_registry.dispatch("post_agent_run", session, response)
+        return response
+
+    return wrapper
+
+
+def instrument_stream(func):
+    @wraps(func)
+    async def wrapper(self, session_id, user_message, verbose=True):
+        start = time.monotonic()
+        with span("agent.run_stream", agent_id=self.agent_id, session_id=str(session_id)):
+            try:
+                async for event in func(self, session_id, user_message, verbose):
+                    if event.type == "done":
+                        metrics.record_latency("agent.run", (time.monotonic() - start) * 1000)
+                        metrics.increment_counter("agent.run.calls")
+                        session = await session_manager.get(session_id)
+                        await plugin_registry.dispatch("post_agent_run", session, event.response)
+                    yield event
+            except Exception:
+                metrics.record_error("agent.run")
+                raise
+
+    return wrapper
 
 SYSTEM_PROMPT = """You are AgentHarness, a self-hosted AI agent. You have access to tools and persistent context stored in PostgreSQL.
 
@@ -216,6 +258,8 @@ class BaseReActAgent:
         if session is None:
             raise SessionNotFoundError(f"Session {session_id} not found")
 
+        await plugin_registry.dispatch("pre_agent_run", session, user_message)
+
         assembler = PromptAssembler(session.context_budget)
 
         # Store user message in context
@@ -402,16 +446,18 @@ class BaseReActAgent:
 
             start = time.monotonic()
             try:
-                if tool_name == "delegate":
-                    from ah.tools.agents import current_session_id
+                with span("agent.tool", tool_name=tool_name, session_id=str(session_id)):
+                    await plugin_registry.dispatch("on_tool_call", tool_name, tool_args)
+                    if tool_name == "delegate":
+                        from ah.tools.agents import current_session_id
 
-                    token = current_session_id.set(session_id)
-                    try:
+                        token = current_session_id.set(session_id)
+                        try:
+                            result = await registry.execute(tool_name, **tool_args)
+                        finally:
+                            current_session_id.reset(token)
+                    else:
                         result = await registry.execute(tool_name, **tool_args)
-                    finally:
-                        current_session_id.reset(token)
-                else:
-                    result = await registry.execute(tool_name, **tool_args)
             except Exception as e:
                 logger.exception("Tool execution failed for '%s'", tool_name)
                 audit_log(
@@ -424,6 +470,11 @@ class BaseReActAgent:
                 result = f"Error: {e}"
 
             result_str = str(result)
+            metrics.record_latency(f"tool.{tool_name}", (time.monotonic() - start) * 1000)
+            metrics.increment_counter(f"tool.{tool_name}.calls")
+            if result_str.startswith("Error:"):
+                metrics.record_error(f"tool.{tool_name}")
+            await plugin_registry.dispatch("on_tool_result", tool_name, result_str)
             audit_log(
                 "tool_call_complete",
                 session_id=str(session_id),
@@ -492,6 +543,7 @@ class ReActAgent(BaseReActAgent):
     Provides both synchronous (run) and streaming (run_stream) execution.
     """
 
+    @instrument_run
     async def run(
         self,
         session_id: uuid.UUID,
@@ -557,7 +609,7 @@ class ReActAgent(BaseReActAgent):
                 # Consolidate memories before returning
                 self._schedule_memory_consolidation(session_id)
                 return AgentResponse(
-                    content=f"LLM provider error: {e}",
+                    content="LLM provider error. Check server logs.",
                     tool_calls=tool_calls_made,
                     tokens_used=total_tokens,
                     iterations=iteration + 1,
@@ -616,6 +668,7 @@ class ReActAgent(BaseReActAgent):
             iterations=self.max_iterations,
         )
 
+    @instrument_stream
     async def run_stream(
         self,
         session_id: uuid.UUID,
@@ -710,7 +763,7 @@ class ReActAgent(BaseReActAgent):
                 yield StreamEvent(
                     type="done",
                     response=AgentResponse(
-                        content=f"LLM provider error: {e}",
+                        content="LLM provider error. Check server logs.",
                         tool_calls=tool_calls_made,
                         tokens_used=total_tokens,
                         iterations=iteration + 1,

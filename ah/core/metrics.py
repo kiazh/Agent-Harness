@@ -6,7 +6,7 @@ import json
 import logging
 import threading
 import time
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
@@ -63,17 +63,21 @@ class MetricsCollector:
         # deadlocked there as soon as any metric had been recorded.
         self._lock = threading.RLock()
         self._latencies: dict[str, list[float]] = defaultdict(list)
+        self._latency_totals: dict[str, dict[str, float]] = defaultdict(
+            lambda: {"count": 0, "sum": 0.0}
+        )
         self._counters: dict[str, int] = defaultdict(int)
         self._errors: dict[str, int] = defaultdict(int)
-        self._token_usage: dict[str, dict[str, int]] = defaultdict(
-            lambda: {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        )
+        self._token_usage: OrderedDict[str, dict[str, int]] = OrderedDict()
+        self._token_totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     def record_latency(self, operation: str, duration_ms: float) -> None:
         """Record a latency measurement in milliseconds."""
         with self._lock:
             latencies = self._latencies[operation]
             latencies.append(duration_ms)
+            self._latency_totals[operation]["count"] += 1
+            self._latency_totals[operation]["sum"] += duration_ms
             # Cap the list size to prevent unbounded memory growth
             if len(latencies) > self._MAX_LATENCY_SAMPLES:
                 # Keep the most recent half to preserve recent latency data
@@ -92,10 +96,19 @@ class MetricsCollector:
     def record_tokens(self, session_id: str, prompt_tokens: int, completion_tokens: int) -> None:
         """Record token usage for a session."""
         with self._lock:
-            tu = self._token_usage[session_id]
+            tu = self._token_usage.setdefault(
+                session_id,
+                {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            )
+            self._token_usage.move_to_end(session_id)
+            if len(self._token_usage) > 10_000:
+                self._token_usage.popitem(last=False)
             tu["prompt_tokens"] += prompt_tokens
             tu["completion_tokens"] += completion_tokens
             tu["total_tokens"] += prompt_tokens + completion_tokens
+            self._token_totals["prompt_tokens"] += prompt_tokens
+            self._token_totals["completion_tokens"] += completion_tokens
+            self._token_totals["total_tokens"] += prompt_tokens + completion_tokens
 
     def record_llm_call(
         self,
@@ -177,19 +190,25 @@ class MetricsCollector:
             )
             return {
                 "latencies": {op: self.get_latency_stats(op) for op in operations},
+                "latency_totals": {op: dict(value) for op, value in self._latency_totals.items()},
                 "counters": dict(self._counters),
                 "errors": dict(self._errors),
                 "error_rates": {op: self.get_error_rate(op) for op in operations},
                 "token_usage": {sid: dict(tu) for sid, tu in self._token_usage.items()},
+                "token_totals": dict(self._token_totals),
             }
 
     def reset(self) -> None:
         """Reset all metrics."""
         with self._lock:
             self._latencies.clear()
+            self._latency_totals.clear()
             self._counters.clear()
             self._errors.clear()
             self._token_usage.clear()
+            self._token_totals = {
+                "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0
+            }
 
 
 # Global singleton

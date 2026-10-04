@@ -128,8 +128,14 @@ class Config:
         # Check legacy environment variable
         if key in LEGACY_ENV_VARS:
             env_val = os.environ.get(LEGACY_ENV_VARS[key])
-            if env_val is not None:
+            if env_val is not None and (env_val != "" or key not in SECRET_KEYS):
                 return env_val
+            if key in SECRET_KEYS:
+                from ah.security.secrets import get_secret
+
+                secret = get_secret(LEGACY_ENV_VARS[key])
+                if secret is not None:
+                    return secret
         return DEFAULTS.get(key)
 
     def set(self, key: str, value: Any, persist: bool = False) -> None:

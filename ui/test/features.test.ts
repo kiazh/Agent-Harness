@@ -130,6 +130,23 @@ test("/jobs heartbeat defaults to 300s and omits a prompt", async () => {
 	assert.equal(call.params.prompt, undefined);
 });
 
+test("/jobs cron sends a UTC expression and prompt", async () => {
+	const host = new FakeHost();
+	host.responses["jobs.create"] = (p: Record<string, unknown>) => ({
+		job: {
+			id: "job-cron1234",
+			prompt: p.prompt,
+			cronExpression: p.cronExpression,
+		},
+	});
+	await run("/jobs cron */15 9-17 * * 1-5 :: check the queue", host);
+	const call = host.calls.at(-1)!;
+	assert.equal(call.params.kind, "cron");
+	assert.equal(call.params.cronExpression, "*/15 9-17 * * 1-5");
+	assert.equal(call.params.prompt, "check the queue");
+	assert.match(host.last().text, /UTC/);
+});
+
 test("/jobs off resolves an id prefix and disables the job", async () => {
 	const host = new FakeHost();
 	host.responses["jobs.list"] = {

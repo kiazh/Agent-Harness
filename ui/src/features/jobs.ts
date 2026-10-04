@@ -1,4 +1,4 @@
-// Job commands: list, add, heartbeat, on, off, delete.
+// Job commands: list, add, heartbeat, cron, on, off, delete.
 
 import { resolvePrefix, shortId, table, when } from "../format.ts";
 import type { JobInfo } from "../protocol.ts";
@@ -12,12 +12,13 @@ async function resolveJobId(host: FeatureHost, sessionId: string, idOrPrefix: st
 
 export const jobsCommand: Command = {
 	name: "jobs",
-	description: "Scheduled jobs: list, add, heartbeat, on, off, delete",
-	argumentHint: "[list|add|heartbeat|on|off|delete]",
+	description: "Scheduled jobs: list, add, heartbeat, cron, on, off, delete",
+	argumentHint: "[list|add|heartbeat|cron|on|off|delete]",
 	getArgumentCompletions: options([
 		["list", "Jobs for this session"],
 		["add", "Repeat a prompt: add <seconds> <prompt>"],
 		["heartbeat", "Nudge an idle session: heartbeat <seconds>"],
+		["cron", "Run on a UTC schedule: cron <5 fields> :: <prompt>"],
 		["on", "Enable a job <id>"],
 		["off", "Disable a job <id>"],
 		["delete", "Remove a job <id>"],
@@ -36,7 +37,7 @@ export const jobsCommand: Command = {
 								jobs.map((j) => [
 									shortId(j.id),
 									j.kind,
-									`${j.intervalSeconds}s`,
+									j.kind === "cron" ? (j.cronExpression ?? "") : `${j.intervalSeconds}s`,
 									j.enabled ? "yes" : "no",
 									String(j.runCount),
 									when(j.nextRunAt),
@@ -73,6 +74,23 @@ export const jobsCommand: Command = {
 				host.print(`Heartbeat every ${job.intervalSeconds}s (${shortId(job.id)}).`, "success");
 				return;
 			}
+			case "cron": {
+				const separator = rest.indexOf("::");
+				if (separator < 0) throw new Error("Usage: /jobs cron <5 fields> :: <prompt>");
+				const cronExpression = rest.slice(0, separator).trim();
+				const prompt = rest.slice(separator + 2).trim();
+				if (cronExpression.split(/\s+/).length !== 5 || !prompt) {
+					throw new Error("Usage: /jobs cron <5 fields> :: <prompt>");
+				}
+				const { job } = await host.request<{ job: JobInfo }>("jobs.create", {
+					sessionId: current.id,
+					kind: "cron",
+					cronExpression,
+					prompt,
+				});
+				host.print(`Scheduled "${job.prompt}" at ${job.cronExpression} UTC (${shortId(job.id)}).`, "success");
+				return;
+			}
 			case "on":
 			case "off": {
 				const id = await resolveJobId(host, current.id, requireArgs(rest, `/jobs ${sub} <id>`));
@@ -87,7 +105,7 @@ export const jobsCommand: Command = {
 				return;
 			}
 			default:
-				throw new Error(`Unknown /jobs option "${sub}". Try: list, add, heartbeat, on, off, delete.`);
+				throw new Error(`Unknown /jobs option "${sub}". Try: list, add, heartbeat, cron, on, off, delete.`);
 		}
 	},
 };

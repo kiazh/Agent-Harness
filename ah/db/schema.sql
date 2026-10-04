@@ -172,14 +172,25 @@ CREATE INDEX IF NOT EXISTS idx_agent_messages_to ON agent_messages(to_agent, sta
 
 -- ─── Scheduled Jobs (Phase 6a: scheduler) ───────────────────────────────────
 
+-- Sanitized security and lifecycle events. The async writer never stores raw
+-- credentials; audit_log redacts values before enqueueing them.
+CREATE TABLE IF NOT EXISTS audit_events (
+    id BIGSERIAL PRIMARY KEY,
+    event TEXT NOT NULL,
+    payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('heartbeat', 'interval')),
+    kind TEXT NOT NULL CHECK (kind IN ('heartbeat', 'interval', 'cron')),
     session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
     agent_name TEXT NOT NULL DEFAULT 'harness',
     prompt TEXT NOT NULL,
     interval_seconds INT NOT NULL CHECK (interval_seconds >= 10),
+    cron_expression TEXT,
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     status TEXT NOT NULL DEFAULT 'idle' CHECK (status IN ('idle', 'running', 'error')),
     last_run_at TIMESTAMPTZ,
@@ -188,6 +199,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     run_count INT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT now()
 );
+
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cron_expression TEXT;
+ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_kind_check;
+ALTER TABLE jobs ADD CONSTRAINT jobs_kind_check CHECK (kind IN ('heartbeat', 'interval', 'cron'));
 
 -- The runner polls for due, enabled jobs by next_run_at.
 CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(next_run_at) WHERE enabled;

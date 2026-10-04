@@ -85,6 +85,9 @@ def audit_log(event_type: str, **kwargs) -> None:
         **sanitized_kwargs,
     }
     _audit_logger.info(json.dumps(entry, default=str))
+    from ah.observability.audit import audit_persistence
+
+    audit_persistence.submit(entry)
 
 
 # ---------------------------------------------------------------------------
