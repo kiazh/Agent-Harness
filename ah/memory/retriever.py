@@ -16,6 +16,7 @@ from ah.core.provider import LLMProvider
 from ah.core.usage import usage_store
 from ah.db.connection import db
 from ah.memory.models import MemoryEntry, RetrievedMemory
+from ah.memory.persona import EmotionTopology, PersonaMemoryStore
 from ah.memory.store import MemoryStore, memory_store
 
 __all__ = ["MemoryRetriever"]
@@ -46,11 +47,14 @@ class MemoryRetriever:
         llm_provider: LLMProvider | None = None,
         top_k: int = DEFAULT_TOP_K,
         rerank: bool = True,
+        persona_store: PersonaMemoryStore | None = None,
     ) -> None:
         self.store = store or memory_store
         self.llm = llm_provider
         self.top_k = top_k
         self.rerank = rerank
+        self.emotion_topology = EmotionTopology()
+        self.persona_store = persona_store or PersonaMemoryStore()
 
     async def retrieve(
         self,
@@ -60,6 +64,7 @@ class MemoryRetriever:
         date_range: tuple[datetime, datetime] | None = None,
         query_embedding: list[float] | None = None,
         session_id: uuid.UUID | None = None,
+        emotion: str | None = None,
     ) -> list[RetrievedMemory]:
         """Retrieve relevant memories for a query.
 
@@ -110,6 +115,12 @@ class MemoryRetriever:
         if self.rerank and len(candidates) > 1:
             candidates = await self._rerank(query, candidates, session_id, agent_id)
 
+        # Step 6: Emotion-weighted persona memory retrieval (if emotion specified)
+        if emotion:
+            candidates = await self._retrieve_with_emotion(
+                candidates, emotion, agent_id
+            )
+
         # Update access stats for retrieved memories (batch)
         ids_to_update = [rm.memory.id for rm in candidates[: self.top_k]]
         if ids_to_update:
@@ -119,6 +130,58 @@ class MemoryRetriever:
                 pass  # Don't fail retrieval due to access update failure
 
         return candidates[: self.top_k]
+
+    async def _retrieve_with_emotion(
+        self,
+        candidates: list[RetrievedMemory],
+        emotion: str,
+        agent_id: str | None = None,
+    ) -> list[RetrievedMemory]:
+        """Retrieve persona memories weighted by emotional state.
+
+        Fetches persona memories for the factual memories in candidates,
+        scores them using EmotionTopology, and merges results.
+        """
+        try:
+            # Get fact IDs from candidates
+            fact_ids = [rm.memory.id for rm in candidates]
+            if not fact_ids:
+                return candidates
+
+            # Fetch persona memories for these facts
+            persona_memories = []
+            for fact_id in fact_ids:
+                mems = await self.persona_store.search_persona(
+                    fact_id=fact_id,
+                    persona_id=agent_id,
+                    limit=10,
+                )
+                persona_memories.extend(mems)
+
+            if not persona_memories:
+                return candidates
+
+            # Score persona memories by emotion
+            scored_persona = self.emotion_topology.retrieve_for_emotion(
+                persona_memories, emotion, limit=self.top_k * 2
+            )
+
+            # Merge: boost factual candidates that have high-scoring persona memories
+            persona_boost: dict[uuid.UUID, float] = {}
+            for pm, score in scored_persona:
+                persona_boost[pm.fact_id] = score
+
+            for rm in candidates:
+                if rm.memory.id in persona_boost:
+                    rm.score += persona_boost[rm.memory.id] * 0.3
+
+            # Re-sort by updated score
+            candidates.sort(key=lambda rm: rm.score, reverse=True)
+            return candidates
+
+        except Exception:
+            logger.warning("Emotion-weighted retrieval failed, returning candidates unchanged")
+            return candidates
 
     async def retrieve_by_embedding(
         self,

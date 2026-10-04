@@ -16,6 +16,7 @@ from ah.core.serialization import (
     embedding_to_str,
     payload_to_msgpack,
     row_to_chunk,
+    str_to_embedding,
 )
 from ah.db.connection import db
 
@@ -331,6 +332,90 @@ class ContextManager:
             session_id,
         )
 
+    async def archive_chunk(
+        self,
+        session_id: uuid.UUID,
+        chunk_id: uuid.UUID,
+        payload_msgpack: bytes,
+        embedding: list[float] | None = None,
+        archive_reason: str = "evicted",
+    ) -> dict[str, Any] | None:
+        """Archive a chunk to context_archive before deletion.
+
+        Stores the byte-exact payload_msgpack and optional embedding for
+        later resurrection via embedding similarity.
+        """
+        embedding_str = embedding_to_str(embedding) if embedding is not None else None
+        row = await db.fetchrow(
+            """
+            INSERT INTO context_archive (session_id, chunk_id, payload_msgpack, embedding, archive_reason)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, session_id, chunk_id, payload_msgpack, embedding, archived_at, archive_reason, resurrection_count, last_resurrected
+            """,
+            session_id,
+            chunk_id,
+            payload_msgpack,
+            embedding_str,
+            archive_reason,
+        )
+        return row
+
+    async def resurrect_context(
+        self,
+        session_id: uuid.UUID,
+        query_embedding: list[float],
+        top_k: int = 5,
+        threshold: float = 0.7,
+    ) -> list[tuple[ContextChunk, float]]:
+        """Retrieve archived chunks by embedding similarity.
+
+        Queries context_archive for chunks semantically similar to the query,
+        increments resurrection_count, and returns (chunk, similarity) tuples.
+        """
+        embedding_str = embedding_to_str(query_embedding)
+        rows = await db.fetch(
+            """
+            SELECT *, 1 - (embedding <=> $1::vector) AS similarity
+            FROM context_archive
+            WHERE session_id = $2 AND embedding IS NOT NULL
+            ORDER BY embedding <=> $1::vector
+            LIMIT $3
+            """,
+            embedding_str,
+            session_id,
+            top_k,
+        )
+        results = []
+        for row in rows:
+            sim = row["similarity"]
+            if sim < threshold:
+                continue
+            # Increment resurrection_count
+            await db.execute(
+                """
+                UPDATE context_archive
+                SET resurrection_count = resurrection_count + 1, last_resurrected = now()
+                WHERE id = $1
+                """,
+                row["id"],
+            )
+            # Build a ContextChunk from the archived row
+            from ah.core.serialization import str_to_embedding
+
+            payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
+            emb = str_to_embedding(row["embedding"]) if row["embedding"] else None
+            chunk = ContextChunk(
+                id=row["chunk_id"],
+                session_id=row["session_id"],
+                agent_id="harness",
+                chunk_type="archived",
+                payload=payload,
+                embedding=emb,
+                created_at=row["archived_at"],
+            )
+            results.append((chunk, sim))
+        return results
+
     async def evict_old_chunks(
         self,
         session_id: uuid.UUID,
@@ -341,6 +426,7 @@ class ContextManager:
 
         Uses LRU eviction based on accessed_at timestamp.
         Preserves the most recent chunks and tool_call/result pairs.
+        Archives chunks to context_archive before deletion (reversible eviction).
 
         Args:
             session_id: The session to evict from.
@@ -370,7 +456,7 @@ class ContextManager:
         # and any tool_call/result pairs
         rows = await db.fetch(
             """
-            SELECT id, token_count, chunk_type, created_at
+            SELECT id, token_count, chunk_type, created_at, payload_msgpack, embedding, agent_id
             FROM context_chunks
             WHERE session_id = $1
             ORDER BY created_at ASC
@@ -403,6 +489,23 @@ class ContextManager:
             chunks_done = max_chunks is None or chunks_freed >= chunks_to_evict
             if tokens_done and chunks_done:
                 break
+
+            # Archive before delete (reversible eviction)
+            # Use .get() for fields that may be absent in test mocks
+            try:
+                payload_msgpack = row.get("payload_msgpack") or b""
+                embedding_raw = row.get("embedding")
+                embedding = str_to_embedding(embedding_raw) if embedding_raw else None
+                await self.archive_chunk(
+                    session_id=session_id,
+                    chunk_id=row["id"],
+                    payload_msgpack=payload_msgpack,
+                    embedding=embedding,
+                    archive_reason="evicted",
+                )
+            except Exception as e:
+                # If archiving fails, log and proceed with deletion
+                logger.warning("Failed to archive chunk %s: %s", row["id"], e)
 
             # Evict this chunk
             await db.execute(

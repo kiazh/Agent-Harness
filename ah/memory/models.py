@@ -46,6 +46,7 @@ class MemoryEntry:
     embedding: list[float] | None = None
     explicitly_important: bool = False
     base_strength: float = 1.0
+    quarantined: bool = False
 
     def __post_init__(self) -> None:
         """Validate category and clamp importance to [0, 1]."""

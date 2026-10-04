@@ -21,6 +21,8 @@ from ah.memory.approval import (
 from ah.memory.consolidator import MemoryConsolidator
 from ah.memory.forgetting import ForgettingModel
 from ah.memory.models import MemoryEntry, RetrievedMemory
+from ah.memory.persona import EmotionTopology, PersonaMemory, PersonaMemoryStore, persona_memory_store
+from ah.memory.rl import MemoryAction, MemoryDecision, MemoryReward, MemoryState
 from ah.memory.redaction import RedactionResult, SecretRedactor, redact_secrets
 from ah.memory.retriever import MemoryRetriever
 from ah.memory.scorer import ImportanceScorer
@@ -29,6 +31,13 @@ from ah.memory.user_profile import (
     UserProfile,
     UserProfileStore,
     user_profile_store,
+)
+from ah.memory.identity import (
+    AgentBelief,
+    IdentityGate,
+    MemoryProvenance,
+    ValidationResult,
+    identity_gate,
 )
 
 __all__ = [
@@ -50,4 +59,17 @@ __all__ = [
     "UserProfile",
     "UserProfileStore",
     "user_profile_store",
+    "MemoryAction",
+    "MemoryDecision",
+    "MemoryReward",
+    "MemoryState",
+    "PersonaMemory",
+    "EmotionTopology",
+    "PersonaMemoryStore",
+    "persona_memory_store",
+    "AgentBelief",
+    "IdentityGate",
+    "MemoryProvenance",
+    "ValidationResult",
+    "identity_gate",
 ]

@@ -13,6 +13,7 @@ from typing import Any
 from ah.core.provider import audit_log
 from ah.core.serialization import embedding_to_str, str_to_embedding
 from ah.db.connection import db, parse_command_count
+from ah.memory.identity import identity_gate
 from ah.memory.models import MemoryEntry
 from ah.memory.redaction import SecretRedactor
 
@@ -38,10 +39,27 @@ class MemoryStore:
         explicitly_important: bool = False,
         base_strength: float = 1.0,
     ) -> MemoryEntry:
-        """Add a new memory entry. Secrets are redacted before storage."""
+        """Add a new memory entry. Secrets are redacted before storage.
+
+        The IdentityGate validates the memory against the agent's belief
+        model before storage. If validation fails, the memory is still
+        stored but flagged as quarantined.
+        """
         # Redact secrets from content before storing
         redaction_result = self._redactor.redact(content)
         content = redaction_result.text
+
+        # Validate against identity gate
+        pre_memory = MemoryEntry(
+            id=uuid.uuid4(),
+            session_id=session_id,
+            agent_id=agent_id,
+            content=content,
+            category=category,
+            importance=importance,
+        )
+        validation = await identity_gate.validate_incoming(agent_id, pre_memory)
+        quarantined = not validation.is_valid
 
         embedding_str = None
         if embedding is not None:
@@ -51,12 +69,12 @@ class MemoryStore:
             """
             INSERT INTO memories (
                 session_id, agent_id, content, category, importance,
-                embedding, explicitly_important, base_strength
+                embedding, explicitly_important, base_strength, quarantined
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING id, session_id, agent_id, content, category, importance,
                       created_at, last_accessed, access_count, embedding,
-                      explicitly_important, base_strength
+                      explicitly_important, base_strength, quarantined
             """,
             session_id,
             agent_id,
@@ -66,6 +84,7 @@ class MemoryStore:
             embedding_str,
             explicitly_important,
             base_strength,
+            quarantined,
         )
         memory = self._row_to_entry(row)
         audit_log(
@@ -74,6 +93,8 @@ class MemoryStore:
             agent_id=agent_id,
             category=category,
             importance=importance,
+            quarantined=quarantined,
+            validation_reason=validation.reason,
         )
         return memory
 
@@ -398,6 +419,7 @@ class MemoryStore:
             embedding=embedding,
             explicitly_important=row["explicitly_important"],
             base_strength=row["base_strength"],
+            quarantined=row.get("quarantined", False),
         )
 
 

@@ -60,6 +60,25 @@ CREATE INDEX IF NOT EXISTS idx_context_chunks_embedding ON context_chunks
     USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
+-- ─── Context Archive (reversible eviction) ─────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS context_archive (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL,
+    chunk_id UUID NOT NULL,
+    payload_msgpack BYTEA NOT NULL,
+    embedding vector(1536),
+    archived_at TIMESTAMPTZ DEFAULT NOW(),
+    archive_reason TEXT,
+    resurrection_count INT DEFAULT 0,
+    last_resurrected TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_context_archive_session ON context_archive(session_id);
+CREATE INDEX IF NOT EXISTS idx_context_archive_embedding ON context_archive
+    USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
 -- ─── Long-Term Memories ────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS memories (
@@ -76,8 +95,11 @@ CREATE TABLE IF NOT EXISTS memories (
     embedding vector(1536),
     explicitly_important BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT now(),
-    last_accessed TIMESTAMPTZ
+    last_accessed TIMESTAMPTZ,
+    quarantined BOOLEAN NOT NULL DEFAULT FALSE
 );
+
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Index for agent+category filtering
 CREATE INDEX IF NOT EXISTS idx_memories_agent_category ON memories(agent_id, category);
@@ -208,6 +230,24 @@ ALTER TABLE jobs ADD CONSTRAINT jobs_kind_check CHECK (kind IN ('heartbeat', 'in
 CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(next_run_at) WHERE enabled;
 CREATE INDEX IF NOT EXISTS idx_jobs_session ON jobs(session_id);
 
+-- ─── Persona Memories (Gap 3: dual-stream memory) ───────────────────────────
+
+CREATE TABLE IF NOT EXISTS persona_memories (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    fact_id UUID REFERENCES memories(id) ON DELETE CASCADE,
+    persona_id TEXT NOT NULL,
+    interpretation TEXT NOT NULL,
+    emotional_valence FLOAT NOT NULL DEFAULT 0.0 CHECK (emotional_valence >= -1.0 AND emotional_valence <= 1.0),
+    emotional_arousal FLOAT NOT NULL DEFAULT 0.0 CHECK (emotional_arousal >= 0.0 AND emotional_arousal <= 1.0),
+    confidence FLOAT NOT NULL DEFAULT 0.5 CHECK (confidence >= 0.0 AND confidence <= 1.0),
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_persona_memories_fact ON persona_memories(fact_id);
+CREATE INDEX IF NOT EXISTS idx_persona_memories_persona ON persona_memories(persona_id);
+CREATE INDEX IF NOT EXISTS idx_persona_memories_valence ON persona_memories(emotional_valence);
+
 -- ─── LLM usage (Phase 7: durable accounting and budgets) ────────────────────
 
 -- Keep usage after a session is deleted so agent-wide budgets and operational
@@ -229,3 +269,27 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_llm_usage_session ON llm_usage(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_agent ON llm_usage(agent_id, created_at DESC);
+
+-- ─── Agent Beliefs (Gap 2: Identity Model) ─────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS agent_beliefs (
+    agent_id TEXT PRIMARY KEY,
+    belief JSONB NOT NULL,
+    version INT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_beliefs_updated ON agent_beliefs(updated_at DESC);
+
+-- ─── Memory Provenance (Gap 2: Identity Propagation Defense) ───────────────
+
+CREATE TABLE IF NOT EXISTS memory_provenance (
+    memory_id UUID PRIMARY KEY,
+    source_agent TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    parent_memory_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_provenance_source ON memory_provenance(source_agent);
+CREATE INDEX IF NOT EXISTS idx_memory_provenance_parent ON memory_provenance(parent_memory_id);
