@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 from ah.core.models import ContextChunk, Session
+
+
+def json_safe_payload(value: Any) -> Any:
+    """Preserve MessagePack binary values in JSON-RPC responses."""
+    if isinstance(value, bytes):
+        return {"$base64": base64.b64encode(value).decode("ascii")}
+    if isinstance(value, dict):
+        return {str(key): json_safe_payload(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe_payload(item) for item in value]
+    return value
 
 
 def session_to_dict(session: Session) -> dict[str, Any]:

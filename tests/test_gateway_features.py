@@ -4,12 +4,14 @@ exercised against the real test database."""
 from __future__ import annotations
 
 import os
+import json
 import uuid
 
 import pytest
 
 from ah.core.config import config
 from ah.core.context import context_manager
+from ah.core.session import session_manager
 from ah.gateway.server import INVALID_PARAMS, NOT_FOUND, Gateway
 from tests.test_gateway import Harness
 
@@ -52,6 +54,54 @@ def test_every_feature_method_is_registered():
 
 
 class TestSessions:
+    async def test_recall_search_and_window_are_scoped_to_current_agent(self, h):
+        tag = f"quartzotter{uuid.uuid4().hex[:8]}"
+        sid = await new_session(h, "Recall owner")
+        other = await session_manager.create(title="Other agent", agent_id=f"other-{tag}")
+        try:
+            own_chunk = await context_manager.add_chunk(
+                uuid.UUID(sid), "harness", "user_message",
+                {"content": f"{tag} own evidence", "attachment": b"\x00\xff"},
+            )
+            other_chunk = await context_manager.add_chunk(
+                other.id, other.agent_id, "user_message", {"content": f"{tag} private"}
+            )
+            hits = result(
+                await h.call("session.recall", {"sessionId": sid, "query": tag})
+            )["hits"]
+            assert [(hit["sessionId"], hit["chunkId"]) for hit in hits] == [
+                (sid, str(own_chunk.id))
+            ]
+            window = result(
+                await h.call(
+                    "session.recall.window",
+                    {
+                        "sessionId": sid,
+                        "targetSessionId": sid,
+                        "chunkId": str(own_chunk.id),
+                    },
+                )
+            )["messages"]
+            assert [item["payload"]["content"] for item in window] == [f"{tag} own evidence"]
+            assert window[0]["payload"]["attachment"] == {"$base64": "AP8="}
+            json.dumps(window)
+            hidden = result(
+                await h.call(
+                    "session.recall.window",
+                    {
+                        "sessionId": sid,
+                        "targetSessionId": str(other.id),
+                        "chunkId": str(other_chunk.id),
+                    },
+                )
+            )["messages"]
+            assert hidden == []
+            invalid = await h.call("session.recall", {"query": tag})
+            assert invalid["error"]["code"] == INVALID_PARAMS
+        finally:
+            await session_manager.delete(uuid.UUID(sid))
+            await session_manager.delete(other.id)
+
     async def test_rename_goal_search_fork_delete(self, h):
         tag = uuid.uuid4().hex[:8]
         sid = await new_session(h)

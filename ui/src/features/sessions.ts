@@ -1,8 +1,8 @@
-// Session commands: new, sessions, resume, search, rename, goal, fork, delete, export.
+// Session commands: new, sessions, resume, search, recall, rename, goal, fork, delete, export.
 
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { resolvePrefix, shortId, when } from "../format.ts";
-import type { ContextResult, ResumeResult, SessionListResult, SessionInfo, SessionResult } from "../protocol.ts";
+import type { ContextResult, RecallResult, RecallWindowResult, ResumeResult, SessionListResult, SessionInfo, SessionResult } from "../protocol.ts";
 import { confirm, requireArgs, requireSession, type Command, type FeatureHost } from "./types.ts";
 
 async function resolveSessionId(host: FeatureHost, idOrPrefix: string): Promise<string> {
@@ -82,6 +82,42 @@ export const sessionCommands: Command[] = [
 			const { sessions } = await host.request<SessionListResult>("session.search", { query, limit: 30 });
 			if (!sessions.length) host.print(`No sessions match "${query}".`);
 			else await pickAndOpen(host, `Sessions matching "${query}"`, sessions);
+		},
+	},
+	{
+		name: "recall",
+		description: "Search past conversation text and inspect a match",
+		argumentHint: "<words>",
+		async run(args, host) {
+			const current = requireSession(host);
+			const query = requireArgs(args, "/recall <words>");
+			const { hits } = await host.request<RecallResult>("session.recall", { sessionId: current.id, query, limit: 30 });
+			if (!hits.length) {
+				host.print(`No transcript matches for "${query}".`);
+				return;
+			}
+			const choice = await host.pick(`Recall "${query}"`, hits.map((hit) => ({
+				value: hit.chunkId ?? hit.sessionId,
+				label: `${hit.title || "(untitled)"}: ${hit.preview.slice(0, 80)}`,
+				description: `${hit.source}  ${shortId(hit.sessionId)}  ${when(hit.occurredAt)}`,
+			})));
+			if (!choice) return;
+			const hit = hits.find((item) => (item.chunkId ?? item.sessionId) === choice.value);
+			if (!hit) return;
+			if (!hit.chunkId) {
+				await openSession(host, hit.sessionId);
+				return;
+			}
+			const { messages } = await host.request<RecallWindowResult>("session.recall.window", {
+				sessionId: current.id, targetSessionId: hit.sessionId, chunkId: hit.chunkId,
+			});
+			host.print(`Transcript from ${hit.title || "(untitled)"} (${shortId(hit.sessionId)}):`);
+			for (const message of messages) {
+				const content = message.payload.content ?? message.payload.text ?? message.payload.result_preview ?? message.payload;
+				const plain = typeof content === "string" ? content : JSON.stringify(content);
+				host.print(`${message.type} [${message.source}]: ${plain.slice(0, 4000)}`, "plain");
+			}
+			host.print(`Use /resume ${hit.sessionId} to continue that conversation.`);
 		},
 	},
 	{

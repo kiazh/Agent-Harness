@@ -9,15 +9,20 @@ Most agent frameworks are black boxes. AgentHarness is built to be understood �
 ## Features
 
 - **ReAct loop**: Thought → Action → Observation with streaming output
-- **PostgreSQL-backed context**: asyncpg + connection pooling, MessagePack payloads, pgvector embeddings
-- **Long-term memory**: LLM-based extraction, importance scoring, Ebbinghaus forgetting, hybrid retrieval, approval gate
+- **PostgreSQL-backed context**: asyncpg + connection pooling, MessagePack payloads, pgvector embeddings, reversible eviction into `context_archive`
+- **Long-term memory**: LLM-based extraction, importance scoring, Ebbinghaus forgetting, hybrid retrieval, approval gate, secret redaction, persona-conditioned interpretations, identity/belief drift gating, HMAC provenance
 - **RAG pipeline**: Document indexing, chunking, embedding, hybrid search (BM25 + dense + RRF), reranking
+- **Multi-agent**: Named agent definitions (DB/YAML/Soul Spec), sequential/parallel delegation, per-agent tool allowlists
+- **Scheduling**: Durable jobs with heartbeat, interval, and five-field UTC cron; atomic claim via `FOR UPDATE SKIP LOCKED`
+- **HTTP API**: FastAPI server with versioned `/api/v1` routes, SSE chat streaming, API-key auth, per-peer rate limiting, `/health`, `/ready`, `/metrics`
+- **Usage accounting**: Durable `llm_usage` with per-session/per-agent token and request budgets that cannot be bypassed by missing provider metadata
 - **Tool registry**: Decorator-based with JSON Schema inference, input validation, caching
-- **Skills system**: SKILL.md parser with YAML frontmatter, trigger matching
+- **Skills system**: SKILL.md parser with YAML frontmatter, trigger matching, curator, hub
 - **Terminal UI**: TypeScript app on [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi) (MIT) — streaming Markdown, tool cards, slash-command and file autocomplete, session picker — driving the Python agent through a JSON-RPC gateway
 - **Configuration**: YAML file + environment variable overrides + per-session overrides
-- **Metrics**: Latency histograms, throughput counters, error rates, token usage tracking
-- **Security**: No shell injection, no path traversal, no SSRF, rate limiting, audit logging, PII redaction
+- **Metrics**: Latency histograms, throughput counters, error rates, token usage tracking; Prometheus exposition
+- **Observability**: Sanitized audit events persisted to PostgreSQL; OpenTelemetry spans when an SDK is configured; plugins via opt-in entry-point hooks
+- **Security**: No shell injection, no path traversal, no SSRF, rate limiting, audit logging, PII redaction, Docker-sandboxed terminal tool (opt-in)
 - **Retry logic**: Exponential backoff on LLM calls
 - **DI container**: Production and testing configurations
 - **Compression**: Context compression with token budget enforcement
@@ -63,12 +68,17 @@ ah (Typer CLI) ──launches──> ui/  TypeScript terminal UI (pi-tui)
                                 └──spawns──> python -m ah.gateway   JSON-RPC 2.0 over stdio
                                                 └─> ReActAgent → LLMProvider (OpenRouter/Ollama)
                                                        ↓
-                                              PostgreSQL (asyncpg + pgvector)
-                                              ├── sessions
-                                              ├── context_chunks (MessagePack + pgvector)
-                                              ├── memories (pgvector)
-                                              ├── pending_memories (approval gate)
-                                              └── user_profiles
+                                               PostgreSQL (asyncpg + pgvector)
+                                               ├── sessions
+                                               ├── context_chunks (MessagePack + pgvector)
+                                               ├── context_archive (reversible eviction)
+                                               ├── memories / persona_memories / pending_memories
+                                               ├── user_profiles
+                                               ├── agents / agent_messages
+                                               ├── jobs (scheduler)
+                                               ├── llm_usage (usage budgets)
+                                               ├── audit_events
+                                               └── agent_beliefs / memory_provenance (identity)
 ```
 
 The UI and the agent only share the protocol in
@@ -170,33 +180,63 @@ agent-harness/
 │   │   └── output.py        # Plain Rich tables/status lines for admin commands
 │   ├── gateway/
 │   │   ├── __main__.py      # `python -m ah.gateway`: stdio JSON-RPC server (protocol on private fds)
-│   │   └── server.py        # Gateway: sessions, prompt streaming, cancel, config
+│   │   ├── server.py        # Gateway: sessions, prompt streaming, cancel, config
+│   │   └── features/        # Domain handlers (sessions, memory, skills, jobs, agents, config)
+│   ├── api/
+│   │   ├── app.py           # FastAPI app (versioned /api/v1 routes, SSE chat, /health, /ready, /metrics)
+│   │   ├── auth.py          # API-key auth (fail-closed when unset)
+│   │   └── rate_limit.py    # Per-transport-peer rate limiting
 │   ├── core/
 │   │   ├── agent.py         # ReActAgent + BaseReActAgent (Template Method)
+│   │   ├── agent_def.py     # AgentDef personas + registry (DB/YAML/Soul Spec/builtin)
 │   │   ├── assembler.py     # PromptAssembler + TokenCounter (tiktoken)
 │   │   ├── compression.py   # Context compression with token budget enforcement
 │   │   ├── config.py        # Config (YAML + env vars + session overrides)
 │   │   ├── container.py     # DI container (production / testing)
-│   │   ├── context.py       # ContextManager (CRUD, batch insert, embedding search)
+│   │   ├── context.py       # ContextManager (CRUD, batch insert, embedding search, archive)
+│   │   ├── cron.py          # Five-field UTC cron parser
 │   │   ├── exceptions.py    # Custom exception hierarchy
 │   │   ├── metrics.py       # MetricsCollector (latency, counters, errors, tokens)
 │   │   ├── models.py        # Domain models (Session, ContextChunk, LLMResponse, etc.)
+│   │   ├── orchestrator.py  # Sequential/parallel delegation, agent_messages
 │   │   ├── provider.py      # LLMProvider (OpenRouter, Ollama) + rate limiting + audit
+│   │   ├── scheduler.py     # JobStore + JobRunner (interval/heartbeat/cron)
 │   │   ├── serialization.py # Shared serialization utilities
-│   │   └── session.py       # SessionManager (with TTLCache)
+│   │   ├── session.py       # SessionManager (with TTLCache)
+│   │   └── usage.py         # Durable llm_usage accounting and budgets
 │   ├── db/
 │   │   ├── connection.py    # asyncpg pool
 │   │   └── schema.sql       # PostgreSQL schema and research tables
 │   ├── memory/
-│   │   ├── approval.py      # MemoryApproval (human-in-the-loop approval gate)
+│   │   ├── approval.py      # MemoryApprovalGate (human-in-the-loop approval gate)
 │   │   ├── consolidator.py  # MemoryConsolidator (LLM extraction → scoring → dedup → write)
 │   │   ├── forgetting.py    # ForgettingModel (Ebbinghaus decay)
+│   │   ├── identity.py      # IdentityGate, AgentBelief, MemoryProvenance, drift containment
 │   │   ├── models.py        # MemoryEntry, RetrievedMemory
+│   │   ├── persona.py       # PersonaMemoryStore + EmotionTopology
+│   │   ├── policy.py        # Group-relative memory-policy trainer (research baseline)
 │   │   ├── redaction.py     # PII redaction for memory content
 │   │   ├── retriever.py     # MemoryRetriever (hybrid search + reranking)
+│   │   ├── rl.py            # RL action space + multi-level rewards (research)
 │   │   ├── scorer.py        # ImportanceScorer (multi-factor)
 │   │   ├── store.py         # MemoryStore (CRUD)
 │   │   └── user_profile.py  # UserProfileManager (per-user preferences)
+│   ├── observability/
+│   │   ├── audit.py         # Bounded async persistence of sanitized audit events
+│   │   ├── metrics.py       # Prometheus text exposition
+│   │   └── tracing.py       # OpenTelemetry spans (when an SDK is configured)
+│   ├── plugins/
+│   │   ├── base.py, loader.py, registry.py  # Opt-in entry-point hooks with timeouts
+│   ├── security/
+│   │   └── secrets.py       # Env, *_FILE, Vault, AWS Secrets Manager resolution
+│   ├── soulspec/
+│   │   ├── schema.py        # Soul Spec package validation + AgentDef conversion
+│   │   ├── merge.py, adapters.py, conformance.py
+│   ├── research/
+│   │   ├── locomo.py        # LoCoMo evidence-retrieval benchmark
+│   │   ├── train_memory_policy.py  # Offline memory-policy training
+│   │   └── identity_eval.py # Identity-drift scenario evaluator
+│   ├── services.py          # Shared service ops (export, compress, learn skill, status)
 │   ├── rag/
 │   │   ├── chunker.py       # RecursiveCharacterTextSplitter
 │   │   ├── embedder.py      # OpenAIEmbedder (LRU cache + batch)
@@ -212,6 +252,7 @@ agent-harness/
 │       ├── file.py          # read_file, write_file, list_files
 │       ├── memory.py        # remember, recall
 │       ├── rag.py           # index_document, search_documents
+│       ├── agents.py        # delegate, list_agents
 │       ├── registry.py      # Re-export for backward compat
 │       └── terminal.py      # terminal (explicit sandbox opt-in)
 ├── ui/                     # TypeScript terminal UI (pi-tui): src/ app, gateway client, widgets; test/
@@ -239,6 +280,24 @@ agent-harness/
 Research reproduction commands, LoCoMo evidence-retrieval results, memory
 policy training, identity-drift scenarios, and Soul Spec package checks are
 documented in [research evaluation](docs/research-evaluation.md).
+
+### Research status
+
+The `docs/research-*.md` files are surveys and design notes written while the
+system was built — they describe the gap that motivated each component and the
+recommended design. What is actually shipped and runnable today:
+
+| Area | Shipped implementation | Research doc's remaining gap |
+|---|---|---|
+| Memory / RAG | Postgres memories + hybrid RAG + persona/emotion/identity gate | RL-trained memory policy is a research baseline only; it is not wired into the runtime |
+| Observability | Prometheus `/metrics`, OTel spans, persisted audit events | Dashboards and alerting are addressed conceptually, not implemented |
+| Multi-agent | `AgentDef` personas + sequential/parallel delegation | Orchestrator-worker decomposition is not built |
+| Scheduling | Interval/heartbeat/cron durable jobs | Script-only (no-agent) jobs are not implemented |
+| Soul Spec | v0.5 manifest validation, package files, AgentDef conversion | Cross-framework runs are adapters, not compatibility certification |
+| Evaluation | LoCoMo evidence retrieval, memory-policy training, identity-drift checks (`ah/research/`) | Small local benchmarks, not product answer-quality claims |
+
+Nothing in the research docs should be read as a claim about generated-answer
+quality of a deployed model.
 
 ```bash
 # Python: tests (DB-backed tests use AGENT_HARNESS_TEST_DATABASE_URL, never DATABASE_URL)

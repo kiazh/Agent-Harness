@@ -536,15 +536,22 @@ The `/journey` command provides visibility into the agent's learning:
 
 ## 8. Implementation Priorities for AgentHarness
 
-Based on this research, the highest-impact improvements for AgentHarness would be:
+This is a research comparison, not the current implementation checklist.
+Hermes uses SQLite/FTS5; AgentHarness uses PostgreSQL and already has GIN
+full-text indexes for live and archived context. The original recommendation to
+"add FTS5 to the existing SQLite schema" was wrong for this repository.
+The current delivery plan is
+[the research and Hermes capability program](superpowers/specs/2026-10-04-research-hermes-program-design.md).
 
-1. **Implement the bounded memory file system** (MEMORY.md + USER.md equivalent) with the frozen snapshot pattern and forced consolidation.
-2. **Add FTS5 session search** to the existing SQLite schema, with the bookend + window pattern for efficient context reconstruction.
-3. **Implement the background review fork** for memory and skill curation, replacing any inline nudge approach.
-4. **Add write-time security scanning** for memory content.
-5. **Implement external drift detection** for memory files.
-6. **Add skill self-improvement** to the existing `ah/skills/registry.py`.
-7. **Consider a Honcho-like dialectic user modeling** plugin for deep user understanding.
+1. Complete PostgreSQL cross-session transcript recall, with an anchored
+   window and an agent-facing entry point. The core search and gateway methods
+   are in development; benchmark and UI work are still pending.
+2. Add bounded post-turn review for proposed memory and skill changes, with
+   read-before-write checks, approval, and an observable history.
+3. Evaluate bounded memory snapshots against the current PostgreSQL memory
+   store before adding a second source of truth.
+4. Treat Honcho-like user modeling as an optional integration and measure its
+   value against the local profile and persona-memory baseline.
 
 ---
 

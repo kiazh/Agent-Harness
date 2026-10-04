@@ -37,6 +37,28 @@ export interface ResumeResult {
 	history: HistoryEntry[];
 }
 
+export interface RecallHit {
+	sessionId: string;
+	chunkId: string | null;
+	title: string | null;
+	source: "live" | "archive" | "title";
+	preview: string;
+	score: number;
+	occurredAt: string;
+}
+
+export interface RecallMessage {
+	sessionId: string;
+	chunkId: string;
+	type: string;
+	source: "live" | "archive";
+	payload: Record<string, unknown>;
+	occurredAt: string;
+}
+
+export interface RecallResult { hits: RecallHit[] }
+export interface RecallWindowResult { messages: RecallMessage[] }
+
 export interface ConfigResult {
 	model: string;
 	provider: string;

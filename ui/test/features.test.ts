@@ -69,6 +69,32 @@ class FakeHost implements FeatureHost {
 
 const run = (text: string, host: FakeHost) => runCommand(parseCommand(text)!, host);
 
+test("/recall searches transcript evidence and opens an anchored window", async () => {
+	const host = new FakeHost();
+	const sourceId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+	const chunkId = "99999999-8888-7777-6666-555555555555";
+	host.responses["session.recall"] = {
+		hits: [{ sessionId: sourceId, chunkId, title: "Older conversation", source: "archive", preview: "The migration decision", score: 0.5, occurredAt: "2026-10-01T00:00:00Z" }],
+	};
+	host.responses["session.recall.window"] = {
+		messages: [{ sessionId: sourceId, chunkId, type: "user_message", source: "archive", payload: { content: "The migration decision" }, occurredAt: "2026-10-01T00:00:00Z" }],
+	};
+	host.picks.push(chunkId);
+	await run("/recall migration", host);
+	assert.deepEqual(host.calls[0], { method: "session.recall", params: { sessionId: SESSION.id, query: "migration", limit: 30 } });
+	assert.deepEqual(host.calls[1], { method: "session.recall.window", params: { sessionId: SESSION.id, targetSessionId: sourceId, chunkId } });
+	assert.match(host.printed.map((p) => p.text).join("\n"), /migration decision/);
+	assert.equal(host.current?.id, SESSION.id);
+});
+
+test("/recall reports empty results without opening a window", async () => {
+	const host = new FakeHost();
+	host.responses["session.recall"] = { hits: [] };
+	await run("/recall obscure", host);
+	assert.match(host.last().text, /No transcript matches/);
+	assert.equal(host.calls.length, 1);
+});
+
 test("/jobs add schedules an interval job and reports it", async () => {
 	const host = new FakeHost();
 	host.responses["jobs.create"] = (p: Record<string, unknown>) => ({

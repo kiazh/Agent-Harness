@@ -13,8 +13,11 @@ AgentHarness has completed Phases 1-6: a ReAct loop, PostgreSQL context and memo
 Phase 7 has started with **session and agent usage controls** (shipped: durable
 `llm_usage` accounting, optional token/request budgets, `ah usage` and
 `usage.get`/`GET /api/v1/sessions/<id>/usage`), then improves the existing
-terminal UI and evaluates durable workflows when a concrete use case requires
-them.
+terminal UI. The expanded research and Hermes capability program now provides
+concrete durable workflow cases. See the
+[program design](superpowers/specs/2026-10-04-research-hermes-program-design.md)
+and the [revised LangGraph decision](research-langgraph.md). These are planned
+work, not completed Phase 7 features.
 
 ---
 
@@ -242,12 +245,13 @@ Improve that UI only where user workflows require it: a searchable session
 browser, clearer context/memory views, and accessible streaming states. Do not
 create a second Textual application.
 
-### 7.3 Durable workflows, if needed
+### 7.3 Durable workflows
 
-Define the crash-recovery or human-approval use case first. Add PostgreSQL
-checkpoints and resumable execution to the existing agent engine if that meets
-the need. Reassess LangGraph only if those requirements exceed the current
-engine; see [the LangGraph research](research-langgraph.md).
+The delegated-task approval and restart case is now defined. Compare a
+PostgreSQL-backed native checkpoint with an isolated LangGraph workflow under
+the same recovery, idempotency, budget, and cancellation tests. The
+[LangGraph decision](research-langgraph.md) records the acceptance gate;
+production integration has not yet been selected.
 
 ### 7.4 Testing and QA
 

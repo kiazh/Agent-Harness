@@ -7,13 +7,14 @@ from typing import TYPE_CHECKING, Any
 from ah import services
 from ah.core.context import context_manager
 from ah.core.session import session_manager
+from ah.core.session_recall import SessionRecall
 from ah.gateway.errors import TURN_IN_PROGRESS, RpcError
-from ah.gateway.serializers import chunk_preview, session_to_dict
+from ah.gateway.serializers import chunk_preview, json_safe_payload, session_to_dict
 
 if TYPE_CHECKING:
     from ah.gateway.server import Gateway
 
-from ah.gateway.features._common import _int, _str
+from ah.gateway.features._common import _int, _str, _uuid
 
 
 async def session_fork(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
@@ -51,6 +52,57 @@ async def session_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         _str(params, "query", max_len=200), limit=_int(params, "limit", 20, 1, 200)
     )
     return {"sessions": [session_to_dict(s) for s in found]}
+
+
+async def session_recall(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Find transcript evidence belonging to the current session's agent."""
+    gw.require_db()
+    session = await gw.get_session(params)
+    hits = await SessionRecall().discover(
+        session.agent_id,
+        _str(params, "query", max_len=200),
+        limit=_int(params, "limit", 20, 1, 100),
+    )
+    return {
+        "hits": [
+            {
+                "sessionId": str(hit.session_id),
+                "chunkId": str(hit.chunk_id) if hit.chunk_id else None,
+                "title": hit.title,
+                "source": hit.source,
+                "preview": hit.preview,
+                "score": hit.score,
+                "occurredAt": hit.occurred_at.isoformat(),
+            }
+            for hit in hits
+        ]
+    }
+
+
+async def session_recall_window(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Read a bounded window without trusting client-supplied agent scope."""
+    gw.require_db()
+    session = await gw.get_session(params)
+    messages = await SessionRecall().window(
+        session.agent_id,
+        _uuid(params, "targetSessionId"),
+        _uuid(params, "chunkId"),
+        before=_int(params, "before", 5, 0, 20),
+        after=_int(params, "after", 5, 0, 20),
+    )
+    return {
+        "messages": [
+            {
+                "sessionId": str(message.session_id),
+                "chunkId": str(message.chunk_id),
+                "type": message.chunk_type,
+                "source": message.source,
+                "payload": json_safe_payload(message.payload),
+                "occurredAt": message.occurred_at.isoformat(),
+            }
+            for message in messages
+        ]
+    }
 
 
 async def session_export(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
