@@ -1,7 +1,8 @@
 # LangGraph Decision for AgentHarness
 
 **Reviewed:** 2026-10-04  
-**Status:** Evaluation required for durable workflows; no production integration yet.
+**Status:** Narrow PostgreSQL recovery trial completed; production integration
+remains undecided.
 
 ## What changed
 
@@ -54,6 +55,29 @@ The trial passes only if it demonstrates all of the following:
 5. The dependency, schema, latency, and recovery behavior are measured with
    a reproducible integration test. A failed trial leaves the current loop
    as the runtime and records the reason.
+
+## Trial result (2026-10-04)
+
+`ah.research.workflow_trial` now runs the same paused approval and idempotent
+PostgreSQL insert through a native row-state implementation and an isolated
+LangGraph graph with `AsyncPostgresSaver`. Tests cover denial, cancellation,
+agent ownership, repeat resume, reopening the checkpointer, and a separate
+Python process starting and resuming the graph. The Windows trial requires
+`psycopg[binary]` and a Selector event loop. The optional dependency group is
+`workflow-trial`; it is not part of the production install.
+
+A five-run local comparison, after setup, measured 3.618 ms mean for native
+start-plus-approval versus 18.608 ms for LangGraph; the graph wrote 20
+checkpoint rows. This small benchmark is only a mechanism check and cannot
+establish a stable latency ratio. Full machine/version data are in
+[`research/results/workflow-trial-2026-10-04.json`](../research/results/workflow-trial-2026-10-04.json).
+
+The trial has **not** passed the production decision gate: its effect is a
+transactional database insert, not a delegated agent tool; it does not yet
+exercise usage budgets, gateway streaming, audit parity, or external side
+effects. The native path is simpler for this case. Keep LangGraph optional
+until a real delegated approval workflow proves a recovery benefit that
+justifies its checkpoint tables and dependency footprint.
 
 An isolated workflow is the migration boundary. Converting all agents,
 sessions, and scheduled jobs at once would create duplicate persistence

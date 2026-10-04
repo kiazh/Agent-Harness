@@ -18,5 +18,16 @@
     "hit_rate": 0.4618108244815377,
     "mean_reciprocal_rank": 0.34574270780644106,
     "mean_retrieved_bytes": 922.3348507840162
+  },
+  "session_recall": {
+    "questions": 1977,
+    "skipped_questions": 5,
+    "evidence_recall": 0.425924501671247,
+    "hit_rate": 0.4618108244815377,
+    "mean_reciprocal_rank": 0.34574270780644106,
+    "mean_retrieved_bytes": 922.3348507840162,
+    "mean_query_latency_ms": 15.293203833681888,
+    "turns_per_session": 50,
+    "note": "Archived turns partitioned into sessions for each conversation; unique agent per conversation. Local PostgreSQL test database on Windows."
   }
 }

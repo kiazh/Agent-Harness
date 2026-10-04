@@ -9,6 +9,8 @@ from ah.tools import (
     file,  # noqa: F401 — read_file, write_file, list_files
     memory,  # noqa: F401 — remember, recall
     rag,  # noqa: F401 — index_document, search_documents
+    session_recall,  # noqa: F401 — transcript recall
+    skills,  # noqa: F401 — skill discovery and reading
     terminal,  # noqa: F401 — terminal
 )
 from ah.tools.base import Tool, ToolRegistry, registry
@@ -22,5 +24,7 @@ __all__ = [
     "terminal",
     "memory",
     "rag",
+    "session_recall",
+    "skills",
     "agents",
 ]

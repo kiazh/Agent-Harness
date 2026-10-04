@@ -1,0 +1,1 @@
+{"specVersion": "0.5", "name": "valid-name", "displayName": "Valid", "version": "1.0.0", "description": "Valid description", "author": {"name": "Ada"}, "license": "MIT", "tags": [], "category": "general", "files": {"soul": "SOUL.md", "identity": "../private.txt"}}

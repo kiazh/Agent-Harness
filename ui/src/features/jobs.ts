@@ -1,4 +1,4 @@
-// Job commands: list, add, heartbeat, cron, on, off, delete.
+// Job commands: list, add, script, heartbeat, cron, on, off, delete.
 
 import { resolvePrefix, shortId, table, when } from "../format.ts";
 import type { JobInfo } from "../protocol.ts";
@@ -19,13 +19,27 @@ function parseSeconds(value: string): number {
 	return seconds;
 }
 
+function pinnedPrompt(value: string): { prompt: string; model?: string; provider?: string } {
+	const words = value.trim().split(/\s+/);
+	const pins: { model?: string; provider?: string } = {};
+	while (words.length && /^--(model|provider)=/.test(words.at(-1)!)) {
+		const option = words.pop()!;
+		const match = /^--(model|provider)=(\S*)$/.exec(option)!;
+		const key = match[1] as "model" | "provider";
+		if (!match[2] || pins[key]) throw new Error(`Invalid --${key} value.`);
+		pins[key] = match[2];
+	}
+	return { prompt: words.join(" "), ...pins };
+}
+
 export const jobsCommand: Command = {
 	name: "jobs",
-	description: "Scheduled jobs: list, add, heartbeat, cron, on, off, delete",
-	argumentHint: "[list|add|heartbeat|cron|on|off|delete]",
+	description: "Scheduled jobs: list, add, script, heartbeat, cron, on, off, delete",
+	argumentHint: "[list|add|script|heartbeat|cron|on|off|delete]",
 	getArgumentCompletions: options([
 		["list", "Jobs for this session"],
 		["add", "Repeat a prompt: add <seconds> <prompt>"],
+		["script", "Run a script without an LLM: script <seconds> <file>"],
 		["heartbeat", "Nudge an idle session: heartbeat <seconds>"],
 		["cron", "Run on a UTC schedule: cron <5 fields> :: <prompt>"],
 		["on", "Enable a job <id>"],
@@ -42,11 +56,12 @@ export const jobsCommand: Command = {
 				host.print(
 					jobs.length
 						? table(
-								["ID", "Kind", "Every", "On", "Runs", "Next"],
+								["ID", "Kind", "Every", "Model", "On", "Runs", "Next"],
 								jobs.map((j) => [
 									shortId(j.id),
-									j.kind,
+									j.noAgent ? "script" : j.kind,
 									j.kind === "cron" ? (j.cronExpression ?? "") : `${j.intervalSeconds}s`,
+									j.model ?? "default",
 									j.enabled ? "yes" : "no",
 									String(j.runCount),
 									when(j.nextRunAt),
@@ -61,14 +76,29 @@ export const jobsCommand: Command = {
 			case "add": {
 				const [secondsText, prompt] = splitSub(requireArgs(rest, "/jobs add <seconds> <prompt>"));
 				const seconds = parseSeconds(secondsText);
-				if (!prompt) throw new Error("Usage: /jobs add <seconds> <prompt>");
+				const pinned = pinnedPrompt(prompt);
+				if (!pinned.prompt) throw new Error("Usage: /jobs add <seconds> <prompt>");
 				const { job } = await host.request<{ job: JobInfo }>("jobs.create", {
 					sessionId: current.id,
 					kind: "interval",
-					prompt,
+					...pinned,
 					intervalSeconds: seconds,
 				});
 				host.print(`Scheduled "${job.prompt}" every ${job.intervalSeconds}s (${shortId(job.id)}).`, "success");
+				return;
+			}
+			case "script": {
+				const [secondsText, scriptPath] = splitSub(requireArgs(rest, "/jobs script <seconds> <file>"));
+				const seconds = parseSeconds(secondsText);
+				if (!scriptPath.trim()) throw new Error("Usage: /jobs script <seconds> <file>");
+				const { job } = await host.request<{ job: JobInfo }>("jobs.create", {
+					sessionId: current.id,
+					kind: "interval",
+					intervalSeconds: seconds,
+					noAgent: true,
+					scriptPath: scriptPath.trim(),
+				});
+				host.print(`Scheduled script ${job.scriptPath} every ${job.intervalSeconds}s (${shortId(job.id)}).`, "success");
 				return;
 			}
 			case "heartbeat": {
@@ -85,15 +115,15 @@ export const jobsCommand: Command = {
 				const separator = rest.indexOf("::");
 				if (separator < 0) throw new Error("Usage: /jobs cron <5 fields> :: <prompt>");
 				const cronExpression = rest.slice(0, separator).trim();
-				const prompt = rest.slice(separator + 2).trim();
-				if (cronExpression.split(/\s+/).length !== 5 || !prompt) {
+				const pinned = pinnedPrompt(rest.slice(separator + 2));
+				if (cronExpression.split(/\s+/).length !== 5 || !pinned.prompt) {
 					throw new Error("Usage: /jobs cron <5 fields> :: <prompt>");
 				}
 				const { job } = await host.request<{ job: JobInfo }>("jobs.create", {
 					sessionId: current.id,
 					kind: "cron",
 					cronExpression,
-					prompt,
+					...pinned,
 				});
 				host.print(`Scheduled "${job.prompt}" at ${job.cronExpression} UTC (${shortId(job.id)}).`, "success");
 				return;
@@ -101,18 +131,18 @@ export const jobsCommand: Command = {
 			case "on":
 			case "off": {
 				const id = await resolveJobId(host, current.id, requireArgs(rest, `/jobs ${sub} <id>`));
-				await host.request("jobs.setEnabled", { id, enabled: sub === "on" });
+				await host.request("jobs.setEnabled", { sessionId: current.id, id, enabled: sub === "on" });
 				host.print(`Job ${shortId(id)} ${sub === "on" ? "enabled" : "disabled"}.`, "success");
 				return;
 			}
 			case "delete": {
 				const id = await resolveJobId(host, current.id, requireArgs(rest, "/jobs delete <id>"));
-				await host.request("jobs.delete", { id });
+				await host.request("jobs.delete", { sessionId: current.id, id });
 				host.print(`Deleted job ${shortId(id)}.`, "success");
 				return;
 			}
 			default:
-				throw new Error(`Unknown /jobs option "${sub}". Try: list, add, heartbeat, cron, on, off, delete.`);
+				throw new Error(`Unknown /jobs option "${sub}". Try: list, add, script, heartbeat, cron, on, off, delete.`);
 		}
 	},
 };

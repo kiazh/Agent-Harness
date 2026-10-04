@@ -10,6 +10,7 @@ Most agent frameworks are black boxes. AgentHarness is built to be understood �
 
 - **ReAct loop**: Thought → Action → Observation with streaming output
 - **PostgreSQL-backed context**: asyncpg + connection pooling, MessagePack payloads, pgvector embeddings, reversible eviction into `context_archive`
+- **Cross-session recall**: Agent-scoped full-text search of live and archived transcripts, with anchored context windows in the gateway, agent tools, and `/recall` UI command
 - **Long-term memory**: LLM-based extraction, importance scoring, Ebbinghaus forgetting, hybrid retrieval, approval gate, secret redaction, persona-conditioned interpretations, identity/belief drift gating, HMAC provenance
 - **RAG pipeline**: Document indexing, chunking, embedding, hybrid search (BM25 + dense + RRF), reranking
 - **Multi-agent**: Named agent definitions (DB/YAML/Soul Spec), sequential/parallel delegation, per-agent tool allowlists
@@ -17,7 +18,7 @@ Most agent frameworks are black boxes. AgentHarness is built to be understood �
 - **HTTP API**: FastAPI server with versioned `/api/v1` routes, SSE chat streaming, API-key auth, per-peer rate limiting, `/health`, `/ready`, `/metrics`
 - **Usage accounting**: Durable `llm_usage` with per-session/per-agent token and request budgets that cannot be bypassed by missing provider metadata
 - **Tool registry**: Decorator-based with JSON Schema inference, input validation, caching
-- **Skills system**: SKILL.md parser with YAML frontmatter, trigger matching, curator, hub
+- **Skills system**: SKILL.md parser with YAML frontmatter, trigger matching, curator, hub, and agent-facing progressive disclosure through `skill_list` and `skill_read`
 - **Terminal UI**: TypeScript app on [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi) (MIT) — streaming Markdown, tool cards, slash-command and file autocomplete, session picker — driving the Python agent through a JSON-RPC gateway
 - **Configuration**: YAML file + environment variable overrides + per-session overrides
 - **Metrics**: Latency histograms, throughput counters, error rates, token usage tracking; Prometheus exposition
@@ -52,7 +53,7 @@ ah sessions      # list sessions
 ```
 
 In the UI: Enter sends, Shift+Enter adds a line, Esc stops a reply, `/` opens command
-autocomplete (`/new`, `/sessions`, `/resume`, `/model`, `/provider`, `/clear`, `/exit`),
+autocomplete (`/new`, `/sessions`, `/resume`, `/recall`, `/model`, `/provider`, `/clear`, `/exit`),
 Tab completes file paths, Ctrl+C exits.
 
 For the HTTP API with Docker Compose, set a separate random
@@ -122,6 +123,10 @@ to 120 per minute per transport peer by default (set
 runner on startup. Jobs support interval, heartbeat, and five-field UTC cron
 expressions through `cronExpression`. Run `ah init` after upgrading to add the
 cron and audit tables/columns to an existing database.
+Jobs can pin `model` and `provider` through the HTTP or gateway create call;
+the TUI accepts `/jobs add 60 Check deployment --model=openrouter/free
+--provider=openrouter` (and the same trailing options for `/jobs cron`).
+Run `ah init` after upgrading so existing databases gain the job pin columns.
 
 Run `ah init` after this upgrade to create the durable `llm_usage` table.
 `ah usage --session <id>` and `GET /api/v1/sessions/<id>/usage` show usage
@@ -131,6 +136,37 @@ set lifetime budgets (0 means unlimited). Each provider attempt counts as a
 request. Calls with missing usage or a provider error keep a conservative
 pre-call token reservation so budgets cannot be bypassed by absent metadata.
 `openrouter/free` never switches to a paid model automatically.
+
+Cross-session transcript recall is available through `/recall <query>` and
+the `session_recall` agent tools. `/memory share <id> <agent>` sends a memory
+through the recipient's provenance and identity gate. Set
+`AGENT_HARNESS_PROVENANCE_KEY` to a private signing key before sharing;
+unsigned or tampered memories are rejected.
+
+Optional post-turn skill review is enabled with
+`AGENT_HARNESS_LEARNING_REVIEW_ENABLED=true` (off by default). A triggered
+review uses at most 512 output tokens and is capped at three reviews per
+session by `AGENT_HARNESS_LEARNING_REVIEW_MAX_PER_SESSION`. It stages a
+redacted suggestion without changing installed skills. Use `/skills proposals`
+to see pending suggestions, then `/skills approve <id>` or
+`/skills reject <id>`. Run `ah init` after upgrading to add the
+`learning_reviews` and shared delivery tables. Review jobs are currently
+process-local; a shutdown can leave a review marked `reviewing`.
+
+The agent prompt includes the names of up to three skills whose triggers
+match the current request. `skill_list` pages through enabled skills and
+searches their names and descriptions. The agent can read an enabled skill in
+800-character pages with `skill_read`; these reads increment skill usage
+telemetry. Skill bodies are not inserted into the prompt automatically.
+
+Script-only scheduled jobs can run without an LLM. Put a `.py`, `.sh`, or
+`.bash` script in `~/.agent-harness/scripts` (or set
+`AGENT_HARNESS_SCRIPTS_DIR`), then use `/jobs script <seconds> <file>`.
+Scripts must stay inside that directory, have a 30-second time limit and a
+64 KiB output limit, and receive a minimal environment without provider API
+keys. Nonempty stdout is saved in the job's session; empty stdout is silent.
+In Compose, the host `scripts/` directory is mounted read-only at
+`/app/scripts`.
 
 Plugins use Python entry points and are opt-in through `AGENT_HARNESS_PLUGINS`;
 see [plugin documentation](docs/plugins.md). Audit events are written to
@@ -290,11 +326,18 @@ recommended design. What is actually shipped and runnable today:
 | Area | Shipped implementation | Research doc's remaining gap |
 |---|---|---|
 | Memory / RAG | Postgres memories + hybrid RAG + persona/emotion/identity gate | RL-trained memory policy is a research baseline only; it is not wired into the runtime |
+| Cross-session recall and learning | Agent-scoped transcript search, gated memory sharing, opt-in skill proposals and approval | Answer quality, review precision, durable review recovery, and delegation text gating remain open |
 | Observability | Prometheus `/metrics`, OTel spans, persisted audit events | Dashboards and alerting are addressed conceptually, not implemented |
 | Multi-agent | `AgentDef` personas + sequential/parallel delegation | Orchestrator-worker decomposition is not built |
-| Scheduling | Interval/heartbeat/cron durable jobs | Script-only (no-agent) jobs are not implemented |
+| Scheduling | Interval/heartbeat/cron durable jobs and script-only jobs | External delivery targets and retries remain open |
 | Soul Spec | v0.5 manifest validation, package files, AgentDef conversion | Cross-framework runs are adapters, not compatibility certification |
 | Evaluation | LoCoMo evidence retrieval, memory-policy training, identity-drift checks (`ah/research/`) | Small local benchmarks, not product answer-quality claims |
+
+LangGraph remains an optional workflow trial rather than a production runtime
+dependency. A PostgreSQL checkpointer resumed a paused approval after a new
+Python process started; the current [decision](docs/research-langgraph.md)
+keeps production selection open until real delegated work, budget, audit, and
+streaming behavior are compared with the native PostgreSQL path.
 
 Nothing in the research docs should be read as a claim about generated-answer
 quality of a deployed model.

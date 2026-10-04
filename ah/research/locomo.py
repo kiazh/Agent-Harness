@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 import uuid
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -221,6 +222,68 @@ async def evaluate_archive_retrieval(
     return evaluate_rankings(conversations, rankings, k=k)
 
 
+async def evaluate_session_recall(
+    conversations: Sequence[Conversation],
+    *,
+    k: int = 5,
+    turns_per_session: int = 50,
+) -> tuple[RetrievalMetrics, float]:
+    """Score production cross-session recall over temporary archived transcripts.
+
+    Each conversation gets a unique agent; its turns are partitioned into
+    separate sessions. Cleanup removes both sessions and their archive rows.
+    Returns evidence metrics and mean query latency in milliseconds.
+    """
+    if not 1 <= k <= 100:
+        raise ValueError("k must be between 1 and 100")
+    if turns_per_session < 1:
+        raise ValueError("turns_per_session must be positive")
+
+    from ah.core.context import context_manager
+    from ah.core.serialization import payload_to_msgpack
+    from ah.core.session import session_manager
+    from ah.core.session_recall import SessionRecall
+
+    rankings: list[list[str]] = []
+    query_seconds: list[float] = []
+    recall = SessionRecall()
+    for conversation in conversations:
+        agent_id = f"locomo-recall-{uuid.uuid4()}"
+        session_ids: list[uuid.UUID] = []
+        identifiers: dict[uuid.UUID, str] = {}
+        try:
+            for offset in range(0, len(conversation.turns), turns_per_session):
+                session = await session_manager.create(
+                    title="LoCoMo transcript", agent_id=agent_id
+                )
+                session_ids.append(session.id)
+                for turn in conversation.turns[offset : offset + turns_per_session]:
+                    chunk_id = uuid.uuid4()
+                    identifiers[chunk_id] = turn.dia_id
+                    await context_manager.archive_chunk(
+                        session.id,
+                        chunk_id,
+                        payload_to_msgpack({"content": turn.text, "speaker": turn.speaker}),
+                        agent_id=agent_id,
+                        chunk_type="dialogue",
+                    )
+            for question in conversation.questions:
+                if not question.evidence:
+                    continue
+                started = time.perf_counter()
+                hits = await recall.discover(agent_id, question.text, limit=k)
+                query_seconds.append(time.perf_counter() - started)
+                rankings.append(
+                    [identifiers[hit.chunk_id] for hit in hits if hit.chunk_id in identifiers]
+                )
+        finally:
+            for session_id in session_ids:
+                await session_manager.delete(session_id)
+    metrics = evaluate_rankings(conversations, rankings, k=k)
+    mean_latency_ms = 1000 * sum(query_seconds) / len(query_seconds) if query_seconds else 0.0
+    return metrics, mean_latency_ms
+
+
 def main() -> None:
     import argparse
     import asyncio
@@ -228,7 +291,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate LoCoMo evidence retrieval")
     parser.add_argument("dataset", help="Path to official locomo10.json")
     parser.add_argument("--k", type=int, default=5)
-    parser.add_argument("--backend", choices=("lexical", "archive"), default="lexical")
+    parser.add_argument(
+        "--backend", choices=("lexical", "archive", "session-recall"), default="lexical"
+    )
     parser.add_argument("--db-url", help="Initialized PostgreSQL DSN for archive backend")
     parser.add_argument(
         "--test-db", action="store_true", help="Use AGENT_HARNESS_TEST_DATABASE_URL"
@@ -240,7 +305,7 @@ def main() -> None:
         if args.max_conversations < 1:
             parser.error("--max-conversations must be positive")
         conversations = conversations[: args.max_conversations]
-    if args.backend == "archive":
+    if args.backend in ("archive", "session-recall"):
         if args.db_url and args.test_db:
             parser.error("use either --db-url or --test-db")
         database_url = args.db_url
@@ -253,20 +318,26 @@ def main() -> None:
         if not database_url:
             parser.error("--db-url or --test-db is required for archive backend")
 
-        async def run_archive() -> RetrievalMetrics:
+        async def run_database() -> tuple[RetrievalMetrics, float | None]:
             from ah.db.connection import db
 
             db.dsn = database_url
             await db.connect()
             try:
-                return await evaluate_archive_retrieval(conversations, k=args.k)
+                if args.backend == "session-recall":
+                    return await evaluate_session_recall(conversations, k=args.k)
+                return await evaluate_archive_retrieval(conversations, k=args.k), None
             finally:
                 await db.close()
 
-        metrics = asyncio.run(run_archive())
+        metrics, latency_ms = asyncio.run(run_database())
     else:
         metrics = evaluate_retrieval(conversations, k=args.k)
-    print(json.dumps(metrics.to_dict(), indent=2, sort_keys=True))
+        latency_ms = None
+    result = metrics.to_dict()
+    if latency_ms is not None:
+        result["mean_query_latency_ms"] = latency_ms
+    print(json.dumps(result, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

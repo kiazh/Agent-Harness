@@ -64,6 +64,20 @@ class SkillParser:
     ]
 
     @staticmethod
+    def _validate_metadata(name: Any, description: Any, triggers: Any) -> None:
+        """Reject malformed metadata before search or prompt catalog use."""
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", name):
+            raise ValueError("skill name must be a short alphanumeric slug")
+        if not isinstance(description, str) or len(description) > 1000:
+            raise ValueError("skill description must be a string of at most 1000 characters")
+        if (
+            not isinstance(triggers, list)
+            or len(triggers) > 32
+            or any(not isinstance(item, str) or not 0 < len(item) <= 100 for item in triggers)
+        ):
+            raise ValueError("skill triggers must be a list of short strings")
+
+    @staticmethod
     def _validate_content(content: str, source_path: str = "") -> str:
         """Validate skill content for prompt injection attempts.
 
@@ -93,12 +107,14 @@ class SkillParser:
         frontmatter_match = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)
         if not frontmatter_match:
             content = SkillParser._validate_content(text, str(path))
+            SkillParser._validate_metadata(path.parent.name, "", [])
             return Skill(
                 name=path.parent.name,
                 description="",
                 triggers=[],
                 content=content,
                 file_path=str(path),
+                created_at=datetime.fromtimestamp(path.stat().st_mtime, UTC),
             )
 
         yaml_text = frontmatter_match.group(1)
@@ -116,15 +132,35 @@ class SkillParser:
             )
             metadata = {}
 
+        if not isinstance(metadata, dict):
+            raise ValueError("skill frontmatter must be a mapping")
+        name = metadata.get("name", path.parent.name)
+        description = metadata.get("description", "")
+        triggers = metadata.get("triggers", [])
+        SkillParser._validate_metadata(name, description, triggers)
+        created_at = metadata.get("created_at")
+        if isinstance(created_at, str):
+            try:
+                created_at = datetime.fromisoformat(created_at)
+            except ValueError:
+                raise ValueError("skill created_at must be an ISO timestamp") from None
+        if created_at is None:
+            created_at = datetime.fromtimestamp(path.stat().st_mtime, UTC)
+        if not isinstance(created_at, datetime):
+            raise ValueError("skill created_at must be an ISO timestamp")
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
         return Skill(
-            name=metadata.get("name", path.parent.name),
-            description=metadata.get("description", ""),
-            triggers=metadata.get("triggers", []),
+            name=name,
+            description=description,
+            triggers=triggers,
             content=content,
             file_path=str(path),
             version=metadata.get("version", "1.0.0"),
+            enabled=metadata.get("enabled", True) is not False,
             source=metadata.get("source", ""),
             source_type=metadata.get("source_type", "local"),
+            created_at=created_at,
         )
 
 
@@ -178,6 +214,7 @@ class SkillRegistry:
         prompt-injection filter) is skipped with a warning rather than
         aborting the whole load.
         """
+        self._skills.clear()
         if not self.skills_dir.exists():
             return
         for skill_dir in sorted(self.skills_dir.iterdir()):
@@ -206,6 +243,8 @@ class SkillRegistry:
         """
         matched = []
         for skill in self._skills.values():
+            if not skill.enabled:
+                continue
             for trigger in skill.triggers:
                 # Use word-boundary regex for whole-word matching
                 pattern = re.compile(r"\b" + re.escape(trigger.lower()) + r"\b")
@@ -217,7 +256,7 @@ class SkillRegistry:
     def get_skill_content(self, name: str) -> str | None:
         """Get the full content of a skill (for injection into prompt)."""
         skill = self._skills.get(name)
-        return skill.content if skill else None
+        return skill.content if skill and skill.enabled else None
 
     # ─── Telemetry methods ─────────────────────────────────────────────────
 
@@ -292,6 +331,8 @@ class SkillRegistry:
         """Create a new skill and persist it to the skills directory."""
         # Validate content for prompt injection
         content = SkillParser._validate_content(content)
+        triggers = triggers or []
+        SkillParser._validate_metadata(name, description, triggers)
 
         # Sanitize name for directory
         safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", name.lower())
@@ -299,12 +340,14 @@ class SkillRegistry:
         skill_dir.mkdir(parents=True, exist_ok=True)
 
         # Build SKILL.md content
-        triggers = triggers or []
+        created_at = datetime.now(UTC)
         frontmatter = {
             "name": name,
             "description": description,
             "triggers": triggers,
             "version": version,
+            "enabled": True,
+            "created_at": created_at.isoformat(),
             "source": source,
             "source_type": source_type,
         }
@@ -312,7 +355,10 @@ class SkillRegistry:
         skill_content = f"---\n{yaml_text}---\n{content}\n"
 
         skill_file = skill_dir / "SKILL.md"
-        skill_file.write_text(skill_content, encoding="utf-8")
+        # Exclusive creation is the final read-before-write guard when two
+        # reviews (or a manual learn) target the same skill concurrently.
+        with skill_file.open("x", encoding="utf-8") as output:
+            output.write(skill_content)
 
         skill = Skill(
             name=name,
@@ -323,6 +369,7 @@ class SkillRegistry:
             version=version,
             source=source,
             source_type=source_type,
+            created_at=created_at,
         )
         self._skills[name] = skill
         return skill
@@ -352,6 +399,8 @@ class SkillRegistry:
             "description": skill.description,
             "triggers": skill.triggers,
             "version": skill.version,
+            "enabled": skill.enabled,
+            "created_at": skill.created_at.isoformat(),
             "source": skill.source,
             "source_type": skill.source_type,
         }
@@ -360,6 +409,14 @@ class SkillRegistry:
 
         Path(skill.file_path).write_text(skill_content, encoding="utf-8")
         return skill
+
+    def set_enabled(self, name: str, enabled: bool) -> Skill | None:
+        """Persist whether a skill is available for agent discovery and reading."""
+        skill = self._skills.get(name)
+        if skill is None:
+            return None
+        skill.enabled = enabled
+        return self.update_skill(name)
 
     def delete_skill(self, name: str) -> bool:
         """Delete a skill by name."""
@@ -396,10 +453,10 @@ class SkillCurator:
             if skill.last_activity_at is None:
                 # Never used — check created_at
                 if skill.created_at < cutoff:
-                    skill.enabled = False
+                    self.registry.set_enabled(skill.name, False)
                     archived.append(skill.name)
             elif skill.last_activity_at < cutoff:
-                skill.enabled = False
+                self.registry.set_enabled(skill.name, False)
                 archived.append(skill.name)
         return archived
 

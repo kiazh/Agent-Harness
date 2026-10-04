@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from ah import services
 from ah.gateway.errors import INVALID_PARAMS, NOT_FOUND, OPERATION_FAILED, RpcError
-from ah.gateway.features._common import _int, _skill, _str
+from ah.gateway.features._common import _int, _skill, _str, _uuid
 
 if TYPE_CHECKING:
     from ah.gateway.server import Gateway
@@ -63,3 +63,41 @@ async def skills_curator(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     report["unused"] = [s.name for s in curator.get_unused_skills()]
     report["stale"] = [s.name for s in curator.get_stale_skills(_int(params, "days", 30, 1, 3650))]
     return report
+
+
+async def learning_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    gw.require_db()
+    from ah.skills.learning import learning_reviewer
+
+    session = await gw.get_session(params)
+    return {
+        "reviews": await learning_reviewer.list_reviews(
+            session.agent_id, limit=_int(params, "limit", 50, 1, 100)
+        )
+    }
+
+
+async def learning_approve(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    gw.require_db()
+    from ah.skills.learning import learning_reviewer
+
+    session = await gw.get_session(params)
+    try:
+        review = await learning_reviewer.approve(_uuid(params, "id"), agent_id=session.agent_id)
+    except (LookupError, PermissionError):
+        raise RpcError(NOT_FOUND, "learning proposal not found for this agent") from None
+    except (ValueError, FileExistsError) as exc:
+        raise RpcError(OPERATION_FAILED, str(exc)) from None
+    return {"review": review}
+
+
+async def learning_reject(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    gw.require_db()
+    from ah.skills.learning import learning_reviewer
+
+    session = await gw.get_session(params)
+    try:
+        review = await learning_reviewer.reject(_uuid(params, "id"), agent_id=session.agent_id)
+    except (LookupError, PermissionError):
+        raise RpcError(NOT_FOUND, "learning proposal not found for this agent") from None
+    return {"review": review}

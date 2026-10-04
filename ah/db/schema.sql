@@ -233,6 +233,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     kind TEXT NOT NULL CHECK (kind IN ('heartbeat', 'interval', 'cron')),
     session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
     agent_name TEXT NOT NULL DEFAULT 'harness',
+    model TEXT,
+    provider TEXT,
+    no_agent BOOLEAN NOT NULL DEFAULT FALSE,
+    script_path TEXT,
     prompt TEXT NOT NULL,
     interval_seconds INT NOT NULL CHECK (interval_seconds >= 10),
     cron_expression TEXT,
@@ -246,6 +250,10 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cron_expression TEXT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS model TEXT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS provider TEXT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS no_agent BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS script_path TEXT;
 ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_kind_check;
 ALTER TABLE jobs ADD CONSTRAINT jobs_kind_check CHECK (kind IN ('heartbeat', 'interval', 'cron'));
 
@@ -345,3 +353,37 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS idx_memory_provenance_source ON memory_provenance(source_agent);
 CREATE INDEX IF NOT EXISTS idx_memory_provenance_parent ON memory_provenance(parent_memory_id);
+
+-- Cross-agent delivery receipts. A source can be delivered to each recipient
+-- once; rejected and quarantined attempts remain visible for audit.
+CREATE TABLE IF NOT EXISTS shared_memory_deliveries (
+    source_memory_id UUID NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    recipient_agent TEXT NOT NULL,
+    target_memory_id UUID REFERENCES memories(id) ON DELETE SET NULL,
+    status TEXT NOT NULL CHECK (status IN ('accepted', 'rejected', 'quarantined')),
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (source_memory_id, recipient_agent)
+);
+CREATE INDEX IF NOT EXISTS idx_shared_memory_deliveries_recipient
+    ON shared_memory_deliveries(recipient_agent, created_at DESC);
+
+-- Bounded post-turn learning. Only reviewed proposals can become skills.
+-- Fingerprints avoid paying for and staging the same turn twice after retries.
+CREATE TABLE IF NOT EXISTS learning_reviews (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    turn_hash TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('reviewing', 'none', 'pending', 'approved', 'rejected', 'error')),
+    name TEXT,
+    description TEXT,
+    triggers JSONB NOT NULL DEFAULT '[]',
+    content TEXT,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at TIMESTAMPTZ,
+    UNIQUE (session_id, turn_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_learning_reviews_agent
+    ON learning_reviews(agent_id, created_at DESC);

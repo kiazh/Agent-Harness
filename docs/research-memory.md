@@ -1,8 +1,11 @@
 # AgentHarness Memory System — Research & Design
 
-> **Status:** Research document. The `ah/memory/` package is currently an empty stub.
-> This document surveys production memory systems for AI agents and proposes a
-> concrete architecture for AgentHarness grounded in the existing codebase.
+> **Status:** Historical design snapshot. The claim that `ah/memory/` is an
+> empty stub is obsolete: it now contains extraction, retrieval, approvals,
+> identity, persona, and RL-policy modules. Sections describing "current state"
+> below refer to the earlier baseline. Use the
+> [current research program](superpowers/specs/2026-10-04-research-hermes-program-design.md)
+> and [evaluation record](research-evaluation.md) for implementation status.
 
 ---
 

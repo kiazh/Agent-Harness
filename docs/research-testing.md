@@ -3,6 +3,10 @@
 **Date:** 2026-10-01  
 **Scope:** AgentHarness (`ah/`) — a self-hosted AI agent framework with ReAct loop, tool registry, skill system, LLM provider abstraction, and PostgreSQL persistence.
 
+> **Status:** Research snapshot. Fixed test counts and coverage assumptions
+> below are historical observations, not a live CI result. Run the current
+> suite and inspect CI artifacts for the active branch before quoting them.
+
 ---
 
 ## Table of Contents

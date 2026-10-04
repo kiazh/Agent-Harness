@@ -37,11 +37,18 @@ async def test_yaml_agents_load_and_database_takes_precedence(tmp_path, monkeypa
     monkeypatch.setattr(
         agent_def.db,
         "fetchrow",
-        AsyncMock(return_value={
-            "name": "reviewer", "description": "DB review", "system_prompt": "",
-            "tools": "[]", "model": None, "provider": None,
-            "max_iterations": 2, "source": "db",
-        }),
+        AsyncMock(
+            return_value={
+                "name": "reviewer",
+                "description": "DB review",
+                "system_prompt": "",
+                "tools": "[]",
+                "model": None,
+                "provider": None,
+                "max_iterations": 2,
+                "source": "db",
+            }
+        ),
     )
     assert (await registry.get("reviewer")).description == "DB review"
 
@@ -60,16 +67,24 @@ async def test_delegation_passes_parent_context_and_records_result(monkeypatch):
             return AgentResponse(content="Reviewed", tool_calls=[], tokens_used=7, iterations=1)
 
     monkeypatch.setattr(module.agent_registry, "get", AsyncMock(return_value=AgentDef("reviewer")))
-    monkeypatch.setattr(module.session_manager, "create", AsyncMock(return_value=SimpleNamespace(id=child_id)))
+    monkeypatch.setattr(
+        module.session_manager, "create", AsyncMock(return_value=SimpleNamespace(id=child_id))
+    )
     monkeypatch.setattr(
         module.session_manager, "get", AsyncMock(return_value=SimpleNamespace(goal="Ship phase 5"))
     )
     monkeypatch.setattr(
         module.context_manager,
         "get_recent_context",
-        AsyncMock(return_value=[{
-            "type": "user_message", "payload": {"content": "Check module A"}, "tokens": 4,
-        }]),
+        AsyncMock(
+            return_value=[
+                {
+                    "type": "user_message",
+                    "payload": {"content": "Check module A"},
+                    "tokens": 4,
+                }
+            ]
+        ),
     )
     add_chunk = AsyncMock()
     monkeypatch.setattr(module.context_manager, "add_chunk", add_chunk)
@@ -91,7 +106,7 @@ async def test_delegation_passes_parent_context_and_records_result(monkeypatch):
 @pytest.mark.asyncio
 async def test_delegate_tool_uses_isolated_session_context(monkeypatch):
     from ah.core import orchestrator as module
-    from ah.tools.agents import current_session_id, delegate
+    from ah.tools.agents import current_agent_id, current_session_id, delegate
 
     seen = []
 
@@ -102,11 +117,18 @@ async def test_delegate_tool_uses_isolated_session_context(monkeypatch):
 
     monkeypatch.setattr(module.orchestrator, "delegate", fake_delegate)
 
+    async def fake_owner(*args):
+        return "harness"
+
+    monkeypatch.setattr("ah.tools.agents.db.fetchval", fake_owner)
+
     async def call(session_id):
         token = current_session_id.set(session_id)
+        agent_token = current_agent_id.set("harness")
         try:
             await delegate("reviewer", "Review")
         finally:
+            current_agent_id.reset(agent_token)
             current_session_id.reset(token)
 
     ids = [uuid.uuid4(), uuid.uuid4()]
@@ -116,16 +138,20 @@ async def test_delegate_tool_uses_isolated_session_context(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_agent_tool_execution_sets_and_resets_delegation_context(monkeypatch):
+@pytest.mark.parametrize(
+    "tool_name",
+    ["delegate", "remember", "recall", "share_memory", "session_recall", "session_recall_window"],
+)
+async def test_agent_tool_execution_sets_and_resets_session_context(monkeypatch, tool_name):
     from ah.core import agent as agent_module
     from ah.core.agent import ReActAgent
-    from ah.tools.agents import current_session_id
+    from ah.tools.agents import current_agent_id, current_session_id
 
     session_id = uuid.uuid4()
     seen = []
 
     async def execute(name, **kwargs):
-        seen.append(current_session_id.get())
+        seen.append((current_session_id.get(), current_agent_id.get()))
         return "done"
 
     monkeypatch.setattr(agent_module.registry, "execute", execute)
@@ -134,11 +160,19 @@ async def test_agent_tool_execution_sets_and_resets_delegation_context(monkeypat
     agent.allowed_tools = None
     agent.agent_id = "harness"
     response = LLMResponse(
-        content="", model="test", tool_calls=[{
-            "id": "call-1", "function": {"name": "delegate", "arguments": '{"agent":"reviewer","task":"review"}'},
-        }],
+        content="",
+        model="test",
+        tool_calls=[
+            {
+                "id": "call-1",
+                "function": {"name": tool_name, "arguments": "{}"},
+            }
+        ],
     )
-    events = [event async for event in agent._execute_tool_calls_stream(response, [], [], session_id)]
+    events = [
+        event async for event in agent._execute_tool_calls_stream(response, [], [], session_id)
+    ]
     assert [event.type for event in events] == ["tool_call", "tool_result"]
-    assert seen == [session_id]
+    assert seen == [(session_id, "harness")]
     assert current_session_id.get() is None
+    assert current_agent_id.get() is None

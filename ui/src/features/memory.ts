@@ -1,9 +1,9 @@
-// Memory commands: list, search, add, forget, pending, approve, reject, stats.
+// Memory commands: list, search, add, forget, share, pending, approve, reject, stats.
 
 import { keyValues, resolvePrefix, shortId, table } from "../format.ts";
 import type { MemoryInfo, PendingMemoryInfo } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
-import { options, requireArgs, type Command, type FeatureHost } from "./types.ts";
+import { options, requireArgs, requireSession, type Command, type FeatureHost } from "./types.ts";
 
 const MEMORY_CATEGORIES = ["preference", "decision", "fact", "event", "transient"];
 
@@ -28,13 +28,14 @@ async function resolvePending(host: FeatureHost, idOrPrefix: string): Promise<st
 
 export const memoryCommand: Command = {
 	name: "memory",
-	description: "Long-term memory: list, search, add, forget, review",
-	argumentHint: "[list|search|add|forget|pending|approve|reject|stats]",
+	description: "Long-term memory: list, search, add, forget, share, review",
+	argumentHint: "[list|search|add|forget|share|pending|approve|reject|stats]",
 	getArgumentCompletions: options([
 		["list", "Recent memories [category]"],
 		["search", "Find relevant memories <query>"],
 		["add", "Remember something [category:] <text>"],
 		["forget", "Delete a memory <id>"],
+		["share", "Send a memory to an agent <id> <agent>"],
 		["pending", "Memories waiting for approval"],
 		["approve", "Approve <id|all>"],
 		["reject", "Reject <id|all>"],
@@ -47,6 +48,7 @@ export const memoryCommand: Command = {
 			case "list": {
 				const category = rest && MEMORY_CATEGORIES.includes(rest.toLowerCase()) ? rest.toLowerCase() : undefined;
 				const { memories, total } = await host.request<{ memories: MemoryInfo[]; total: number }>("memory.list", {
+					sessionId: host.session()?.id,
 					category,
 					limit: 20,
 				});
@@ -55,7 +57,7 @@ export const memoryCommand: Command = {
 			}
 			case "search": {
 				const query = requireArgs(rest, "/memory search <query>");
-				const { results } = await host.request<{ results: MemoryInfo[] }>("memory.search", { query, limit: 10 });
+				const { results } = await host.request<{ results: MemoryInfo[] }>("memory.search", { sessionId: host.session()?.id, query, limit: 10 });
 				host.print(results.length ? memoryTable(results, true) : `Nothing found for "${query}".`, "plain");
 				return;
 			}
@@ -77,10 +79,29 @@ export const memoryCommand: Command = {
 			}
 			case "forget": {
 				const target = requireArgs(rest, "/memory forget <id>");
-				const { memories } = await host.request<{ memories: MemoryInfo[] }>("memory.list", { limit: 500 });
+				const { memories } = await host.request<{ memories: MemoryInfo[] }>("memory.list", { sessionId: host.session()?.id, limit: 500 });
 				const id = resolvePrefix(target, memories.map((m) => m.id), "memory");
-				await host.request("memory.forget", { id });
+				await host.request("memory.forget", { sessionId: host.session()?.id, id });
 				host.print(`Forgot memory ${shortId(id)}.`, "success");
+				return;
+			}
+			case "share": {
+				const parts = rest.trim().split(/\s+/);
+				if (parts.length !== 2 || !parts[0] || !parts[1]) {
+					throw new Error("Usage: /memory share <id> <agent>");
+				}
+				const session = requireSession(host);
+				const { memories } = await host.request<{ memories: MemoryInfo[] }>("memory.list", {
+					sessionId: session.id,
+					limit: 500,
+				});
+				const id = resolvePrefix(parts[0], memories.map((memory) => memory.id), "memory");
+				const { status } = await host.request<{ status: string }>("memory.share", {
+					sessionId: session.id,
+					id,
+					recipientAgent: parts[1],
+				});
+				host.print(`Memory delivery ${status} for ${parts[1]}.`, "success");
 				return;
 			}
 			case "pending": {
@@ -124,7 +145,7 @@ export const memoryCommand: Command = {
 				return;
 			}
 			default:
-				throw new Error(`Unknown /memory option "${sub}". Try: list, search, add, forget, pending, approve, reject, stats.`);
+				throw new Error(`Unknown /memory option "${sub}". Try: list, search, add, forget, share, pending, approve, reject, stats.`);
 		}
 	},
 };

@@ -14,6 +14,7 @@ from typing import Any
 from rich.console import Console
 
 from ah.core.assembler import PromptAssembler
+from ah.core.config import config
 from ah.core.context import context_manager
 from ah.core.exceptions import DatabaseError, SessionNotFoundError, UsageBudgetExceededError
 from ah.core.metrics import metrics
@@ -120,6 +121,7 @@ class BaseReActAgent:
         # mid-execution (the classic "Task was destroyed but it is pending"
         # bug).  A done-callback discards each task once it finishes.
         self._consolidation_tasks: set[asyncio.Task] = set()
+        self._learning_tasks: set[asyncio.Task] = set()
 
     def _tool_defs(self) -> list[ToolDefinition]:
         """Tool definitions offered to the model, honoring the allow-list."""
@@ -384,9 +386,18 @@ class BaseReActAgent:
         except Exception as e:
             logger.warning("Archived context retrieval failed: %s", e)
 
+        system_prompt = self.system_prompt
+        if self.allowed_tools is None or "skill_read" in self.allowed_tools:
+            try:
+                from ah.skills.runtime import matching_skill_catalog
+
+                system_prompt += matching_skill_catalog(user_message)
+            except (OSError, ValueError) as exc:
+                logger.warning("Skill catalog unavailable: %s", exc)
+
         # Assemble prompt
         prompt = assembler.assemble(
-            system_prompt=self.system_prompt,
+            system_prompt=system_prompt,
             goal=session.goal,
             recent_chunks=recent,
             retrieved_chunks=retrieved_chunks,
@@ -522,13 +533,22 @@ class BaseReActAgent:
             try:
                 with span("agent.tool", tool_name=tool_name, session_id=str(session_id)):
                     await plugin_registry.dispatch("on_tool_call", tool_name, tool_args)
-                    if tool_name == "delegate":
-                        from ah.tools.agents import current_session_id
+                    if tool_name in {
+                        "delegate",
+                        "remember",
+                        "recall",
+                        "share_memory",
+                        "session_recall",
+                        "session_recall_window",
+                    }:
+                        from ah.tools.agents import current_agent_id, current_session_id
 
                         token = current_session_id.set(session_id)
+                        agent_token = current_agent_id.set(self.agent_id)
                         try:
                             result = await registry.execute(tool_name, **tool_args)
                         finally:
+                            current_agent_id.reset(agent_token)
                             current_session_id.reset(token)
                     else:
                         result = await registry.execute(tool_name, **tool_args)
@@ -608,6 +628,33 @@ class BaseReActAgent:
                 )
         except Exception as e:
             logger.warning("Memory consolidation failed for session %s: %s", session_id, e)
+
+    def _schedule_learning_review(
+        self, session_id: uuid.UUID, user_message: str, response: AgentResponse
+    ) -> None:
+        """Review successful turns in the background when explicitly enabled."""
+        if not config.get("learning_review_enabled"):
+            return
+        task = asyncio.create_task(self._review_learning(session_id, user_message, response))
+        self._learning_tasks.add(task)
+        task.add_done_callback(self._learning_tasks.discard)
+
+    async def _review_learning(
+        self, session_id: uuid.UUID, user_message: str, response: AgentResponse
+    ) -> None:
+        from ah.skills.learning import learning_reviewer
+
+        try:
+            await learning_reviewer.review_turn(
+                session_id,
+                self.agent_id,
+                user_message,
+                response.content,
+                self.provider,
+                tool_calls=response.tool_calls,
+            )
+        except Exception as exc:
+            logger.warning("Learning review failed for session %s: %s", session_id, exc)
 
 
 class ReActAgent(BaseReActAgent):
@@ -724,12 +771,14 @@ class ReActAgent(BaseReActAgent):
                 )
                 # Consolidate memories after successful run
                 self._schedule_memory_consolidation(session_id)
-                return AgentResponse(
+                completed = AgentResponse(
                     content=response.content,
                     tool_calls=tool_calls_made,
                     tokens_used=total_tokens,
                     iterations=iteration + 1,
                 )
+                self._schedule_learning_review(session_id, user_message, completed)
+                return completed
 
             # Execute tool calls
             await self._execute_tool_calls(response, messages, tool_calls_made, session_id, verbose)
@@ -887,14 +936,16 @@ class ReActAgent(BaseReActAgent):
                     tool_calls_count=len(tool_calls_made),
                 )
                 self._schedule_memory_consolidation(session_id)
+                completed = AgentResponse(
+                    content=response.content,
+                    tool_calls=tool_calls_made,
+                    tokens_used=total_tokens,
+                    iterations=iteration + 1,
+                )
+                self._schedule_learning_review(session_id, user_message, completed)
                 yield StreamEvent(
                     type="done",
-                    response=AgentResponse(
-                        content=response.content,
-                        tool_calls=tool_calls_made,
-                        tokens_used=total_tokens,
-                        iterations=iteration + 1,
-                    ),
+                    response=completed,
                 )
                 return
 

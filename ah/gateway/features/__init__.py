@@ -43,6 +43,7 @@ from ah.gateway.features.memory import (
     memory_reject,
     memory_reject_all,
     memory_search,
+    memory_share,
     memory_stats,
 )
 from ah.gateway.features.sessions import (
@@ -58,6 +59,9 @@ from ah.gateway.features.sessions import (
     session_set_goal,
 )
 from ah.gateway.features.skills import (
+    learning_approve,
+    learning_list,
+    learning_reject,
     skills_curator,
     skills_delete,
     skills_learn,
@@ -91,6 +95,7 @@ METHODS: dict[str, Handler] = {
     "context.compress": context_compress,
     "memory.list": memory_list,
     "memory.search": memory_search,
+    "memory.share": memory_share,
     "memory.add": memory_add,
     "memory.forget": memory_forget,
     "memory.pending": memory_pending,
@@ -104,6 +109,9 @@ METHODS: dict[str, Handler] = {
     "skills.learn": skills_learn,
     "skills.delete": skills_delete,
     "skills.curator": skills_curator,
+    "learning.list": learning_list,
+    "learning.approve": learning_approve,
+    "learning.reject": learning_reject,
     "config.get": config_get,
     "profile.get": profile_get,
     "profile.set": profile_set,

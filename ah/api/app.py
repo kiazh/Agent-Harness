@@ -55,8 +55,12 @@ class CreateJobRequest(BaseModel):
     kind: str = "interval"
     prompt: str | None = Field(default=None, max_length=5000)
     intervalSeconds: int = Field(default=300, ge=10, le=86_400)
-    agent: str = Field(default="harness", max_length=100)
+    agent: str | None = Field(default=None, min_length=1, max_length=100)
     cronExpression: str | None = Field(default=None, max_length=100)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+    provider: str | None = Field(default=None, min_length=1, max_length=100)
+    noAgent: bool = False
+    scriptPath: str | None = Field(default=None, min_length=1, max_length=500)
 
 
 class PromptRequest(BaseModel):
@@ -533,7 +537,7 @@ def create_app() -> FastAPI:
         kind = req.kind
         if kind not in ("heartbeat", "interval", "cron"):
             raise HTTPException(400, "kind must be 'heartbeat', 'interval', or 'cron'")
-        prompt = req.prompt or DEFAULT_HEARTBEAT_PROMPT
+        prompt = req.prompt or ("" if req.noAgent else DEFAULT_HEARTBEAT_PROMPT)
         try:
             job = await job_store.create(
                 name=req.name or f"{kind} job",
@@ -541,8 +545,12 @@ def create_app() -> FastAPI:
                 session_id=sid,
                 prompt=prompt,
                 interval_seconds=req.intervalSeconds,
-                agent_name=req.agent,
+                agent_name=req.agent or session.agent_id,
                 cron_expression=req.cronExpression,
+                model=req.model,
+                provider=req.provider,
+                no_agent=req.noAgent,
+                script_path=req.scriptPath,
             )
         except ValueError as e:
             raise HTTPException(400, str(e)) from None

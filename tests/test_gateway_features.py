@@ -3,8 +3,8 @@ exercised against the real test database."""
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import uuid
 
 import pytest
@@ -12,6 +12,7 @@ import pytest
 from ah.core.config import config
 from ah.core.context import context_manager
 from ah.core.session import session_manager
+from ah.db.connection import db
 from ah.gateway.server import INVALID_PARAMS, NOT_FOUND, Gateway
 from tests.test_gateway import Harness
 
@@ -60,15 +61,15 @@ class TestSessions:
         other = await session_manager.create(title="Other agent", agent_id=f"other-{tag}")
         try:
             own_chunk = await context_manager.add_chunk(
-                uuid.UUID(sid), "harness", "user_message",
+                uuid.UUID(sid),
+                "harness",
+                "user_message",
                 {"content": f"{tag} own evidence", "attachment": b"\x00\xff"},
             )
             other_chunk = await context_manager.add_chunk(
                 other.id, other.agent_id, "user_message", {"content": f"{tag} private"}
             )
-            hits = result(
-                await h.call("session.recall", {"sessionId": sid, "query": tag})
-            )["hits"]
+            hits = result(await h.call("session.recall", {"sessionId": sid, "query": tag}))["hits"]
             assert [(hit["sessionId"], hit["chunkId"]) for hit in hits] == [
                 (sid, str(own_chunk.id))
             ]
@@ -168,6 +169,61 @@ class TestContext:
 
 
 class TestMemory:
+    async def test_session_scoped_memory_operations_keep_agents_separate(self, h):
+        tag = f"amberheron{uuid.uuid4().hex[:8]}"
+        own_sid = await new_session(h)
+        other_agent = f"other-{uuid.uuid4()}"
+        other_session = await session_manager.create(title="Other memory", agent_id=other_agent)
+        try:
+            own = result(await h.call("memory.add", {
+                "sessionId": own_sid, "content": f"{tag} own", "category": "fact",
+            }))["memory"]
+            other = result(await h.call("memory.add", {
+                "sessionId": str(other_session.id), "content": f"{tag} private", "category": "fact",
+            }))["memory"]
+            listed = result(await h.call("memory.list", {"sessionId": own_sid}))["memories"]
+            assert own["id"] in {item["id"] for item in listed}
+            assert other["id"] not in {item["id"] for item in listed}
+            found = result(await h.call("memory.search", {
+                "sessionId": own_sid, "query": "amberheron",
+            }))["results"]
+            assert [item["id"] for item in found] == [own["id"]]
+            denied = await h.call("memory.forget", {"sessionId": own_sid, "id": other["id"]})
+            assert denied["error"]["code"] == NOT_FOUND
+            assert result(await h.call("memory.forget", {
+                "sessionId": str(other_session.id), "id": other["id"],
+            }))["deleted"] is True
+        finally:
+            await db.execute("DELETE FROM memories WHERE agent_id IN ('harness', $1) AND content LIKE $2", other_agent, f"{tag}%")
+            await session_manager.delete(uuid.UUID(own_sid))
+            await session_manager.delete(other_session.id)
+
+    async def test_share_uses_session_owner_and_rejects_other_agents_memory(self, h, monkeypatch):
+        from ah.memory.store import memory_store
+
+        monkeypatch.setenv("AGENT_HARNESS_PROVENANCE_KEY", "test-only-provenance-key")
+        sid = await new_session(h)
+        other_agent = f"other-{uuid.uuid4()}"
+        recipient = f"recipient-{uuid.uuid4()}"
+        own = await memory_store.add(None, "harness", "The beacon is green", "fact")
+        other = await memory_store.add(None, other_agent, "The beacon is private", "fact")
+        try:
+            shared = result(await h.call("memory.share", {
+                "sessionId": sid, "id": str(own.id), "recipientAgent": recipient,
+                "publisherAgent": other_agent,
+            }))
+            assert shared["status"] == "accepted"
+            assert len(await memory_store.search(agent_id=recipient)) == 1
+            denied = await h.call("memory.share", {
+                "sessionId": sid, "id": str(other.id), "recipientAgent": recipient,
+            })
+            assert denied["error"]["code"] == NOT_FOUND
+        finally:
+            await memory_store.delete(own.id)
+            await memory_store.delete(other.id)
+            await db.execute("DELETE FROM memories WHERE agent_id = $1", recipient)
+            await session_manager.delete(uuid.UUID(sid))
+
     async def test_add_list_search_forget(self, h):
         tag = uuid.uuid4().hex[:10]
         added = result(

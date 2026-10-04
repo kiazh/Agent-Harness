@@ -2,7 +2,8 @@
 
 **Last updated:** 2026-10-03  
 **Current version:** 0.2.0
-**Test status:** 901 tests collected on Windows (some platform-specific tests deselected)
+**Test status:** Run the current Python and TypeScript suites for live counts;
+the earlier 901-test snapshot is no longer current.
 
 ---
 
@@ -183,7 +184,7 @@ class AgentDef:
 | Component | Description |
 |---|---|
 | `JobStore` | Persist jobs (`jobs` table); atomic claim via `FOR UPDATE SKIP LOCKED` |
-| `JobRunner` | Poll loop run by the gateway/API; lease renewal; heartbeat, interval, and UTC cron kinds |
+| `JobRunner` | Poll loop run by the gateway/API; lease renewal; heartbeat, interval, and UTC cron kinds; bounded script-only mode |
 | `next_cron_time` | Five-field cron parser in `ah/core/cron.py` |
 
 ### 6.4 Plugin System (`ah/plugins/`)
@@ -252,6 +253,17 @@ PostgreSQL-backed native checkpoint with an isolated LangGraph workflow under
 the same recovery, idempotency, budget, and cancellation tests. The
 [LangGraph decision](research-langgraph.md) records the acceptance gate;
 production integration has not yet been selected.
+
+### 7.5 Research and Hermes capability program
+
+The [program design](superpowers/specs/2026-10-04-research-hermes-program-design.md)
+tracks the five research directions and major Hermes capabilities. Shipped
+increments now include scoped live/archive transcript recall, gated
+cross-agent memory delivery, opt-in staged skill proposals, and bounded
+agent-facing skill discovery and reading. Jobs can also run user-managed
+scripts without inference. Evidence
+retrieval has a full LoCoMo measurement; answer quality, learning precision,
+durable review recovery, and broad Hermes parity remain open.
 
 ### 7.4 Testing and QA
 

@@ -46,6 +46,8 @@ DEFAULTS: dict[str, Any] = {
     "usage_agent_token_limit": 0,
     "usage_agent_request_limit": 0,
     "memory_enabled": True,
+    "learning_review_enabled": False,
+    "learning_review_max_per_session": 3,
     "rag_enabled": True,
     "streaming": True,
     "theme": "default",
@@ -105,6 +107,8 @@ class Config:
     usage_agent_token_limit: int = 0
     usage_agent_request_limit: int = 0
     memory_enabled: bool = True
+    learning_review_enabled: bool = False
+    learning_review_max_per_session: int = 3
     rag_enabled: bool = True
     streaming: bool = True
     theme: str = "default"

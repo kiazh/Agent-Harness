@@ -185,6 +185,8 @@ class IdentityGate:
         agent_id: str,
         memory: MemoryEntry,
         provenance: MemoryProvenance | None = None,
+        *,
+        connection: Any | None = None,
     ) -> ValidationResult:
         """Validate an incoming shared memory against the agent's beliefs.
 
@@ -197,7 +199,7 @@ class IdentityGate:
         # with no established beliefs yet.
         if memory.agent_id != agent_id:
             try:
-                provenance = provenance or await self._load_provenance(memory.id)
+                provenance = provenance or await self._load_provenance(memory.id, connection=connection)
             except Exception as exc:
                 logger.warning(
                     "Provenance lookup failed for memory %s (%s)", memory.id, type(exc).__name__
@@ -212,7 +214,7 @@ class IdentityGate:
 
         # Load agent beliefs
         try:
-            belief = await self._load_beliefs(agent_id)
+            belief = await self._load_beliefs(agent_id, connection=connection)
         except Exception as exc:
             logger.warning("Belief lookup failed for agent %s (%s)", agent_id, type(exc).__name__)
             return ValidationResult(False, 0.0, "Belief lookup unavailable")
@@ -236,7 +238,7 @@ class IdentityGate:
 
         if memory.agent_id == agent_id:
             try:
-                provenance = provenance or await self._load_provenance(memory.id)
+                provenance = provenance or await self._load_provenance(memory.id, connection=connection)
             except Exception as exc:
                 logger.warning(
                     "Provenance lookup failed for memory %s (%s)", memory.id, type(exc).__name__
@@ -335,9 +337,9 @@ class IdentityGate:
             logger.error("Drift containment failed: %s", exc)
             return False
 
-    async def _load_beliefs(self, agent_id: str) -> AgentBelief | None:
+    async def _load_beliefs(self, agent_id: str, *, connection: Any | None = None) -> AgentBelief | None:
         """Load agent beliefs from the database."""
-        row = await db.fetchrow(
+        row = await (connection or db).fetchrow(
             "SELECT agent_id, belief, version, updated_at FROM agent_beliefs WHERE agent_id = $1",
             agent_id,
         )
@@ -456,9 +458,11 @@ class IdentityGate:
             quarantined_count=quarantined_count,
         )
 
-    async def _load_provenance(self, memory_id: uuid.UUID) -> MemoryProvenance | None:
+    async def _load_provenance(
+        self, memory_id: uuid.UUID, *, connection: Any | None = None
+    ) -> MemoryProvenance | None:
         """Load memory provenance from the database."""
-        row = await db.fetchrow(
+        row = await (connection or db).fetchrow(
             "SELECT memory_id, source_agent, signature, parent_memory_id, created_at FROM memory_provenance WHERE memory_id = $1",
             memory_id,
         )

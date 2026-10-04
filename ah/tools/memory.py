@@ -9,6 +9,7 @@ from ah.core.exceptions import ToolError, ValidationError
 from ah.core.provider import audit_log
 from ah.memory.retriever import MemoryRetriever
 from ah.memory.store import memory_store
+from ah.tools.agents import active_agent_scope, current_agent_id, current_session_id
 from ah.tools.base import registry
 
 logger = logging.getLogger(__name__)
@@ -69,13 +70,17 @@ async def remember(
         # Clamp importance
         importance = max(0.0, min(1.0, importance))
 
-        # Parse session_id if provided
-        sid = None
-        if session_id:
-            try:
-                sid = uuid.UUID(session_id)
-            except ValueError:
-                raise ValidationError(f"Invalid session_id '{session_id}'") from None
+        # Agent tool calls are bound to the running agent and owned session.
+        # Direct Python callers retain the explicit agent/session arguments.
+        if current_agent_id.get() is not None or current_session_id.get() is not None:
+            agent_id, sid = await active_agent_scope()
+        else:
+            sid = None
+            if session_id:
+                try:
+                    sid = uuid.UUID(session_id)
+                except ValueError:
+                    raise ValidationError(f"Invalid session_id '{session_id}'") from None
 
         # Create and store memory
         entry = await memory_store.add(
@@ -146,6 +151,8 @@ async def recall(
         Formatted string with retrieved memories.
     """
     try:
+        if current_agent_id.get() is not None or current_session_id.get() is not None:
+            agent_id, _ = await active_agent_scope()
         retriever = MemoryRetriever(store=memory_store, top_k=limit)
         results = await retriever.retrieve(
             query=query,
@@ -160,7 +167,7 @@ async def recall(
         for i, rm in enumerate(results, 1):
             m = rm.memory
             lines.append(
-                f"\n  [{i}] ({m.category}, importance={m.importance:.2f}, "
+                f"\n  [{i}] id={m.id} ({m.category}, importance={m.importance:.2f}, "
                 f"score={rm.score:.3f}, source={rm.source})"
             )
             lines.append(f"      {m.content[:200]}")

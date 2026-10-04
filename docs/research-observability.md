@@ -3,6 +3,13 @@
 **Date:** 2026-10-01  
 **Scope:** What production observability looks like for an AI agent framework, mapped to AgentHarness's current architecture.
 
+> **Status:** Historical research snapshot. AgentHarness now has optional
+> OpenTelemetry spans in `ah/observability/tracing.py` and agent/tool calls.
+> Claims below that tracing is entirely absent describe the earlier baseline.
+> Check `ah/observability/` and the
+> [current program](superpowers/specs/2026-10-04-research-hermes-program-design.md)
+> before treating recommendations as unfinished work.
+
 ---
 
 ## Executive Summary

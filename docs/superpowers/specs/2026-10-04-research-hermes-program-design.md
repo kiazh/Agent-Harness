@@ -19,13 +19,14 @@ must be able to run the core system without a paid provider or platform token.
 | Track | Working foundation | Completion evidence still needed |
 | --- | --- | --- |
 | Reversible context | Byte-preserving archive, resurrection, compression, LoCoMo evidence retrieval | Adaptive compaction, measured token cost and answer quality against eviction baselines |
-| Identity defense | Beliefs, keyed provenance, validation, drift history, quarantine | Shared-memory bus that gates every recipient; adversarial and benign longitudinal traces |
+| Identity defense | Beliefs, keyed provenance, validation, drift history, quarantine, gated cross-agent memory delivery, owned-session checks for delegate tool | Gate delegation text handoffs and run adversarial and benign longitudinal traces |
 | Persona memory | Factual/persona separation and emotion topology | Learned or calibrated persona conditioning; multi-persona human and task evaluation |
 | RL memory policy | Six actions, rewards, offline finite-action trainer | Representative rollout corpus, reproducible joint model-training pipeline, held-out task and safety evaluation |
 | Soul Spec | Schema, merge, package validation, adapters | Live import/export runs in target frameworks and published conformance cases |
-| Hermes learning loop | Skills, learning command, curator and memory store | Post-turn review, staged skill edits, read-before-write, skill-use feedback, learning history |
-| Hermes recall | PostgreSQL full-text indexes and session title search | Agent-callable cross-session transcript discovery, scroll and read with agent scoping |
-| Hermes orchestration | Cron, delegation, gateway, streaming and usage budgets | Structured child output, steering/cancellation, durable task coordination, per-job model and delivery |
+| Hermes learning loop | Skills, manual learning, opt-in bounded post-turn skill proposals, approval, learning history, agent-facing progressive skill disclosure and read telemetry | Durable review recovery, outcome feedback, labeled precision evaluation |
+| Hermes recall | Scoped live/archive transcript discovery, anchored windows, agent tools and TUI | Improve evidence ranking and evaluate answer quality at scale |
+| Hermes orchestration | Cron, delegation, gateway, streaming, usage budgets, per-job model/provider pinning, bounded script-only jobs | Structured child output, steering/cancellation, durable task coordination, external delivery and retries |
+| Durable workflow engine | PostgreSQL sessions and jobs; process-local agent turn | Restartable delegated approval flow, idempotent side effects, native-vs-LangGraph recovery trial |
 | Hermes ecosystem | Plugin hooks, tools, TUI, Docker, OpenRouter | Optional channel adapters, MCP lifecycle, toolsets, analytics, additional execution backends where tested |
 
 Existing research documents are source material, not completion checklists:
@@ -74,6 +75,8 @@ uses PostgreSQL. Each milestone below must update the relevant status table.
 
 - Extend scheduled jobs with model pinning, delivery state, retries and a
   no-agent mode; extend delegated work with structured output and cancellation.
+- Run the [LangGraph decision trial](../../research-langgraph.md) against a
+  native PostgreSQL checkpoint before selecting a durable workflow engine.
 - Add usage insights and an observable learning history to the existing TUI.
 - Add optional channel adapters and tool/terminal backends in tested batches,
   starting with a common adapter contract and one end-to-end connector.
@@ -94,12 +97,17 @@ not merely that a class or schema was added.
 
 ## First implementation slice
 
-Cross-session recall is the first slice. `SessionManager.search()` currently
-searches titles only, while live and archived chunks already have PostgreSQL
-full-text indexes. Implement agent-scoped discovery over transcript text and
-an anchored window/read interface without an LLM dependency. Keep existing
-title search behavior compatible. Follow with a gateway method, agent tool,
-and TUI entry point in separate tested changes.
+Cross-session recall is the first slice. `SessionManager.search()` remains a
+title search. `SessionRecall` searches live and archived transcript text and
+returns anchored windows through the gateway, agent tools, and `/recall` TUI
+command. Restart and LoCoMo evidence-retrieval tests are recorded in
+[research evaluation](../../research-evaluation.md). This does not yet measure
+answer quality. The second slice stages opt-in, capped post-turn skill
+suggestions for approval via `/skills proposals` and `/skills approve`; it
+does not modify installed skills without review. Review precision and restart
+recovery remain open. Agent turns now list only matching validated skill names and
+read enabled skill bodies in bounded pages on demand. Read counts are a usage
+signal, not evidence that the skill helped; outcome feedback remains open.
 
 ## Sources checked
 

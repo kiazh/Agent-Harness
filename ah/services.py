@@ -172,7 +172,7 @@ def learn_skill(
             source=source,
             source_type="learned",
         )
-    except ValueError as e:
+    except (ValueError, FileExistsError) as e:
         raise ServiceError(f"Skill rejected: {e}") from None
 
 

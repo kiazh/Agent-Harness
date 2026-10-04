@@ -70,7 +70,7 @@ _PATTERNS: list[RedactionPattern] = [
     ),
     RedactionPattern(
         name="openrouter_api_key",
-        pattern=re.compile(r"sk-or-[a-zA-Z0-9]{20,}"),
+        pattern=re.compile(r"sk-or-[a-zA-Z0-9_-]{20,}"),
         replacement="[REDACTED_OPENROUTER_KEY]",
     ),
     # Bearer tokens

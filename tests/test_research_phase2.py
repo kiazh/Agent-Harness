@@ -18,6 +18,7 @@ from ah.research.locomo import (
     Question,
     evaluate_archive_retrieval,
     evaluate_retrieval,
+    evaluate_session_recall,
     load_locomo,
 )
 from ah.research.train_memory_policy import load_scored_states, train_from_file
@@ -181,6 +182,26 @@ async def test_archive_backend_scores_and_cleans_up(db_pool, monkeypatch):
     before = await db_pool.fetchval("SELECT COUNT(*) FROM context_archive")
     metrics = await evaluate_archive_retrieval(dataset, k=1)
     assert metrics.hit_rate == 1
+    assert await db_pool.fetchval("SELECT COUNT(*) FROM context_archive") == before
+
+
+async def test_session_recall_backend_scores_across_sessions_and_cleans_up(db_pool, monkeypatch):
+    monkeypatch.setattr("ah.core.context.db", db_pool)
+    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    dataset = [
+        Conversation(
+            turns=(
+                DialogueTurn("D1:1", "Ada", "The telescope observed a nebula"),
+                DialogueTurn("D1:2", "Ben", "The orchid blooms at sunrise"),
+            ),
+            questions=(Question("Which telescope observed a nebula?", ("D1:1",)),),
+        )
+    ]
+    before = await db_pool.fetchval("SELECT COUNT(*) FROM context_archive")
+    metrics, latency_ms = await evaluate_session_recall(dataset, k=1, turns_per_session=1)
+    assert metrics.hit_rate == 1
+    assert latency_ms >= 0
     assert await db_pool.fetchval("SELECT COUNT(*) FROM context_archive") == before
 
 

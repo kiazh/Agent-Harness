@@ -1,18 +1,21 @@
 // Skill commands: list, show, learn, delete, curator.
 
-import { keyValues, table } from "../format.ts";
-import type { SkillInfo } from "../protocol.ts";
+import { keyValues, resolvePrefix, shortId, table } from "../format.ts";
+import type { LearningReviewInfo, SkillInfo } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
-import { confirm, options, requireArgs, type Command } from "./types.ts";
+import { confirm, options, requireArgs, requireSession, type Command } from "./types.ts";
 
 export const skillsCommand: Command = {
 	name: "skills",
-	description: "Skills: list, show, learn, delete, health report",
-	argumentHint: "[list|show|learn|delete|curator]",
+	description: "Skills: list, show, learn, proposals, approve, reject, delete, health report",
+	argumentHint: "[list|show|learn|proposals|approve|reject|delete|curator]",
 	getArgumentCompletions: options([
 		["list", "All installed skills"],
 		["show", "Read a skill <name>"],
 		["learn", "Create a skill from <file|url|skill>"],
+		["proposals", "Review suggested skills"],
+		["approve", "Approve a suggested skill <id>"],
+		["reject", "Reject a suggested skill <id>"],
 		["delete", "Remove a skill <name>"],
 		["curator", "Skill health report"],
 	]),
@@ -48,6 +51,29 @@ export const skillsCommand: Command = {
 				host.print(`Learned skill "${skill.name}".`, "success");
 				return;
 			}
+			case "proposals": {
+				const session = requireSession(host);
+				const { reviews } = await host.request<{ reviews: LearningReviewInfo[] }>("learning.list", {
+					sessionId: session.id, limit: 50,
+				});
+				const pending = reviews.filter((review) => review.status === "pending");
+				host.print(pending.length
+					? table(["ID", "Name", "Description"], pending.map((review) => [shortId(review.id), review.name ?? "—", review.description ?? "—"]), 70)
+					: "No learning proposals waiting for review.", "plain");
+				return;
+			}
+			case "approve":
+			case "reject": {
+				const target = requireArgs(rest, `/skills ${sub} <id>`);
+				const session = requireSession(host);
+				const { reviews } = await host.request<{ reviews: LearningReviewInfo[] }>("learning.list", {
+					sessionId: session.id, limit: 100,
+				});
+				const id = resolvePrefix(target, reviews.filter((review) => review.status === "pending").map((review) => review.id), "learning proposal");
+				const { review } = await host.request<{ review: LearningReviewInfo }>(`learning.${sub}`, { sessionId: session.id, id });
+				host.print(`Learning proposal ${shortId(id)} ${review.status}.`, "success");
+				return;
+			}
 			case "delete": {
 				const name = requireArgs(rest, "/skills delete <name>");
 				if (!(await confirm(host, `Delete skill "${name}"?`, "Delete"))) {
@@ -75,7 +101,7 @@ export const skillsCommand: Command = {
 				return;
 			}
 			default:
-				throw new Error(`Unknown /skills option "${sub}". Try: list, show, learn, delete, curator.`);
+				throw new Error(`Unknown /skills option "${sub}". Try: list, show, learn, proposals, approve, reject, delete, curator.`);
 		}
 	},
 };

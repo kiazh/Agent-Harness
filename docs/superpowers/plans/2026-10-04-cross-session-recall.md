@@ -15,6 +15,13 @@ Results contain source and stable chunk IDs so callers can open a window.
 **Stack:** Python 3.11, asyncpg, PostgreSQL/pgvector, JSON-RPC gateway,
 TypeScript TUI, pytest.
 
+**Progress (2026-10-04):** The PostgreSQL discovery/window service, scoped
+gateway methods, agent tools, and `/recall` TUI command are implemented.
+Integration tests cover live and archived matches, agent scope, read-only
+archive access, and a fresh-process restart. The full LoCoMo evidence-retrieval
+benchmark is recorded in [research evaluation](../../research-evaluation.md).
+The title-only comparison and generated-answer evaluation remain open.
+
 ## Task 1: Transcript discovery service
 
 **Files:** Create `ah/core/session_recall.py`; add `tests/test_session_recall.py`.

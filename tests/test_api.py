@@ -143,7 +143,10 @@ class TestSessions:
         with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_session
             with patch("ah.core.usage.usage_store.summary", new_callable=AsyncMock) as summary:
-                summary.return_value = {"sessionId": str(mock_session.id), "session": {"requests": 2}}
+                summary.return_value = {
+                    "sessionId": str(mock_session.id),
+                    "session": {"requests": 2},
+                }
                 resp = await client.get(path, headers=auth_headers)
                 assert resp.status_code == 200
                 assert resp.json()["session"]["requests"] == 2
@@ -243,6 +246,24 @@ class TestMemory:
 
 
 class TestJobs:
+    async def test_create_script_job_passes_no_agent_configuration(self, client, auth_headers):
+        mock_session = make_session()
+        mock_job = MagicMock()
+        mock_job.to_dict.return_value = {"id": str(uuid.uuid4()), "noAgent": True}
+        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_session
+            with patch("ah.core.scheduler.job_store.create", new_callable=AsyncMock) as mock_create:
+                mock_create.return_value = mock_job
+                response = await client.post(
+                    f"/sessions/{mock_session.id}/jobs",
+                    headers=auth_headers,
+                    json={"kind": "interval", "noAgent": True, "scriptPath": "check.py"},
+                )
+                assert response.status_code == 200
+                assert mock_create.await_args.kwargs["no_agent"] is True
+                assert mock_create.await_args.kwargs["script_path"] == "check.py"
+                assert mock_create.await_args.kwargs["prompt"] == ""
+
     async def test_create_job(self, client, auth_headers):
         mock_session = make_session()
         mock_job = MagicMock()
@@ -269,11 +290,19 @@ class TestJobs:
                 resp = await client.post(
                     f"/sessions/{mock_session.id}/jobs",
                     headers=auth_headers,
-                    json={"kind": "interval", "prompt": "test", "intervalSeconds": 300},
+                    json={
+                        "kind": "interval",
+                        "prompt": "test",
+                        "intervalSeconds": 300,
+                        "model": "openrouter/free",
+                        "provider": "openrouter",
+                    },
                 )
                 assert resp.status_code == 200
                 data = resp.json()
                 assert "job" in data
+                assert mock_create.await_args.kwargs["model"] == "openrouter/free"
+                assert mock_create.await_args.kwargs["provider"] == "openrouter"
 
     async def test_list_jobs(self, client, auth_headers):
         mock_session = make_session()

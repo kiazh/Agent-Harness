@@ -1,0 +1,18 @@
+{
+  "specVersion": "0.5",
+  "name": "research-helper",
+  "displayName": "Research Helper",
+  "version": "1.0.0",
+  "description": "Finds and checks sources",
+  "author": {
+    "name": "Test Author"
+  },
+  "license": "MIT",
+  "tags": [
+    "research"
+  ],
+  "category": "general",
+  "files": {
+    "soul": "SOUL.md"
+  }
+}

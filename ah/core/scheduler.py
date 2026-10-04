@@ -51,6 +51,10 @@ class Job:
     last_error: str | None
     run_count: int
     cron_expression: str | None = None
+    model: str | None = None
+    provider: str | None = None
+    no_agent: bool = False
+    script_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,12 +72,17 @@ class Job:
             "lastError": self.last_error,
             "runCount": self.run_count,
             "cronExpression": self.cron_expression,
+            "model": self.model,
+            "provider": self.provider,
+            "noAgent": self.no_agent,
+            "scriptPath": self.script_path,
         }
 
 
 _COLUMNS = (
     "id, name, kind, session_id, agent_name, prompt, interval_seconds, enabled, "
-    "status, last_run_at, next_run_at, last_error, run_count, cron_expression"
+    "status, last_run_at, next_run_at, last_error, run_count, cron_expression, model, provider, "
+    "no_agent, script_path"
 )
 
 
@@ -93,6 +102,10 @@ def _row_to_job(row: Any) -> Job:
         last_error=row["last_error"],
         run_count=row["run_count"],
         cron_expression=row["cron_expression"],
+        model=row["model"],
+        provider=row["provider"],
+        no_agent=row["no_agent"],
+        script_path=row["script_path"],
     )
 
 
@@ -109,6 +122,10 @@ class JobStore:
         interval_seconds: int,
         agent_name: str = "harness",
         cron_expression: str | None = None,
+        model: str | None = None,
+        provider: str | None = None,
+        no_agent: bool = False,
+        script_path: str | None = None,
     ) -> Job:
         if kind not in ("heartbeat", "interval", "cron"):
             raise ValueError("kind must be 'heartbeat', 'interval', or 'cron'")
@@ -120,10 +137,31 @@ class JobStore:
             next_run = next_cron_time(cron_expression, datetime.now(UTC))
         else:
             next_run = datetime.now(UTC) + timedelta(seconds=interval_seconds)
+        if model is not None and (
+            not isinstance(model, str) or not model.strip() or len(model) > 200
+        ):
+            raise ValueError("model must be a non-empty string of at most 200 characters")
+        if provider is not None and (
+            not isinstance(provider, str) or not provider.strip() or len(provider) > 100
+        ):
+            raise ValueError("provider must be a non-empty string of at most 100 characters")
+        if no_agent:
+            from ah.core.job_scripts import resolve_script_path
+
+            if not script_path:
+                raise ValueError("script_path is required for no-agent jobs")
+            if prompt.strip():
+                raise ValueError("prompt must be empty for no-agent jobs")
+            if model or provider:
+                raise ValueError("no-agent jobs cannot pin a model or provider")
+            resolve_script_path(script_path)
+        elif script_path is not None:
+            raise ValueError("script_path requires no_agent=true")
         row = await db.fetchrow(
             f"""
-            INSERT INTO jobs (name, kind, session_id, agent_name, prompt, interval_seconds, next_run_at, cron_expression)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO jobs (name, kind, session_id, agent_name, prompt, interval_seconds,
+                              next_run_at, cron_expression, model, provider, no_agent, script_path)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING {_COLUMNS}
             """,
             name,
@@ -134,6 +172,10 @@ class JobStore:
             interval_seconds,
             next_run,
             cron_expression,
+            model,
+            provider,
+            no_agent,
+            script_path,
         )
         return _row_to_job(row)
 
@@ -331,11 +373,33 @@ class JobRunner:
     async def _execute(self, job: Job) -> None:
         if job.session_id is None:
             raise RuntimeError("job has no session")
+        if getattr(job, "no_agent", False):
+            from ah.core.assembler import get_token_count
+            from ah.core.context import context_manager
+            from ah.core.job_scripts import run_job_script
+            from ah.memory.redaction import redact_secrets
+
+            output = redact_secrets(await run_job_script(job.script_path or "")).text
+            if output:
+                await context_manager.add_chunk(
+                    session_id=job.session_id,
+                    agent_id=job.agent_name,
+                    chunk_type="result",
+                    payload={"content": output, "job_id": str(job.id)},
+                    token_count=get_token_count(output),
+                )
+            return
         prompt = job.prompt or DEFAULT_HEARTBEAT_PROMPT
-        agent = await self._build_agent(job.agent_name)
+        agent = await self._build_agent(
+            job.agent_name,
+            model=getattr(job, "model", None),
+            provider=getattr(job, "provider", None),
+        )
         await agent.run(job.session_id, prompt, verbose=False)
 
-    async def _build_agent(self, agent_name: str):
+    async def _build_agent(
+        self, agent_name: str, *, model: str | None = None, provider: str | None = None
+    ):
         if self._agent_factory is not None:
             return self._agent_factory(agent_name)
         from ah.core.agent import ReActAgent
@@ -347,8 +411,8 @@ class JobRunner:
             raise ValueError(f"no agent named {agent_name!r}")
         return ReActAgent(
             provider=get_provider(
-                provider=definition.provider or config.get("provider"),
-                model=definition.model or config.get("model"),
+                provider=provider or definition.provider or config.get("provider"),
+                model=model or definition.model or config.get("model"),
             ),
             max_iterations=definition.max_iterations,
             agent_id=agent_name,

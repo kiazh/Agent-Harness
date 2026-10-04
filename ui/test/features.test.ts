@@ -95,6 +95,33 @@ test("/recall reports empty results without opening a window", async () => {
 	assert.equal(host.calls.length, 1);
 });
 
+test("/memory share sends an owned memory to a named agent", async () => {
+	const host = new FakeHost();
+	host.responses["memory.list"] = {
+		memories: [{ id: "bbbb2222-3333-4444-5555-666666666666", content: "Fact", category: "fact", importance: 0.7 }],
+	};
+	host.responses["memory.share"] = { status: "accepted", targetMemoryId: "aaaaaaaa-3333-4444-5555-666666666666" };
+	await run("/memory share bbbb2222 researcher", host);
+	assert.deepEqual(host.calls.at(-1), {
+		method: "memory.share",
+		params: { sessionId: SESSION.id, id: "bbbb2222-3333-4444-5555-666666666666", recipientAgent: "researcher" },
+	});
+	assert.match(host.last().text, /accepted/);
+});
+
+test("/skills proposals lists staged learning and reviews one by id", async () => {
+	const host = new FakeHost();
+	const id = "11111111-aaaa-bbbb-cccc-eeeeeeeeeeee";
+	host.responses["learning.list"] = { reviews: [{ id, name: "deployment-checks", description: "Check a deployment", status: "pending", content: "Check health and ready.", triggers: ["deploy"] }] };
+	host.responses["learning.approve"] = { review: { id, status: "approved" } };
+	await run("/skills proposals", host);
+	assert.deepEqual(host.calls[0], { method: "learning.list", params: { sessionId: SESSION.id, limit: 50 } });
+	assert.match(host.last().text, /deployment-checks/);
+	await run("/skills approve 11111111", host);
+	assert.deepEqual(host.calls.at(-1), { method: "learning.approve", params: { sessionId: SESSION.id, id } });
+	assert.match(host.last().text, /approved/);
+});
+
 test("/jobs add schedules an interval job and reports it", async () => {
 	const host = new FakeHost();
 	host.responses["jobs.create"] = (p: Record<string, unknown>) => ({
@@ -121,6 +148,27 @@ test("/jobs add schedules an interval job and reports it", async () => {
 	assert.equal(call.params.intervalSeconds, 60);
 	assert.equal(call.params.prompt, "check the news");
 	assert.equal(host.last().kind, "success");
+});
+
+test("/jobs add can pin a model and provider", async () => {
+	const host = new FakeHost();
+	host.responses["jobs.create"] = { job: { id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", prompt: "Check deployment", intervalSeconds: 60 } };
+	await run("/jobs add 60 Check deployment --model=openrouter/free --provider=openrouter", host);
+	assert.deepEqual(host.calls.at(-1), {
+		method: "jobs.create",
+		params: { sessionId: SESSION.id, kind: "interval", prompt: "Check deployment", intervalSeconds: 60, model: "openrouter/free", provider: "openrouter" },
+	});
+});
+
+test("/jobs script schedules a script-only job without a prompt", async () => {
+	const host = new FakeHost();
+	host.responses["jobs.create"] = { job: { id: "job-script01", scriptPath: "check.py", intervalSeconds: 60 } };
+	await run("/jobs script 60 check.py", host);
+	assert.deepEqual(host.calls.at(-1), {
+		method: "jobs.create",
+		params: { sessionId: SESSION.id, kind: "interval", intervalSeconds: 60, noAgent: true, scriptPath: "check.py" },
+	});
+	assert.match(host.last().text, /check.py/);
 });
 
 test("/jobs add rejects a non-numeric interval", async () => {
@@ -191,6 +239,7 @@ test("/jobs off resolves an id prefix and disables the job", async () => {
 	assert.equal(call.method, "jobs.setEnabled");
 	assert.equal(call.params.id, "job-abcdef01");
 	assert.equal(call.params.enabled, false);
+	assert.equal(call.params.sessionId, SESSION.id);
 });
 
 test("every command has a description and unique name", () => {
@@ -228,7 +277,7 @@ test("/memory forget resolves an id prefix", async () => {
 	host.responses["memory.list"] = { memories: [{ id: "aaaa1111-x" }, { id: "bbbb2222-y" }], total: 2 };
 	host.responses["memory.forget"] = { deleted: true };
 	await run("/memory forget bbbb", host);
-	assert.deepEqual(host.calls.at(-1), { method: "memory.forget", params: { id: "bbbb2222-y" } });
+	assert.deepEqual(host.calls.at(-1), { method: "memory.forget", params: { sessionId: SESSION.id, id: "bbbb2222-y" } });
 	assert.equal(host.last().kind, "success");
 });
 

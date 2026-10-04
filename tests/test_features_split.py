@@ -8,12 +8,13 @@ def test_all_feature_methods_accessible_after_split():
 
     expected = {
         "session.fork", "session.delete", "session.rename", "session.setGoal",
-        "session.search", "session.export",
+        "session.search", "session.recall", "session.recall.window", "session.export",
         "context.get", "context.compress",
-        "memory.list", "memory.search", "memory.add", "memory.forget",
+        "memory.list", "memory.search", "memory.share", "memory.add", "memory.forget",
         "memory.pending", "memory.approve", "memory.reject",
         "memory.approveAll", "memory.rejectAll", "memory.stats",
         "skills.list", "skills.show", "skills.learn", "skills.delete", "skills.curator",
+        "learning.list", "learning.approve", "learning.reject",
         "config.get", "profile.get", "profile.set", "profile.list", "status",
         "agents.list", "agents.save", "agents.delete", "agents.run", "agents.history",
         "jobs.create", "jobs.list", "jobs.setEnabled", "jobs.delete",

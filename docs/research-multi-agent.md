@@ -2,6 +2,12 @@
 
 > Research survey for AgentHarness multi-agent extension. Covers communication patterns, task decomposition, result aggregation, conflict resolution, and agent specialization — with references to current production frameworks and academic work.
 
+> **Status:** Historical design snapshot. Sequential and parallel delegation
+> now exist in `ah/core/orchestrator.py`; sections below proposing the first
+> multi-agent implementation describe the earlier baseline. Durable child
+> coordination remains planned in the
+> [current program](superpowers/specs/2026-10-04-research-hermes-program-design.md).
+
 ---
 
 ## 1. Why Multi-Agent? When to Add Complexity

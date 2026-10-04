@@ -23,10 +23,14 @@ async def memory_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     gw.require_db()
     from ah.memory.store import memory_store
 
+    agent_id = (await gw.get_session(params)).agent_id if params.get("sessionId") else None
     memories = await memory_store.search(
-        category=_category(params), limit=_int(params, "limit", 20, 1, 500)
+        agent_id=agent_id, category=_category(params), limit=_int(params, "limit", 20, 1, 500)
     )
-    return {"memories": [_memory(m) for m in memories], "total": await memory_store.count()}
+    return {
+        "memories": [_memory(m) for m in memories],
+        "total": await memory_store.count(agent_id=agent_id),
+    }
 
 
 async def memory_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
@@ -34,11 +38,12 @@ async def memory_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     from ah.memory.retriever import MemoryRetriever
 
     retriever = MemoryRetriever(top_k=_int(params, "limit", 10, 1, 100))
-    session_id = _uuid(params, "sessionId") if params.get("sessionId") else None
+    session = await gw.get_session(params) if params.get("sessionId") else None
     found = await retriever.retrieve(
         query=_str(params, "query", max_len=500),
         category=_category(params),
-        session_id=session_id,
+        agent_id=session.agent_id if session else None,
+        session_id=session.id if session else None,
     )
     return {"results": [_memory(r.memory, r.score) for r in found]}
 
@@ -54,10 +59,10 @@ async def memory_add(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         or not 0 <= importance <= 1
     ):
         raise RpcError(INVALID_PARAMS, "importance must be a number between 0 and 1")
-    session_id = _uuid(params, "sessionId") if params.get("sessionId") else None
+    session = await gw.get_session(params) if params.get("sessionId") else None
     memory = await memory_store.add(
-        session_id=session_id,
-        agent_id=config.get("agent_id"),
+        session_id=session.id if session else None,
+        agent_id=session.agent_id if session else config.get("agent_id"),
         content=_str(params, "content", max_len=5000),
         category=_category(params) or "fact",
         importance=float(importance),
@@ -66,11 +71,42 @@ async def memory_add(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     return {"memory": _memory(memory)}
 
 
+async def memory_share(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Deliver one owned memory through the recipient's identity gate."""
+    gw.require_db()
+    from ah.memory.shared_bus import shared_memory_bus
+
+    session = await gw.get_session(params)
+    try:
+        receipt = await shared_memory_bus.deliver(
+            _uuid(params, "id"),
+            _str(params, "recipientAgent", max_len=128),
+            publisher_agent=session.agent_id,
+        )
+    except PermissionError:
+        raise RpcError(NOT_FOUND, "memory not found for this agent") from None
+    except ValueError as exc:
+        raise RpcError(INVALID_PARAMS, str(exc)) from None
+    return {
+        "sourceMemoryId": str(receipt.source_memory_id),
+        "recipientAgent": receipt.recipient_agent,
+        "targetMemoryId": str(receipt.target_memory_id) if receipt.target_memory_id else None,
+        "status": receipt.status,
+        "reason": receipt.reason,
+    }
+
+
 async def memory_forget(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     gw.require_db()
     from ah.memory.store import memory_store
 
-    return {"deleted": await memory_store.delete(_uuid(params, "id"))}
+    memory_id = _uuid(params, "id")
+    if params.get("sessionId"):
+        agent_id = (await gw.get_session(params)).agent_id
+        memory = await memory_store.get(memory_id)
+        if memory is None or memory.agent_id != agent_id:
+            raise RpcError(NOT_FOUND, "memory not found for this agent")
+    return {"deleted": await memory_store.delete(memory_id)}
 
 
 async def memory_pending(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:

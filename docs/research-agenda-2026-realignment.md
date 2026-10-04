@@ -11,7 +11,7 @@ AgentHarness has built a production system (TUI, gateway, API, multi-agent, sche
 | Gap | Implemented in the codebase | Research still needed |
 |-----|-----------------------------|-----------------------|
 | Reversible eviction | Byte-preserving archive, transactional eviction, text and vector recall, session cleanup; LoCoMo evidence-retrieval baseline | Adaptive compression, answer-quality and token-efficiency measurements |
-| Identity propagation | Belief storage, keyed provenance, quarantine, recorded drift transitions, labeled sequence evaluator | Shared-bus integration and large adversarial evaluation |
+| Identity propagation | Belief storage, keyed provenance, quarantine, recorded drift transitions, labeled sequence evaluator, gated shared-memory delivery | Gate delegation text handoffs and run large adversarial evaluation |
 | Persona memory | Separate factual and persona records, emotion-conditioned retrieval and prompt assembly | Learned persona model, human evaluation, longitudinal consistency |
 | RL memory control | Six actions, reward functions, finite-action group-relative training and held-out evaluation | Joint LLM training and benchmark comparison |
 | Soul Spec | Internal YAML model, merge rules, v0.5 package validation, declared-file round trip and registry loading | Live cross-framework validation and official conformance certification |

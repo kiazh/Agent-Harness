@@ -106,6 +106,18 @@ export interface SkillInfo {
 	content?: string;
 }
 
+export interface LearningReviewInfo {
+	id: string;
+	sessionId: string;
+	agentId: string;
+	status: string;
+	name: string | null;
+	description: string | null;
+	triggers: string[];
+	content: string | null;
+	reason: string;
+}
+
 export interface ProfileInfo {
 	userId: string;
 	displayName: string;
@@ -176,6 +188,10 @@ export interface JobInfo {
 	prompt: string;
 	intervalSeconds: number;
 	cronExpression?: string | null;
+	model?: string | null;
+	provider?: string | null;
+	noAgent?: boolean;
+	scriptPath?: string | null;
 	enabled: boolean;
 	status: string;
 	lastRunAt: string | null;

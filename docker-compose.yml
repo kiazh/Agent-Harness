@@ -26,6 +26,7 @@ services:
       AGENT_HARNESS_MODEL: ${AGENT_HARNESS_MODEL:-openrouter/free}
       AGENT_HARNESS_API_KEY: ${AGENT_HARNESS_API_KEY:?Set AGENT_HARNESS_API_KEY in .env}
       AGENT_HARNESS_PROVENANCE_KEY: ${AGENT_HARNESS_PROVENANCE_KEY:-}
+      AGENT_HARNESS_SCRIPTS_DIR: /app/scripts
       AGENT_HARNESS_USAGE_SESSION_TOKEN_LIMIT: ${AGENT_HARNESS_USAGE_SESSION_TOKEN_LIMIT:-0}
       AGENT_HARNESS_USAGE_SESSION_REQUEST_LIMIT: ${AGENT_HARNESS_USAGE_SESSION_REQUEST_LIMIT:-0}
       AGENT_HARNESS_USAGE_AGENT_TOKEN_LIMIT: ${AGENT_HARNESS_USAGE_AGENT_TOKEN_LIMIT:-0}
@@ -41,6 +42,7 @@ services:
       - "127.0.0.1:8000:8000"
     volumes:
       - ./ah:/app/ah:ro
+      - ./scripts:/app/scripts:ro
     entrypoint: ["/bin/sh", "-c"]
     command: ["ah init && exec ah serve --host 0.0.0.0 --port 8000"]
     healthcheck:

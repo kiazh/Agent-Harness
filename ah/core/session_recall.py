@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 import msgpack
 
+from ah.core.text_search import build_or_tsquery
 from ah.db.connection import db
 
 RecallSource = Literal["live", "archive", "title"]
@@ -48,11 +49,14 @@ class SessionRecall:
             return []
         if len(query) > 200:
             raise ValueError("query must be at most 200 characters")
+        tsquery = build_or_tsquery(query)
+        if not tsquery:
+            return []
 
         rows = await db.fetch(
             """
             WITH search_query AS (
-                SELECT plainto_tsquery('english', $2) AS terms
+                SELECT to_tsquery('english', $2) AS terms
             ), matches AS (
                 SELECT s.id AS session_id, c.id AS chunk_id, s.title,
                        'live'::text AS source, LEFT(c.search_text, 240) AS preview,
@@ -97,7 +101,7 @@ class SessionRecall:
             LIMIT $3
             """,
             agent_id,
-            query,
+            tsquery,
             limit,
         )
         return [

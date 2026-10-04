@@ -74,7 +74,9 @@ class MemoryStore:
             category=category,
             importance=importance,
         )
-        validation = await identity_gate.validate_incoming(agent_id, pre_memory, provenance)
+        validation = await identity_gate.validate_incoming(
+            agent_id, pre_memory, provenance, connection=connection
+        )
         quarantined = not validation.is_valid
 
         embedding_str = None
