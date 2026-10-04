@@ -41,11 +41,13 @@ class CreateSessionRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     provider: str | None = Field(default=None, max_length=50)
     goal: str | None = Field(default=None, max_length=10_000)
+    emotion: str | None = None
 
 
 class UpdateSessionRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     goal: str | None = Field(default=None, max_length=10_000)
+    emotion: str | None = None
 
 
 class CreateJobRequest(BaseModel):
@@ -68,6 +70,15 @@ class CreateMemoryRequest(BaseModel):
     importance: float = Field(default=0.5, ge=0, le=1)
     sessionId: uuid.UUID | None = None
     agent: str = "harness"
+
+
+class CreatePersonaMemoryRequest(BaseModel):
+    factId: uuid.UUID
+    personaId: str = Field(..., min_length=1, max_length=100)
+    interpretation: str = Field(..., min_length=1, max_length=20_000)
+    emotionalValence: float = Field(default=0.0, ge=-1, le=1)
+    emotionalArousal: float = Field(default=0.0, ge=0, le=1)
+    confidence: float = Field(default=0.5, ge=0, le=1)
 
 
 class CreateDocumentRequest(BaseModel):
@@ -215,12 +226,17 @@ def create_app() -> FastAPI:
     @app.post("/api/v1/sessions", dependencies=[Depends(require_api_key)])
     @app.post("/sessions", dependencies=[Depends(require_api_key)])
     async def create_session(req: CreateSessionRequest) -> dict[str, Any]:
+        from ah.memory.persona import EmotionTopology
+
+        if req.emotion and req.emotion not in EmotionTopology.EMOTION_PROFILES:
+            raise HTTPException(400, "unknown emotion")
         session = await session_manager.create(
             title=req.title,
             model=req.model or config.get("model"),
             provider=req.provider or config.get("provider"),
             goal=req.goal,
             context_budget=config.get("context_budget"),
+            state={"emotion": req.emotion} if req.emotion else None,
         )
         return {"session": session_to_dict(session)}
 
@@ -257,10 +273,23 @@ def create_app() -> FastAPI:
 
     @app.patch("/api/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])
     async def update_session(session_id: uuid.UUID, req: UpdateSessionRequest) -> dict[str, Any]:
-        if req.title is None and req.goal is None:
-            raise HTTPException(400, "title or goal is required")
-        if await session_manager.get(session_id) is None:
+        if req.title is None and req.goal is None and req.emotion is None:
+            raise HTTPException(400, "title, goal, or emotion is required")
+        session = await session_manager.get(session_id)
+        if session is None:
             raise HTTPException(404, "session not found")
+        if req.emotion is not None:
+            from ah.memory.persona import EmotionTopology
+
+            if req.emotion and req.emotion not in EmotionTopology.EMOTION_PROFILES:
+                raise HTTPException(400, "unknown emotion")
+            await session_manager.update_state(
+                session_id,
+                {
+                    **session.state,
+                    "emotion": req.emotion or None,
+                },
+            )
         if req.title is not None:
             await session_manager.set_title(session_id, req.title)
         if req.goal is not None:
@@ -290,23 +319,15 @@ def create_app() -> FastAPI:
             from ah.core.provider import get_provider
 
             try:
-                # Cache agents by session_id to avoid recreating per request
-                if not hasattr(app.state, "_agent_cache"):
-                    app.state._agent_cache = {}
-
-                if sid not in app.state._agent_cache:
-                    llm = get_provider(
-                        provider=session.provider or config.get("provider"),
-                        model=session.model or config.get("model"),
-                    )
-                    agent = ReActAgent(
-                        provider=llm,
-                        max_iterations=config.get("max_iterations"),
-                        agent_id=config.get("agent_id"),
-                    )
-                    app.state._agent_cache[sid] = agent
-
-                agent = app.state._agent_cache[sid]
+                llm = get_provider(
+                    provider=session.provider or config.get("provider"),
+                    model=session.model or config.get("model"),
+                )
+                agent = ReActAgent(
+                    provider=llm,
+                    max_iterations=config.get("max_iterations"),
+                    agent_id=session.agent_id,
+                )
                 async for event in agent.run_stream(sid, req.text, verbose=req.verbose):
                     data = _serialize_event(event)
                     yield f"data: {json.dumps(data)}\n\n"
@@ -328,9 +349,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/v1/sessions/{session_id}/context", dependencies=[Depends(require_api_key)])
     @app.get("/sessions/{session_id}/context", dependencies=[Depends(require_api_key)])
-    async def get_context(
-        session_id: str, limit: int = Query(50, ge=1, le=500)
-    ) -> dict[str, Any]:
+    async def get_context(session_id: str, limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
         try:
             sid = uuid.UUID(session_id)
         except ValueError:
@@ -357,9 +376,7 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/sessions/{session_id}/memory", dependencies=[Depends(require_api_key)])
-    async def get_memory(
-        session_id: str, limit: int = Query(20, ge=1, le=100)
-    ) -> dict[str, Any]:
+    async def get_memory(session_id: str, limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
         try:
             sid = uuid.UUID(session_id)
         except ValueError:
@@ -402,7 +419,27 @@ def create_app() -> FastAPI:
             importance=req.importance,
             explicitly_important=True,
         )
-        return {"memory": {"id": str(entry.id), "content": entry.content, "category": entry.category}}
+        return {
+            "memory": {"id": str(entry.id), "content": entry.content, "category": entry.category}
+        }
+
+    @app.post("/api/v1/persona-memory", dependencies=[Depends(require_api_key)])
+    async def create_persona_memory(req: CreatePersonaMemoryRequest) -> dict[str, Any]:
+        from ah.memory.persona import persona_memory_store
+        from ah.memory.store import memory_store
+
+        fact = await memory_store.get(req.factId)
+        if fact is None or fact.quarantined:
+            raise HTTPException(404, "fact not found")
+        entry = await persona_memory_store.add_persona(
+            fact_id=req.factId,
+            persona_id=req.personaId,
+            interpretation=req.interpretation,
+            emotional_valence=req.emotionalValence,
+            emotional_arousal=req.emotionalArousal,
+            confidence=req.confidence,
+        )
+        return {"personaMemory": {"id": str(entry.id), "factId": str(entry.fact_id)}}
 
     @app.get("/api/v1/memory/search", dependencies=[Depends(require_api_key)])
     async def search_memory(
@@ -410,16 +447,26 @@ def create_app() -> FastAPI:
         limit: int = Query(5, ge=1, le=50),
         agent: str | None = None,
         category: str | None = None,
+        emotion: str | None = None,
     ) -> dict[str, Any]:
+        from ah.memory.persona import EmotionTopology
         from ah.memory.retriever import MemoryRetriever
 
+        if emotion and emotion not in EmotionTopology.EMOTION_PROFILES:
+            raise HTTPException(400, "unknown emotion")
+
         results = await MemoryRetriever(top_k=limit).retrieve(
-            query, agent_id=agent, category=category
+            query, agent_id=agent, category=category, emotion=emotion
         )
         return {
             "memories": [
-                {"id": str(item.memory.id), "content": item.memory.content,
-                 "category": item.memory.category, "score": item.score}
+                {
+                    "id": str(item.memory.id),
+                    "content": item.memory.content,
+                    "category": item.memory.category,
+                    "score": item.score,
+                    "personaInterpretation": item.persona_interpretation,
+                }
                 for item in results
             ]
         }
@@ -461,8 +508,12 @@ def create_app() -> FastAPI:
             raise HTTPException(502, "document search failed") from None
         return {
             "results": [
-                {"id": str(item.chunk.id), "text": item.chunk.payload.get("text", ""),
-                 "source": item.chunk.payload.get("source", ""), "score": item.score}
+                {
+                    "id": str(item.chunk.id),
+                    "text": item.chunk.payload.get("text", ""),
+                    "source": item.chunk.payload.get("source", ""),
+                    "score": item.score,
+                }
                 for item in results
             ]
         }
@@ -499,9 +550,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/v1/sessions/{session_id}/jobs", dependencies=[Depends(require_api_key)])
     @app.get("/sessions/{session_id}/jobs", dependencies=[Depends(require_api_key)])
-    async def list_jobs(
-        session_id: str, limit: int = Query(100, ge=1, le=500)
-    ) -> dict[str, Any]:
+    async def list_jobs(session_id: str, limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
         try:
             sid = uuid.UUID(session_id)
         except ValueError:

@@ -185,6 +185,10 @@ async def search_files(pattern: str, path: str = ".", file_glob: str | None = No
 
         def _search():
             for f in dir_path.glob(glob_pattern):
+                try:
+                    resolve_path(str(f))
+                except ValueError:
+                    continue
                 if not f.is_file():
                     continue
                 try:

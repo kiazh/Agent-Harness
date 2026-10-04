@@ -13,9 +13,10 @@ from typing import Any
 from ah.core.provider import audit_log
 from ah.core.serialization import embedding_to_str, str_to_embedding
 from ah.db.connection import db, parse_command_count
-from ah.memory.identity import identity_gate
+from ah.memory.identity import MemoryProvenance, identity_gate
 from ah.memory.models import MemoryEntry
 from ah.memory.redaction import SecretRedactor
+from ah.security.secrets import get_secret
 
 __all__ = ["MemoryStore", "memory_store"]
 
@@ -38,6 +39,9 @@ class MemoryStore:
         embedding: list[float] | None = None,
         explicitly_important: bool = False,
         base_strength: float = 1.0,
+        connection: Any | None = None,
+        source_agent: str | None = None,
+        parent_memory_id: uuid.UUID | None = None,
     ) -> MemoryEntry:
         """Add a new memory entry. Secrets are redacted before storage.
 
@@ -49,43 +53,79 @@ class MemoryStore:
         redaction_result = self._redactor.redact(content)
         content = redaction_result.text
 
+        # The ID used for signing must be the ID actually inserted.
+        memory_id = uuid.uuid4()
+        source = source_agent or agent_id
+        provenance = None
+        if get_secret("AGENT_HARNESS_PROVENANCE_KEY"):
+            provenance = MemoryProvenance(
+                memory_id=memory_id,
+                source_agent=source,
+                signature=MemoryProvenance.compute_signature(memory_id, content, source),
+                parent_memory_id=parent_memory_id,
+            )
+
         # Validate against identity gate
         pre_memory = MemoryEntry(
-            id=uuid.uuid4(),
+            id=memory_id,
             session_id=session_id,
-            agent_id=agent_id,
+            agent_id=source,
             content=content,
             category=category,
             importance=importance,
         )
-        validation = await identity_gate.validate_incoming(agent_id, pre_memory)
+        validation = await identity_gate.validate_incoming(agent_id, pre_memory, provenance)
         quarantined = not validation.is_valid
 
         embedding_str = None
         if embedding is not None:
             embedding_str = embedding_to_str(embedding)
 
-        row = await db.fetchrow(
-            """
+        async def insert(executor: Any) -> Any:
+            row = await executor.fetchrow(
+                """
             INSERT INTO memories (
-                session_id, agent_id, content, category, importance,
+                id, session_id, agent_id, content, category, importance,
                 embedding, explicitly_important, base_strength, quarantined
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING id, session_id, agent_id, content, category, importance,
                       created_at, last_accessed, access_count, embedding,
                       explicitly_important, base_strength, quarantined
             """,
-            session_id,
-            agent_id,
-            content,
-            category,
-            importance,
-            embedding_str,
-            explicitly_important,
-            base_strength,
-            quarantined,
-        )
+                memory_id,
+                session_id,
+                agent_id,
+                content,
+                category,
+                importance,
+                embedding_str,
+                explicitly_important,
+                base_strength,
+                quarantined,
+            )
+            if provenance is not None:
+                await executor.execute(
+                    """
+                    INSERT INTO memory_provenance
+                        (memory_id, source_agent, signature, parent_memory_id)
+                    VALUES ($1, $2, $3, $4)
+                    """,
+                    memory_id,
+                    source,
+                    provenance.signature,
+                    parent_memory_id,
+                )
+            return row
+
+        if connection is not None:
+            row = await insert(connection)
+        elif provenance is not None:
+            async with db.acquire() as conn:
+                async with conn.transaction():
+                    row = await insert(conn)
+        else:
+            row = await insert(db)
         memory = self._row_to_entry(row)
         audit_log(
             "memory_add",
@@ -104,7 +144,7 @@ class MemoryStore:
             """
             SELECT id, session_id, agent_id, content, category, importance,
                    created_at, last_accessed, access_count, embedding,
-                   explicitly_important, base_strength
+                   explicitly_important, base_strength, quarantined
             FROM memories WHERE id = $1
             """,
             memory_id,
@@ -122,7 +162,7 @@ class MemoryStore:
         session_id: uuid.UUID | None = None,
     ) -> list[MemoryEntry]:
         """Search memories with optional filters (fully parameterized)."""
-        conditions = []
+        conditions = ["quarantined = FALSE"]
         params: list[Any] = []
         param_idx = 1
 
@@ -148,7 +188,7 @@ class MemoryStore:
             f"""
             SELECT id, session_id, agent_id, content, category, importance,
                    created_at, last_accessed, access_count, embedding,
-                   explicitly_important, base_strength
+                   explicitly_important, base_strength, quarantined
             FROM memories
             WHERE {where_clause}
             ORDER BY importance DESC, created_at DESC
@@ -172,7 +212,7 @@ class MemoryStore:
         """
         embedding_str = embedding_to_str(embedding)
 
-        conditions = ["embedding IS NOT NULL"]
+        conditions = ["embedding IS NOT NULL", "quarantined = FALSE"]
         params: list[Any] = [embedding_str, limit]
         param_idx = 3
 
@@ -192,7 +232,7 @@ class MemoryStore:
             f"""
             SELECT id, session_id, agent_id, content, category, importance,
                    created_at, last_accessed, access_count, embedding,
-                   explicitly_important, base_strength,
+                   explicitly_important, base_strength, quarantined,
                    1 - (embedding <=> $1::vector) AS similarity
             FROM memories
             WHERE {where_clause}
@@ -263,9 +303,7 @@ class MemoryStore:
             return await self.search(agent_id=agent_id, limit=limit, offset=offset)
         return await self.search(limit=limit, offset=offset)
 
-    async def count(
-        self, agent_id: str | None = None, session_id: uuid.UUID | None = None
-    ) -> int:
+    async def count(self, agent_id: str | None = None, session_id: uuid.UUID | None = None) -> int:
         """Count memories, optionally filtered by agent and session."""
         if agent_id is not None and session_id is not None:
             result = await db.fetchval(
@@ -374,7 +412,7 @@ class MemoryStore:
                 """
                 SELECT id, session_id, agent_id, content, category, importance,
                        created_at, last_accessed, access_count, embedding,
-                       explicitly_important, base_strength
+                       explicitly_important, base_strength, quarantined
                 FROM memories
                 WHERE agent_id = $1 AND importance < $2
                 ORDER BY importance ASC
@@ -389,7 +427,7 @@ class MemoryStore:
                 """
                 SELECT id, session_id, agent_id, content, category, importance,
                        created_at, last_accessed, access_count, embedding,
-                       explicitly_important, base_strength
+                       explicitly_important, base_strength, quarantined
                 FROM memories
                 WHERE importance < $1
                 ORDER BY importance ASC

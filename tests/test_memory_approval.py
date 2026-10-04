@@ -23,6 +23,16 @@ from ah.memory.user_profile import (
     UserProfileStore,
 )
 
+
+def _transactional_connection(mock_db):
+    conn = AsyncMock()
+    conn.fetchrow = mock_db.fetchrow
+    conn.execute = mock_db.execute
+    conn.transaction = MagicMock(return_value=AsyncMock())
+    cm = AsyncMock()
+    cm.__aenter__.return_value = conn
+    mock_db.acquire = MagicMock(return_value=cm)
+
 # ===========================================================================
 # SecretRedactor Tests
 # ===========================================================================
@@ -239,6 +249,7 @@ class TestMemoryApprovalGate:
             mock_memory.add = AsyncMock(return_value=MagicMock(id=uuid.uuid4()))
             with patch("ah.memory.approval.memory_store", mock_memory):
                 mock_db.execute = AsyncMock(return_value="UPDATE 1")
+                _transactional_connection(mock_db)
                 # The mock may yield None; this only checks approve() doesn't raise.
                 await gate.approve(uuid.uuid4())
 
@@ -297,6 +308,7 @@ class TestMemoryApprovalGate:
             mock_memory = AsyncMock()
             mock_memory.add = AsyncMock(return_value=MagicMock(id=uuid.uuid4()))
             with patch("ah.memory.approval.memory_store", mock_memory):
+                _transactional_connection(mock_db)
                 pending = await gate.submit("Test", "fact")
                 # When disabled, auto-approve is called
                 assert pending is not None

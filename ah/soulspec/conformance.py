@@ -1,7 +1,9 @@
 """SoulSpec conformance test suite."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from ah.soulspec.merge import SoulSpecMerger
 from ah.soulspec.schema import SoulSpec
@@ -46,11 +48,25 @@ class SoulSpecConformance:
 
         return ValidationResult(valid=len(errors) == 0, errors=errors)
 
+    def validate_package(self, directory: str | Path) -> ValidationResult:
+        """Validate the required manifest and SOUL.md in a Soul Spec package."""
+        try:
+            SoulSpec.from_package(directory)
+        except (OSError, UnicodeError, TypeError, ValueError) as exc:
+            return ValidationResult(valid=False, errors=[str(exc)])
+        return ValidationResult(valid=True)
+
     def test_merge_semantics(self) -> None:
         """Test that merge works correctly."""
         # Scalar override
-        base = SoulSpec(name="Base", version="1.0.0", config=SoulSpec.Config(model="gpt-4", max_iterations=5))
-        override = SoulSpec(name="Override", version="2.0.0", config=SoulSpec.Config(model="claude-3", max_iterations=15))
+        base = SoulSpec(
+            name="Base", version="1.0.0", config=SoulSpec.Config(model="gpt-4", max_iterations=5)
+        )
+        override = SoulSpec(
+            name="Override",
+            version="2.0.0",
+            config=SoulSpec.Config(model="claude-3", max_iterations=15),
+        )
         merged = SoulSpecMerger.merge(base, override)
         assert merged.name == "Override"
         assert merged.version == "2.0.0"
@@ -65,7 +81,10 @@ class SoulSpecConformance:
         )
         override = SoulSpec(
             name="Override",
-            workflow=[SoulSpec.Workflow(name="wf1", steps=["b"]), SoulSpec.Workflow(name="wf2", steps=["c"])],
+            workflow=[
+                SoulSpec.Workflow(name="wf1", steps=["b"]),
+                SoulSpec.Workflow(name="wf2", steps=["c"]),
+            ],
         )
         merged = SoulSpecMerger.merge(base, override)
         names = [w.name for w in merged.workflow]

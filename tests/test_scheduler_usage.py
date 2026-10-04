@@ -1,4 +1,4 @@
-"""Scheduler usage tracking: reserve/finish around job execution."""
+"""Scheduled jobs leave provider accounting to the agent."""
 from __future__ import annotations
 
 import os
@@ -38,8 +38,8 @@ class RecordingAgent:
 @needs_db
 @pytest.mark.usefixtures("connected_db")
 @pytest.mark.asyncio
-async def test_scheduler_execute_calls_usage_store(monkeypatch):
-    """JobRunner._execute() should call usage_store.reserve() and usage_store.finish() around the agent call."""
+async def test_scheduler_execute_does_not_double_count(monkeypatch):
+    """The scheduler does not charge a second request around an agent run."""
     from ah.core.scheduler import JobRunner, job_store
 
     RecordingAgent.runs = []
@@ -57,21 +57,21 @@ async def test_scheduler_execute_calls_usage_store(monkeypatch):
 
     reserve = AsyncMock(return_value=uuid.uuid4())
     finish = AsyncMock()
-    monkeypatch.setattr("ah.core.scheduler.usage_store.reserve", reserve)
-    monkeypatch.setattr("ah.core.scheduler.usage_store.finish", finish)
+    monkeypatch.setattr("ah.core.usage.usage_store.reserve", reserve)
+    monkeypatch.setattr("ah.core.usage.usage_store.finish", finish)
 
     runner = JobRunner(agent_factory=RecordingAgent)
     await runner._execute(job)
 
-    reserve.assert_awaited_once()
-    finish.assert_awaited_once()
+    reserve.assert_not_awaited()
+    finish.assert_not_awaited()
 
 
 @needs_db
 @pytest.mark.usefixtures("connected_db")
 @pytest.mark.asyncio
-async def test_scheduler_execute_calls_finish_with_failed_on_error(monkeypatch):
-    """JobRunner._execute() should call usage_store.finish(failed=True) when agent raises."""
+async def test_scheduler_failure_does_not_add_phantom_reservation(monkeypatch):
+    """A failed job does not charge a wrapper request."""
     from ah.core.scheduler import JobRunner, job_store
 
     sid = await _session()
@@ -91,16 +91,15 @@ async def test_scheduler_execute_calls_finish_with_failed_on_error(monkeypatch):
 
     reserve = AsyncMock(return_value=uuid.uuid4())
     finish = AsyncMock()
-    monkeypatch.setattr("ah.core.scheduler.usage_store.reserve", reserve)
-    monkeypatch.setattr("ah.core.scheduler.usage_store.finish", finish)
+    monkeypatch.setattr("ah.core.usage.usage_store.reserve", reserve)
+    monkeypatch.setattr("ah.core.usage.usage_store.finish", finish)
 
     runner = JobRunner(agent_factory=Exploding)
     with pytest.raises(RuntimeError, match="kaboom"):
         await runner._execute(job)
 
-    reserve.assert_awaited_once()
-    finish.assert_awaited_once()
-    assert finish.call_args.kwargs.get("failed") is True
+    reserve.assert_not_awaited()
+    finish.assert_not_awaited()
 
 
 async def _session() -> uuid.UUID:

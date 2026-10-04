@@ -175,10 +175,7 @@ class EmotionTopology:
         if not memories:
             return []
 
-        scored = [
-            (mem, self.compute_score(mem, emotion, now))
-            for mem in memories
-        ]
+        scored = [(mem, self.compute_score(mem, emotion, now)) for mem in memories]
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:limit]
 
@@ -196,6 +193,9 @@ class PersonaMemoryStore:
         confidence: float = 0.5,
     ) -> PersonaMemory:
         """Add a new persona memory."""
+        emotional_valence = max(-1.0, min(1.0, emotional_valence))
+        emotional_arousal = max(0.0, min(1.0, emotional_arousal))
+        confidence = max(0.0, min(1.0, confidence))
         row = await db.fetchrow(
             """
             INSERT INTO persona_memories (
@@ -289,16 +289,19 @@ class PersonaMemoryStore:
             param_idx += 1
 
         if emotional_valence is not None:
+            emotional_valence = max(-1.0, min(1.0, emotional_valence))
             updates.append(f"emotional_valence = ${param_idx}")
             params.append(emotional_valence)
             param_idx += 1
 
         if emotional_arousal is not None:
+            emotional_arousal = max(0.0, min(1.0, emotional_arousal))
             updates.append(f"emotional_arousal = ${param_idx}")
             params.append(emotional_arousal)
             param_idx += 1
 
         if confidence is not None:
+            confidence = max(0.0, min(1.0, confidence))
             updates.append(f"confidence = ${param_idx}")
             params.append(confidence)
             param_idx += 1
@@ -312,7 +315,7 @@ class PersonaMemoryStore:
         row = await db.fetchrow(
             f"""
             UPDATE persona_memories
-            SET {', '.join(updates)}
+            SET {", ".join(updates)}
             WHERE id = ${param_idx}
             RETURNING id, fact_id, persona_id, interpretation,
                       emotional_valence, emotional_arousal, confidence,

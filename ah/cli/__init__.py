@@ -84,9 +84,7 @@ def chat(
     message: str = typer.Argument(None, help="Message to send to the agent"),
     continue_: bool = typer.Option(False, "--continue", "-c", help="Continue last session"),
     session_id: str | None = typer.Option(None, "--session", "-s", help="Resume specific session"),
-    model: str = typer.Option(
-        None, "--model", "-m", help="Model to use (e.g., openrouter/free)"
-    ),
+    model: str = typer.Option(None, "--model", "-m", help="Model to use (e.g., openrouter/free)"),
     provider: str = typer.Option(
         "openrouter", "--provider", "-p", help="LLM provider (openrouter, ollama)"
     ),
@@ -289,10 +287,16 @@ def usage_command(
             for scope in ("session", "agent"):
                 item = result[scope]
                 table.add_row(
-                    scope, str(item["requests"]), str(item["accountedTokens"]),
+                    scope,
+                    str(item["requests"]),
+                    str(item["accountedTokens"]),
                     str(item["unknownCalls"]),
-                    str(item["requestsRemaining"]) if item["requestsRemaining"] is not None else "unlimited",
-                    str(item["tokensRemaining"]) if item["tokensRemaining"] is not None else "unlimited",
+                    str(item["requestsRemaining"])
+                    if item["requestsRemaining"] is not None
+                    else "unlimited",
+                    str(item["tokensRemaining"])
+                    if item["tokensRemaining"] is not None
+                    else "unlimited",
                 )
             console.print(table)
         finally:

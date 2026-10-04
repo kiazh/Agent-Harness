@@ -862,8 +862,9 @@ class TestErrorHandling:
         with pytest.raises(ValidationError, match="not in the allowlist"):
             asyncio.run(terminal_fn("this_command_does_not_exist_12345"))
 
-    def test_terminal_timeout(self):
+    def test_terminal_timeout(self, monkeypatch):
         """Test terminal with timeout."""
+        monkeypatch.setenv("AGENT_HARNESS_TERMINAL_SANDBOX", "docker")
         from ah.core.exceptions import ToolError
         from ah.tools.terminal import terminal as terminal_fn
 

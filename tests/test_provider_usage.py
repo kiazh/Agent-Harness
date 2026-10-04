@@ -6,8 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ah.core.models import LLMResponse, StreamEvent
-
 
 def _make_openrouter_provider():
     """Create an OpenRouterProvider with a mocked HTTP client."""

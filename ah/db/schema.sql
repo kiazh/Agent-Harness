@@ -64,7 +64,7 @@ CREATE INDEX IF NOT EXISTS idx_context_chunks_embedding ON context_chunks
 
 CREATE TABLE IF NOT EXISTS context_archive (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_id UUID NOT NULL,
+    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     chunk_id UUID NOT NULL,
     payload_msgpack BYTEA NOT NULL,
     embedding vector(1536),
@@ -74,7 +74,30 @@ CREATE TABLE IF NOT EXISTS context_archive (
     last_resurrected TIMESTAMPTZ
 );
 
+ALTER TABLE context_archive ADD COLUMN IF NOT EXISTS agent_id TEXT;
+ALTER TABLE context_archive ADD COLUMN IF NOT EXISTS chunk_type TEXT;
+ALTER TABLE context_archive ADD COLUMN IF NOT EXISTS token_count INT NOT NULL DEFAULT 0;
+ALTER TABLE context_archive ADD COLUMN IF NOT EXISTS original_created_at TIMESTAMPTZ;
+ALTER TABLE context_archive ADD COLUMN IF NOT EXISTS search_text TEXT;
+
+-- Older installations created this table without the session foreign key.
+DELETE FROM context_archive a WHERE NOT EXISTS (
+    SELECT 1 FROM sessions s WHERE s.id = a.session_id
+);
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'context_archive'::regclass
+          AND confrelid = 'sessions'::regclass AND contype = 'f'
+    ) THEN
+        ALTER TABLE context_archive ADD CONSTRAINT context_archive_session_fk
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_context_archive_session ON context_archive(session_id);
+CREATE INDEX IF NOT EXISTS idx_context_archive_fts ON context_archive
+    USING GIN (to_tsvector('english', COALESCE(search_text, '')));
 CREATE INDEX IF NOT EXISTS idx_context_archive_embedding ON context_archive
     USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
@@ -284,12 +307,26 @@ CREATE INDEX IF NOT EXISTS idx_agent_beliefs_updated ON agent_beliefs(updated_at
 -- ─── Memory Provenance (Gap 2: Identity Propagation Defense) ───────────────
 
 CREATE TABLE IF NOT EXISTS memory_provenance (
-    memory_id UUID PRIMARY KEY,
+    memory_id UUID PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
     source_agent TEXT NOT NULL,
     signature TEXT NOT NULL,
     parent_memory_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+DELETE FROM memory_provenance p WHERE NOT EXISTS (
+    SELECT 1 FROM memories m WHERE m.id = p.memory_id
+);
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'memory_provenance'::regclass
+          AND confrelid = 'memories'::regclass AND contype = 'f'
+    ) THEN
+        ALTER TABLE memory_provenance ADD CONSTRAINT memory_provenance_memory_fk
+            FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE;
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_memory_provenance_source ON memory_provenance(source_agent);
 CREATE INDEX IF NOT EXISTS idx_memory_provenance_parent ON memory_provenance(parent_memory_id);

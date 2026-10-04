@@ -259,7 +259,9 @@ class MemoryConsolidator:
         return "\n".join(lines)
 
     async def _extract_memories(
-        self, conversation: str, session_id: uuid.UUID | None = None,
+        self,
+        conversation: str,
+        session_id: uuid.UUID | None = None,
         agent_id: str = "harness",
     ) -> list[MemoryEntry]:
         """Use LLM to extract candidate memories from conversation.
@@ -274,7 +276,9 @@ class MemoryConsolidator:
             from ah.core.usage import usage_store
 
             response = await usage_store.complete_call(
-                self.llm, session_id, agent_id,
+                self.llm,
+                session_id,
+                agent_id,
                 messages=[
                     {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
                     {"role": "user", "content": conversation},

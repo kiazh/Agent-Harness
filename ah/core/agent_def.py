@@ -154,6 +154,18 @@ class AgentRegistry:
                 )
             except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
                 logger.warning("Skipping agent definition %s: %s", path, exc)
+        from ah.soulspec.schema import SoulSpec
+
+        for manifest in sorted(directory.glob("*/soul.json")):
+            try:
+                spec = SoulSpec.from_package(manifest.parent)
+                if spec.name in BUILTIN_AGENTS or spec.name in definitions:
+                    raise ValueError("cannot replace an existing agent definition")
+                definition = spec.to_agent_def()
+                definition.source = "soulspec"
+                definitions[definition.name] = definition
+            except (OSError, UnicodeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning("Skipping Soul Spec package %s: %s", manifest, exc)
         self._file_definitions_cache = definitions
         self._file_definitions_cache_time = now
         return definitions

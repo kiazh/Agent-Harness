@@ -209,49 +209,43 @@ class MemoryApprovalGate:
 
         Returns the created MemoryEntry, or None if not found.
         """
-        # Step 1: Get the pending record
-        row = await db.fetchrow(
-            """
-            SELECT id, content, category, importance, agent_id, session_id,
-                   redactions, status, created_at, explicitly_important,
-                   base_strength
-            FROM pending_memories WHERE id = $1
-            """,
-            pending_id,
-        )
-        if row is None:
-            logger.warning("Pending memory %s not found for approval", pending_id)
-            return None
-
-        if row["status"] != ApprovalStatus.PENDING.value:
-            logger.warning("Pending memory %s already %s", pending_id, row["status"])
-            return None
-
-        # Step 2: Create the actual memory entry
-        memory = await memory_store.add(
-            session_id=row["session_id"],
-            agent_id=row["agent_id"],
-            content=row["content"],
-            category=row["category"],
-            importance=row["importance"],
-            explicitly_important=row["explicitly_important"],
-            base_strength=row["base_strength"],
-        )
-
-        # Step 3: Update pending record
-        now = datetime.now(UTC)
-        await db.execute(
-            """
-            UPDATE pending_memories
-            SET status = $2, memory_id = $3, reviewed_at = $4, review_note = $5
-            WHERE id = $1
-            """,
-            pending_id,
-            ApprovalStatus.APPROVED.value,
-            memory.id,
-            now,
-            review_note,
-        )
+        # Lock the pending row and commit its memory in the same transaction.
+        # A failed update or a concurrent approval cannot leave an orphan.
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    SELECT id, content, category, importance, agent_id, session_id,
+                           redactions, status, created_at, explicitly_important,
+                           base_strength
+                    FROM pending_memories WHERE id = $1 FOR UPDATE
+                    """,
+                    pending_id,
+                )
+                if row is None or row["status"] != ApprovalStatus.PENDING.value:
+                    return None
+                memory = await memory_store.add(
+                    session_id=row["session_id"],
+                    agent_id=row["agent_id"],
+                    content=row["content"],
+                    category=row["category"],
+                    importance=row["importance"],
+                    explicitly_important=row["explicitly_important"],
+                    base_strength=row["base_strength"],
+                    connection=conn,
+                )
+                await conn.execute(
+                    """
+                    UPDATE pending_memories
+                    SET status = $2, memory_id = $3, reviewed_at = $4, review_note = $5
+                    WHERE id = $1
+                    """,
+                    pending_id,
+                    ApprovalStatus.APPROVED.value,
+                    memory.id,
+                    datetime.now(UTC),
+                    review_note,
+                )
 
         audit_log(
             "memory_approved",
@@ -357,34 +351,38 @@ class MemoryApprovalGate:
 
         Returns the count of approved memories.
         """
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                return await self._approve_all_locked(conn, agent_id)
+
+    async def _approve_all_locked(self, conn: Any, agent_id: str | None) -> int:
+        """Approve a locked batch; the caller owns the transaction."""
         if agent_id:
-            rows = await db.fetch(
+            rows = await conn.fetch(
                 """
                 SELECT id, content, category, importance, agent_id, session_id,
                        redactions, created_at, explicitly_important, base_strength
                 FROM pending_memories
                 WHERE status = $1 AND agent_id = $2
-                ORDER BY created_at ASC
+                ORDER BY created_at ASC FOR UPDATE
                 """,
                 ApprovalStatus.PENDING.value,
                 agent_id,
             )
         else:
-            rows = await db.fetch(
+            rows = await conn.fetch(
                 """
                 SELECT id, content, category, importance, agent_id, session_id,
                        redactions, created_at, explicitly_important, base_strength
                 FROM pending_memories
                 WHERE status = $1
-                ORDER BY created_at ASC
+                ORDER BY created_at ASC FOR UPDATE
                 """,
                 ApprovalStatus.PENDING.value,
             )
 
         if not rows:
             return 0
-
-        from ah.memory.store import memory_store
 
         now = datetime.now(UTC)
         pending_ids = [row["id"] for row in rows]
@@ -398,14 +396,15 @@ class MemoryApprovalGate:
                 importance=row["importance"],
                 explicitly_important=row["explicitly_important"],
                 base_strength=row["base_strength"],
+                connection=conn,
             )
             memory_ids.append(memory.id)
 
         # Single batch UPDATE to mark all pending records as approved
-        await db.execute(
+        await conn.execute(
             """
             UPDATE pending_memories
-            SET status = $2,
+            SET status = 'approved',
                 memory_id = approved_memory_ids.mem_id,
                 reviewed_at = $3,
                 review_note = ''

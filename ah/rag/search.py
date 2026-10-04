@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import msgpack
 import uuid
 from dataclasses import dataclass
 from typing import Any
 
 import asyncpg
+import msgpack
 
 from ah.core.models import ContextChunk
 from ah.core.provider import audit_log
@@ -115,7 +115,9 @@ class HybridSearch:
         matches = await self._dense_search(
             session_id, query_embedding, top_k or self._final_top_k, db
         )
-        return [SearchResult(chunk=chunk, score=score, dense_score=score) for chunk, score in matches]
+        return [
+            SearchResult(chunk=chunk, score=score, dense_score=score) for chunk, score in matches
+        ]
 
     async def _dense_search(
         self,

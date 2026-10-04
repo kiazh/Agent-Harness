@@ -1,4 +1,4 @@
-"""Orchestrator usage tracking: reserve/finish around delegated agent calls."""
+"""Delegation leaves provider usage accounting to the agent."""
 from __future__ import annotations
 
 import os
@@ -41,16 +41,16 @@ class FakeAgent:
 @needs_db
 @pytest.mark.usefixtures("connected_db")
 @pytest.mark.asyncio
-async def test_orchestrator_delegate_calls_usage_store(monkeypatch):
-    """Orchestrator.delegate() should call usage_store.reserve() and usage_store.finish() around the agent call."""
+async def test_orchestrator_delegate_does_not_double_count(monkeypatch):
+    """Delegation does not add a second reservation around the agent."""
     from ah.core.orchestrator import Orchestrator
 
     orch = Orchestrator(agent_factory=FakeAgent)
 
     reserve = AsyncMock(return_value=uuid.uuid4())
     finish = AsyncMock()
-    monkeypatch.setattr("ah.core.orchestrator.usage_store.reserve", reserve)
-    monkeypatch.setattr("ah.core.orchestrator.usage_store.finish", finish)
+    monkeypatch.setattr("ah.core.usage.usage_store.reserve", reserve)
+    monkeypatch.setattr("ah.core.usage.usage_store.finish", finish)
 
     parent = await _parent_session()
     result = await orch.delegate(
@@ -58,15 +58,15 @@ async def test_orchestrator_delegate_calls_usage_store(monkeypatch):
     )
 
     assert result.status == "complete"
-    reserve.assert_awaited_once()
-    finish.assert_awaited_once()
+    reserve.assert_not_awaited()
+    finish.assert_not_awaited()
 
 
 @needs_db
 @pytest.mark.usefixtures("connected_db")
 @pytest.mark.asyncio
-async def test_orchestrator_delegate_calls_finish_with_failed_on_error(monkeypatch):
-    """Orchestrator.delegate() should call usage_store.finish(failed=True) when agent raises."""
+async def test_orchestrator_error_does_not_make_phantom_reservation(monkeypatch):
+    """A failed delegate does not charge an extra wrapper request."""
     from ah.core.orchestrator import Orchestrator
 
     class ExplodingAgent:
@@ -80,8 +80,8 @@ async def test_orchestrator_delegate_calls_finish_with_failed_on_error(monkeypat
 
     reserve = AsyncMock(return_value=uuid.uuid4())
     finish = AsyncMock()
-    monkeypatch.setattr("ah.core.orchestrator.usage_store.reserve", reserve)
-    monkeypatch.setattr("ah.core.orchestrator.usage_store.finish", finish)
+    monkeypatch.setattr("ah.core.usage.usage_store.reserve", reserve)
+    monkeypatch.setattr("ah.core.usage.usage_store.finish", finish)
 
     parent = await _parent_session()
     result = await orch.delegate(
@@ -89,9 +89,8 @@ async def test_orchestrator_delegate_calls_finish_with_failed_on_error(monkeypat
     )
 
     assert result.status == "error"
-    reserve.assert_awaited_once()
-    finish.assert_awaited_once()
-    assert finish.call_args.kwargs.get("failed") is True
+    reserve.assert_not_awaited()
+    finish.assert_not_awaited()
 
 
 @needs_db
@@ -105,8 +104,8 @@ async def test_orchestrator_delegate_skips_usage_store_without_parent_session(mo
 
     reserve = AsyncMock(return_value=uuid.uuid4())
     finish = AsyncMock()
-    monkeypatch.setattr("ah.core.orchestrator.usage_store.reserve", reserve)
-    monkeypatch.setattr("ah.core.orchestrator.usage_store.finish", finish)
+    monkeypatch.setattr("ah.core.usage.usage_store.reserve", reserve)
+    monkeypatch.setattr("ah.core.usage.usage_store.finish", finish)
 
     result = await orch.delegate("researcher", "find the latest release")
 

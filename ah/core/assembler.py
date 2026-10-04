@@ -157,7 +157,9 @@ class PromptAssembler:
                 result = result[:limit] + "..."
             return f"  -> {status}: {result}"
         elif chunk_type == "memory":
-            return f"[memory] {payload.get('content', '')}"
+            fact = f"[memory fact] {payload.get('content', '')}"
+            interpretation = payload.get("persona_interpretation")
+            return fact + (f"\n[persona interpretation] {interpretation}" if interpretation else "")
         elif chunk_type == "document":
             source = payload.get("source", payload.get("metadata", {}).get("source", ""))
             return f"[document: {source}] {payload.get('text', '')}"

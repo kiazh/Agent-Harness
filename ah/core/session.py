@@ -173,11 +173,11 @@ class SessionManager:
         await self._cache_invalidate(session_id)
 
     async def delete(self, session_id: uuid.UUID) -> bool:
-        """Permanently delete a session and all its context chunks."""
-        result = await db.execute(
-            "DELETE FROM sessions WHERE id = $1",
-            session_id,
-        )
+        """Permanently delete a session and its active and archived context."""
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM context_archive WHERE session_id = $1", session_id)
+                result = await conn.execute("DELETE FROM sessions WHERE id = $1", session_id)
         await self._cache_invalidate(session_id)
         from ah.db.connection import parse_command_count
 

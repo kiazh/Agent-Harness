@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 # Base directory for all file operations. Defaults to the current working
 # directory; override via the agent_harness_home config key.
 _BASE_DIR = Path(config.get("agent_harness_home") or os.getcwd()).resolve()
+_PRIVATE_PARTS = {".git", ".aws", ".ssh", ".agent-harness", "__pycache__"}
+_PRIVATE_FILES = {".env", ".env.local", ".npmrc", ".pypirc", "id_rsa", "id_ed25519"}
 
 
 def resolve_path(path: str) -> Path:
@@ -30,6 +32,14 @@ def resolve_path(path: str) -> Path:
     # Ensure the resolved path is within the allowed root
     if not candidate.is_relative_to(_BASE_DIR):
         raise ValueError(f"Path '{path}' escapes the allowed base directory '{_BASE_DIR}'")
+
+    parts = candidate.relative_to(_BASE_DIR).parts
+    if any(part.lower() in _PRIVATE_PARTS for part in parts) or any(
+        part.lower() in _PRIVATE_FILES or part.lower().startswith(".env.")
+        for part in parts
+        if part.lower() != ".env.example"
+    ):
+        raise ValueError(f"Path '{path}' is private")
 
     return candidate
 
@@ -54,7 +64,9 @@ def resolve_path(path: str) -> Path:
         "required": ["path"],
     },
 )
-async def read_file(path: str, offset: int = 1, limit: int = 2000, max_size: int = 1_048_576) -> str:
+async def read_file(
+    path: str, offset: int = 1, limit: int = 2000, max_size: int = 1_048_576
+) -> str:
     """Read a file with optional offset and limit.
 
     Args:
@@ -82,9 +94,7 @@ async def read_file(path: str, offset: int = 1, limit: int = 2000, max_size: int
     # Check file size before reading
     file_size = file_path.stat().st_size
     if file_size > max_size:
-        raise ToolError(
-            f"File '{path}' is too large ({file_size} bytes, max {max_size} bytes)"
-        )
+        raise ToolError(f"File '{path}' is too large ({file_size} bytes, max {max_size} bytes)")
 
     try:
 
@@ -165,6 +175,10 @@ async def list_files(path: str = ".", pattern: str = "*") -> str:
                 return f"No files found matching '{pattern}' in {path}"
             lines = []
             for f in sorted(files):
+                try:
+                    resolve_path(str(f))
+                except ValueError:
+                    continue
                 if f.is_file():
                     size = f.stat().st_size
                     lines.append(f"{f.relative_to(dir_path)} ({size} bytes)")

@@ -1,14 +1,14 @@
 """Session-related feature handlers."""
+
 from __future__ import annotations
 
-import uuid
 from typing import TYPE_CHECKING, Any
 
 from ah import services
-from ah.gateway.errors import INVALID_PARAMS, TURN_IN_PROGRESS, RpcError
-from ah.gateway.serializers import chunk_preview, session_to_dict
 from ah.core.context import context_manager
 from ah.core.session import session_manager
+from ah.gateway.errors import TURN_IN_PROGRESS, RpcError
+from ah.gateway.serializers import chunk_preview, session_to_dict
 
 if TYPE_CHECKING:
     from ah.gateway.server import Gateway

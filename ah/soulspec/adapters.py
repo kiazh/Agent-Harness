@@ -1,7 +1,6 @@
 """SoulSpec adapters — export to various agent frameworks."""
-from __future__ import annotations
 
-import textwrap
+from __future__ import annotations
 
 from ah.core.agent_def import AgentDef
 from ah.soulspec.schema import SoulSpec
@@ -25,6 +24,9 @@ class AgentHarnessAdapter:
         return SoulSpec(
             name=agent_def.name,
             persona=persona,
+            workflow=[SoulSpec.Workflow(name="agent-tools", tools=list(agent_def.tools))]
+            if agent_def.tools
+            else [],
             config=config,
         )
 
@@ -50,14 +52,10 @@ class ClaudeCodeAdapter:
         # Persona
         if spec.persona:
             if spec.persona.values:
-                values_str = ", ".join(
-                    f"{v.name} ({v.weight})" for v in spec.persona.values
-                )
+                values_str = ", ".join(f"{v.name} ({v.weight})" for v in spec.persona.values)
                 sections.append(f"## Values\n{values_str}\n")
             if spec.persona.traits:
-                traits_str = ", ".join(
-                    f"{t.name} ({t.strength})" for t in spec.persona.traits
-                )
+                traits_str = ", ".join(f"{t.name} ({t.strength})" for t in spec.persona.traits)
                 sections.append(f"## Traits\n{traits_str}\n")
             if spec.persona.voice:
                 sections.append(

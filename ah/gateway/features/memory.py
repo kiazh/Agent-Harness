@@ -1,11 +1,12 @@
 """Memory-related feature handlers."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
 from ah.core.config import config
 from ah.gateway.errors import INVALID_PARAMS, NOT_FOUND, RpcError
-from ah.gateway.features._common import _int, _memory, _pending, _str, _uuid, MEMORY_CATEGORIES
+from ah.gateway.features._common import MEMORY_CATEGORIES, _int, _memory, _pending, _str, _uuid
 
 if TYPE_CHECKING:
     from ah.gateway.server import Gateway
@@ -35,7 +36,8 @@ async def memory_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     retriever = MemoryRetriever(top_k=_int(params, "limit", 10, 1, 100))
     session_id = _uuid(params, "sessionId") if params.get("sessionId") else None
     found = await retriever.retrieve(
-        query=_str(params, "query", max_len=500), category=_category(params),
+        query=_str(params, "query", max_len=500),
+        category=_category(params),
         session_id=session_id,
     )
     return {"results": [_memory(r.memory, r.score) for r in found]}

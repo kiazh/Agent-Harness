@@ -66,3 +66,4 @@ class RetrievedMemory:
     memory: MemoryEntry
     score: float
     source: str = "hybrid"  # "dense", "sparse", or "hybrid"
+    persona_interpretation: str | None = None

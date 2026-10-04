@@ -1,7 +1,10 @@
-"""SoulSpec schema — dataclasses for agent configuration."""
+"""AgentHarness persona schema with import/export for Soul Spec packages."""
+
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -19,6 +22,7 @@ class SoulSpec:
     workflow: list[SoulSpec.Workflow] = field(default_factory=list)
     skills: list[SoulSpec.Skill] = field(default_factory=list)
     config: SoulSpec.Config | None = None
+    package_manifest: dict[str, Any] = field(default_factory=dict, repr=False)
 
     # ─── Nested dataclasses ──────────────────────────────────────────────
 
@@ -73,6 +77,98 @@ class SoulSpec:
         permissions: SoulSpec.Permissions | None = None
 
     # ─── Constructors ────────────────────────────────────────────────────
+
+    @classmethod
+    def from_package(cls, directory: str | Path) -> SoulSpec:
+        """Read a Soul Spec package (soul.json plus SOUL.md).
+
+        The older YAML format remains available through ``from_yaml``.
+        """
+        root = Path(directory).resolve()
+        manifest = json.loads((root / "soul.json").read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            raise ValueError("soul.json must contain a JSON object")
+        required = (
+            "specVersion",
+            "name",
+            "displayName",
+            "version",
+            "description",
+            "author",
+            "license",
+            "tags",
+            "category",
+            "files",
+        )
+        missing = [key for key in required if key not in manifest]
+        if missing:
+            raise ValueError(f"soul.json missing required fields: {', '.join(missing)}")
+        if manifest["specVersion"] not in {"0.3", "0.4", "0.5"}:
+            raise ValueError("unsupported Soul Spec version")
+        for key in ("name", "displayName", "version", "description", "license", "category"):
+            if not isinstance(manifest[key], str) or not manifest[key].strip():
+                raise ValueError(f"{key} must be a non-empty string")
+        if len(manifest["description"]) > 160:
+            raise ValueError("description must be at most 160 characters")
+        if not isinstance(manifest["author"], dict) or not manifest["author"].get("name"):
+            raise ValueError("author.name is required")
+        if (
+            not isinstance(manifest["tags"], list)
+            or len(manifest["tags"]) > 10
+            or any(not isinstance(tag, str) for tag in manifest["tags"])
+        ):
+            raise ValueError("tags must be a list of at most ten strings")
+        files = manifest["files"]
+        if not isinstance(files, dict) or not isinstance(files.get("soul"), str):
+            raise ValueError("files.soul must name SOUL.md")
+        soul_path = (root / files["soul"]).resolve()
+        if not soul_path.is_relative_to(root) or soul_path.name != "SOUL.md":
+            raise ValueError("SOUL.md must stay inside the package")
+        soul_text = soul_path.read_text(encoding="utf-8")
+        if not soul_text.strip():
+            raise ValueError("SOUL.md is empty")
+        return cls(
+            name=manifest["name"],
+            version=manifest["version"],
+            persona=cls.Persona(
+                name=manifest["displayName"],
+                description=manifest["description"],
+                system_prompt=soul_text,
+            ),
+            package_manifest=manifest,
+        )
+
+    def write_package(
+        self,
+        directory: str | Path,
+        *,
+        author: str,
+        license: str = "MIT",
+        category: str = "general",
+        tags: list[str] | None = None,
+    ) -> None:
+        """Export the runtime persona as a minimal Soul Spec v0.5 package."""
+        if not self.persona or not self.persona.system_prompt.strip():
+            raise ValueError("a non-empty persona system prompt is required")
+        root = Path(directory)
+        root.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            **self.package_manifest,
+            "specVersion": "0.5",
+            "name": self.name,
+            "displayName": self.persona.name or self.name,
+            "version": self.version,
+            "description": self.persona.description[:160],
+            "author": {"name": author},
+            "license": license,
+            "tags": tags or [],
+            "category": category,
+            "files": {"soul": "SOUL.md"},
+        }
+        (root / "soul.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        (root / "SOUL.md").write_text(self.persona.system_prompt, encoding="utf-8")
 
     @classmethod
     def from_yaml(cls, yaml_str: str) -> SoulSpec:
@@ -167,9 +263,7 @@ class SoulSpec:
                 "description": self.persona.description,
             }
             if self.persona.values:
-                p["values"] = [
-                    {"name": v.name, "weight": v.weight} for v in self.persona.values
-                ]
+                p["values"] = [{"name": v.name, "weight": v.weight} for v in self.persona.values]
             if self.persona.traits:
                 p["traits"] = [
                     {"name": t.name, "strength": t.strength} for t in self.persona.traits
@@ -231,6 +325,19 @@ class SoulSpec:
                 for t in wf.tools:
                     if t not in tools:
                         tools.append(t)
+        if self.config and self.config.permissions:
+            permissions = self.config.permissions
+            if permissions.allowed_tools:
+                tools = (
+                    [t for t in tools if t in permissions.allowed_tools]
+                    if tools
+                    else list(permissions.allowed_tools)
+                )
+            tools = [t for t in tools if t not in permissions.denied_tools]
+            if not tools and (permissions.allowed_tools or permissions.denied_tools):
+                # AgentDef uses [] to mean every tool; a private sentinel keeps
+                # an explicitly empty effective allowlist empty at runtime.
+                tools = ["__no_tools__"]
         return AgentDef(
             name=self.name,
             description=self.persona.description if self.persona else "",

@@ -10,9 +10,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-HOOKS = frozenset({
-    "pre_agent_run", "post_agent_run", "on_tool_call", "on_tool_result", "on_memory_extract"
-})
+HOOKS = frozenset(
+    {"pre_agent_run", "post_agent_run", "on_tool_call", "on_tool_result", "on_memory_extract"}
+)
 
 
 class PluginRegistry:

@@ -43,10 +43,13 @@ def _estimate_tokens(messages: list[dict[str, Any]], tools: list[Any], max_token
     return max(1, int(prompt_estimate * 1.2) + 16 + max_tokens)
 
 
-def _check_limit(scope: str, requests: int, tokens: int, request_limit: int, token_limit: int,
-                 reservation: int) -> None:
+def _check_limit(
+    scope: str, requests: int, tokens: int, request_limit: int, token_limit: int, reservation: int
+) -> None:
     if request_limit and requests + 1 > request_limit:
-        raise UsageBudgetExceededError(f"{scope} request budget exceeded ({requests}/{request_limit})")
+        raise UsageBudgetExceededError(
+            f"{scope} request budget exceeded ({requests}/{request_limit})"
+        )
     if token_limit and tokens + reservation > token_limit:
         raise UsageBudgetExceededError(
             f"{scope} token budget exceeded ({tokens} used, {reservation} requested, "
@@ -56,9 +59,15 @@ def _check_limit(scope: str, requests: int, tokens: int, request_limit: int, tok
 
 class UsageStore:
     async def complete_call(
-        self, provider: Any, session_id: uuid.UUID | None, agent_id: str,
-        messages: list[dict[str, Any]], *, tools: list[Any] | None = None,
-        max_tokens: int = 4096, **kwargs: Any,
+        self,
+        provider: Any,
+        session_id: uuid.UUID | None,
+        agent_id: str,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[Any] | None = None,
+        max_tokens: int = 4096,
+        **kwargs: Any,
     ) -> Any:
         """Call a provider once, accounting for auxiliary and agent requests."""
         reservation = None
@@ -67,8 +76,13 @@ class UsageStore:
             provider_name = type(provider).__name__.removesuffix("Provider").lower()
             try:
                 reservation = await self.reserve(
-                    session_id, agent_id, provider_name, model,
-                    messages, tools or [], max_tokens,
+                    session_id,
+                    agent_id,
+                    provider_name,
+                    model,
+                    messages,
+                    tools or [],
+                    max_tokens,
                 )
             except UsageBudgetExceededError:
                 raise
@@ -87,7 +101,8 @@ class UsageStore:
             raise
         try:
             await self.finish(
-                reservation, getattr(response, "usage", {}),
+                reservation,
+                getattr(response, "usage", {}),
                 model=getattr(response, "model", None),
             )
         except Exception as e:
@@ -132,26 +147,40 @@ class UsageStore:
                     session_id,
                 )
                 _check_limit(
-                    "agent", int(agent_row["requests"]), int(agent_row["tokens"]),
-                    limits["usage_agent_request_limit"], limits["usage_agent_token_limit"],
+                    "agent",
+                    int(agent_row["requests"]),
+                    int(agent_row["tokens"]),
+                    limits["usage_agent_request_limit"],
+                    limits["usage_agent_token_limit"],
                     reserved,
                 )
                 _check_limit(
-                    "session", int(session_row["requests"]), int(session_row["tokens"]),
-                    limits["usage_session_request_limit"], limits["usage_session_token_limit"],
+                    "session",
+                    int(session_row["requests"]),
+                    int(session_row["tokens"]),
+                    limits["usage_session_request_limit"],
+                    limits["usage_session_token_limit"],
                     reserved,
                 )
                 row = await conn.fetchrow(
                     "INSERT INTO llm_usage "
                     "(session_id, agent_id, provider, model, status, reserved_tokens, accounted_tokens) "
                     "VALUES ($1, $2, $3, $4, 'reserved', $5, $5) RETURNING id",
-                    session_id, agent_id, provider, model, reserved,
+                    session_id,
+                    agent_id,
+                    provider,
+                    model,
+                    reserved,
                 )
         return row["id"]
 
     async def finish(
-        self, reservation_id: uuid.UUID | None, usage: dict[str, Any] | None = None,
-        *, failed: bool = False, model: str | None = None,
+        self,
+        reservation_id: uuid.UUID | None,
+        usage: dict[str, Any] | None = None,
+        *,
+        failed: bool = False,
+        model: str | None = None,
     ) -> None:
         if reservation_id is None:
             return
@@ -159,11 +188,17 @@ class UsageStore:
         prompt = usage.get("prompt_tokens")
         completion = usage.get("completion_tokens")
         total = usage.get("total_tokens")
-        total = total if isinstance(total, int) and not isinstance(total, bool) and total >= 0 else 0
+        total = (
+            total if isinstance(total, int) and not isinstance(total, bool) and total >= 0 else 0
+        )
         known = (
             not failed
-            and isinstance(prompt, int) and not isinstance(prompt, bool) and prompt >= 0
-            and isinstance(completion, int) and not isinstance(completion, bool) and completion >= 0
+            and isinstance(prompt, int)
+            and not isinstance(prompt, bool)
+            and prompt >= 0
+            and isinstance(completion, int)
+            and not isinstance(completion, bool)
+            and completion >= 0
             and (prompt + completion > 0 or total > 0)
         )
         accounted = max(prompt + completion, total) if known else None
@@ -171,47 +206,65 @@ class UsageStore:
             "UPDATE llm_usage SET status = $2, prompt_tokens = $3, completion_tokens = $4, "
             "accounted_tokens = COALESCE($5, reserved_tokens), model = COALESCE($6, model), "
             "completed_at = now() WHERE id = $1",
-            reservation_id, "error" if failed else "complete",
-            prompt if known else None, completion if known else None, accounted, model,
+            reservation_id,
+            "error" if failed else "complete",
+            prompt if known else None,
+            completion if known else None,
+            accounted,
+            model,
         )
 
     async def summary(self, session_id: uuid.UUID, agent_id: str) -> dict[str, Any]:
         limits = _limits()
         session = await db.fetchrow(
-            "SELECT COUNT(*) AS requests, COALESCE(SUM(accounted_tokens), 0) AS tokens, "
+            "SELECT COUNT(*) FILTER (WHERE status = 'complete') AS requests, "
+            "COALESCE(SUM(accounted_tokens) FILTER (WHERE status = 'complete'), 0) AS tokens, "
+            "COUNT(*) AS charged_requests, COALESCE(SUM(accounted_tokens), 0) AS charged_tokens, "
             "COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
             "COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
             "COUNT(*) FILTER (WHERE prompt_tokens IS NULL) AS unknown_calls "
-            "FROM llm_usage WHERE session_id = $1 AND status = 'complete'",
+            "FROM llm_usage WHERE session_id = $1",
             session_id,
         )
         agent = await db.fetchrow(
-            "SELECT COUNT(*) AS requests, COALESCE(SUM(accounted_tokens), 0) AS tokens, "
+            "SELECT COUNT(*) FILTER (WHERE status = 'complete') AS requests, "
+            "COALESCE(SUM(accounted_tokens) FILTER (WHERE status = 'complete'), 0) AS tokens, "
+            "COUNT(*) AS charged_requests, COALESCE(SUM(accounted_tokens), 0) AS charged_tokens, "
             "COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
             "COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
             "COUNT(*) FILTER (WHERE prompt_tokens IS NULL) AS unknown_calls "
-            "FROM llm_usage WHERE agent_id = $1 AND status = 'complete'",
+            "FROM llm_usage WHERE agent_id = $1",
             agent_id,
         )
 
         def view(row: Any, prefix: str) -> dict[str, Any]:
             requests, tokens = int(row["requests"]), int(row["tokens"])
+            charged_requests = int(row["charged_requests"])
+            charged_tokens = int(row["charged_tokens"])
             request_limit = limits[f"usage_{prefix}_request_limit"]
             token_limit = limits[f"usage_{prefix}_token_limit"]
             return {
                 "requests": requests,
                 "accountedTokens": tokens,
+                "chargedRequests": charged_requests,
+                "chargedTokens": charged_tokens,
                 "knownPromptTokens": int(row["prompt_tokens"]),
                 "knownCompletionTokens": int(row["completion_tokens"]),
                 "unknownCalls": int(row["unknown_calls"]),
                 "requestLimit": request_limit or None,
                 "tokenLimit": token_limit or None,
-                "requestsRemaining": max(0, request_limit - requests) if request_limit else None,
-                "tokensRemaining": max(0, token_limit - tokens) if token_limit else None,
+                "requestsRemaining": max(0, request_limit - charged_requests)
+                if request_limit
+                else None,
+                "tokensRemaining": max(0, token_limit - charged_tokens) if token_limit else None,
             }
 
-        return {"sessionId": str(session_id), "agentId": agent_id,
-                "session": view(session, "session"), "agent": view(agent, "agent")}
+        return {
+            "sessionId": str(session_id),
+            "agentId": agent_id,
+            "session": view(session, "session"),
+            "agent": view(agent, "agent"),
+        }
 
     async def cleanup_orphaned_reservations(self) -> int:
         """Mark all 'reserved' rows as 'error' — called on startup to clean up after crashes.
@@ -219,8 +272,7 @@ class UsageStore:
         Returns the number of rows that were cleaned up.
         """
         result = await db.execute(
-            "UPDATE llm_usage SET status = 'error', completed_at = now() "
-            "WHERE status = 'reserved'"
+            "UPDATE llm_usage SET status = 'error', completed_at = now() WHERE status = 'reserved'"
         )
         # Parse the command count from the result (e.g., "UPDATE 3")
         try:
@@ -233,8 +285,11 @@ class UsageStore:
             "SELECT COUNT(*) AS requests, COALESCE(SUM(accounted_tokens), 0) AS tokens, "
             "COUNT(*) FILTER (WHERE prompt_tokens IS NULL) AS unknown_calls FROM llm_usage"
         )
-        return {"requests": int(row["requests"]), "accounted_tokens": int(row["tokens"]),
-                "unknown_calls": int(row["unknown_calls"])}
+        return {
+            "requests": int(row["requests"]),
+            "accounted_tokens": int(row["tokens"]),
+            "unknown_calls": int(row["unknown_calls"]),
+        }
 
 
 usage_store = UsageStore()

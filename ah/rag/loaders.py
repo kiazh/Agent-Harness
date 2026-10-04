@@ -99,7 +99,7 @@ class FileLoader:
 
     def __init__(self, base_dir: str | Path | None = None) -> None:
         self._base_dir = (
-            Path(base_dir)
+            Path(base_dir).resolve()
             if base_dir
             else Path(config.get("agent_harness_home") or os.getcwd()).resolve()
         )

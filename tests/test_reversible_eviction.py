@@ -1,8 +1,9 @@
 """Tests for reversible eviction — archive before delete, resurrection via embedding."""
+
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -39,7 +40,7 @@ class TestEvictionArchivesBeforeDelete:
                 "id": uuid.uuid4(),
                 "token_count": 100,
                 "chunk_type": "user_message",
-                "created_at": f"2025-01-0{i+1}T00:00:00Z",
+                "created_at": f"2025-01-0{i + 1}T00:00:00Z",
                 "payload_msgpack": payload_msgpack,
                 "embedding": embedding_str,
                 "agent_id": "harness",
@@ -48,21 +49,23 @@ class TestEvictionArchivesBeforeDelete:
         ]
         mock_db.fetch = AsyncMock(return_value=rows)
         mock_db.fetchval = AsyncMock(return_value=1100)  # total tokens
-        mock_db.execute = AsyncMock(return_value="DELETE 1")
+        connection = AsyncMock()
+        connection.fetchrow.return_value = {"id": uuid.uuid4()}
+        connection.transaction = MagicMock()
+        mock_db.acquire = MagicMock()
+        mock_db.acquire.return_value.__aenter__.return_value = connection
 
         with patch("ah.core.context.db", mock_db):
             evicted = await manager.evict_old_chunks(session_id, max_tokens=50)
 
         assert evicted == 1
         # Verify archive INSERT was called (via fetchrow for INSERT...RETURNING)
-        all_calls = (
-            list(mock_db.fetchrow.call_args_list)
-            + list(mock_db.execute.call_args_list)
+        all_calls = list(connection.fetchrow.call_args_list) + list(
+            connection.execute.call_args_list
         )
-        archive_inserted = any(
-            "context_archive" in str(call) for call in all_calls
-        )
+        archive_inserted = any("context_archive" in str(call) for call in all_calls)
         assert archive_inserted, "Expected INSERT INTO context_archive before DELETE"
+        connection.execute.assert_awaited_once()
 
 
 class TestResurrectionViaEmbedding:
@@ -103,9 +106,7 @@ class TestResurrectionViaEmbedding:
         assert similarity == 0.95
         # Verify the query was against context_archive
         fetch_calls = mock_db.fetch.call_args_list
-        archive_queried = any(
-            "context_archive" in str(call) for call in fetch_calls
-        )
+        archive_queried = any("context_archive" in str(call) for call in fetch_calls)
         assert archive_queried, "Expected query against context_archive table"
 
 

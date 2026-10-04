@@ -1,4 +1,5 @@
 """Job/scheduler-related feature handlers."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -30,9 +31,8 @@ async def jobs_create(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
             prompt=prompt,
             interval_seconds=_int(params, "intervalSeconds", 300, 10, 86_400),
             agent_name=_str(params, "agent", required=False, max_len=100) or "harness",
-            cron_expression=_str(
-                params, "cronExpression", required=kind == "cron", max_len=100
-            ) or None,
+            cron_expression=_str(params, "cronExpression", required=kind == "cron", max_len=100)
+            or None,
         )
     except ValueError as e:
         raise RpcError(INVALID_PARAMS, str(e)) from None

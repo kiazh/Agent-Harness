@@ -1,8 +1,7 @@
 """Tests for evict_weak_memories atomicity — race condition fix."""
 from __future__ import annotations
 
-import uuid
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, patch
 
 import pytest
 

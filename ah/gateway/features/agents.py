@@ -1,7 +1,7 @@
 """Agent-related feature handlers."""
+
 from __future__ import annotations
 
-import uuid
 from typing import TYPE_CHECKING, Any
 
 from ah.gateway.errors import INVALID_PARAMS, NOT_FOUND, RpcError

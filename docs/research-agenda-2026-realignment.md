@@ -6,7 +6,15 @@
 
 ## Executive Summary
 
-AgentHarness has built a solid production system (TUI, gateway, API, multi-agent, scheduler, usage tracking) but has drifted from the original research vision. The 5 research gaps identified in September 2026 remain unsolved and highly relevant. This document maps each gap to specific implementation plans that leverage the existing infrastructure and 2026 research findings.
+AgentHarness has built a production system (TUI, gateway, API, multi-agent, scheduler, usage tracking). This agenda was written before the five research prototypes were added. The assessments and plans below describe that earlier baseline; the current implementation status is recorded here so the plans are not mistaken for a description of today's code.
+
+| Gap | Implemented in the codebase | Research still needed |
+|-----|-----------------------------|-----------------------|
+| Reversible eviction | Byte-preserving archive, transactional eviction, text and vector recall, session cleanup | LoCoMo evaluation, adaptive compression, token-efficiency measurements |
+| Identity propagation | Belief storage, keyed provenance, quarantine on cross-agent ingestion | Shared-bus integration, drift detection over time, adversarial evaluation |
+| Persona memory | Separate factual and persona records, emotion-conditioned retrieval and prompt assembly | Learned persona model, human evaluation, longitudinal consistency |
+| RL memory control | Six action definitions and reward functions | Policy training, GRPO experiments, benchmark comparison |
+| Soul Spec | Internal YAML model, merge rules, conformance checks, package import/export and registry loading | Full v0.5 conformance, round-trip preservation of every package field, cross-framework validation |
 
 **Core Insight**: The existing `llm_usage` + `context_chunks` + `memories` infrastructure provides the foundation for all 5 gaps. What's missing is the *novel* contribution that makes each gap publishable.
 
@@ -381,7 +389,7 @@ No standardized structure for agent configuration. AGENTS.md files, identity def
 
 ### Research Findings
 
-- **SoulSpec** (arXiv:2510.21413): Proposes format for AGENTS.md consolidation
+- **Soul Spec** ([official v0.5 specification](https://github.com/clawsouls/soulspec/blob/main/soul-spec-v0.5.md)): Defines `soul.json` and `SOUL.md` package structure. The previously cited arXiv:2510.21413 is an unrelated context engineering paper.
 - **AGENTS.md** standard: De facto standard, 75.5% cross-org propagation
 - **SoulSpec v0.5**: Persona + workflow + skill manifests with 3-level progressive disclosure
 - **Supply chain risk**: Agent configs are undeclared shared components (<1% permission declarations)

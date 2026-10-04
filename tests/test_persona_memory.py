@@ -6,7 +6,7 @@ dual-stream separation, and persona memory updates.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -17,7 +17,6 @@ from ah.memory.persona import (
     PersonaMemory,
     PersonaMemoryStore,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -361,7 +360,6 @@ class TestDualStreamSeparation:
 
     def test_schema_has_persona_memories_table(self):
         """Test that the schema defines persona_memories table."""
-        from ah.db.connection import db
 
         # Read the schema file
         import ah.db

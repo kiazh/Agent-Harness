@@ -70,11 +70,7 @@ def _sanitize_value(value: Any) -> Any:
         return sanitized
     elif isinstance(value, dict):
         return {
-            k: (
-                "[REDACTED]"
-                if _is_sensitive_audit_key(k)
-                else _sanitize_value(v)
-            )
+            k: ("[REDACTED]" if _is_sensitive_audit_key(k) else _sanitize_value(v))
             for k, v in value.items()
         }
     elif isinstance(value, list):
@@ -88,7 +84,17 @@ def _sanitize_value(value: Any) -> Any:
 def _is_sensitive_audit_key(key: Any) -> bool:
     normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
     return normalized == "authorization" or normalized.endswith(
-        ("apikey", "token", "secret", "password", "passwd", "pwd", "credential", "privatekey", "accesskey")
+        (
+            "apikey",
+            "token",
+            "secret",
+            "password",
+            "passwd",
+            "pwd",
+            "credential",
+            "privatekey",
+            "accesskey",
+        )
     )
 
 
@@ -236,9 +242,7 @@ class OpenRouterProvider(LLMProvider):
 
     BASE_URL = "https://openrouter.ai/api/v1"
 
-    def __init__(
-        self, api_key: str | None = None, model: str = "openrouter/free"
-    ) -> None:
+    def __init__(self, api_key: str | None = None, model: str = "openrouter/free") -> None:
         self.api_key = api_key or config.get("openrouter_api_key") or ""
         if not self.api_key:
             raise ValidationError("OPENROUTER_API_KEY not set")
@@ -287,7 +291,13 @@ class OpenRouterProvider(LLMProvider):
         reservation_id = None
         if session_id is not None and agent_id is not None:
             reservation_id = await usage_store.reserve(
-                session_id, agent_id, "openrouter", model, messages, tools or [], max_tokens,
+                session_id,
+                agent_id,
+                "openrouter",
+                model,
+                messages,
+                tools or [],
+                max_tokens,
             )
 
         start = time.monotonic()
@@ -326,7 +336,9 @@ class OpenRouterProvider(LLMProvider):
         # Finish usage reservation
         if reservation_id is not None:
             await usage_store.finish(
-                reservation_id, usage, model=data.get("model", model),
+                reservation_id,
+                usage,
+                model=data.get("model", model),
             )
 
         audit_log(
@@ -390,7 +402,13 @@ class OpenRouterProvider(LLMProvider):
         reservation_id = None
         if session_id is not None and agent_id is not None:
             reservation_id = await usage_store.reserve(
-                session_id, agent_id, "openrouter", model, messages, tools or [], max_tokens,
+                session_id,
+                agent_id,
+                "openrouter",
+                model,
+                messages,
+                tools or [],
+                max_tokens,
             )
 
         content_parts: list[str] = []
@@ -553,7 +571,13 @@ class OllamaProvider(LLMProvider):
         reservation_id = None
         if session_id is not None and agent_id is not None:
             reservation_id = await usage_store.reserve(
-                session_id, agent_id, "ollama", model or self.model, messages, tools or [], max_tokens,
+                session_id,
+                agent_id,
+                "ollama",
+                model or self.model,
+                messages,
+                tools or [],
+                max_tokens,
             )
 
         start = time.monotonic()
@@ -661,7 +685,13 @@ class OllamaProvider(LLMProvider):
         reservation_id = None
         if session_id is not None and agent_id is not None:
             reservation_id = await usage_store.reserve(
-                session_id, agent_id, "ollama", model or self.model, messages, tools or [], max_tokens,
+                session_id,
+                agent_id,
+                "ollama",
+                model or self.model,
+                messages,
+                tools or [],
+                max_tokens,
             )
 
         content_parts: list[str] = []
@@ -704,7 +734,9 @@ class OllamaProvider(LLMProvider):
         # Finish usage reservation
         if reservation_id is not None:
             await usage_store.finish(
-                reservation_id, {}, model=model or self.model,
+                reservation_id,
+                {},
+                model=model or self.model,
             )
 
         audit_log(

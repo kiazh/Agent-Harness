@@ -274,7 +274,7 @@ class TestSecretRedactionOnDirectWrites:
         class CapturingMock:
             async def fetchrow(self, query, *args):
                 nonlocal captured_content
-                captured_content = args[2]  # content is 3rd positional arg
+                captured_content = args[3]  # content follows the explicit memory ID
                 return {
                     "id": uuid.uuid4(),
                     "session_id": None,
@@ -312,7 +312,7 @@ class TestSecretRedactionOnDirectWrites:
         class CapturingMock:
             async def fetchrow(self, query, *args):
                 nonlocal captured_content
-                captured_content = args[2]
+                captured_content = args[3]
                 return {
                     "id": uuid.uuid4(),
                     "session_id": None,

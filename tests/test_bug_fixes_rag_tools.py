@@ -153,8 +153,8 @@ class TestBug13CdNotInAllowlist:
         with pytest.raises(ValidationError, match="not in the allowlist"):
             await terminal("cd ..")
 
-    async def test_other_commands_not_affected(self):
+    async def test_other_commands_not_affected(self, monkeypatch):
         """Removing 'cd' should not affect other allowed commands."""
-        # pwd should still work (it's a real binary)
-        result = await terminal("pwd")
+        monkeypatch.setenv("AGENT_HARNESS_TERMINAL_SANDBOX", "local")
+        result = await terminal("git --version")
         assert isinstance(result, str)

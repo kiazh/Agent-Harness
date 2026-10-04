@@ -4,8 +4,6 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from ah.api.app import create_app
 
 

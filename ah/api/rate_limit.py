@@ -42,6 +42,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             calls.append(now)
             if len(self._calls) > 10_000:
                 self._calls = defaultdict(
-                    deque, {key: value for key, value in self._calls.items() if value and now - value[-1] < 60}
+                    deque,
+                    {
+                        key: value
+                        for key, value in self._calls.items()
+                        if value and now - value[-1] < 60
+                    },
                 )
         return await call_next(request)

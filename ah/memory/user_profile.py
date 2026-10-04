@@ -256,7 +256,7 @@ class UserProfileStore:
                                 SELECT to_jsonb($2) AS elem
                                 UNION ALL
                                 SELECT elem FROM jsonb_array_elements(last_topics) elem
-                                WHERE elem != $2
+                                WHERE elem != to_jsonb($2::text)
                             ) combined
                             LIMIT 10
                         ) limited

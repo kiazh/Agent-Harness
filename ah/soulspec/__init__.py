@@ -1,4 +1,5 @@
 """SoulSpec: Open Standard for Agent Configuration (Gap 5)."""
+
 from __future__ import annotations
 
 from ah.soulspec.adapters import AgentHarnessAdapter, ClaudeCodeAdapter, CodexAdapter

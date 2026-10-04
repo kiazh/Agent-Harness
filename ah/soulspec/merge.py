@@ -1,4 +1,5 @@
 """SoulSpec merge semantics — merge multiple configurations."""
+
 from __future__ import annotations
 
 from ah.soulspec.schema import SoulSpec
@@ -74,7 +75,9 @@ class SoulSpecMerger:
             else:
                 voice = SoulSpec.Voice(
                     tone=override.voice.tone if override.voice.tone != "neutral" else voice.tone,
-                    style=override.voice.style if override.voice.style != "concise" else voice.style,
+                    style=override.voice.style
+                    if override.voice.style != "concise"
+                    else voice.style,
                 )
 
         return SoulSpec.Persona(
@@ -158,14 +161,16 @@ class SoulSpecMerger:
             return base
 
         # Permissions: intersection (most restrictive wins)
-        permissions = SoulSpecMerger._merge_permissions(
-            base.permissions, override.permissions
-        )
+        permissions = SoulSpecMerger._merge_permissions(base.permissions, override.permissions)
 
         return SoulSpec.Config(
             model=override.model if override.model else base.model,
-            max_iterations=override.max_iterations if override.max_iterations != 10 else base.max_iterations,
-            context_budget=override.context_budget if override.context_budget != 8000 else base.context_budget,
+            max_iterations=override.max_iterations
+            if override.max_iterations != 10
+            else base.max_iterations,
+            context_budget=override.context_budget
+            if override.context_budget != 8000
+            else base.context_budget,
             permissions=permissions,
         )
 
@@ -180,8 +185,8 @@ class SoulSpecMerger:
             return base
 
         # Intersection of allowed_tools (most restrictive)
-        allowed = list(set(base.allowed_tools) & set(override.allowed_tools))
+        allowed = sorted(set(base.allowed_tools) & set(override.allowed_tools))
         # Union of denied_tools
-        denied = list(set(base.denied_tools) | set(override.denied_tools))
+        denied = sorted(set(base.denied_tools) | set(override.denied_tools))
 
         return SoulSpec.Permissions(allowed_tools=allowed, denied_tools=denied)

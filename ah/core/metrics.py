@@ -206,9 +206,7 @@ class MetricsCollector:
             self._counters.clear()
             self._errors.clear()
             self._token_usage.clear()
-            self._token_totals = {
-                "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0
-            }
+            self._token_totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
 
 # Global singleton

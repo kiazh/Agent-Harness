@@ -1,7 +1,6 @@
 """Tests for ApprovalMemory.embedding storage — must not always be None."""
 from __future__ import annotations
 
-import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest

@@ -16,7 +16,6 @@ from ah.soulspec import (
     SoulSpecMerger,
 )
 
-
 # ─── Fixtures ───────────────────────────────────────────────────────────────
 
 SAMPLE_YAML = textwrap.dedent("""\
@@ -352,7 +351,6 @@ class TestConformance:
                 SoulSpec.Skill(name="deep", progressive_disclosure_level=3),
             ],
         )
-        conf = SoulSpecConformance()
         # Level 1 = always loaded, Level 2 = on demand, Level 3 = deep reference
         always = [s for s in spec.skills if s.progressive_disclosure_level == 1]
         on_demand = [s for s in spec.skills if s.progressive_disclosure_level == 2]

@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import ast
-import inspect
 import re
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -190,6 +189,7 @@ class TestAsyncClientClosedOnContainerStop:
     async def test_container_stop_closes_embedder(self):
         """Container.stop() should call close() on the RAG pipeline's embedder."""
         from types import SimpleNamespace
+
         from ah.core.container import Container
 
         container = Container.testing()
@@ -210,6 +210,7 @@ class TestAsyncClientClosedOnContainerStop:
     async def test_container_stop_closes_reranker(self):
         """Container.stop() should call close() on the RAG pipeline's reranker."""
         from types import SimpleNamespace
+
         from ah.core.container import Container
 
         container = Container.testing()
@@ -360,8 +361,9 @@ class TestAgentRegistryFileDefinitionsCache:
 
     def test_file_definitions_caches_result(self):
         """_file_definitions should cache its result for 60 seconds."""
-        from ah.core.agent_def import AgentRegistry
         from unittest.mock import patch
+
+        from ah.core.agent_def import AgentRegistry
 
         registry = AgentRegistry()
 
@@ -376,9 +378,9 @@ class TestAgentRegistryFileDefinitionsCache:
 
     def test_file_definitions_cache_expires_after_ttl(self):
         """Cache should expire after 60 seconds."""
-        import time
-        from ah.core.agent_def import AgentRegistry
         from unittest.mock import patch
+
+        from ah.core.agent_def import AgentRegistry
 
         registry = AgentRegistry()
 
@@ -429,6 +431,7 @@ class TestSkillRegistryTelemetryPersistence:
     def test_telemetry_loaded_on_init(self, tmp_path):
         """SkillRegistry should load telemetry from JSON on init."""
         import json
+
         from ah.skills.registry import Skill, SkillRegistry
 
         # Write a telemetry file

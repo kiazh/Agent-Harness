@@ -99,6 +99,11 @@ class MemoryRetriever:
             limit=self.top_k * 2,
         )
 
+        # Defense in depth: never pass quarantined rows to the agent, even if
+        # a custom store or an older query returned them.
+        dense_results = [(m, s) for m, s in dense_results if not m.quarantined]
+        sparse_results = [(m, s) for m, s in sparse_results if not m.quarantined]
+
         # Step 3: Merge and deduplicate
         candidates = self._merge_results(dense_results, sparse_results)
 
@@ -117,9 +122,7 @@ class MemoryRetriever:
 
         # Step 6: Emotion-weighted persona memory retrieval (if emotion specified)
         if emotion:
-            candidates = await self._retrieve_with_emotion(
-                candidates, emotion, agent_id
-            )
+            candidates = await self._retrieve_with_emotion(candidates, emotion, agent_id)
 
         # Update access stats for retrieved memories (batch)
         ids_to_update = [rm.memory.id for rm in candidates[: self.top_k]]
@@ -167,13 +170,17 @@ class MemoryRetriever:
             )
 
             # Merge: boost factual candidates that have high-scoring persona memories
-            persona_boost: dict[uuid.UUID, float] = {}
+            persona_boost: dict[uuid.UUID, tuple[float, str]] = {}
             for pm, score in scored_persona:
-                persona_boost[pm.fact_id] = score
+                previous = persona_boost.get(pm.fact_id)
+                if previous is None or score > previous[0]:
+                    persona_boost[pm.fact_id] = (score, pm.interpretation)
 
             for rm in candidates:
                 if rm.memory.id in persona_boost:
-                    rm.score += persona_boost[rm.memory.id] * 0.3
+                    score, interpretation = persona_boost[rm.memory.id]
+                    rm.score += score * 0.3
+                    rm.persona_interpretation = interpretation
 
             # Re-sort by updated score
             candidates.sort(key=lambda rm: rm.score, reverse=True)
@@ -226,7 +233,7 @@ class MemoryRetriever:
             return []
 
         # Build ILIKE conditions for each keyword
-        conditions = []
+        conditions = ["quarantined = FALSE"]
         params: list[Any] = []
         param_idx = 1
 
@@ -347,7 +354,9 @@ Return a JSON array of indices in order of relevance (most relevant first).
 Return ONLY the JSON array, no other text."""
 
             response = await usage_store.complete_call(
-                self.llm, session_id, agent_id or "harness",
+                self.llm,
+                session_id,
+                agent_id or "harness",
                 messages=[
                     {"role": "system", "content": "You are a memory re-ranking system."},
                     {"role": "user", "content": rerank_prompt},

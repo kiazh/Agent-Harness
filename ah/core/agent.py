@@ -72,6 +72,7 @@ def instrument_stream(func):
 
     return wrapper
 
+
 SYSTEM_PROMPT = """You are AgentHarness, a self-hosted AI agent. You have access to tools and persistent context stored in PostgreSQL.
 
 When you need to do something, use the available tools. Think step by step:
@@ -166,7 +167,11 @@ class BaseReActAgent:
         for attempt in range(4):  # 1 initial + 3 retries
             try:
                 return await usage_store.complete_call(
-                    self.provider, session_id, self.agent_id, messages, tools=tools,
+                    self.provider,
+                    session_id,
+                    self.agent_id,
+                    messages,
+                    tools=tools,
                 )
             except (UsageBudgetExceededError, DatabaseError):
                 raise
@@ -210,7 +215,8 @@ class BaseReActAgent:
                 completed = False
                 try:
                     async for event in self.provider.stream_complete(
-                        messages=messages, tools=tools,
+                        messages=messages,
+                        tools=tools,
                     ):
                         emitted = True
                         if event.type == "done" and event.response is not None:
@@ -220,7 +226,10 @@ class BaseReActAgent:
                         yield event
                 finally:
                     await self._finish_usage(
-                        reservation, usage, failed=not completed, model=actual_model,
+                        reservation,
+                        usage,
+                        failed=not completed,
+                        model=actual_model,
                     )
                 return  # Success — exit retry loop
             except (UsageBudgetExceededError, DatabaseError):
@@ -250,7 +259,9 @@ class BaseReActAgent:
         raise last_exception  # type: ignore[misc]
 
     async def _reserve_usage(
-        self, session_id: uuid.UUID | None, messages: list[dict[str, Any]],
+        self,
+        session_id: uuid.UUID | None,
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> uuid.UUID | None:
         if session_id is None:
@@ -259,7 +270,13 @@ class BaseReActAgent:
         provider_name = type(self.provider).__name__.removesuffix("Provider").lower()
         try:
             return await usage_store.reserve(
-                session_id, self.agent_id, provider_name, model, messages, tools, 4096,
+                session_id,
+                self.agent_id,
+                provider_name,
+                model,
+                messages,
+                tools,
+                4096,
             )
         except UsageBudgetExceededError:
             raise
@@ -267,8 +284,12 @@ class BaseReActAgent:
             raise DatabaseError("usage accounting unavailable") from e
 
     async def _finish_usage(
-        self, reservation: uuid.UUID | None, usage: dict[str, Any] | None = None,
-        *, failed: bool = False, model: str | None = None,
+        self,
+        reservation: uuid.UUID | None,
+        usage: dict[str, Any] | None = None,
+        *,
+        failed: bool = False,
+        model: str | None = None,
     ) -> None:
         try:
             await usage_store.finish(reservation, usage, failed=failed, model=model)
@@ -328,6 +349,7 @@ class BaseReActAgent:
                     query=user_message,
                     agent_id=self.agent_id,
                     session_id=session_id,
+                    emotion=session.state.get("emotion"),
                 )
                 # Convert retrieved memories to ContextChunk-like tuples for assembler
                 from ah.core.models import ContextChunk
@@ -343,6 +365,7 @@ class BaseReActAgent:
                             "content": m.content,
                             "importance": m.importance,
                             "category": m.category,
+                            "persona_interpretation": rm.persona_interpretation,
                         },
                         token_count=len(m.content) // 4,
                     )
@@ -353,6 +376,13 @@ class BaseReActAgent:
         # Retrieve RAG context if pipeline is configured
         rag_chunks = await self._get_rag_context(session_id, user_message)
         retrieved_chunks.extend(rag_chunks)
+
+        try:
+            retrieved_chunks.extend(
+                await context_manager.search_archive_text(session_id, user_message)
+            )
+        except Exception as e:
+            logger.warning("Archived context retrieval failed: %s", e)
 
         # Assemble prompt
         prompt = assembler.assemble(
@@ -463,7 +493,9 @@ class BaseReActAgent:
                     tool_name=tool_name,
                     error=str(e),
                 )
-                self._append_tool_messages(messages, response, tc, f"Error: invalid tool arguments: {e}")
+                self._append_tool_messages(
+                    messages, response, tc, f"Error: invalid tool arguments: {e}"
+                )
                 continue
 
             if self.allowed_tools is not None and tool_name not in self.allowed_tools:
@@ -643,8 +675,10 @@ class ReActAgent(BaseReActAgent):
             except UsageBudgetExceededError as e:
                 audit_log("agent_run_budget_exceeded", session_id=str(session_id), error=str(e))
                 return AgentResponse(
-                    content=str(e), tool_calls=tool_calls_made,
-                    tokens_used=total_tokens, iterations=iteration,
+                    content=str(e),
+                    tool_calls=tool_calls_made,
+                    tokens_used=total_tokens,
+                    iterations=iteration,
                 )
             except Exception as e:
                 logger.error("LLM call ultimately failed: %s", e)
@@ -806,8 +840,10 @@ class ReActAgent(BaseReActAgent):
                 yield StreamEvent(
                     type="done",
                     response=AgentResponse(
-                        content=str(e), tool_calls=tool_calls_made,
-                        tokens_used=total_tokens, iterations=iteration,
+                        content=str(e),
+                        tool_calls=tool_calls_made,
+                        tokens_used=total_tokens,
+                        iterations=iteration,
                     ),
                 )
                 return

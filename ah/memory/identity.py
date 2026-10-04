@@ -11,9 +11,12 @@ Before incorporating a shared memory, the IdentityGate validates:
 Drift detection compares belief states before/after shared memory access.
 Containment quarantines affected memories when drift is detected.
 """
+
 from __future__ import annotations
 
 import hashlib
+import hmac
+import json
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -23,6 +26,7 @@ from typing import Any
 from ah.core.provider import audit_log
 from ah.db.connection import db
 from ah.memory.models import MemoryEntry
+from ah.security.secrets import get_secret
 
 __all__ = [
     "AgentBelief",
@@ -35,14 +39,44 @@ logger = logging.getLogger(__name__)
 
 # Simple sentiment words for consistency checking
 _POSITIVE_WORDS = {
-    "great", "good", "excellent", "amazing", "wonderful", "fantastic",
-    "love", "like", "enjoy", "prefer", "best", "awesome", "brilliant",
-    "positive", "beneficial", "useful", "valuable", "important",
+    "great",
+    "good",
+    "excellent",
+    "amazing",
+    "wonderful",
+    "fantastic",
+    "love",
+    "like",
+    "enjoy",
+    "prefer",
+    "best",
+    "awesome",
+    "brilliant",
+    "positive",
+    "beneficial",
+    "useful",
+    "valuable",
+    "important",
 }
 _NEGATIVE_WORDS = {
-    "terrible", "bad", "awful", "horrible", "hate", "dislike", "worst",
-    "poor", "negative", "harmful", "useless", "worthless", "stupid",
-    "wrong", "fail", "broken", "ugly", "disgusting",
+    "terrible",
+    "bad",
+    "awful",
+    "horrible",
+    "hate",
+    "dislike",
+    "worst",
+    "poor",
+    "negative",
+    "harmful",
+    "useless",
+    "worthless",
+    "stupid",
+    "wrong",
+    "fail",
+    "broken",
+    "ugly",
+    "disgusting",
 }
 
 
@@ -94,21 +128,25 @@ class MemoryProvenance:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @staticmethod
-    def compute_signature(
-        memory_id: uuid.UUID, content: str, source_agent: str
-    ) -> str:
+    def compute_signature(memory_id: uuid.UUID, content: str, source_agent: str) -> str:
         """Compute HMAC-SHA256 signature of memory content.
 
-        Uses a simple hash-based signature (no external key needed for
-        integrity verification within a single system).
+        Requires a separately configured key. An unkeyed digest does not
+        authenticate provenance because anyone can recompute it.
         """
+        key = get_secret("AGENT_HARNESS_PROVENANCE_KEY")
+        if not key:
+            raise ValueError("AGENT_HARNESS_PROVENANCE_KEY is required")
         data = f"{memory_id}:{content}:{source_agent}"
-        return hashlib.sha256(data.encode("utf-8")).hexdigest()
+        return hmac.new(key.encode("utf-8"), data.encode("utf-8"), hashlib.sha256).hexdigest()
 
     def verify(self, memory_id: uuid.UUID, content: str) -> bool:
         """Verify the signature matches the given memory content."""
-        expected = self.compute_signature(memory_id, content, self.source_agent)
-        return self.signature == expected
+        try:
+            expected = self.compute_signature(memory_id, content, self.source_agent)
+        except ValueError:
+            return False
+        return hmac.compare_digest(self.signature, expected)
 
 
 @dataclass
@@ -131,7 +169,10 @@ class IdentityGate:
     DRIFT_THRESHOLD = 0.5
 
     async def validate_incoming(
-        self, agent_id: str, memory: MemoryEntry
+        self,
+        agent_id: str,
+        memory: MemoryEntry,
+        provenance: MemoryProvenance | None = None,
     ) -> ValidationResult:
         """Validate an incoming shared memory against the agent's beliefs.
 
@@ -140,6 +181,17 @@ class IdentityGate:
         2. Provenance via signed memory entries
         3. Semantic relevance via keyword overlap
         """
+        # Shared memories require authenticated provenance even for an agent
+        # with no established beliefs yet.
+        if memory.agent_id != agent_id:
+            provenance = provenance or await self._load_provenance(memory.id)
+            if (
+                provenance is None
+                or provenance.source_agent != memory.agent_id
+                or not provenance.verify(memory.id, memory.content)
+            ):
+                return ValidationResult(False, 0.0, "Missing or invalid shared-memory provenance")
+
         # Load agent beliefs
         belief = await self._load_beliefs(agent_id)
         if belief is None:
@@ -206,8 +258,7 @@ class IdentityGate:
         all_traits = set(before.traits) | set(after.traits)
         if all_traits:
             trait_drift = sum(
-                abs(before.traits.get(t, 0.0) - after.traits.get(t, 0.0))
-                for t in all_traits
+                abs(before.traits.get(t, 0.0) - after.traits.get(t, 0.0)) for t in all_traits
             ) / len(all_traits)
             drift_scores.append(trait_drift)
 
@@ -215,8 +266,7 @@ class IdentityGate:
         all_values = set(before.values) | set(after.values)
         if all_values:
             value_drift = sum(
-                abs(before.values.get(v, 0.0) - after.values.get(v, 0.0))
-                for v in all_values
+                abs(before.values.get(v, 0.0) - after.values.get(v, 0.0)) for v in all_values
             ) / len(all_values)
             drift_scores.append(value_drift)
 
@@ -225,9 +275,7 @@ class IdentityGate:
 
         return sum(drift_scores) / len(drift_scores)
 
-    async def contain_drift(
-        self, agent_id: str, memory_ids: list[uuid.UUID]
-    ) -> bool:
+    async def contain_drift(self, agent_id: str, memory_ids: list[uuid.UUID]) -> bool:
         """Quarantine affected memories when drift is detected.
 
         Sets quarantined=True on the given memories to prevent further
@@ -270,14 +318,30 @@ class IdentityGate:
             )
             if row is None:
                 return None
-            return AgentBelief.from_dict(row["belief"])
+            belief = row["belief"]
+            if isinstance(belief, str):
+                belief = json.loads(belief)
+            return AgentBelief.from_dict(belief)
         except Exception as exc:
             logger.debug("Failed to load beliefs for %s: %s", agent_id, exc)
             return None
 
-    async def _load_provenance(
-        self, memory_id: uuid.UUID
-    ) -> MemoryProvenance | None:
+    async def save_beliefs(self, belief: AgentBelief) -> None:
+        """Persist an explicitly supplied agent identity model."""
+        await db.execute(
+            """
+            INSERT INTO agent_beliefs (agent_id, belief, version, updated_at)
+            VALUES ($1, $2::jsonb, 1, now())
+            ON CONFLICT (agent_id) DO UPDATE SET
+                belief = EXCLUDED.belief,
+                version = agent_beliefs.version + 1,
+                updated_at = now()
+            """,
+            belief.agent_id,
+            json.dumps(belief.to_dict()),
+        )
+
+    async def _load_provenance(self, memory_id: uuid.UUID) -> MemoryProvenance | None:
         """Load memory provenance from the database."""
         try:
             row = await db.fetchrow(
@@ -303,8 +367,6 @@ class IdentityGate:
         Uses simple keyword overlap with known facts.
         """
         content_lower = content.lower()
-        content_words = set(content_lower.split())
-
         if not belief.known_facts:
             return 0.5  # No facts to compare against
 

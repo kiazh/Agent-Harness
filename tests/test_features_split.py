@@ -23,7 +23,7 @@ def test_all_feature_methods_accessible_after_split():
 
 def test_submodules_importable():
     """Each domain module must be importable."""
-    from ah.gateway.features import sessions, memory, skills, agents, jobs, config
+    from ah.gateway.features import agents, config, jobs, memory, sessions, skills
     assert hasattr(sessions, "session_fork")
     assert hasattr(memory, "memory_list")
     assert hasattr(skills, "skills_list")

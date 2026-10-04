@@ -339,6 +339,11 @@ class ContextManager:
         payload_msgpack: bytes,
         embedding: list[float] | None = None,
         archive_reason: str = "evicted",
+        agent_id: str = "harness",
+        chunk_type: str = "document",
+        token_count: int = 0,
+        created_at: datetime | None = None,
+        connection: asyncpg.Connection | None = None,
     ) -> dict[str, Any] | None:
         """Archive a chunk to context_archive before deletion.
 
@@ -346,10 +351,14 @@ class ContextManager:
         later resurrection via embedding similarity.
         """
         embedding_str = embedding_to_str(embedding) if embedding is not None else None
-        row = await db.fetchrow(
+        payload = msgpack.unpackb(payload_msgpack, raw=False)
+        executor = connection or db
+        row = await executor.fetchrow(
             """
-            INSERT INTO context_archive (session_id, chunk_id, payload_msgpack, embedding, archive_reason)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO context_archive
+                (session_id, chunk_id, payload_msgpack, embedding, archive_reason,
+                 agent_id, chunk_type, token_count, original_created_at, search_text)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING id, session_id, chunk_id, payload_msgpack, embedding, archived_at, archive_reason, resurrection_count, last_resurrected
             """,
             session_id,
@@ -357,6 +366,11 @@ class ContextManager:
             payload_msgpack,
             embedding_str,
             archive_reason,
+            agent_id,
+            chunk_type,
+            token_count,
+            created_at,
+            _search_text_for(payload),
         )
         return row
 
@@ -407,14 +421,60 @@ class ContextManager:
             chunk = ContextChunk(
                 id=row["chunk_id"],
                 session_id=row["session_id"],
-                agent_id="harness",
-                chunk_type="archived",
+                agent_id=row.get("agent_id") or "harness",
+                chunk_type=row.get("chunk_type") or "document",
                 payload=payload,
+                token_count=row.get("token_count") or 0,
                 embedding=emb,
-                created_at=row["archived_at"],
+                created_at=row.get("original_created_at") or row["archived_at"],
             )
             results.append((chunk, sim))
         return results
+
+    async def search_archive_text(
+        self, session_id: uuid.UUID, query: str, top_k: int = 3
+    ) -> list[tuple[ContextChunk, float]]:
+        """Recall archived conversation without requiring an embedding provider."""
+        if not query.strip():
+            return []
+        rows = await db.fetch(
+            """
+            SELECT *, ts_rank(
+                to_tsvector('english', COALESCE(search_text, '')),
+                plainto_tsquery('english', $2)
+            ) AS similarity
+            FROM context_archive
+            WHERE session_id = $1 AND
+                to_tsvector('english', COALESCE(search_text, '')) @@
+                plainto_tsquery('english', $2)
+            ORDER BY similarity DESC, archived_at DESC LIMIT $3
+            """,
+            session_id,
+            query,
+            top_k,
+        )
+        result = []
+        for row in rows:
+            await db.execute(
+                "UPDATE context_archive SET resurrection_count = resurrection_count + 1, "
+                "last_resurrected = now() WHERE id = $1",
+                row["id"],
+            )
+            result.append(
+                (
+                    ContextChunk(
+                        id=row["chunk_id"],
+                        session_id=session_id,
+                        agent_id=row.get("agent_id") or "harness",
+                        chunk_type=row.get("chunk_type") or "document",
+                        payload=msgpack.unpackb(row["payload_msgpack"], raw=False),
+                        token_count=row.get("token_count") or 0,
+                        created_at=row.get("original_created_at") or row["archived_at"],
+                    ),
+                    float(row["similarity"]),
+                )
+            )
+        return result
 
     async def evict_old_chunks(
         self,
@@ -496,22 +556,28 @@ class ContextManager:
                 payload_msgpack = row.get("payload_msgpack") or b""
                 embedding_raw = row.get("embedding")
                 embedding = str_to_embedding(embedding_raw) if embedding_raw else None
-                await self.archive_chunk(
-                    session_id=session_id,
-                    chunk_id=row["id"],
-                    payload_msgpack=payload_msgpack,
-                    embedding=embedding,
-                    archive_reason="evicted",
-                )
+                async with db.acquire() as conn:
+                    async with conn.transaction():
+                        archived = await self.archive_chunk(
+                            session_id=session_id,
+                            chunk_id=row["id"],
+                            payload_msgpack=payload_msgpack,
+                            embedding=embedding,
+                            archive_reason="evicted",
+                            agent_id=row["agent_id"],
+                            chunk_type=row["chunk_type"],
+                            token_count=row["token_count"],
+                            created_at=row["created_at"],
+                            connection=conn,
+                        )
+                        if archived is None:
+                            raise RuntimeError("archive insert returned no row")
+                        await conn.execute("DELETE FROM context_chunks WHERE id = $1", row["id"])
             except Exception as e:
-                # If archiving fails, log and proceed with deletion
+                # A failed archive must never turn reversible eviction into loss.
                 logger.warning("Failed to archive chunk %s: %s", row["id"], e)
+                continue
 
-            # Evict this chunk
-            await db.execute(
-                "DELETE FROM context_chunks WHERE id = $1",
-                row["id"],
-            )
             tokens_freed += row["token_count"]
             chunks_freed += 1
             evicted += 1

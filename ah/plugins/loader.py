@@ -18,7 +18,9 @@ def load_plugins(
     """Load named entry points; no third-party code runs without opt-in."""
     registry = registry or plugin_registry
     if names is None:
-        names = [n.strip() for n in os.environ.get("AGENT_HARNESS_PLUGINS", "").split(",") if n.strip()]
+        names = [
+            n.strip() for n in os.environ.get("AGENT_HARNESS_PLUGINS", "").split(",") if n.strip()
+        ]
     available = {ep.name: ep for ep in entry_points(group=ENTRY_POINT_GROUP)}
     loaded = []
     for name in names:

@@ -11,7 +11,7 @@ Covers:
 
 import inspect
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -167,13 +167,21 @@ class TestEvictionLogic:
                 "created_at": "2024-01-12",
             },
         ]
+        for row in mock_rows:
+            row.update(agent_id="harness", payload_msgpack=b"\x80", embedding=None)
         with patch.object(
             context_manager, "get_token_usage", new_callable=AsyncMock, return_value=1200
         ):
             with patch("ah.core.context.db") as mock_db:
                 mock_db.fetchval = AsyncMock(return_value=12)
                 mock_db.fetch = AsyncMock(return_value=mock_rows)
+                mock_db.fetchrow = AsyncMock(return_value={"id": uuid.uuid4()})
                 mock_db.execute = AsyncMock(return_value="DELETE 1")
+                connection = AsyncMock()
+                connection.fetchrow.return_value = {"id": uuid.uuid4()}
+                connection.transaction = MagicMock()
+                mock_db.acquire = MagicMock()
+                mock_db.acquire.return_value.__aenter__.return_value = connection
                 result = await context_manager.evict_old_chunks(
                     session_id, max_tokens=500, max_chunks=None
                 )
@@ -192,13 +200,21 @@ class TestEvictionLogic:
             }
             for i in range(1, 16)
         ]
+        for row in mock_rows:
+            row.update(agent_id="harness", payload_msgpack=b"\x80", embedding=None)
         with patch.object(
             context_manager, "get_token_usage", new_callable=AsyncMock, return_value=150
         ):
             with patch("ah.core.context.db") as mock_db:
                 mock_db.fetchval = AsyncMock(return_value=15)
                 mock_db.fetch = AsyncMock(return_value=mock_rows)
+                mock_db.fetchrow = AsyncMock(return_value={"id": uuid.uuid4()})
                 mock_db.execute = AsyncMock(return_value="DELETE 1")
+                connection = AsyncMock()
+                connection.fetchrow.return_value = {"id": uuid.uuid4()}
+                connection.transaction = MagicMock()
+                mock_db.acquire = MagicMock()
+                mock_db.acquire.return_value.__aenter__.return_value = connection
                 result = await context_manager.evict_old_chunks(
                     session_id, max_tokens=None, max_chunks=5
                 )
@@ -218,13 +234,21 @@ class TestEvictionLogic:
             }
             for i in range(1, 16)
         ]
+        for row in mock_rows:
+            row.update(agent_id="harness", payload_msgpack=b"\x80", embedding=None)
         with patch.object(
             context_manager, "get_token_usage", new_callable=AsyncMock, return_value=1500
         ):
             with patch("ah.core.context.db") as mock_db:
                 mock_db.fetchval = AsyncMock(return_value=15)
                 mock_db.fetch = AsyncMock(return_value=mock_rows)
+                mock_db.fetchrow = AsyncMock(return_value={"id": uuid.uuid4()})
                 mock_db.execute = AsyncMock(return_value="DELETE 1")
+                connection = AsyncMock()
+                connection.fetchrow.return_value = {"id": uuid.uuid4()}
+                connection.transaction = MagicMock()
+                mock_db.acquire = MagicMock()
+                mock_db.acquire.return_value.__aenter__.return_value = connection
                 result = await context_manager.evict_old_chunks(
                     session_id, max_tokens=500, max_chunks=None
                 )

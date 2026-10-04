@@ -19,7 +19,6 @@ from ah.core.assembler import PromptAssembler, get_token_count, truncate_to_toke
 from ah.core.config import config
 from ah.core.context import context_manager
 from ah.core.session import session_manager
-from ah.core.usage import usage_store
 from ah.db.connection import db
 
 __all__ = ["DelegationResult", "Orchestrator", "AgentNotFoundError"]
@@ -61,20 +60,22 @@ class Orchestrator:
             A versioned prompt string.
         """
         parts = [
-            f"## Task",
+            "## Task",
             f"{task}",
-            f"",
+            "",
             f"# Delegation Prompt v{Orchestrator.PROMPT_VERSION}",
-            f"",
-            f"## Agent",
+            "",
+            "## Agent",
             f"{agent_name}",
         ]
         if context:
-            parts.extend([
-                f"",
-                f"## Parent Session Context",
-                f"{context}",
-            ])
+            parts.extend(
+                [
+                    "",
+                    "## Parent Session Context",
+                    f"{context}",
+                ]
+            )
         return "\n".join(parts)
 
     def __init__(self, agent_factory=None) -> None:
@@ -117,8 +118,7 @@ class Orchestrator:
         """
         if _hop_count > self.MAX_HOP_COUNT or _hop_count < 0:
             raise ValueError(
-                f"Invalid hop count {_hop_count} — "
-                f"must be between 0 and {self.MAX_HOP_COUNT}"
+                f"Invalid hop count {_hop_count} — must be between 0 and {self.MAX_HOP_COUNT}"
             )
         definition = await agent_registry.get(agent_name)
         if definition is None:
@@ -136,32 +136,15 @@ class Orchestrator:
         message_id = await self._record_start(parent_session_id, from_agent, agent_name, task)
 
         agent = self._agent_factory(definition)
-        reservation_id = None
         try:
             child_task = self._build_delegation_prompt(agent_name, task, handoff)
-            # Reserve usage for the child session if we have a parent session
-            if parent_session_id is not None:
-                reservation_id = await usage_store.reserve(
-                    child.id, agent_name, "orchestrator", definition.model or config.get("model"),
-                    [{"role": "user", "content": child_task}], [], 4096,
-                )
             response = await agent.run(child.id, child_task, verbose=False)
         except Exception as e:
             logger.exception("Delegation to %s failed", agent_name)
-            if reservation_id is not None:
-                await usage_store.finish(reservation_id, failed=True)
             await self._record_end(
                 message_id, status="error", response=f"{type(e).__name__}: {e}", tokens=0
             )
             return DelegationResult(agent_name, task, f"Error: {e}", child.id, 0, 0, "error")
-
-        # Finish usage reservation
-        if reservation_id is not None:
-            await usage_store.finish(
-                reservation_id,
-                {"total_tokens": response.tokens_used},
-                model=definition.model or config.get("model"),
-            )
 
         await self._record_end(
             message_id, status="complete", response=response.content, tokens=response.tokens_used

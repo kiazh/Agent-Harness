@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.memory.approval import ApprovalStatus, MemoryApprovalGate
+from ah.memory.approval import MemoryApprovalGate
 
 
 @pytest.fixture
@@ -21,6 +21,13 @@ def mock_db():
     mock.fetchrow = AsyncMock(return_value=None)
     mock.fetchval = AsyncMock(return_value=0)
     mock.execute = AsyncMock(return_value="UPDATE 1")
+    conn = AsyncMock()
+    conn.fetch = mock.fetch
+    conn.execute = mock.execute
+    conn.transaction = MagicMock(return_value=AsyncMock())
+    cm = AsyncMock()
+    cm.__aenter__.return_value = conn
+    mock.acquire = MagicMock(return_value=cm)
     return mock
 
 
@@ -49,11 +56,11 @@ class TestApproveAllBatch:
     async def test_approve_all_no_agent_filter_no_fetchrow(self, gate, mock_db):
         """approve_all must not call fetchrow (which approve() uses per-record)."""
         rows = _make_pending_rows(3)
-        mock_db.fetch = AsyncMock(return_value=rows)
+        mock_db.acquire.return_value.__aenter__.return_value.fetch = AsyncMock(return_value=rows)
         mock_memory = AsyncMock()
         mock_memory.add = AsyncMock(side_effect=[MagicMock(id=uuid.uuid4()) for _ in range(3)])
         with patch("ah.memory.approval.db", mock_db), \
-             patch("ah.memory.store.memory_store", mock_memory):
+             patch("ah.memory.approval.memory_store", mock_memory):
             count = await gate.approve_all()
         assert count == 3
         # fetchrow is only used in approve() for individual records — batch must not call it
@@ -62,18 +69,18 @@ class TestApproveAllBatch:
     async def test_approve_all_with_agent_filter_no_fetchrow(self, gate, mock_db):
         """With agent filter, approve_all must not call fetchrow."""
         rows = _make_pending_rows(2)
-        mock_db.fetch = AsyncMock(return_value=rows)
+        mock_db.acquire.return_value.__aenter__.return_value.fetch = AsyncMock(return_value=rows)
         mock_memory = AsyncMock()
         mock_memory.add = AsyncMock(side_effect=[MagicMock(id=uuid.uuid4()) for _ in range(2)])
         with patch("ah.memory.approval.db", mock_db), \
-             patch("ah.memory.store.memory_store", mock_memory):
+             patch("ah.memory.approval.memory_store", mock_memory):
             count = await gate.approve_all(agent_id="harness")
         assert count == 2
         mock_db.fetchrow.assert_not_called()
 
     async def test_approve_all_empty(self, gate, mock_db):
         """approve_all with no pending records returns 0."""
-        mock_db.fetch = AsyncMock(return_value=[])
+        mock_db.acquire.return_value.__aenter__.return_value.fetch = AsyncMock(return_value=[])
         with patch("ah.memory.approval.db", mock_db):
             count = await gate.approve_all()
         assert count == 0

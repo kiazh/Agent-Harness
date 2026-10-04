@@ -127,10 +127,12 @@ see [plugin documentation](docs/plugins.md). Audit events are written to
 PostgreSQL while the gateway or HTTP server runs. Agent and tool spans use
 OpenTelemetry when an SDK is configured by the host application.
 
-For a read-only Docker terminal sandbox, run
-`docker build -f Dockerfile.sandbox -t agent-harness-tool-sandbox:latest .` and set
-`AGENT_HARNESS_TERMINAL_SANDBOX=docker`. This mode requires Docker on the host
-and is not enabled by the Compose app. Secrets can come from environment
+The terminal tool is disabled by default. To enable its read-only Docker
+sandbox, run `docker build -f Dockerfile.sandbox -t agent-harness-tool-sandbox:latest .`
+and set `AGENT_HARNESS_TERMINAL_SANDBOX=docker`. This mode requires Docker on
+the host and is not enabled by the Compose app. `local` is an explicit trusted
+development mode because command allowlists cannot contain Git aliases or
+test runners. Secrets can come from environment
 variables, `*_FILE` mounted secrets, HashiCorp Vault KV
 (`AGENT_HARNESS_SECRET_BACKEND=vault`, `AGENT_HARNESS_VAULT_ADDR`,
 `AGENT_HARNESS_VAULT_PATH`, and a Vault token), or AWS Secrets Manager

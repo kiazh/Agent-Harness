@@ -167,9 +167,7 @@ class SkillRegistry:
                 ),
             }
         try:
-            self._telemetry_file.write_text(
-                json.dumps(telemetry, indent=2), encoding="utf-8"
-            )
+            self._telemetry_file.write_text(json.dumps(telemetry, indent=2), encoding="utf-8")
         except OSError:
             pass
 

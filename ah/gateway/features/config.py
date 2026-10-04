@@ -1,11 +1,11 @@
 """Config, profile, and status feature handlers."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
 from ah import services
-from ah.core.config import DEFAULTS, SECRET_KEYS, config
-from ah.gateway.errors import RpcError
+from ah.core.config import SECRET_KEYS
 from ah.gateway.features._common import _config_snapshot, _int, _profile, _str
 
 if TYPE_CHECKING:

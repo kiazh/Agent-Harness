@@ -11,7 +11,6 @@ from ah.memory.identity import (
     AgentBelief,
     IdentityGate,
     MemoryProvenance,
-    ValidationResult,
 )
 from ah.memory.models import MemoryEntry
 
@@ -106,8 +105,9 @@ class TestAgentBelief:
 class TestMemoryProvenance:
     """Tests for MemoryProvenance dataclass."""
 
-    def test_memory_provenance_signature(self):
+    def test_memory_provenance_signature(self, monkeypatch):
         """Verify memory provenance is signed."""
+        monkeypatch.setenv("AGENT_HARNESS_PROVENANCE_KEY", "test-provenance-secret")
         memory_id = uuid.uuid4()
         content = "Test memory content"
         source_agent = "harness"
