@@ -36,6 +36,9 @@ COPY --chown=appuser:appuser pyproject.toml README.md ./
 # Switch to non-root user
 USER appuser
 
+# Catch missing runtime dependencies during the image build.
+RUN ah --help > /dev/null && python -c "from ah.api.app import create_app; create_app()"
+
 # Default command
 ENTRYPOINT ["ah"]
 CMD ["--help"]
