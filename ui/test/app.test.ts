@@ -149,24 +149,30 @@ function makeApp(session: SessionInfo) {
 
 const ev = (e: Record<string, unknown>) => ({ sessionId: SESSION_A.id, turnId: "t", ...e }) as GatewayEvent;
 
+function widgetWith<K extends string>(tui: FakeTUI, property: K): Component & Record<K, unknown> {
+	const widget = tui.children.find((child) => property in child);
+	assert.ok(widget, `widget with ${property} exists`);
+	return widget as Component & Record<K, unknown>;
+}
+
 test("cancel() sets running=false immediately, before the completion event arrives", async () => {
 	const { app, tui, client } = makeApp(SESSION_A);
 	await app.start();
 
 	// Submit a prompt — this sets running=true and sends prompt.submit
-	const submitPromise = (app as any).prompt("hello");
+	const submitPromise = (app as unknown as { prompt: (text: string) => Promise<void> }).prompt("hello");
 	// Let the prompt.submit request go through
 	await new Promise((r) => setTimeout(r, 10));
 
 	// Now cancel — running should be false immediately
-	(app as any).cancel();
+	(app as unknown as { cancel: () => void }).cancel();
 
 	// The editor should be re-enabled right away (running=false)
-	const editor = tui.children.find((c) => (c as any).disableSubmit !== undefined) as any;
+	const editor = widgetWith(tui, "disableSubmit");
 	assert.equal(editor.disableSubmit, false, "editor is re-enabled immediately after cancel");
 
 	// Footer status should be "ready" (not "working")
-	const footer = tui.children.find((c) => (c as any).status !== undefined) as any;
+	const footer = widgetWith(tui, "status");
 	assert.equal(footer.status, "ready", "footer status is ready immediately after cancel");
 
 	// Clean up: resolve the prompt.submit so the promise doesn't hang
@@ -180,12 +186,12 @@ test("message.complete for a non-current session is still processed (in-flight t
 	await app.start();
 
 	// Submit a prompt on session A
-	const submitPromise = (app as any).prompt("hello");
+	const submitPromise = (app as unknown as { prompt: (text: string) => Promise<void> }).prompt("hello");
 	await new Promise((r) => setTimeout(r, 10));
 
 	// Switch to session B while the turn is still in flight
 	client.responses.set("session.resume", { session: SESSION_B, history: [] });
-	await (app as any).switchTo(SESSION_B, []);
+	app.switchTo(SESSION_B, []);
 
 	// Now the completion event arrives for session A (the old session)
 	client.emit(
@@ -193,7 +199,7 @@ test("message.complete for a non-current session is still processed (in-flight t
 	);
 
 	// The app should have processed it: running should be false
-	const editor = tui.children.find((c) => (c as any).disableSubmit !== undefined) as any;
+	const editor = widgetWith(tui, "disableSubmit");
 	assert.equal(editor.disableSubmit, false, "running is false after in-flight turn completes on old session");
 
 	// Clean up
@@ -213,7 +219,7 @@ test("events for sessions with no in-flight turn are ignored", async () => {
 
 	// The app should NOT have processed it: running should still be false (it was never set)
 	// and no tokens should have been added
-	const footer = tui.children.find((c) => (c as any).tokens !== undefined) as any;
+	const footer = widgetWith(tui, "tokens");
 	assert.equal(footer.tokens, 0, "no tokens added for event from session with no in-flight turn");
 
 	await app.exit();

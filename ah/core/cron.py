@@ -19,7 +19,9 @@ def _field(text: str, minimum: int, maximum: int) -> set[int]:
                 first, last = base.split("-", 1)
                 start, end = int(first), int(last)
             else:
-                start = end = int(base)
+                start = int(base)
+                # In cron, N/step means N through the end of the field.
+                end = maximum if separator else start
         except ValueError:
             raise ValueError(f"invalid cron field {text!r}") from None
         if start < minimum or end > maximum or start > end:
@@ -42,7 +44,8 @@ def next_cron_time(expression: str, after: datetime) -> datetime:
         _field(fields[1], 0, 23),
         _field(fields[2], 1, 31),
         _field(fields[3], 1, 12),
-        _field(fields[4], 0, 6),
+        # Both 0 and 7 denote Sunday in standard five-field cron.
+        {value % 7 for value in _field(fields[4], 0, 7)},
     )
     if after.tzinfo is None:
         raise ValueError("cron scheduling requires a timezone-aware timestamp")
@@ -55,7 +58,9 @@ def next_cron_time(expression: str, after: datetime) -> datetime:
             continue
         day_matches = current.day in day
         weekday_matches = (current.weekday() + 1) % 7 in weekday
-        if len(day) != 31 and len(weekday) != 7:
+        # Cron's OR rule depends on the field syntax, not on the size of the
+        # resulting set: an explicit 1-31 or 0-6 is still restricted.
+        if "*" not in fields[2] and "*" not in fields[4]:
             date_matches = day_matches or weekday_matches
         else:
             date_matches = day_matches and weekday_matches

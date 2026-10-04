@@ -1,10 +1,11 @@
-"""Scheduled jobs: heartbeats and interval tasks (Phase 6a).
+"""Scheduled jobs: heartbeats, intervals, and UTC cron expressions.
 
-A *job* re-runs a prompt on a session every ``interval_seconds``. Two kinds:
+A *job* re-runs a prompt on a session. Three kinds:
 
 - ``interval``  — run the prompt as a normal agent turn on its session.
 - ``heartbeat`` — a nudge: the prompt defaults to "continue your current goal",
   used to re-engage an idle session.
+- ``cron`` — run at the times selected by a five-field UTC expression.
 
 :class:`JobStore` persists jobs in the ``jobs`` table; :class:`JobRunner` polls
 for due jobs and runs them one at a time. Claiming a due row is atomic

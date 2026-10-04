@@ -104,6 +104,13 @@ test("/jobs add rejects a non-numeric interval", async () => {
 	assert.match(host.last().text, /number of seconds/);
 });
 
+test("/jobs add rejects trailing text in an interval", async () => {
+	const host = new FakeHost();
+	await run("/jobs add 30abc do stuff", host);
+	assert.equal(host.last().kind, "error");
+	assert.equal(host.calls.length, 0);
+});
+
 test("/jobs heartbeat defaults to 300s and omits a prompt", async () => {
 	const host = new FakeHost();
 	host.responses["jobs.create"] = (p: Record<string, unknown>) => ({

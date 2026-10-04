@@ -304,7 +304,7 @@ Return ONLY the JSON array, no other text."""
                     reranked.append(candidates[idx])
 
             # Add any candidates not included in LLM response
-            for i, rm in enumerate(candidates):
+            for rm in candidates:
                 if rm not in reranked:
                     reranked.append(rm)
 

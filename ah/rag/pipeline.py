@@ -124,7 +124,7 @@ class RAGPipeline:
         # Store in database (batch)
         stored_chunks: list[ContextChunk] = []
         records = []
-        for chunk, embedding in zip(chunks, embeddings):
+        for chunk, embedding in zip(chunks, embeddings, strict=True):
             chunk_meta = {
                 **chunk.metadata,
                 "source": doc.source,
@@ -309,7 +309,7 @@ class RAGPipeline:
 
         # Update rows with embeddings and FTS text (batch)
         updated = []
-        for (row, text), embedding in zip(chunks_to_embed, embeddings):
+        for (row, text), embedding in zip(chunks_to_embed, embeddings, strict=True):
             updated.append((embedding_to_str(embedding), text, row["id"]))
 
         await db.executemany(

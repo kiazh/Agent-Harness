@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any
 from ah import services
 from ah.core.config import DEFAULTS, SECRET_KEYS, config
 from ah.core.context import context_manager
-from ah.core.models import ContextChunk
 from ah.core.session import session_manager
 from ah.gateway.errors import (
     INVALID_PARAMS,
@@ -23,6 +22,7 @@ from ah.gateway.errors import (
     TURN_IN_PROGRESS,
     RpcError,
 )
+from ah.gateway.serializers import chunk_preview, session_to_dict
 
 if TYPE_CHECKING:
     from ah.gateway.server import Gateway
@@ -94,16 +94,6 @@ def _iso(value: Any) -> str | None:
     return value.isoformat() if value else None
 
 
-def _chunk_preview(chunk: ContextChunk) -> str:
-    payload = chunk.payload
-    for key in ("content", "text", "result_preview"):
-        if payload.get(key):
-            return str(payload[key])[:200]
-    if payload.get("tool"):
-        return f"{payload['tool']}({payload.get('args', {})})"[:200]
-    return str(payload)[:200]
-
-
 def _memory(m: Any, score: float | None = None) -> dict[str, Any]:
     data = {
         "id": str(m.id),
@@ -170,8 +160,6 @@ async def session_fork(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     gw.require_db()
     source = await gw.get_session(params)
     title = _str(params, "title", required=False, max_len=80) or None
-    from ah.gateway.server import session_to_dict
-
     return {"session": session_to_dict(await session_manager.fork(source.id, title=title))}
 
 
@@ -187,8 +175,6 @@ async def session_rename(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     gw.require_db()
     session = await gw.get_session(params)
     await session_manager.set_title(session.id, _str(params, "title", max_len=80))
-    from ah.gateway.server import session_to_dict
-
     return {"session": session_to_dict(await session_manager.get(session.id))}
 
 
@@ -201,8 +187,6 @@ async def session_set_goal(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
 
 async def session_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     gw.require_db()
-    from ah.gateway.server import session_to_dict
-
     found = await session_manager.search(
         _str(params, "query", max_len=200), limit=_int(params, "limit", 20, 1, 200)
     )
@@ -228,7 +212,7 @@ async def context_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
                 "agent": c.agent_id,
                 "tokens": c.token_count,
                 "createdAt": _iso(c.created_at),
-                "preview": _chunk_preview(c),
+                "preview": chunk_preview(c),
             }
             for c in chunks
         ],
@@ -572,7 +556,7 @@ async def agents_run(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     except AgentNotFoundError as e:
         raise RpcError(NOT_FOUND, str(e)) from None
     serialized = []
-    for (agent, task), result in zip(steps, results):
+    for (agent, task), result in zip(steps, results, strict=True):
         if isinstance(result, BaseException):
             serialized.append(
                 {

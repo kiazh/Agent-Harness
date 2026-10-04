@@ -48,6 +48,8 @@ class Database:
 
     async def connect(self) -> None:
         """Initialize the connection pool with configurable sizes."""
+        if self._pool is not None:
+            return
         if not self.dsn:
             raise ValueError(
                 "Database DSN not configured. Set DATABASE_URL or database_url in config."
@@ -56,31 +58,8 @@ class Database:
         max_size = int(os.environ.get("AGENT_HARNESS_DB_MAX_POOL", "10"))
         command_timeout = int(os.environ.get("AGENT_HARNESS_DB_TIMEOUT", "30"))
 
-        # Parse DSN to extract host/port, bypassing DNS resolution on Windows
-        from urllib.parse import urlparse
-
-        parsed = urlparse(self.dsn)
-        host = parsed.hostname or "127.0.0.1"
-        port = parsed.port or 5432
-        user = parsed.username or "postgres"
-        password = parsed.password or ""
-        dbname = parsed.path.lstrip("/") or "agentharness"
-
-        # Use IP address directly to bypass getaddrinfo on Windows
-        import ipaddress
-
-        try:
-            ip = ipaddress.ip_address(host)
-            host_arg = str(ip)
-        except ValueError:
-            host_arg = host
-
         self._pool = await asyncpg.create_pool(
-            host=host_arg,
-            port=port,
-            user=user,
-            password=password,
-            database=dbname,
+            dsn=self.dsn,
             min_size=min_size,
             max_size=max_size,
             command_timeout=command_timeout,

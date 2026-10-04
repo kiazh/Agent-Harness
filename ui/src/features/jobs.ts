@@ -10,6 +10,15 @@ async function resolveJobId(host: FeatureHost, sessionId: string, idOrPrefix: st
 	return resolvePrefix(idOrPrefix, jobs.map((j) => j.id), "job");
 }
 
+function parseSeconds(value: string): number {
+	if (!/^\d+$/.test(value)) throw new Error("Interval must be a whole number of seconds.");
+	const seconds = Number(value);
+	if (!Number.isSafeInteger(seconds) || seconds < 10 || seconds > 86_400) {
+		throw new Error("Interval must be between 10 and 86400 seconds.");
+	}
+	return seconds;
+}
+
 export const jobsCommand: Command = {
 	name: "jobs",
 	description: "Scheduled jobs: list, add, heartbeat, cron, on, off, delete",
@@ -51,8 +60,7 @@ export const jobsCommand: Command = {
 			}
 			case "add": {
 				const [secondsText, prompt] = splitSub(requireArgs(rest, "/jobs add <seconds> <prompt>"));
-				const seconds = Number.parseInt(secondsText, 10);
-				if (!Number.isFinite(seconds)) throw new Error("First argument must be a number of seconds.");
+				const seconds = parseSeconds(secondsText);
 				if (!prompt) throw new Error("Usage: /jobs add <seconds> <prompt>");
 				const { job } = await host.request<{ job: JobInfo }>("jobs.create", {
 					sessionId: current.id,
@@ -64,8 +72,7 @@ export const jobsCommand: Command = {
 				return;
 			}
 			case "heartbeat": {
-				const seconds = Number.parseInt(rest.trim() || "300", 10);
-				if (!Number.isFinite(seconds)) throw new Error("Usage: /jobs heartbeat <seconds>");
+				const seconds = parseSeconds(rest.trim() || "300");
 				const { job } = await host.request<{ job: JobInfo }>("jobs.create", {
 					sessionId: current.id,
 					kind: "heartbeat",

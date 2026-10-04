@@ -7,7 +7,6 @@ import ipaddress
 import logging
 import re
 import socket
-from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -49,7 +48,7 @@ def _is_safe_url(url: str) -> bool:
     try:
         # Get all addresses (IPv4 and IPv6)
         addr_infos = socket.getaddrinfo(hostname, None)
-        for family, _, _, _, sockaddr in addr_infos:
+        for _, _, _, _, sockaddr in addr_infos:
             ip = ipaddress.ip_address(sockaddr[0])
             if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
                 return False
@@ -58,17 +57,6 @@ def _is_safe_url(url: str) -> bool:
         return False
 
     return True
-
-
-def _get_pinned_ip(hostname: str) -> str | None:
-    """Resolve hostname to IP and return it for pinning in HTTP requests."""
-    try:
-        addr_infos = socket.getaddrinfo(hostname, None)
-        if addr_infos:
-            return addr_infos[0][4][0]
-    except (socket.gaierror, ValueError):
-        pass
-    return None
 
 
 @registry.register(description="Search the web for information")
@@ -174,30 +162,13 @@ async def web_extract(url: str) -> str:
         raise ToolError(f"Error extracting URL: {e}") from e
 
 
-def _resolve_path(path: str, base_dir: str | None = None) -> Path:
-    """Resolve a path and ensure it stays within the base directory."""
-    # Use the same base directory as file.py for consistency
-    from ah.tools.file import _BASE_DIR
-
-    base = Path(base_dir or _BASE_DIR).resolve()
-    # Handle absolute paths directly
-    p = Path(path)
-    if p.is_absolute():
-        resolved = p.resolve()
-    else:
-        resolved = (base / path).resolve()
-    try:
-        resolved.relative_to(base)
-    except ValueError:
-        raise ValueError(f"Path '{path}' escapes base directory '{base}'") from None
-    return resolved
-
-
 @registry.register(description="Search file contents with regex")
 async def search_files(pattern: str, path: str = ".", file_glob: str | None = None) -> str:
     """Search file contents using regex pattern."""
+    from ah.tools.file import resolve_path
+
     try:
-        dir_path = _resolve_path(path)
+        dir_path = resolve_path(path)
     except ValueError as e:
         raise ToolError(f"{e}") from e
     if not dir_path.exists():

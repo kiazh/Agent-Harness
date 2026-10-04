@@ -23,10 +23,29 @@ from ah.plugins.registry import PluginRegistry
 from ah.security.secrets import get_secret
 
 
+@pytest.mark.asyncio
+async def test_database_passes_full_dsn_and_does_not_replace_a_live_pool(monkeypatch):
+    from ah.db.connection import Database
+
+    dsn = "postgresql://user:p%40ss@localhost/example?sslmode=require"
+    pool = AsyncMock()
+    create_pool = AsyncMock(return_value=pool)
+    monkeypatch.setattr("ah.db.connection.asyncpg.create_pool", create_pool)
+    database = Database(dsn=dsn)
+    await database.connect()
+    await database.connect()
+    create_pool.assert_awaited_once()
+    assert create_pool.await_args.kwargs["dsn"] == dsn
+    await database.close()
+
+
 def test_cron_next_time_and_validation():
     start = datetime(2026, 10, 3, 10, 14, 30, tzinfo=UTC)
     assert next_cron_time("*/15 10 * * *", start) == datetime(2026, 10, 3, 10, 15, tzinfo=UTC)
     assert next_cron_time("0 9 * * 0", start) == datetime(2026, 10, 4, 9, 0, tzinfo=UTC)
+    assert next_cron_time("0 9 * * 7", start) == datetime(2026, 10, 4, 9, 0, tzinfo=UTC)
+    assert next_cron_time("5/10 10 * * *", start) == datetime(2026, 10, 3, 10, 15, tzinfo=UTC)
+    assert next_cron_time("0 9 1-31 * 1", start) == datetime(2026, 10, 4, 9, 0, tzinfo=UTC)
     assert next_cron_time("0 0 29 2 *", start) == datetime(2028, 2, 29, 0, 0, tzinfo=UTC)
     with pytest.raises(ValueError, match="five fields"):
         next_cron_time("* * *", start)
@@ -47,6 +66,21 @@ def test_prometheus_export_uses_cumulative_totals():
     assert 'ah_duration_milliseconds_sum{operation="agent.run"} 20.0' in output
     assert 'ah_tokens_total{kind="total_tokens"} 10' in output
     assert "private-session-a" not in output and "private-session-b" not in output
+
+
+def test_audit_sanitizes_sensitive_field_names():
+    from ah.core.provider import _sanitize_value
+
+    payload = {
+        "apiKey": "unusual-secret-value",
+        "nested": {"Authorization": "plain-value"},
+        "total_tokens": 7,
+    }
+    assert _sanitize_value(payload) == {
+        "apiKey": "[REDACTED]",
+        "nested": {"Authorization": "[REDACTED]"},
+        "total_tokens": 7,
+    }
 
 
 def test_mounted_secret_and_vault_lookup(monkeypatch, tmp_path):

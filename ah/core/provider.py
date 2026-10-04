@@ -67,7 +67,14 @@ def _sanitize_value(value: Any) -> Any:
         )
         return sanitized
     elif isinstance(value, dict):
-        return {k: _sanitize_value(v) for k, v in value.items()}
+        return {
+            k: (
+                "[REDACTED]"
+                if _is_sensitive_audit_key(k)
+                else _sanitize_value(v)
+            )
+            for k, v in value.items()
+        }
     elif isinstance(value, list):
         return [_sanitize_value(v) for v in value]
     elif isinstance(value, tuple):
@@ -76,9 +83,16 @@ def _sanitize_value(value: Any) -> Any:
         return value
 
 
+def _is_sensitive_audit_key(key: Any) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+    return normalized == "authorization" or normalized.endswith(
+        ("apikey", "token", "secret", "password", "passwd", "pwd", "credential", "privatekey", "accesskey")
+    )
+
+
 def audit_log(event_type: str, **kwargs) -> None:
     """Log a security-relevant event as JSON. All kwargs are sanitized to redact secrets."""
-    sanitized_kwargs = {k: _sanitize_value(v) for k, v in kwargs.items()}
+    sanitized_kwargs = _sanitize_value(kwargs)
     entry = {
         "timestamp": time.time(),
         "event": event_type,

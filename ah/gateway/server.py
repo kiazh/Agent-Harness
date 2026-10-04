@@ -22,7 +22,7 @@ from typing import Any, Protocol
 from ah import __version__
 from ah.core.config import config
 from ah.core.context import context_manager
-from ah.core.models import ContextChunk, Session
+from ah.core.models import Session
 from ah.core.session import session_manager
 from ah.db.connection import db
 from ah.gateway import features
@@ -39,6 +39,7 @@ from ah.gateway.errors import (  # noqa: F401 — re-exported for clients and te
     TURN_IN_PROGRESS,
     RpcError,
 )
+from ah.gateway.serializers import history_from_chunks, session_to_dict
 
 __all__ = [
     "Gateway",
@@ -57,39 +58,6 @@ Writer = Callable[[dict[str, Any]], None]
 
 class StreamingAgent(Protocol):
     def run_stream(self, session_id: uuid.UUID, user_message: str, verbose: bool = ...) -> Any: ...
-
-
-def session_to_dict(session: Session) -> dict[str, Any]:
-    return {
-        "id": str(session.id),
-        "title": session.title or "",
-        "model": session.model or "",
-        "provider": session.provider or "",
-        "status": session.status,
-        "lastActivity": session.last_activity.isoformat() if session.last_activity else None,
-    }
-
-
-def history_from_chunks(chunks: list[ContextChunk]) -> list[dict[str, Any]]:
-    """Turn stored context chunks (newest first) into a chronological transcript."""
-    history: list[dict[str, Any]] = []
-    for chunk in reversed(chunks):
-        payload = chunk.payload
-        if chunk.chunk_type == "user_message":
-            history.append({"role": "user", "content": str(payload.get("content", ""))})
-        elif chunk.chunk_type == "assistant_message":
-            history.append({"role": "assistant", "content": str(payload.get("content", ""))})
-        elif chunk.chunk_type == "tool_call":
-            history.append(
-                {
-                    "role": "tool",
-                    "tool": str(payload.get("tool", "")),
-                    "content": str(payload.get("result_preview", "")),
-                }
-            )
-        elif chunk.chunk_type == "compression_summary":
-            history.append({"role": "system", "content": str(payload.get("content", ""))})
-    return history
 
 
 def _git_branch() -> str:

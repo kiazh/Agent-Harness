@@ -394,7 +394,6 @@ class BaseReActAgent:
                     "tool_call_invalid",
                     session_id=str(session_id),
                     error="missing_name",
-                    raw_call=str(tc),
                 )
                 self._append_tool_messages(
                     messages, response, tc, "Error: tool call missing 'name' field"
@@ -418,7 +417,6 @@ class BaseReActAgent:
                     session_id=str(session_id),
                     tool_name=tool_name,
                     error=str(e),
-                    raw_args=raw_args,
                 )
                 self._append_tool_messages(messages, response, tc, f"Error: invalid tool arguments: {e}")
                 continue
@@ -441,7 +439,6 @@ class BaseReActAgent:
                 "tool_call_start",
                 session_id=str(session_id),
                 tool_name=tool_name,
-                tool_args=tool_args,
             )
 
             start = time.monotonic()
@@ -480,7 +477,6 @@ class BaseReActAgent:
                 session_id=str(session_id),
                 tool_name=tool_name,
                 duration_ms=int((time.monotonic() - start) * 1000),
-                result_preview=result_str[:200],
             )
             yield StreamEvent(type="tool_result", tool_name=tool_name, tool_result=result_str)
 

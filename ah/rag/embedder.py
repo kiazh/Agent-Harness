@@ -152,7 +152,7 @@ class OpenAIEmbedder(Embedder):
 
                 batch_embeddings = await self._embed_uncached(batch_texts)
 
-                for idx, embedding in zip(batch_indices, batch_embeddings):
+                for idx, embedding in zip(batch_indices, batch_embeddings, strict=True):
                     results[idx] = embedding
                     # Cache
                     cache_key = self._cache_key(texts[idx])

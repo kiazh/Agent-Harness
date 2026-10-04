@@ -128,7 +128,7 @@ class ContextManager:
         # pre-existing rows in that session (created_at is identical for every
         # row written in one transaction, so the ordering is nondeterministic).
         chunk_ids = [uuid.uuid4() for _ in records]
-        records_with_ids = [(cid, *rec) for cid, rec in zip(chunk_ids, records)]
+        records_with_ids = [(cid, *rec) for cid, rec in zip(chunk_ids, records, strict=True)]
 
         # Use executemany for batch insert
         await db.executemany(

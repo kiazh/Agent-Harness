@@ -27,7 +27,8 @@ from ah.core.models import StreamEvent
 from ah.core.session import session_manager
 from ah.db.connection import db
 from ah.gateway.errors import RpcError
-from ah.gateway.server import Gateway, history_from_chunks, session_to_dict
+from ah.gateway.serializers import chunk_preview, history_from_chunks, session_to_dict
+from ah.gateway.server import Gateway
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +80,6 @@ class CreateDocumentRequest(BaseModel):
 class RpcRequest(BaseModel):
     method: str = Field(..., min_length=1, max_length=100)
     params: dict[str, Any] = Field(default_factory=dict)
-
-
-class RpcResponse(BaseModel):
-    result: Any = None
-    error: dict[str, Any] | None = None
 
 
 # ─── gateway helper ────────────────────────────────────────────────────────
@@ -312,7 +308,7 @@ def create_app() -> FastAPI:
                     "agent": c.agent_id,
                     "tokens": c.token_count,
                     "createdAt": c.created_at.isoformat() if c.created_at else None,
-                    "preview": _chunk_preview(c),
+                    "preview": chunk_preview(c),
                 }
                 for c in chunks
             ],
@@ -543,14 +539,3 @@ def _serialize_event(event: StreamEvent) -> dict[str, Any]:
         data["iterations"] = resp.iterations
         data["toolCalls"] = len(resp.tool_calls)
     return data
-
-
-def _chunk_preview(chunk: Any) -> str:
-    """Extract a short preview from a context chunk."""
-    payload = chunk.payload
-    for key in ("content", "text", "result_preview"):
-        if payload.get(key):
-            return str(payload[key])[:200]
-    if payload.get("tool"):
-        return f"{payload['tool']}({payload.get('args', {})})"[:200]
-    return str(payload)[:200]

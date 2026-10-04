@@ -124,9 +124,12 @@ class MemoryConsolidator:
             for candidate in candidates_with_embedding:
                 is_duplicate = False
                 for existing in existing_memories:
-                    if existing.embedding:
+                    if existing.embedding and len(candidate.embedding) == len(existing.embedding):
                         # Simple cosine similarity check
-                        dot = sum(a * b for a, b in zip(candidate.embedding, existing.embedding))
+                        dot = sum(
+                            a * b
+                            for a, b in zip(candidate.embedding, existing.embedding, strict=True)
+                        )
                         norm_a = sum(a * a for a in candidate.embedding) ** 0.5
                         norm_b = sum(b * b for b in existing.embedding) ** 0.5
                         if norm_a > 0 and norm_b > 0:
