@@ -50,7 +50,8 @@ In the UI: Enter sends, Shift+Enter adds a line, Esc stops a reply, `/` opens co
 autocomplete (`/new`, `/sessions`, `/resume`, `/model`, `/provider`, `/clear`, `/exit`),
 Tab completes file paths, Ctrl+C exits.
 
-For the HTTP API with Docker Compose, set `AGENT_HARNESS_API_KEY` in `.env` and run
+For the HTTP API with Docker Compose, set a separate random
+`AGENT_HARNESS_API_KEY` alongside `OPENROUTER_API_KEY` in `.env`, then run
 `docker compose up --build`. Compose initializes the schema and serves the API at
 `http://127.0.0.1:8000` (health check: `/health`). The terminal UI requires the
 local Node.js setup above.
@@ -84,7 +85,7 @@ Hermes Agent (`ui-tui` ↔ `tui_gateway`) and opencode use.
 | 4: Interactive UI | TypeScript terminal UI (pi-tui) + JSON-RPC gateway, slash commands, config system | Done |
 | 5: Multi-Agent | Subagent system, orchestration | Done |
 | 6: Production | Web API, scheduler, plugins, observability | Done |
-| 7: Advanced | LangGraph, TUI, cost optimization | Pending |
+| 7: Advanced | Usage budgets, existing UI improvements, durable workflows if needed | Pending |
 
 ### Multi-agent definitions
 

@@ -10,7 +10,9 @@
 
 AgentHarness has completed Phases 1-6: a ReAct loop, PostgreSQL context and memory, RAG, a terminal UI and JSON-RPC gateway, multi-agent delegation, and production API, scheduling, observability, plugins, and security controls. The Windows test run passes 688 tests, with one platform-specific test deselected.
 
-The next roadmap phase focuses on **advanced features**.
+Phase 7 starts with **session and agent usage controls**, then improves the
+existing terminal UI and evaluates durable workflows when a concrete use case
+requires them.
 
 ---
 
@@ -178,37 +180,51 @@ class AgentDef:
 
 ---
 
-## Phase 7: Advanced Features
+## Phase 7: Usage Controls and Workflow Improvements
 
-### 7.1 LangGraph Integration (`ah/graph/`)
+### 7.1 Session and agent usage controls — first implementation
 
-- StateGraph definition for complex agent workflows
-- Checkpointing to PostgreSQL (reuse existing tables)
-- Conditional branching based on tool results
-- Human-in-the-loop approval for dangerous operations
+The provider currently records LLM calls with an empty session ID, while the
+agent tracks token usage in memory. Start by attributing each completed call to
+its session and agent without counting the same tokens twice.
 
-### 7.2 TUI (`ah/tui/`)
+1. Persist prompt and completion tokens, model, provider, and call outcome in
+   PostgreSQL so usage survives restarts. Include streamed and non-streamed
+   calls, scheduled jobs, and delegated agents.
+2. Add configurable session and agent token/request budgets. Check limits before
+   a call and return a clear budget error through the CLI, gateway, and HTTP
+   stream. Keep limits optional for existing installations.
+3. Expose usage and remaining budget through the existing API, CLI, and metrics.
+   Treat missing provider usage as unknown rather than zero consumption.
+4. Test concurrent calls, cancellation, provider errors, restart recovery, and
+   the `openrouter/free` route. Never switch to a paid model automatically.
 
-- Textual-based terminal interface
-- Split-pane: chat + context/memory view
-- Real-time streaming with syntax highlighting
-- Session browser with fuzzy search
+Acceptance: usage for a session can be queried after an app restart; a budget
+stops a subsequent call before it reaches the provider; the same result is
+visible from each supported client.
 
-### 7.3 Cost Optimization (`ah/optimization/`)
+### 7.2 Improve the existing terminal UI (`ui/`)
 
-- Token usage tracking per session/agent
-- Automatic model downgrade when budget is low
-- Prompt caching for repeated context
-- Batch embedding API calls
+The TypeScript terminal UI and JSON-RPC gateway were delivered in Phase 4.
+Improve that UI only where user workflows require it: a searchable session
+browser, clearer context/memory views, and accessible streaming states. Do not
+create a second Textual application.
 
-### 7.4 Testing & QA
+### 7.3 Durable workflows, if needed
+
+Define the crash-recovery or human-approval use case first. Add PostgreSQL
+checkpoints and resumable execution to the existing agent engine if that meets
+the need. Reassess LangGraph only if those requirements exceed the current
+engine; see [the LangGraph research](research-langgraph.md).
+
+### 7.4 Testing and QA
 
 | Feature | Description |
 |---|---|
-| Integration tests | Real PostgreSQL + mocked LLM |
-| Benchmark suite | Token usage, latency, cost per task |
-| Fuzz testing | Tool input fuzzing for security |
-| Coverage target | 90%+ code coverage |
+| Integration tests | Real PostgreSQL with a controlled LLM response |
+| Benchmark suite | Token usage, latency, and task cost |
+| Fuzz testing | Tool input validation and security boundaries |
+| Coverage target | Measure the baseline, then reach 90%+ on new Phase 7 code |
 
 ---
 
@@ -222,8 +238,8 @@ cli/__init__.py -> interactive.py -> agent.py -> assembler.py -> context.py -> c
                                     -> rag/ -> provider.py, connection.py
                                     -> multi_agent/ -> agent.py
                                     -> scheduler/ -> agent.py
-server/ -> agent.py, memory/, rag/
-tui/ -> interactive.py
+api/ -> agent.py, memory/, rag/
+ui/ -> gateway/
 ```
 
 ---
@@ -237,9 +253,9 @@ tui/ -> interactive.py
 | P2 | Observability | Medium | Medium | 6 |
 | P2 | Task scheduling | Medium | Medium | 6 |
 | P3 | Plugin system | Medium | Medium | 6 |
-| P3 | LangGraph integration | Medium | High | 7 |
-| P3 | TUI | Low | High | 7 |
-| P3 | Cost optimization | Low | Medium | 7 |
+| P1 | Session and agent usage controls | High | Medium | 7 |
+| P2 | Existing terminal UI improvements | Medium | Medium | 7 |
+| P3 | Durable workflows, if required | Medium | High | 7 |
 
 ---
 
@@ -258,10 +274,11 @@ tui/ -> interactive.py
 - [x] Plugin system with lifecycle hooks
 
 ### Phase 7 (Advanced)
-- [ ] LangGraph integration
-- [ ] Textual TUI
-- [ ] Cost optimization
-- [ ] 90%+ code coverage
+- [ ] Persist and expose per-session and per-agent LLM usage
+- [ ] Enforce optional token/request budgets across entry points
+- [ ] Improve the existing terminal UI based on user workflows
+- [ ] Decide whether durable workflows need an external graph engine
+- [ ] 90%+ coverage for new Phase 7 code
 
 ---
 
@@ -277,9 +294,11 @@ tui/ -> interactive.py
 
 ## Open Questions
 
-1. **Multi-agent communication:** Shared context vs. message passing vs. blackboard pattern?
-2. **Server framework:** FastAPI (async-native) vs. Flask (simpler)?
-3. **TUI framework:** Textual (modern) vs. prompt_toolkit (lightweight)?
+1. **Budget defaults:** Which session and agent limits should be opt-in, and
+   what should happen when a provider omits token usage?
+2. **Usage retention:** How long should call records remain available?
+3. **Workflow durability:** Which task actually requires pause/resume after a
+   process restart?
 
 ---
 
