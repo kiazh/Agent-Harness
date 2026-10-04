@@ -599,12 +599,12 @@ The AgentHarness RAG pipeline (`ah/rag/pipeline.py`, `ah/tools/rag.py`) already 
 | Metric | Target | Current State |
 |--------|--------|---------------|
 | Token cost per task | < $0.50 for routine tasks | Not measured |
-| Context compression ratio | > 50% for long sessions | Not implemented |
+| Context compression ratio | > 50% for long sessions | `RollingCompaction` + `ContextCompressor` shipped (truncate/LLM summarize) |
 | Memory retrieval accuracy (LoCoMo F1) | > 3.0 | Not measured |
 | RAG answer accuracy | > 85% | ~70% (baseline hybrid) |
 | Multi-hop reasoning accuracy | > 60% | Not measured |
 | Agent loop termination rate | > 99% clean stops | Not measured |
-| Per-agent budget adherence | > 95% within budget | Advisory only |
+| Per-agent budget adherence | > 95% within budget | Enforced via `llm_usage` reservations and `UsageBudgetExceededError` |
 
 ### 6.3 Anti-Patterns to Avoid
 
@@ -655,16 +655,17 @@ The AgentHarness RAG pipeline (`ah/rag/pipeline.py`, `ah/tools/rag.py`) already 
 
 | Research Area | Current Implementation | File Location | Gap |
 |---------------|----------------------|---------------|-----|
-| Token budgeting | UsageStore with advisory locks | `ah/core/usage.py` | No circuit breaker, no enforcement |
+| Token budgeting | UsageStore with advisory locks | `ah/core/usage.py` | Optional; enforced via `usage_*` budgets (no circuit breaker) |
 | Multi-agent | Basic delegate tool | `ah/tools/agents.py` | No orchestrator-worker, no model tiering |
 | Memory decay | Ebbinghaus model | `ah/memory/forgetting.py` | No dynamic linking, no memory evolution |
 | Memory retrieval | Hybrid dense+sparse | `ah/memory/retriever.py` | No parent-context, no dedup |
 | Memory importance | Multi-factor scoring | `ah/memory/scorer.py` | Solid, research-backed |
 | Memory consolidation | LLM extraction pipeline | `ah/memory/consolidator.py` | No sleep-time compute |
-| Context management | LRU cache, batch insert | `ah/core/context.py` | No active compression, no masking |
-| RAG pipeline | Hybrid BM25+dense+RRF | `ah/rag/pipeline.py` | No re-ranking, no adaptive chunking |
+| Context management | LRU cache, batch insert, archive | `ah/core/context.py` | Compression exists; no observation masking |
+| RAG pipeline | Hybrid BM25+dense+RRF, reranker interface | `ah/rag/pipeline.py` | No adaptive chunking |
 | RAG tools | index/search documents | `ah/tools/rag.py` | No query transformation, no GraphRAG |
 
 ---
 
 *Report compiled: 2026-10-04. Next review: 2027-01-04.*
+

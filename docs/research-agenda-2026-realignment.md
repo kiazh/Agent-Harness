@@ -31,10 +31,10 @@ Fixed-length memory buffers destroy information permanently when overwritten. Ex
 
 | Component | Status | Gap |
 |-----------|--------|-----|
-| `ContextManager` (ah/core/context.py) | LRU cache + token-based eviction | Eviction is lossy — chunks deleted permanently |
-| `PromptAssembler` (ah/core/assembler.py) | Greedy packing with token budget | No resurrection mechanism |
-| `ContextChunk` (ah/core/models.py) | MessagePack payloads + pgvector | No archive tier or resurrection path |
-| `RollingCompaction` | Dead code | Never implemented |
+| `ContextManager` (ah/core/context.py) | LRU cache + token-based eviction | Eviction archives to `context_archive` before deletion (shipped) |
+| `PromptAssembler` (ah/core/assembler.py) | Budgeted prompt assembly | Archived-context recall via `search_archive_text` (shipped); embedding resurrection available |
+| `ContextChunk` (ah/core/models.py) | MessagePack payloads + pgvector | `context_archive` tier with resurrection path (shipped) |
+| `RollingCompaction` | Shipped in `ah/core/compression.py` | Optional LLM summarization in compress path |
 
 ### Research Findings (from 2026 reports)
 
@@ -104,10 +104,10 @@ When agents share context, identity drift propagates via shared context. No syst
 
 | Component | Status | Gap |
 |-----------|--------|-----|
-| `agent_messages` table | Cross-agent messaging | No identity gating or validation |
-| `AgentDef` (ah/core/agent_def.py) | Static persona definitions | No belief model or consistency checking |
-| `Orchestrator` (ah/core/orchestrator.py) | Sequential/parallel delegation | No shared memory bus |
-| `memory_store` | Per-agent memories | No cross-agent validation |
+| `agent_messages` table | Cross-agent messaging | Identity gating shipped via `IdentityGate` on memory writes; no per-message validation |
+| `AgentDef` (ah/core/agent_def.py) | Static persona definitions | Belief model shipped (`AgentBelief`, `IdentityGate`) |
+| `Orchestrator` (ah/core/orchestrator.py) | Sequential/parallel delegation | No shared memory bus (still open) |
+| `memory_store` | Per-agent memories | `IdentityGate.validate_incoming` validates writes (shipped) |
 
 ### Research Findings
 
@@ -193,10 +193,10 @@ Current memory systems store facts neutrally. Agents retrieve surface facts but 
 
 | Component | Status | Gap |
 |-----------|--------|-----|
-| `memories` table | Neutral facts with importance score | No persona conditioning |
-| `ImportanceScorer` | Multi-factor scoring (category, recency, frequency) | No emotion topology |
-| `ForgettingModel` | Ebbinghaus decay | No emotion-modulated decay |
-| `user_profile.py` | User preferences | Not agent persona |
+| `memories` table | Facts + `persona_memories` interpretation layer | Persona conditioning shipped (`PersonaMemory`, `EmotionTopology`) |
+| `ImportanceScorer` | Multi-factor scoring (category, recency, frequency) | Emotion topology shipped (`EmotionTopology`); no emotion-modulated scoring |
+| `ForgettingModel` | Ebbinghaus decay | No emotion-modulated decay (still open) |
+| `user_profile.py` | User preferences | Not agent persona (covered by AgentDef + AgentBelief) |
 
 ### Research Findings
 
@@ -284,10 +284,10 @@ Memory-R1 trains Memory Manager and Answer Agent separately because sparse rewar
 
 | Component | Status | Gap |
 |-----------|--------|-----|
-| `MemoryConsolidator` | Rule-based extraction → scoring → dedup → write | Not learned |
-| `ImportanceScorer` | Fixed weights (category, recency, frequency) | Not RL-trained |
-| `ForgettingModel` | Ebbinghaus decay with fixed lambda | Not RL-trained |
-| `PromptAssembler` | Greedy packing | Not RL-trained |
+| `MemoryConsolidator` | LLM-based extraction -> scoring -> dedup -> write | Not learned policy (research baseline exists) |
+| `ImportanceScorer` | Fixed weights (category, recency, frequency) | Not RL-trained (open) |
+| `ForgettingModel` | Ebbinghaus decay with fixed lambda | Not RL-trained (open) |
+| `PromptAssembler` | Budgeted prompt assembly | Not RL-trained (open) |
 
 ### Research Findings
 
@@ -385,9 +385,9 @@ No standardized structure for agent configuration. AGENTS.md files, identity def
 
 | Component | Status | Gap |
 |-----------|--------|-----|
-| `AgentDef` (ah/core/agent_def.py) | Basic persona (name, description, system_prompt, tools) | No merge semantics, no conformance testing |
-| `Skill` (ah/skills/registry.py) | SKILL.md with YAML frontmatter | No cross-framework compatibility |
-| `BUILTIN_AGENTS` | Hardcoded harness/researcher/coder | Not portable |
+| `AgentDef` (ah/core/agent_def.py) | Persona + YAML/DB/Soul Spec sources | Soul Spec merge/conformance/adapters shipped |
+| `Skill` (ah/skills/registry.py) | SKILL.md with YAML frontmatter | Cross-framework compat still needs target-framework runs |
+| `BUILTIN_AGENTS` | Hardcoded harness/researcher/coder | Importable from YAML/Soul Spec packages; not all portable |
 
 ### Research Findings
 
@@ -606,3 +606,4 @@ Each gap must demonstrate:
 ---
 
 *This document is a living blueprint. Update as research progresses and implementation reveals new insights.*
+

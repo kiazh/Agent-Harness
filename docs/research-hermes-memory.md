@@ -487,15 +487,15 @@ The `/journey` command provides visibility into the agent's learning:
 
 | Dimension | Hermes Agent | AgentHarness (Current) |
 |---|---|---|
-| **Persistent Memory** | MEMORY.md + USER.md (bounded, curated) | `ah/memory/` stub — not implemented |
-| **Cross-Session Search** | FTS5 over SQLite — full-text search of past sessions | `ContextManager` with pgvector similarity search |
-| **External Plugins** | 8+ backends (Honcho, mem0, etc.) — one active at a time | None |
-| **User Modeling** | Honcho dialectic reasoning | None |
-| **Auto-Persistence** | Nudges → background review | None |
-| **Skill Auto-Generation** | Auto-create + security scan | `ah/skills/registry.py` — manual only |
-| **Skill Self-Improvement** | Agent-driven patching | None |
-| **Cache Optimization** | Frozen snapshot pattern | None |
-| **Session Storage** | SQLite WAL + FTS5 | `ah/db/schema.sql` — 3 tables, no FTS |
+| **Persistent Memory** | MEMORY.md + USER.md (bounded, curated) | PostgreSQL memories, importance scoring, forgetting, approval gate |
+| **Cross-Session Search** | FTS5 over SQLite — full-text search of past sessions | Postgres FTS (`search_text`) + pgvector + RRF, `context_archive` FTS |
+| **External Plugins** | 8+ backends (Honcho, mem0, etc.) — one active at a time | Plugin hooks (`agent_harness.plugins`); no memory backends |
+| **User Modeling** | Honcho dialectic reasoning | `UserProfileStore` preferences/topics; no dialectic layer |
+| **Auto-Persistence** | Nudges + background review | Background memory consolidation after each run |
+| **Skill Auto-Generation** | Auto-create + security scan | `ah learn` (file/URL/skill) with prompt-injection screening |
+| **Skill Self-Improvement** | Agent-driven patching | Manual edit/update/delete + curator (stale/unused maintenance) |
+| **Cache Optimization** | Frozen snapshot pattern | LRU session/context caches; prompt rebuild per turn |
+| **Session Storage** | SQLite WAL + FTS5 | `ah/db/schema.sql` — 15+ tables, pgvector, FTS |
 
 ---
 
@@ -564,3 +564,4 @@ Based on this research, the highest-impact improvements for AgentHarness would b
 - PR #15696 (flush removal): https://github.com/NousResearch/hermes-agent/pull/15696
 - Issue #94226 (memory cadence): https://github.com/NousResearch/hermes-agent/issues/94226
 - Issue #2227 (nudge pollution): https://github.com/NousResearch/hermes-agent/issues/2227
+

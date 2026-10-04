@@ -748,13 +748,13 @@ The "self-improving" label means: **the agent writes durable behavioral artifact
 
 | System | AgentHarness | Gap |
 |--------|-------------|-----|
-| Skills | `ah/skills/registry.py` — file-based, trigger matching | No background review, no self-creation, no curation |
-| Memory | `ah/memory/` — PostgreSQL + pgvector, 7 files | No frozen snapshot, no injection scanner, no char limits |
-| Context | `ah/core/context.py` — msgpack chunks, token budget | No dual compression, no auxiliary models |
-| Sessions | `ah/core/session.py` — PostgreSQL, LRU cache | No FTS5 search, no session splitting |
-| User Model | None | No Honcho or equivalent |
-| Cron | None | No scheduled task system |
-| Self-Improvement | None | No background review, no skill nudge |
+| Skills | `ah/skills/registry.py` - file-based, trigger matching, curator, `ah learn` | No background review, no agent-driven patching |
+| Memory | `ah/memory/` - PostgreSQL + pgvector, consolidation, approval gate, redaction, identity gate | No frozen snapshot, no char limits |
+| Context | `ah/core/context.py` - msgpack chunks, token budget, reversible archive | No dual compression, no auxiliary models |
+| Sessions | `ah/core/session.py` - PostgreSQL, TTLCache | No FTS5 search, no session splitting |
+| User Model | `UserProfileStore` preferences/topics | No Honcho or dialectic reasoning |
+| Cron | Provided: `ah/core/scheduler.py` + `cron.py` (heartbeat/interval/cron) | No per-job model pin, no script-only jobs |
+| Self-Improvement | Skill curator maintenance pass | No background review fork, no skill nudge |
 
 ### Phase 1: Background Review Agent (High Impact, Medium Effort)
 

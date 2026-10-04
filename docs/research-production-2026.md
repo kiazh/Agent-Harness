@@ -82,7 +82,7 @@ The LLM cost optimization market reached $863.7M in 2025 and is projected to hit
 
 ### 1.4 Recommendations for AgentHarness
 
-**Current state:** AgentHarness has `ah/observability/metrics.py` and `ah/gateway/` but lacks per-request cost attribution, model routing, and budget enforcement.
+**Current state:** AgentHarness has `ah/observability/metrics.py` and `ah/gateway/` with durable `llm_usage` accounting and enforced session/agent budgets, but no dollar cost attribution or model routing.
 
 **Priority actions:**
 
@@ -250,7 +250,7 @@ Agent evaluation has become its own discipline, distinct from LLM evaluation. Ke
 
 ### 3.2 Recommendations for AgentHarness
 
-**Current state:** AgentHarness has `skills/testing-qa/` and `docs/research-testing.md` but no automated evaluation pipeline.
+**Current state:** AgentHarness has `skills/testing-qa/` and `docs/research-testing.md` with LoCoMo evidence retrieval, memory-policy training, and identity-drift evaluations (`ah/research/`), but no CI eval gate.
 
 **Priority actions:**
 
@@ -342,7 +342,7 @@ Agent evaluation has become its own discipline, distinct from LLM evaluation. Ke
 
 ### 4.3 Recommendations for AgentHarness
 
-**Current state:** AgentHarness has `ah/security/secrets.py` and `skills/security-sandboxing/` but lacks comprehensive prompt injection defense, tool abuse prevention, and sandboxing.
+**Current state:** AgentHarness has `ah/security/secrets.py` and `skills/security-sandboxing/` with the Docker terminal sandbox shipped, secrets redaction, and prompt-injection screening in skills; comprehensive tool-abuse prevention and injection defense in depth remain open.
 
 **Priority actions:**
 
@@ -569,11 +569,11 @@ Agent evaluation has become its own discipline, distinct from LLM evaluation. Ke
 
 | Area | Current State | Priority | Impact |
 |---|---|---|---|
-| Usage Tracking | Basic audit logging | P0 | High |
+| Usage Tracking | Durable `llm_usage` + audit events | P1 | High |
 | Cost Optimization | None | P0 | High |
 | Observability | Basic tracing + metrics | P0 | High |
-| Evaluation | Manual testing only | P1 | High |
-| Security | Secrets management only | P1 | Critical |
+| Evaluation | LoCoMo/policy/identity evals exist; no CI gate | P1 | High |
+| Security | Secrets backend + Docker sandbox + redaction | P2 | High |
 | Configuration | Basic skill registry | P2 | Medium |
 
 **Top 5 immediate actions:**
@@ -582,3 +582,4 @@ Agent evaluation has become its own discipline, distinct from LLM evaluation. Ke
 3. Build unit + trajectory eval layers with CI/CD integration
 4. Add input sanitization and prompt injection detection
 5. Implement SoulSpec v0.5 manifests with progressive disclosure
+

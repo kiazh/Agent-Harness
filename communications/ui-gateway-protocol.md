@@ -33,7 +33,7 @@ stays UI-agnostic; any future client (web, API server) can speak the same protoc
 | `config.set` | `{key, value, persist?}` | `{model, provider, key, value}` — `model`/`provider` apply to this gateway; any other non-secret setting updates config (saved to `config.yaml` when `persist`). Secrets are rejected. |
 | `shutdown` | `{}` | `{}` — gateway exits after replying |
 
-### Feature methods (`ah/gateway/features.py`)
+### Feature methods (`ah/gateway/features/`)
 
 | Method | Params | Result |
 |---|---|---|

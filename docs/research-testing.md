@@ -774,7 +774,7 @@ AgentHarness has **zero load testing**. This is expected for an early-stage proj
 | `ah/core/session.py` | 85% | 80% | 100% |
 | `ah/tools/` | 80% | 75% | 100% |
 | `ah/skills/` | 90% | 85% | 100% |
-| `ah/cli.py` | 70% | 60% | 100% |
+| `ah/cli/` | 70% | 60% | 100% |
 | **Overall** | **85%** | **80%** | **100%** |
 
 ### 10.2 Critical Paths Requiring 100% Coverage
@@ -800,7 +800,7 @@ pytest --cov=ah --cov-fail-under=85
 
 ### 10.4 Current State
 
-AgentHarness has **436 tests** with unknown coverage. Based on the critique document, coverage is likely:
+AgentHarness has **901 tests** with unknown coverage. Based on the critique document, coverage is likely:
 - **High** for `PromptAssembler`, `ToolRegistry`, `SkillParser` (well-tested)
 - **Medium** for `ReActAgent` (mocked tests, doesn't verify real behavior)
 - **Low** for `Database`, `ContextManager`, `SessionManager` (mocked DB tests)
@@ -820,7 +820,7 @@ AgentHarness has **436 tests** with unknown coverage. Based on the critique docu
 | Property-based tests | 0 | N/A | No Hypothesis tests |
 | Chaos tests | 0 | N/A | No fault injection tests |
 | Load tests | 0 | N/A | No performance tests |
-| **Total** | **436** | **Mixed** | |
+| **Total** | **901** | | **Mixed** | |
 
 ### 11.2 Critical Gaps
 

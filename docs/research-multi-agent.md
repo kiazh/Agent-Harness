@@ -360,7 +360,7 @@ For production systems, domain specialization means:
 
 ### 6.5 Specialization in AgentHarness
 
-Current state: Single `ReActAgent` with `agent_id` field. The `agent_id` is a string identifier but doesn't drive specialization.
+Shipped: specialist agents come from `AgentDef` (YAML/DB/Soul Spec) with system prompts, tool allowlists, and model/provider overrides; `agent_id` selects the persona.
 
 **Path to specialization:**
 1. Define agent profiles (role, system prompt, tool allowlist, model preference)
@@ -415,8 +415,8 @@ Current state: Single `ReActAgent` with `agent_id` field. The `agent_id` is a st
 | `ReActAgent` | Single agent loop | Base class for Planner/Executor/Critic agents |
 | `Session.state` | Dict for arbitrary state | Store task DAG, per-task results, agent assignments |
 | `ContextChunk` | Per-agent context chunks | Tag with `task_id` for task-scoped context |
-| `Container` | Wires singletons | Add `AgentRegistry` for multi-agent wiring |
-| `ToolRegistry` | Global tool access | Per-agent tool filtering |
+| `Container` | Wires singletons | `AgentRegistry` shipped separately for agent definitions |
+| `ToolRegistry` | Global tool access with per-agent allowlists | Shipped: allowlists filter tools per agent |
 | `PromptAssembler` | Single prompt assembly | Per-role prompt templates |
 
 ### 8.3 Implementation Phases
@@ -471,3 +471,4 @@ Current state: Single `ReActAgent` with `agent_id` field. The `agent_id` is a st
 10. "An Electoral Approach to Diversify LLM-based Multi-Agent Collective Decision-Making." EMNLP 2024.
 11. "Representational Collapse in Multi-Agent LLM Committees." arXiv:2604.03809, 2026.
 12. "An Approach for Systematic Decomposition of Complex LLM Tasks." arXiv:2510.07772, 2025.
+

@@ -12,7 +12,7 @@ AgentHarness is a Python 3.11+ async framework with:
 | Component | Technology | Notes |
 |-----------|-----------|-------|
 | CLI | Typer + Rich | `ah` command, `asyncio.run()` per invocation |
-| Database | PostgreSQL + pgvector | asyncpg pool (2–10 connections), 2 tables |
+| Database | PostgreSQL + pgvector | asyncpg pool (2-10 connections), 15+ tables |
 | LLM Provider | OpenRouter / Ollama | httpx async clients, token-bucket rate limiting |
 | Context Store | MessagePack in BYTEA | `context_chunks` with HNSW embedding index |
 | Skills | File-based registry | YAML frontmatter, loaded from `skills/` |
@@ -22,7 +22,7 @@ AgentHarness is a Python 3.11+ async framework with:
 
 **Key deployment characteristics:**
 - **Stateless compute** — agent runs are ephemeral; all state lives in PostgreSQL
-- **Single-process CLI** — no long-running server today; `ah chat` is one-shot
+- **Single-process compute with two entry points** — the one-shot CLI (`ah chat`), a long-running gateway (`python -m ah.gateway`) driven by the UI, and the HTTP API server (`ah serve`) are available today
 - **External LLM dependency** — OpenRouter API or local Ollama
 - **pgvector required** — `CREATE EXTENSION vector` in schema.sql
 
@@ -409,7 +409,7 @@ The project has two GitHub Actions workflows:
 - `ci.yml` — runs on push to main + PRs: ruff check, ruff format, pytest
 - `pr.yml` — same checks on PRs
 
-**Missing:** build, security scan, CD pipeline, release automation.
+**Missing:** release automation and CD pipeline (Docker images are provided: `Dockerfile`, `Dockerfile.sandbox`, `docker-compose.yml`; audit events persist to the `audit_events` table).
 
 ### 4.2 Recommended CI Pipeline
 
@@ -1124,7 +1124,7 @@ data:
 
 ### 8.1 Current State
 
-AgentHarness uses environment variables (`DATABASE_URL`, `OPENROUTER_API_KEY`) loaded via `python-dotenv`. This is fine for development but insufficient for production.
+AgentHarness reads secrets from environment variables (`DATABASE_URL`, `OPENROUTER_API_KEY`) loaded via `python-dotenv`, with `*_FILE` mounted-secret support and optional HashiCorp Vault or AWS Secrets Manager backends (`AGENT_HARNESS_SECRET_BACKEND`). Environment variables are still the default; the external backends cover production secret rotation.
 
 ### 8.2 Secrets Inventory
 

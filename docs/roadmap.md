@@ -170,17 +170,18 @@ class AgentDef:
 
 | Component | Description |
 |---|---|
-| `observability/metrics.py` | Prometheus metrics (token usage, latency, tool calls) |
+| `observability/metrics.py` | Prometheus metrics exposition (in-process collector → text format) |
 | `observability/tracing.py` | OpenTelemetry tracing for agent runs |
-| `observability/health.py` | Health check endpoint |
+| `observability/audit.py` | Persisted, sanitized audit events |
+| `/health`, `/ready` | Liveness and DB/schema readiness (served from `ah/api/app.py`) |
 
-### 6.3 Task Scheduling (`ah/scheduler/`)
+### 6.3 Task Scheduling (`ah/core/scheduler.py`, `ah/core/cron.py`)
 
 | Component | Description |
 |---|---|
-| `scheduler/heartbeat.py` | Periodic agent heartbeat (run agent every N minutes) |
-| `scheduler/cron.py` | Cron-like task scheduler |
-| `scheduler/jobs.py` | Job definitions and persistence |
+| `JobStore` | Persist jobs (`jobs` table); atomic claim via `FOR UPDATE SKIP LOCKED` |
+| `JobRunner` | Poll loop run by the gateway/API; lease renewal; heartbeat, interval, and UTC cron kinds |
+| `next_cron_time` | Five-field cron parser in `ah/core/cron.py` |
 
 ### 6.4 Plugin System (`ah/plugins/`)
 
@@ -213,24 +214,26 @@ class AgentDef:
 
 ### 7.1 Session and agent usage controls — first implementation
 
-The provider currently records LLM calls with an empty session ID, while the
-agent tracks token usage in memory. Start by attributing each completed call to
-its session and agent without counting the same tokens twice.
+Shipped in 0.2.0:
 
-1. Persist prompt and completion tokens, model, provider, and call outcome in
-   PostgreSQL so usage survives restarts. Include streamed and non-streamed
-   calls, scheduled jobs, and delegated agents.
-2. Add configurable session and agent token/request budgets. Check limits before
-   a call and return a clear budget error through the CLI, gateway, and HTTP
-   stream. Keep limits optional for existing installations.
-3. Expose usage and remaining budget through the existing API, CLI, and metrics.
-   Treat missing provider usage as unknown rather than zero consumption.
-4. Test concurrent calls, cancellation, provider errors, restart recovery, and
-   the `openrouter/free` route. Never switch to a paid model automatically.
+1. Prompt and completion tokens, model, provider, and call outcome are
+   persisted in the `llm_usage` table, so usage survives restarts. Streamed
+   and non-streamed calls, scheduled jobs, and delegated agents are all
+   recorded.
+2. Optional session and agent token/request budgets (`usage_*` config keys)
+   are checked before a call and a budget error is returned through the CLI,
+   gateway, and HTTP stream. Limits are optional and default to unlimited.
+3. Usage and remaining budget are exposed through the API, CLI (`ah usage`),
+   and the gateway's `usage.get`. Calls with missing provider usage keep a
+   conservative reservation, so unknown usage is not free.
+4. Concurrent calls, cancellation, provider errors, restart recovery, and the
+   `openrouter/free` route are tested. `openrouter/free` never switches to a
+   paid model automatically.
 
-Acceptance: usage for a session can be queried after an app restart; a budget
-stops a subsequent call before it reaches the provider; the same result is
-visible from each supported client.
+The acceptance criteria below now describe the shipped behavior: usage for a
+session can be queried after an app restart; a budget stops a subsequent call
+before it reaches the provider; the same result is visible from each
+supported client.
 
 ### 7.2 Improve the existing terminal UI (`ui/`)
 
@@ -260,15 +263,16 @@ engine; see [the LangGraph research](research-langgraph.md).
 ## Dependency Graph (Target)
 
 ```
-cli/__init__.py -> interactive.py -> agent.py -> assembler.py -> context.py -> connection.py
-                                    -> provider.py
-                                    -> session.py -> connection.py
-                                    -> memory/ -> provider.py, connection.py
-                                    -> rag/ -> provider.py, connection.py
-                                    -> multi_agent/ -> agent.py
-                                    -> scheduler/ -> agent.py
-api/ -> agent.py, memory/, rag/
-ui/ -> gateway/
+cli/__init__.py -> cli/launcher.py (spawns ui/) -> gateway/server.py -> core/agent.py
+                                              -> core/assembler.py -> core/context.py -> db/connection.py
+                                              -> core/provider.py
+                                              -> core/session.py -> db/connection.py
+                                              -> memory/ -> core/provider.py, db/connection.py
+                                              -> rag/ -> core/provider.py, db/connection.py
+                                              -> core/orchestrator.py -> core/agent.py
+                                              -> core/scheduler.py -> core/agent.py
+api/app.py -> core/agent.py, memory/, rag/, gateway/server.py
+ui/ -> gateway/ (JSON-RPC over stdio)
 ```
 
 ---
@@ -303,8 +307,8 @@ ui/ -> gateway/
 - [x] Plugin system with lifecycle hooks
 
 ### Phase 7 (Advanced)
-- [ ] Persist and expose per-session and per-agent LLM usage
-- [ ] Enforce optional token/request budgets across entry points
+- [x] Persist and expose per-session and per-agent LLM usage
+- [x] Enforce optional token/request budgets across entry points
 - [ ] Improve the existing terminal UI based on user workflows
 - [ ] Decide whether durable workflows need an external graph engine
 - [ ] 90%+ coverage for new Phase 7 code

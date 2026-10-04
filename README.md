@@ -85,7 +85,7 @@ Hermes Agent (`ui-tui` ↔ `tui_gateway`) and opencode use.
 | 4: Interactive UI | TypeScript terminal UI (pi-tui) + JSON-RPC gateway, slash commands, config system | Done |
 | 5: Multi-Agent | Subagent system, orchestration | Done |
 | 6: Production | Web API, scheduler, plugins, observability | Done |
-| 7: Advanced | Usage budgets, existing UI improvements, durable workflows if needed | Pending |
+| 7: Advanced | Usage budgets (shipped), existing UI improvements, durable workflows if needed | In progress |
 
 ### Multi-agent definitions
 

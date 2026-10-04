@@ -1,7 +1,7 @@
 # Production RAG Pipeline Research for AgentHarness
 
 **Date:** 2026-10-01  
-**Context:** AgentHarness has empty stubs at `ah/rag/` and `ah/memory/`. The current architecture uses PostgreSQL + pgvector with a `context_chunks` table (embedding vector(1536), HNSW index, MessagePack payloads). This document researches what a production-grade RAG pipeline looks like and how it maps to AgentHarness.
+**Context:** AgentHarness has a shipped RAG pipeline (`ah/rag/`) and memory system (`ah/memory/`). The architecture uses PostgreSQL + pgvector with a `context_chunks` table (embedding vector(1536), HNSW index, MessagePack payloads). This document researches what a production-grade RAG pipeline looks like and how it maps to AgentHarness.
 
 ---
 
@@ -111,7 +111,7 @@ Considerations:
 
 ### 3.3 Chunking in AgentHarness Context
 
-Currently, `context_chunks` stores raw payloads (tool calls, results, messages) without intelligent chunking. For RAG:
+`context_chunks` stores both raw conversation/tool payloads and RAG document chunks produced by `RecursiveCharacterTextSplitter`. For very long content:
 
 - **Tool results** and **assistant messages** should be chunked if they exceed ~512 tokens
 - **Metadata to preserve:** source, section heading, document date, chunk position
@@ -160,7 +160,7 @@ Where `k=60` is the standard constant (prevents any single result from dominatin
 
 ### 4.4 Implementation in AgentHarness
 
-Current: `search_by_embedding()` does single-vector cosine search.
+Shipped: `HybridSearch` runs dense pgvector cosine search concurrently with BM25 (Postgres FTS) and fuses via RRF; `search_by_embedding()` remains for dense-only callers.
 
 For hybrid search, add:
 1. **BM25 index** — either:
@@ -411,4 +411,5 @@ result = evaluate(dataset, metrics=[faithfulness, answer_relevancy, context_prec
 
 ---
 
-*This document provides the research foundation for implementing RAG capabilities in AgentHarness. The empty stubs at `ah/rag/` and `ah/memory/` should be filled following the architecture and recommendations outlined here.*
+*Status: the Phase 1 pipeline (chunker, embedder, hybrid search) and Phase 2 reranker shipped in `ah/rag/`. Phase 3 (evaluation module, query understanding) remains open.*
+

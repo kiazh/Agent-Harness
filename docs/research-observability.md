@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-AgentHarness currently has **audit logging** (JSON events to stdout via `ah.audit` logger) and **basic Python logging** (`logging.getLogger(__name__)`). This is a reasonable v0.1.0 foundation but falls short of production observability in five key areas:
+AgentHarness has **audit logging** (sanitized JSON events to stderr via the `ah.audit` logger, persisted asynchronously to the `audit_events` table) and **standard Python logging** (`logging.getLogger(__name__)`). This still falls short of production observability in the five key areas below:
 
 1. **No distributed tracing** — a single agent run fans out to 10–30+ LLM calls and tool executions with no causal chain.
 2. **No metrics** — token counts, latency, cost, and success rates are logged but never aggregated.
@@ -23,10 +23,10 @@ This document maps industry best practices to AgentHarness's specific architectu
 
 ### Current State
 
-AgentHarness has two logging mechanisms:
+AgentHarness has structured logging plus a durable, sanitized audit trail:
 
 ```python
-# ah/core/provider.py — audit logger (JSON to stdout)
+# ah/core/provider.py — audit logger (JSON lines to stderr, plus persistence)
 _audit_logger = logging.getLogger("ah.audit")
 def audit_log(event_type: str, **kwargs) -> None:
     entry = {"timestamp": time.time(), "event": event_type, **kwargs}
@@ -44,7 +44,7 @@ logger.warning("LLM call failed (attempt %d/%d): %s — retrying in %ds", ...)
 - No `trace_id` / `span_id` correlation.
 - No log levels for audit events (everything is INFO).
 - No PII redaction — `tool_args` and `result_preview` are logged verbatim.
-- No output destination — stdout only, no file rotation, no log shipping.
+- No output destination — stderr + DB only, no file rotation, no log shipping.
 
 ### Industry Standard: The Log Envelope
 
@@ -161,7 +161,7 @@ class StructuredLogger:
 
 ### Current State
 
-AgentHarness tracks `total_tokens` per run and logs it in audit events. There is **no metrics aggregation** — no counters, no histograms, no gauges. You cannot answer:
+AgentHarness aggregates in-process metrics (`ah/core/metrics.py`) and exposes them as Prometheus text at `/metrics`, including per-operation latency, counters, error rates, and token totals. Open questions remain around histograms over long windows and cross-restart aggregation.
 
 - What is the p95 latency for a tool call?
 - Which model costs the most per session?
@@ -288,7 +288,7 @@ tool_success_gauge = meter.create_gauge(
 
 ### Current State
 
-AgentHarness has **no distributed tracing**. A single `ReActAgent.run()` call fans out to:
+AgentHarness has OpenTelemetry spans around agent runs and tool calls when an SDK is configured. A single `ReActAgent.run()` call fans out to:
 - 1 session lookup
 - 1 context retrieval
 - 1 prompt assembly
@@ -385,7 +385,7 @@ async def run(self, session_id, user_message, verbose=True):
 
 ### Current State
 
-AgentHarness has **no dashboards**. All observability data goes to stdout and is lost.
+AgentHarness has **no dashboards**. Metrics are exposed as Prometheus text; audit events persist to PostgreSQL.
 
 ### Industry Standard: The Three-Layer Dashboard
 
@@ -456,7 +456,7 @@ services:
 
 ### Current State
 
-AgentHarness has **no alerting**. Errors are logged to stdout and discovered when a user complains.
+AgentHarness has **no alerting**. Errors are recorded in metrics and persisted audit events.
 
 ### Industry Standard: The Three-Tier Alert Framework
 
@@ -541,7 +541,7 @@ ALERT_RULES = [
 
 ### Current State
 
-AgentHarness tracks `total_tokens` per run but does **not** calculate cost. The `LLMResponse.usage` dict contains token counts but no cost estimation.
+AgentHarness tracks `total_tokens` per run and durable per-session/per-agent usage in `llm_usage`, but does **not** calculate dollar cost. The `LLMResponse.usage` dict contains token counts but no cost estimation.
 
 ### Industry Standard: Per-Span Cost Attribution
 
@@ -607,7 +607,7 @@ async def complete(self, messages, model=None, ...):
 
 ### Current State
 
-AgentHarness tracks `total_tokens` per run and stores `token_count` per context chunk. There is **no token analytics** — no breakdown by component, no trend analysis, no efficiency metrics.
+AgentHarness tracks `total_tokens` per run, durable `llm_usage`, and stores `token_count` per context chunk, but has **no token analytics** — no breakdown by component, no trend analysis, no efficiency metrics.
 
 ### Industry Standard: Token Flow Analysis
 
@@ -801,3 +801,5 @@ token_breakdown.total = token_breakdown.llm_input + token_breakdown.llm_output
 - [Helicone](https://helicone.ai/) — LLM request logging and cost tracking
 - [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/)
 - [SigNoz](https://signoz.io/) — Open-source observability platform
+
+
