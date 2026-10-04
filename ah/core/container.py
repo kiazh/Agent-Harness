@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from ah.core.context import ContextManager, context_manager
 from ah.core.provider import LLMProvider, get_provider
 from ah.core.session import SessionManager, session_manager
+from ah.core.usage import UsageStore, usage_store
 from ah.db.connection import Database, db
 from ah.memory.consolidator import MemoryConsolidator
 from ah.memory.forgetting import ForgettingModel
@@ -41,6 +42,7 @@ class Container:
     _context_manager: ContextManager = field(default_factory=ContextManager)
     _tool_registry: ToolRegistry = field(default_factory=ToolRegistry)
     _skill_registry: SkillRegistry = field(default_factory=SkillRegistry)
+    _usage_store: UsageStore = field(default_factory=UsageStore)
 
     # Memory singletons
     _memory_store: MemoryStore = field(default_factory=MemoryStore)
@@ -70,6 +72,7 @@ class Container:
             _context_manager=context_manager,
             _tool_registry=registry,
             _skill_registry=skill_registry,
+            _usage_store=usage_store,
         )
 
     @classmethod
@@ -100,6 +103,10 @@ class Container:
     @property
     def skill_registry(self) -> SkillRegistry:
         return self._skill_registry
+
+    @property
+    def usage_store(self) -> UsageStore:
+        return self._usage_store
 
     @property
     def memory_store(self) -> MemoryStore:
@@ -170,6 +177,13 @@ class Container:
         if self._provider and hasattr(self._provider, "close"):
             await self._provider.close()
 
+        # Close RAG pipeline's HTTP clients (embedder + reranker)
+        if self._rag_pipeline is not None:
+            for attr in ("_embedder", "_reranker"):
+                component = getattr(self._rag_pipeline, attr, None)
+                if component is not None and hasattr(component, "close"):
+                    await component.close()
+
         self._started = False
 
     async def reset(self) -> None:
@@ -189,6 +203,7 @@ class Container:
         # Replace our references with the fresh global singletons
         from ah.core.context import context_manager as fresh_context_manager
         from ah.core.session import session_manager as fresh_session_manager
+        from ah.core.usage import usage_store as fresh_usage_store
         from ah.db.connection import db as fresh_db
         from ah.skills.registry import skill_registry as fresh_skill_registry
         from ah.tools.base import registry as fresh_tool_registry
@@ -198,6 +213,7 @@ class Container:
         self._context_manager = fresh_context_manager
         self._tool_registry = fresh_tool_registry
         self._skill_registry = fresh_skill_registry
+        self._usage_store = fresh_usage_store
         self._provider = None
         self._started = False
 

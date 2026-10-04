@@ -38,6 +38,11 @@ async def client():
     with patch("ah.api.app.db.connect", new_callable=AsyncMock):
         with patch("ah.api.app.db.close", new_callable=AsyncMock):
             app = create_app()
+            # Set up mock RPC gateway for tests that need it
+            mock_gw = AsyncMock()
+            mock_gw.call.return_value = {"result": "ok"}
+            mock_gw.close = AsyncMock()
+            app.state._rpc_gateway = mock_gw
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as c:
                 yield c
@@ -316,17 +321,11 @@ class TestAgents:
 
 class TestRpc:
     async def test_rpc_dispatch(self, client, auth_headers):
-        with patch("ah.api.app._RpcGateway") as MockGateway:
-            mock_gw = AsyncMock()
-            mock_gw.call.return_value = {"result": "ok"}
-            mock_gw.close = AsyncMock()
-            MockGateway.return_value = mock_gw
-
-            resp = await client.post(
-                "/rpc",
-                headers=auth_headers,
-                json={"method": "session.list", "params": {}},
-            )
-            assert resp.status_code == 200
-            data = resp.json()
-            assert "result" in data
+        resp = await client.post(
+            "/rpc",
+            headers=auth_headers,
+            json={"method": "session.list", "params": {}},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "result" in data

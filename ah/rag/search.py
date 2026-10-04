@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import msgpack
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -241,8 +242,6 @@ class HybridSearch:
 
     def _row_to_chunk(self, row: asyncpg.Record) -> ContextChunk:
         """Convert a database row to a ContextChunk."""
-        import msgpack
-
         payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
         embedding = None
         if row["embedding"] is not None:

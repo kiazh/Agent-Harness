@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -229,7 +229,7 @@ class TestMemoryApprovalGate:
                     "session_id": None,
                     "redactions": [],
                     "status": "pending",
-                    "created_at": datetime.utcnow(),
+                    "created_at": datetime.now(UTC),
                     "explicitly_important": False,
                     "base_strength": 1.0,
                 }
@@ -237,7 +237,7 @@ class TestMemoryApprovalGate:
             # Mock memory_store.add
             mock_memory = AsyncMock()
             mock_memory.add = AsyncMock(return_value=MagicMock(id=uuid.uuid4()))
-            with patch("ah.memory.store.memory_store", mock_memory):
+            with patch("ah.memory.approval.memory_store", mock_memory):
                 mock_db.execute = AsyncMock(return_value="UPDATE 1")
                 # The mock may yield None; this only checks approve() doesn't raise.
                 await gate.approve(uuid.uuid4())
@@ -289,14 +289,14 @@ class TestMemoryApprovalGate:
                     "session_id": None,
                     "redactions": [],
                     "status": "pending",
-                    "created_at": datetime.utcnow(),
+                    "created_at": datetime.now(UTC),
                     "explicitly_important": False,
                     "base_strength": 1.0,
                 }
             )
             mock_memory = AsyncMock()
             mock_memory.add = AsyncMock(return_value=MagicMock(id=uuid.uuid4()))
-            with patch("ah.memory.store.memory_store", mock_memory):
+            with patch("ah.memory.approval.memory_store", mock_memory):
                 pending = await gate.submit("Test", "fact")
                 # When disabled, auto-approve is called
                 assert pending is not None

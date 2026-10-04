@@ -33,8 +33,10 @@ async def memory_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     from ah.memory.retriever import MemoryRetriever
 
     retriever = MemoryRetriever(top_k=_int(params, "limit", 10, 1, 100))
+    session_id = _uuid(params, "sessionId") if params.get("sessionId") else None
     found = await retriever.retrieve(
-        query=_str(params, "query", max_len=500), category=_category(params)
+        query=_str(params, "query", max_len=500), category=_category(params),
+        session_id=session_id,
     )
     return {"results": [_memory(r.memory, r.score) for r in found]}
 

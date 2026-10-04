@@ -151,8 +151,9 @@ class TestReadFileSizeLimit:
         big_file = tmp_path / "big.txt"
         big_file.write_text("x" * 2048)
 
-        with pytest.raises(ToolError, match="too large|exceeds|max_size|size limit"):
-            await read_file(str(big_file), max_size=1024)
+        with patch("ah.tools.file._BASE_DIR", tmp_path):
+            with pytest.raises(ToolError, match="too large|exceeds|max_size|size limit"):
+                await read_file(str(big_file), max_size=1024)
 
     async def test_read_file_allows_small_file(self, tmp_path):
         """read_file should succeed when file is under max_size."""
@@ -161,7 +162,8 @@ class TestReadFileSizeLimit:
         small_file = tmp_path / "small.txt"
         small_file.write_text("hello")
 
-        result = await read_file(str(small_file), max_size=1024)
+        with patch("ah.tools.file._BASE_DIR", tmp_path):
+            result = await read_file(str(small_file), max_size=1024)
         assert result == "hello"
 
     async def test_read_file_default_max_size(self, tmp_path):
@@ -172,7 +174,8 @@ class TestReadFileSizeLimit:
         small_file = tmp_path / "default.txt"
         small_file.write_text("default test")
 
-        result = await read_file(str(small_file))
+        with patch("ah.tools.file._BASE_DIR", tmp_path):
+            result = await read_file(str(small_file))
         assert result == "default test"
 
 
@@ -186,18 +189,17 @@ class TestAsyncClientClosedOnContainerStop:
 
     async def test_container_stop_closes_embedder(self):
         """Container.stop() should call close() on the RAG pipeline's embedder."""
+        from types import SimpleNamespace
         from ah.core.container import Container
-        from ah.rag.embedder import OpenAIEmbedder
 
         container = Container.testing()
+        container._started = True  # Simulate started state
 
         # Create a mock embedder with close()
-        mock_embedder = AsyncMock(spec=OpenAIEmbedder)
-        mock_embedder.close = AsyncMock()
+        mock_embedder = SimpleNamespace(close=AsyncMock())
 
         # Create a mock RAG pipeline with the embedder
-        mock_pipeline = MagicMock()
-        mock_pipeline._embedder = mock_embedder
+        mock_pipeline = SimpleNamespace(_embedder=mock_embedder)
 
         container._rag_pipeline = mock_pipeline
 
@@ -207,16 +209,15 @@ class TestAsyncClientClosedOnContainerStop:
 
     async def test_container_stop_closes_reranker(self):
         """Container.stop() should call close() on the RAG pipeline's reranker."""
+        from types import SimpleNamespace
         from ah.core.container import Container
-        from ah.rag.reranker import Reranker
 
         container = Container.testing()
+        container._started = True  # Simulate started state
 
-        mock_reranker = AsyncMock(spec=Reranker)
-        mock_reranker.close = AsyncMock()
+        mock_reranker = SimpleNamespace(close=AsyncMock())
 
-        mock_pipeline = MagicMock()
-        mock_pipeline._reranker = mock_reranker
+        mock_pipeline = SimpleNamespace(_reranker=mock_reranker)
 
         container._rag_pipeline = mock_pipeline
 
@@ -373,8 +374,9 @@ class TestAgentRegistryFileDefinitionsCache:
             result2 = registry._file_definitions()
             assert result1 is result2, "_file_definitions should return cached result"
 
-    def test_file_definitions_cache_expires(self):
-        """Cache should expire after TTL."""
+    def test_file_definitions_cache_expires_after_ttl(self):
+        """Cache should expire after 60 seconds."""
+        import time
         from ah.core.agent_def import AgentRegistry
         from unittest.mock import patch
 
@@ -383,11 +385,10 @@ class TestAgentRegistryFileDefinitionsCache:
         with patch("ah.core.agent_def.agents_directory") as mock_dir:
             mock_dir.return_value = _PROJECT_ROOT / "agents"
             result1 = registry._file_definitions()
-            # Simulate cache expiration by clearing the cache
-            if hasattr(registry, '_file_definitions_cache'):
-                del registry._file_definitions_cache
-            result2 = registry._file_definitions()
-            # After cache clear, should get a new dict
+            # Simulate TTL expiration by monkey-patching the TTL to 0
+            with patch.object(AgentRegistry, "_FILE_DEFINITIONS_TTL", 0):
+                result2 = registry._file_definitions()
+            # After TTL expiry, should get a new dict
             assert result1 is not result2
 
 
@@ -450,6 +451,8 @@ class TestSkillRegistryTelemetryPersistence:
                 file_path=str(tmp_path / "test_skill" / "SKILL.md"),
             )
         }
+        # Manually trigger load since __init__ runs before skills are set
+        registry._load_telemetry()
         # The telemetry should be loaded (usage_count should be 5)
         skill = registry._skills["test_skill"]
         assert skill.usage_count == 5

@@ -24,6 +24,7 @@ from typing import Any
 
 from ah.core.config import config
 from ah.core.cron import next_cron_time
+from ah.core.usage import usage_store
 from ah.db.connection import db, parse_command_count
 
 __all__ = ["Job", "JobStore", "JobRunner", "job_store", "DEFAULT_HEARTBEAT_PROMPT"]
@@ -333,7 +334,19 @@ class JobRunner:
             raise RuntimeError("job has no session")
         prompt = job.prompt or DEFAULT_HEARTBEAT_PROMPT
         agent = await self._build_agent(job.agent_name)
-        await agent.run(job.session_id, prompt, verbose=False)
+        reservation_id = None
+        try:
+            reservation_id = await usage_store.reserve(
+                job.session_id, job.agent_name, "scheduler", "unknown",
+                [{"role": "user", "content": prompt}], [], 4096,
+            )
+            await agent.run(job.session_id, prompt, verbose=False)
+        except Exception:
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
+            raise
+        if reservation_id is not None:
+            await usage_store.finish(reservation_id, {})
 
     async def _build_agent(self, agent_name: str):
         if self._agent_factory is not None:

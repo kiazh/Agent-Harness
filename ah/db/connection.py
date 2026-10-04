@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -90,7 +91,6 @@ class Database:
 
     async def execute(self, query: str, *args) -> str:
         """Execute a query."""
-        import time
 
         start = time.monotonic()
         try:
@@ -106,7 +106,6 @@ class Database:
 
     async def executemany(self, query: str, args: list) -> None:
         """Execute *query* once per argument tuple in *args* (single round trip batch)."""
-        import time
 
         start = time.monotonic()
         try:
@@ -119,7 +118,6 @@ class Database:
 
     async def fetch(self, query: str, *args) -> list[asyncpg.Record]:
         """Fetch rows."""
-        import time
 
         start = time.monotonic()
         try:
@@ -135,7 +133,6 @@ class Database:
 
     async def fetchrow(self, query: str, *args) -> asyncpg.Record | None:
         """Fetch a single row."""
-        import time
 
         start = time.monotonic()
         try:
@@ -151,7 +148,6 @@ class Database:
 
     async def fetchval(self, query: str, *args):
         """Fetch a single value."""
-        import time
 
         start = time.monotonic()
         try:

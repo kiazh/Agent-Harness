@@ -12,7 +12,7 @@ from typing import Any
 
 from ah.core.provider import audit_log
 from ah.core.serialization import embedding_to_str, str_to_embedding
-from ah.db.connection import db
+from ah.db.connection import db, parse_command_count
 from ah.memory.models import MemoryEntry
 from ah.memory.redaction import SecretRedactor
 
@@ -273,8 +273,6 @@ class MemoryStore:
             session_id,
         )
         # Parse "DELETE N" format
-        from ah.db.connection import parse_command_count
-
         return parse_command_count(result)
 
     async def evict_weak_memories(
@@ -294,45 +292,34 @@ class MemoryStore:
             Number of memories evicted.
         """
         if max_memories is not None:
-            # Evict oldest/weakest memories beyond the limit
+            # Use a single CTE to atomically count and delete, avoiding race conditions
+            # where concurrent inserts could cause over/under-deletion.
             if agent_id:
-                count = await db.fetchval(
-                    "SELECT COUNT(*) FROM memories WHERE agent_id = $1",
-                    agent_id,
-                )
-                if count <= max_memories:
-                    return 0
-                # Delete oldest, least important memories beyond the limit
                 result = await db.execute(
                     """
-                    DELETE FROM memories
-                    WHERE id IN (
+                    WITH target AS (
                         SELECT id FROM memories
                         WHERE agent_id = $1
                         ORDER BY importance ASC, created_at ASC
-                        LIMIT $2
+                        LIMIT GREATEST((SELECT COUNT(*) FROM memories WHERE agent_id = $1) - $2, 0)
                     )
+                    DELETE FROM memories WHERE id IN (SELECT id FROM target)
                     """,
                     agent_id,
-                    count - max_memories,
+                    max_memories,
                 )
             else:
-                count = await db.fetchval("SELECT COUNT(*) FROM memories")
-                if count <= max_memories:
-                    return 0
                 result = await db.execute(
                     """
-                    DELETE FROM memories
-                    WHERE id IN (
+                    WITH target AS (
                         SELECT id FROM memories
                         ORDER BY importance ASC, created_at ASC
-                        LIMIT $1
+                        LIMIT GREATEST((SELECT COUNT(*) FROM memories) - $1, 0)
                     )
+                    DELETE FROM memories WHERE id IN (SELECT id FROM target)
                     """,
-                    count - max_memories,
+                    max_memories,
                 )
-            from ah.db.connection import parse_command_count
-
             return parse_command_count(result)
         else:
             # Evict by importance threshold
@@ -347,8 +334,6 @@ class MemoryStore:
                     "DELETE FROM memories WHERE importance < $1",
                     threshold,
                 )
-            from ah.db.connection import parse_command_count
-
             return parse_command_count(result)
 
     async def get_weak_memories(

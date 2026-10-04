@@ -239,6 +239,9 @@ class Gateway:
             except Exception as e:
                 raise RpcError(DATABASE_UNAVAILABLE, f"database unavailable: {e}") from e
             self._db_ready = True
+            from ah.core.usage import usage_store
+
+            await usage_store.cleanup_orphaned_reservations()
             from ah.observability.audit import audit_persistence
 
             audit_persistence.start()

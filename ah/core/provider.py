@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -20,6 +21,7 @@ from ah.core.models import (  # noqa: F401 — re-exported for backward compat
     StreamEvent,
     ToolDefinition,
 )
+from ah.core.usage import usage_store
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +261,8 @@ class OpenRouterProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         tools: list[ToolDefinition] | None = None,
+        session_id: uuid.UUID | None = None,
+        agent_id: str | None = None,
     ) -> LLMResponse:
         # Input validation
         _validate_messages(messages)
@@ -279,6 +283,13 @@ class OpenRouterProvider(LLMProvider):
 
         audit_log("llm_call_start", provider="openrouter", model=model, message_count=len(messages))
 
+        # Reserve usage if session_id and agent_id are provided
+        reservation_id = None
+        if session_id is not None and agent_id is not None:
+            reservation_id = await usage_store.reserve(
+                session_id, agent_id, "openrouter", model, messages, tools or [], max_tokens,
+            )
+
         start = time.monotonic()
         try:
             resp = await self.client.post("/chat/completions", json=payload)
@@ -292,6 +303,8 @@ class OpenRouterProvider(LLMProvider):
                 duration_ms=duration_ms,
                 is_error=True,
             )
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
             audit_log("llm_call_error", provider="openrouter", model=model, error=str(e))
             raise
 
@@ -309,6 +322,12 @@ class OpenRouterProvider(LLMProvider):
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
         )
+
+        # Finish usage reservation
+        if reservation_id is not None:
+            await usage_store.finish(
+                reservation_id, usage, model=data.get("model", model),
+            )
 
         audit_log(
             "llm_call_complete",
@@ -339,6 +358,8 @@ class OpenRouterProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         tools: list[ToolDefinition] | None = None,
+        session_id: uuid.UUID | None = None,
+        agent_id: str | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Stream completion via SSE — yields text deltas as they arrive."""
         # Input validation
@@ -364,6 +385,13 @@ class OpenRouterProvider(LLMProvider):
         audit_log(
             "llm_stream_start", provider="openrouter", model=model, message_count=len(messages)
         )
+
+        # Reserve usage if session_id and agent_id are provided
+        reservation_id = None
+        if session_id is not None and agent_id is not None:
+            reservation_id = await usage_store.reserve(
+                session_id, agent_id, "openrouter", model, messages, tools or [], max_tokens,
+            )
 
         content_parts: list[str] = []
         tool_calls_by_index: dict[int, dict[str, str]] = {}
@@ -413,6 +441,8 @@ class OpenRouterProvider(LLMProvider):
                         if func.get("arguments"):
                             tc["arguments"] += func["arguments"]
         except Exception as e:
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
             audit_log("llm_stream_error", provider="openrouter", model=model, error=str(e))
             raise
 
@@ -437,6 +467,10 @@ class OpenRouterProvider(LLMProvider):
             "completion_tokens": stream_usage.get("completion_tokens", 0),
             "total_tokens": stream_usage.get("total_tokens", 0),
         }
+
+        # Finish usage reservation
+        if reservation_id is not None:
+            await usage_store.finish(reservation_id, usage, model=resolved_model)
 
         audit_log(
             "llm_stream_complete", provider="openrouter", model=model, tool_calls=len(tool_calls)
@@ -486,6 +520,8 @@ class OllamaProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         tools: list[ToolDefinition] | None = None,
+        session_id: uuid.UUID | None = None,
+        agent_id: str | None = None,
     ) -> LLMResponse:
         # Input validation
         _validate_messages(messages)
@@ -513,6 +549,13 @@ class OllamaProvider(LLMProvider):
             message_count=len(messages),
         )
 
+        # Reserve usage if session_id and agent_id are provided
+        reservation_id = None
+        if session_id is not None and agent_id is not None:
+            reservation_id = await usage_store.reserve(
+                session_id, agent_id, "ollama", model or self.model, messages, tools or [], max_tokens,
+            )
+
         start = time.monotonic()
         try:
             resp = await self.client.post("/api/chat", json=payload)
@@ -526,6 +569,8 @@ class OllamaProvider(LLMProvider):
                 duration_ms=duration_ms,
                 is_error=True,
             )
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
             audit_log("llm_call_error", provider="ollama", model=model or self.model, error=str(e))
             raise
 
@@ -541,6 +586,18 @@ class OllamaProvider(LLMProvider):
             prompt_tokens=data.get("prompt_eval_count", 0),
             completion_tokens=data.get("eval_count", 0),
         )
+
+        # Finish usage reservation
+        if reservation_id is not None:
+            await usage_store.finish(
+                reservation_id,
+                {
+                    "prompt_tokens": data.get("prompt_eval_count", 0),
+                    "completion_tokens": data.get("eval_count", 0),
+                    "total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0),
+                },
+                model=data.get("model", model or self.model),
+            )
 
         audit_log(
             "llm_call_complete",
@@ -570,6 +627,8 @@ class OllamaProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         tools: list[ToolDefinition] | None = None,
+        session_id: uuid.UUID | None = None,
+        agent_id: str | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Stream completion via newline-delimited JSON."""
         # Input validation
@@ -597,6 +656,13 @@ class OllamaProvider(LLMProvider):
             model=model or self.model,
             message_count=len(messages),
         )
+
+        # Reserve usage if session_id and agent_id are provided
+        reservation_id = None
+        if session_id is not None and agent_id is not None:
+            reservation_id = await usage_store.reserve(
+                session_id, agent_id, "ollama", model or self.model, messages, tools or [], max_tokens,
+            )
 
         content_parts: list[str] = []
         tool_calls: list[dict] = []
@@ -626,12 +692,20 @@ class OllamaProvider(LLMProvider):
                     if data.get("done"):
                         break
         except Exception as e:
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
             audit_log(
                 "llm_stream_error", provider="ollama", model=model or self.model, error=str(e)
             )
             raise
 
         full_content = "".join(content_parts)
+
+        # Finish usage reservation
+        if reservation_id is not None:
+            await usage_store.finish(
+                reservation_id, {}, model=model or self.model,
+            )
 
         audit_log(
             "llm_stream_complete",

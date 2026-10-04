@@ -132,6 +132,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     load_plugins()
     runner = None
+    rpc_gw = None
     try:
         await db.connect()
         audit_persistence.start()
@@ -139,11 +140,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         runner = JobRunner()
         runner.start()
+        # Create a single _RpcGateway for all RPC dispatches
+        rpc_gw = _RpcGateway()
+        app.state._rpc_gateway = rpc_gw
     except Exception as e:
         logger.warning("Database not available: %s", e)
     yield
     if runner is not None:
         await runner.stop()
+    if rpc_gw is not None:
+        await rpc_gw.close()
     await audit_persistence.stop()
     await db.close()
 
@@ -284,15 +290,23 @@ def create_app() -> FastAPI:
             from ah.core.provider import get_provider
 
             try:
-                llm = get_provider(
-                    provider=session.provider or config.get("provider"),
-                    model=session.model or config.get("model"),
-                )
-                agent = ReActAgent(
-                    provider=llm,
-                    max_iterations=config.get("max_iterations"),
-                    agent_id=config.get("agent_id"),
-                )
+                # Cache agents by session_id to avoid recreating per request
+                if not hasattr(app.state, "_agent_cache"):
+                    app.state._agent_cache = {}
+
+                if sid not in app.state._agent_cache:
+                    llm = get_provider(
+                        provider=session.provider or config.get("provider"),
+                        model=session.model or config.get("model"),
+                    )
+                    agent = ReActAgent(
+                        provider=llm,
+                        max_iterations=config.get("max_iterations"),
+                        agent_id=config.get("agent_id"),
+                    )
+                    app.state._agent_cache[sid] = agent
+
+                agent = app.state._agent_cache[sid]
                 async for event in agent.run_stream(sid, req.text, verbose=req.verbose):
                     data = _serialize_event(event)
                     yield f"data: {json.dumps(data)}\n\n"
@@ -524,7 +538,9 @@ def create_app() -> FastAPI:
         """Generic JSON-RPC dispatch to any gateway feature method."""
         if req.method in {"prompt.submit", "prompt.cancel", "shutdown"}:
             raise HTTPException(400, "use the session prompt stream for turns")
-        gw = _RpcGateway()
+        gw = getattr(app.state, "_rpc_gateway", None)
+        if gw is None:
+            raise HTTPException(503, "RPC gateway not initialized")
         try:
             result = await gw.call(req.method, req.params)
             return {"result": result}
@@ -535,8 +551,6 @@ def create_app() -> FastAPI:
         except Exception:
             logger.exception("RPC dispatch failed for method %s", req.method)
             raise HTTPException(500, "internal error") from None
-        finally:
-            await gw.close()
 
     return app
 

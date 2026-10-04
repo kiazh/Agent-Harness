@@ -23,6 +23,7 @@ from ah.core.provider import audit_log
 from ah.db.connection import db
 from ah.memory.models import MemoryEntry
 from ah.memory.redaction import SecretRedactor
+from ah.memory.store import memory_store
 
 __all__ = [
     "ApprovalStatus",
@@ -165,7 +166,7 @@ class MemoryApprovalGate:
             now,
             explicitly_important,
             base_strength,
-            None,  # embedding stored separately if needed
+            embedding,
         )
 
         pending = PendingMemory(
@@ -227,8 +228,6 @@ class MemoryApprovalGate:
             return None
 
         # Step 2: Create the actual memory entry
-        from ah.memory.store import memory_store
-
         memory = await memory_store.add(
             session_id=row["session_id"],
             agent_id=row["agent_id"],
@@ -353,12 +352,17 @@ class MemoryApprovalGate:
     async def approve_all(self, agent_id: str | None = None) -> int:
         """Approve all pending memories, optionally filtered by agent.
 
+        Uses a batch UPDATE to mark all pending records as approved in a
+        single query, then creates memory entries for each.
+
         Returns the count of approved memories.
         """
         if agent_id:
             rows = await db.fetch(
                 """
-                SELECT id FROM pending_memories
+                SELECT id, content, category, importance, agent_id, session_id,
+                       redactions, created_at, explicitly_important, base_strength
+                FROM pending_memories
                 WHERE status = $1 AND agent_id = $2
                 ORDER BY created_at ASC
                 """,
@@ -368,20 +372,61 @@ class MemoryApprovalGate:
         else:
             rows = await db.fetch(
                 """
-                SELECT id FROM pending_memories
+                SELECT id, content, category, importance, agent_id, session_id,
+                       redactions, created_at, explicitly_important, base_strength
+                FROM pending_memories
                 WHERE status = $1
                 ORDER BY created_at ASC
                 """,
                 ApprovalStatus.PENDING.value,
             )
 
-        count = 0
-        for row in rows:
-            result = await self.approve(row["id"], auto_approved=True)
-            if result is not None:
-                count += 1
+        if not rows:
+            return 0
 
-        return count
+        from ah.memory.store import memory_store
+
+        now = datetime.now(UTC)
+        pending_ids = [row["id"] for row in rows]
+        memory_ids: list[uuid.UUID] = []
+        for row in rows:
+            memory = await memory_store.add(
+                session_id=row["session_id"],
+                agent_id=row["agent_id"],
+                content=row["content"],
+                category=row["category"],
+                importance=row["importance"],
+                explicitly_important=row["explicitly_important"],
+                base_strength=row["base_strength"],
+            )
+            memory_ids.append(memory.id)
+
+        # Single batch UPDATE to mark all pending records as approved
+        await db.execute(
+            """
+            UPDATE pending_memories
+            SET status = $2,
+                memory_id = approved_memory_ids.mem_id,
+                reviewed_at = $3,
+                review_note = ''
+            FROM (
+                SELECT unnest($1::uuid[]) AS pending_id,
+                       unnest($2::uuid[]) AS mem_id
+            ) AS approved_memory_ids
+            WHERE pending_memories.id = approved_memory_ids.pending_id
+            """,
+            pending_ids,
+            memory_ids,
+            now,
+        )
+
+        audit_log(
+            "memory_approve_all",
+            count=len(pending_ids),
+            agent_id=agent_id,
+        )
+
+        return len(pending_ids)
 
     async def reject_all(
         self,
@@ -390,33 +435,46 @@ class MemoryApprovalGate:
     ) -> int:
         """Reject all pending memories, optionally filtered by agent.
 
+        Uses a single batch UPDATE to mark all pending records as rejected.
+
         Returns the count of rejected memories.
         """
+        now = datetime.now(UTC)
         if agent_id:
-            rows = await db.fetch(
+            result = await db.execute(
                 """
-                SELECT id FROM pending_memories
-                WHERE status = $1 AND agent_id = $2
-                ORDER BY created_at ASC
+                UPDATE pending_memories
+                SET status = $2, reviewed_at = $3, review_note = $4
+                WHERE status = $1 AND agent_id = $5
                 """,
                 ApprovalStatus.PENDING.value,
+                ApprovalStatus.REJECTED.value,
+                now,
+                review_note,
                 agent_id,
             )
         else:
-            rows = await db.fetch(
+            result = await db.execute(
                 """
-                SELECT id FROM pending_memories
+                UPDATE pending_memories
+                SET status = $2, reviewed_at = $3, review_note = $4
                 WHERE status = $1
-                ORDER BY created_at ASC
                 """,
                 ApprovalStatus.PENDING.value,
+                ApprovalStatus.REJECTED.value,
+                now,
+                review_note,
             )
 
-        count = 0
-        for row in rows:
-            if await self.reject(row["id"], review_note=review_note):
-                count += 1
+        from ah.db.connection import parse_command_count
 
+        count = parse_command_count(result)
+        if count > 0:
+            audit_log(
+                "memory_reject_all",
+                count=count,
+                agent_id=agent_id,
+            )
         return count
 
     async def get_stats(self) -> dict[str, int]:

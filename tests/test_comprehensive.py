@@ -5,7 +5,7 @@ import os
 import subprocess
 import tempfile
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1783,7 +1783,7 @@ class TestSkillCurator:
         curator = SkillCurator(reg)
         # Make the skill stale by setting last_activity_at to 60 days ago
         skill = reg.get("test-skill")
-        skill.last_activity_at = datetime.utcnow() - timedelta(days=60)
+        skill.last_activity_at = datetime.now(UTC) - timedelta(days=60)
         archived = curator.archive_stale(days=30)
         assert "test-skill" in archived
         assert skill.enabled is False
@@ -1794,7 +1794,7 @@ class TestSkillCurator:
         reg.load_all()
         curator = SkillCurator(reg)
         skill = reg.get("test-skill")
-        skill.last_activity_at = datetime.utcnow() - timedelta(days=60)
+        skill.last_activity_at = datetime.now(UTC) - timedelta(days=60)
         stale = curator.get_stale_skills(days=30)
         assert len(stale) == 1
         assert stale[0].name == "test-skill"

@@ -13,7 +13,7 @@ def age_days(dt: datetime | None, now: datetime | None = None) -> float:
     """Days elapsed since *dt*, safe for naive (UTC) and aware datetimes.
 
     Rows loaded from PostgreSQL TIMESTAMPTZ columns are timezone-aware, while
-    in-process defaults use naive ``datetime.utcnow()``; subtracting the two
+    in-process defaults use ``datetime.now(UTC)``; subtracting the two
     raises ``TypeError``. Both are normalized to aware UTC here.
     """
     if dt is None:

@@ -182,7 +182,7 @@ class UsageStore:
             "COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
             "COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
             "COUNT(*) FILTER (WHERE prompt_tokens IS NULL) AS unknown_calls "
-            "FROM llm_usage WHERE session_id = $1",
+            "FROM llm_usage WHERE session_id = $1 AND status = 'complete'",
             session_id,
         )
         agent = await db.fetchrow(
@@ -190,7 +190,7 @@ class UsageStore:
             "COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
             "COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
             "COUNT(*) FILTER (WHERE prompt_tokens IS NULL) AS unknown_calls "
-            "FROM llm_usage WHERE agent_id = $1",
+            "FROM llm_usage WHERE agent_id = $1 AND status = 'complete'",
             agent_id,
         )
 
@@ -212,6 +212,21 @@ class UsageStore:
 
         return {"sessionId": str(session_id), "agentId": agent_id,
                 "session": view(session, "session"), "agent": view(agent, "agent")}
+
+    async def cleanup_orphaned_reservations(self) -> int:
+        """Mark all 'reserved' rows as 'error' — called on startup to clean up after crashes.
+
+        Returns the number of rows that were cleaned up.
+        """
+        result = await db.execute(
+            "UPDATE llm_usage SET status = 'error', completed_at = now() "
+            "WHERE status = 'reserved'"
+        )
+        # Parse the command count from the result (e.g., "UPDATE 3")
+        try:
+            return int(result.split()[-1])
+        except (ValueError, IndexError):
+            return 0
 
     async def totals(self) -> dict[str, int]:
         row = await db.fetchrow(

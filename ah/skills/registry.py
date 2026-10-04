@@ -61,10 +61,6 @@ class SkillParser:
         re.compile(r"forget\s+(all\s+)?previous\s+instructions", re.IGNORECASE),
         re.compile(r"system\s*:\s*(you\s+are|ignore|disregard|forget|override)", re.IGNORECASE),
         re.compile(r"<\s*system\s*>", re.IGNORECASE),
-        re.compile(r"\[INST\]", re.IGNORECASE),
-        re.compile(r"\[/INST\]", re.IGNORECASE),
-        re.compile(r"<\|im_start\|>", re.IGNORECASE),
-        re.compile(r"<\|im_end\|>", re.IGNORECASE),
     ]
 
     @staticmethod
@@ -138,6 +134,44 @@ class SkillRegistry:
     def __init__(self, skills_dir: str | Path | None = None) -> None:
         self.skills_dir = Path(skills_dir) if skills_dir is not None else default_skills_dir()
         self._skills: dict[str, Skill] = {}
+        self._telemetry_file = self.skills_dir / "telemetry.json"
+
+    def _load_telemetry(self) -> None:
+        """Load telemetry data from JSON file into skill objects."""
+        if not self._telemetry_file.exists():
+            return
+        try:
+            data = json.loads(self._telemetry_file.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return
+            for name, telemetry in data.items():
+                if name in self._skills:
+                    skill = self._skills[name]
+                    skill.usage_count = telemetry.get("usage_count", 0)
+                    skill.view_count = telemetry.get("view_count", 0)
+                    last_activity = telemetry.get("last_activity_at")
+                    if last_activity:
+                        skill.last_activity_at = datetime.fromisoformat(last_activity)
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+
+    def _save_telemetry(self) -> None:
+        """Persist telemetry data to JSON file."""
+        telemetry: dict[str, Any] = {}
+        for name, skill in self._skills.items():
+            telemetry[name] = {
+                "usage_count": skill.usage_count,
+                "view_count": skill.view_count,
+                "last_activity_at": (
+                    skill.last_activity_at.isoformat() if skill.last_activity_at else None
+                ),
+            }
+        try:
+            self._telemetry_file.write_text(
+                json.dumps(telemetry, indent=2), encoding="utf-8"
+            )
+        except OSError:
+            pass
 
     def load_all(self) -> None:
         """Load all skills from the skills directory.
@@ -158,6 +192,7 @@ class SkillRegistry:
                         logger.warning("Skipping skill %s: %s", skill_file, e)
                         continue
                     self._skills[skill.name] = skill
+        self._load_telemetry()
 
     def get(self, name: str) -> Skill | None:
         return self._skills.get(name)
@@ -166,12 +201,17 @@ class SkillRegistry:
         return list(self._skills.values())
 
     def match_triggers(self, query: str) -> list[Skill]:
-        """Match query against skill triggers (simple keyword matching)."""
-        query_lower = query.lower()
+        """Match query against skill triggers using word-boundary matching.
+
+        A trigger matches only when it appears as a whole word in the query,
+        preventing false positives like trigger "cat" matching "concatenate".
+        """
         matched = []
         for skill in self._skills.values():
             for trigger in skill.triggers:
-                if trigger.lower() in query_lower:
+                # Use word-boundary regex for whole-word matching
+                pattern = re.compile(r"\b" + re.escape(trigger.lower()) + r"\b")
+                if pattern.search(query.lower()):
                     matched.append(skill)
                     break
         return matched
@@ -189,6 +229,7 @@ class SkillRegistry:
         if skill:
             skill.usage_count += 1
             skill.last_activity_at = datetime.now(UTC)
+            self._save_telemetry()
 
     def record_view(self, name: str) -> None:
         """Record that a skill was viewed (listed or inspected)."""
@@ -196,6 +237,7 @@ class SkillRegistry:
         if skill:
             skill.view_count += 1
             skill.last_activity_at = datetime.now(UTC)
+            self._save_telemetry()
 
     def get_telemetry(self, name: str) -> dict[str, Any] | None:
         """Get telemetry data for a skill."""

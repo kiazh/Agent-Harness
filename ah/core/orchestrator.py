@@ -15,10 +15,11 @@ from dataclasses import dataclass
 
 from ah.core.agent import ReActAgent
 from ah.core.agent_def import AgentDef, agent_registry
-from ah.core.assembler import PromptAssembler, truncate_to_tokens
+from ah.core.assembler import PromptAssembler, get_token_count, truncate_to_tokens
 from ah.core.config import config
 from ah.core.context import context_manager
 from ah.core.session import session_manager
+from ah.core.usage import usage_store
 from ah.db.connection import db
 
 __all__ = ["DelegationResult", "Orchestrator", "AgentNotFoundError"]
@@ -44,6 +45,38 @@ class DelegationResult:
 class Orchestrator:
     """Runs tasks on named agents and records them in ``agent_messages``."""
 
+    MAX_HOP_COUNT = 10  # Maximum delegation depth to prevent circular delegation
+    PROMPT_VERSION = "1.0.0"  # Version of the delegation prompt template
+
+    @staticmethod
+    def _build_delegation_prompt(agent_name: str, task: str, context: str) -> str:
+        """Build a deterministic, versioned delegation prompt.
+
+        Args:
+            agent_name: Name of the agent being delegated to.
+            task: The task description.
+            context: Parent session context (may be empty).
+
+        Returns:
+            A versioned prompt string.
+        """
+        parts = [
+            f"## Task",
+            f"{task}",
+            f"",
+            f"# Delegation Prompt v{Orchestrator.PROMPT_VERSION}",
+            f"",
+            f"## Agent",
+            f"{agent_name}",
+        ]
+        if context:
+            parts.extend([
+                f"",
+                f"## Parent Session Context",
+                f"{context}",
+            ])
+        return "\n".join(parts)
+
     def __init__(self, agent_factory=None) -> None:
         # Injectable so tests can supply a fake agent without an API key.
         self._agent_factory = agent_factory or self._build_agent
@@ -68,8 +101,25 @@ class Orchestrator:
         *,
         from_agent: str = "orchestrator",
         parent_session_id: uuid.UUID | None = None,
+        _hop_count: int = 0,
     ) -> DelegationResult:
-        """Run *task* on *agent_name* in a fresh child session."""
+        """Run *task* on *agent_name* in a fresh child session.
+
+        Args:
+            agent_name: Name of the agent to delegate to.
+            task: The task description.
+            from_agent: The agent making this delegation.
+            parent_session_id: Optional parent session for context.
+            _hop_count: Internal hop counter to prevent circular delegation.
+
+        Raises:
+            ValueError: If hop count exceeds MAX_HOP_COUNT (deadlock guard).
+        """
+        if _hop_count > self.MAX_HOP_COUNT or _hop_count < 0:
+            raise ValueError(
+                f"Invalid hop count {_hop_count} — "
+                f"must be between 0 and {self.MAX_HOP_COUNT}"
+            )
         definition = await agent_registry.get(agent_name)
         if definition is None:
             raise AgentNotFoundError(f"no agent named {agent_name!r}")
@@ -86,15 +136,32 @@ class Orchestrator:
         message_id = await self._record_start(parent_session_id, from_agent, agent_name, task)
 
         agent = self._agent_factory(definition)
+        reservation_id = None
         try:
-            child_task = f"{task}\n\n## Parent session context\n{handoff}" if handoff else task
+            child_task = self._build_delegation_prompt(agent_name, task, handoff)
+            # Reserve usage for the child session if we have a parent session
+            if parent_session_id is not None:
+                reservation_id = await usage_store.reserve(
+                    child.id, agent_name, "orchestrator", definition.model or config.get("model"),
+                    [{"role": "user", "content": child_task}], [], 4096,
+                )
             response = await agent.run(child.id, child_task, verbose=False)
         except Exception as e:
             logger.exception("Delegation to %s failed", agent_name)
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
             await self._record_end(
                 message_id, status="error", response=f"{type(e).__name__}: {e}", tokens=0
             )
             return DelegationResult(agent_name, task, f"Error: {e}", child.id, 0, 0, "error")
+
+        # Finish usage reservation
+        if reservation_id is not None:
+            await usage_store.finish(
+                reservation_id,
+                {"total_tokens": response.tokens_used},
+                model=definition.model or config.get("model"),
+            )
 
         await self._record_end(
             message_id, status="complete", response=response.content, tokens=response.tokens_used
@@ -105,7 +172,7 @@ class Orchestrator:
                 agent_id=from_agent,
                 chunk_type="result",
                 payload={"agent": agent_name, "content": f"[{agent_name}] {response.content}"},
-                token_count=len(response.content) // 4,
+                token_count=get_token_count(response.content),
             )
         return DelegationResult(
             agent=agent_name,

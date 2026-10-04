@@ -11,7 +11,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from ah.core.provider import audit_log
@@ -49,8 +49,8 @@ class UserProfile:
     interaction_count: int = 0
     topics: dict[str, int] = field(default_factory=dict)
     last_topics: list[str] = field(default_factory=list)
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:
         """Ensure mutable defaults are not shared."""
@@ -64,7 +64,7 @@ class UserProfile:
     def record_interaction(self, topic: str | None = None) -> None:
         """Record a new interaction, optionally with a topic."""
         self.interaction_count += 1
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(UTC)
         if topic:
             self.topics[topic] = self.topics.get(topic, 0) + 1
             # Maintain last 10 topics, most recent first
@@ -76,7 +76,7 @@ class UserProfile:
     def set_preference(self, key: str, value: Any) -> None:
         """Set a preference key-value pair."""
         self.preferences[key] = value
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(UTC)
 
     def get_preference(self, key: str, default: Any = None) -> Any:
         """Get a preference value by key."""
@@ -115,12 +115,12 @@ class UserProfile:
             created_at=(
                 datetime.fromisoformat(data["created_at"])
                 if isinstance(data.get("created_at"), str)
-                else data.get("created_at", datetime.utcnow())
+                else data.get("created_at", datetime.now(UTC))
             ),
             updated_at=(
                 datetime.fromisoformat(data["updated_at"])
                 if isinstance(data.get("updated_at"), str)
-                else data.get("updated_at", datetime.utcnow())
+                else data.get("updated_at", datetime.now(UTC))
             ),
         )
 
@@ -139,7 +139,7 @@ class UserProfileStore:
     ) -> UserProfile:
         """Create a new user profile."""
         profile_id = uuid.uuid4()
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         preferences_json = json.dumps(preferences or {})
 
         row = await db.fetchrow(
@@ -235,60 +235,56 @@ class UserProfileStore:
         profile_id: uuid.UUID,
         topic: str | None = None,
     ) -> UserProfile | None:
-        """Record an interaction for a profile."""
-        async with self._lock:
-            # Build the topic update
-            if topic:
-                # Get current topics and last_topics
-                row = await db.fetchrow(
-                    """
-                    SELECT topics, last_topics FROM user_profiles WHERE id = $1
-                    """,
-                    profile_id,
-                )
-                if row is None:
-                    return None
+        """Record an interaction for a profile.
 
-                topics = json.loads(row["topics"]) if row["topics"] else {}
-                last_topics = json.loads(row["last_topics"]) if row["last_topics"] else []
+        Uses a single atomic UPDATE ... RETURNING query to avoid race conditions
+        between concurrent interaction recordings.
+        """
+        if topic:
+            row = await db.fetchrow(
+                """
+                UPDATE user_profiles
+                SET interaction_count = interaction_count + 1,
+                    topics = jsonb_set(
+                        COALESCE(topics, '{}'::jsonb),
+                        ARRAY[$2],
+                        to_jsonb(COALESCE((topics->>$2)::int, 0) + 1)
+                    ),
+                    last_topics = COALESCE((
+                        SELECT jsonb_agg(elem) FROM (
+                            SELECT elem FROM (
+                                SELECT to_jsonb($2) AS elem
+                                UNION ALL
+                                SELECT elem FROM jsonb_array_elements(last_topics) elem
+                                WHERE elem != $2
+                            ) combined
+                            LIMIT 10
+                        ) limited
+                    ), '[]'::jsonb),
+                    updated_at = now()
+                WHERE id = $1
+                RETURNING id, user_id, display_name, preferences, interaction_count,
+                          topics, last_topics, created_at, updated_at
+                """,
+                profile_id,
+                topic,
+            )
+        else:
+            row = await db.fetchrow(
+                """
+                UPDATE user_profiles
+                SET interaction_count = interaction_count + 1,
+                    updated_at = now()
+                WHERE id = $1
+                RETURNING id, user_id, display_name, preferences, interaction_count,
+                          topics, last_topics, created_at, updated_at
+                """,
+                profile_id,
+            )
 
-                topics[topic] = topics.get(topic, 0) + 1
-                if topic in last_topics:
-                    last_topics.remove(topic)
-                last_topics.insert(0, topic)
-                last_topics = last_topics[:10]
-
-                row = await db.fetchrow(
-                    """
-                    UPDATE user_profiles
-                    SET interaction_count = interaction_count + 1,
-                        topics = $2,
-                        last_topics = $3,
-                        updated_at = now()
-                    WHERE id = $1
-                    RETURNING id, user_id, display_name, preferences, interaction_count,
-                              topics, last_topics, created_at, updated_at
-                    """,
-                    profile_id,
-                    json.dumps(topics),
-                    json.dumps(last_topics),
-                )
-            else:
-                row = await db.fetchrow(
-                    """
-                    UPDATE user_profiles
-                    SET interaction_count = interaction_count + 1,
-                        updated_at = now()
-                    WHERE id = $1
-                    RETURNING id, user_id, display_name, preferences, interaction_count,
-                              topics, last_topics, created_at, updated_at
-                    """,
-                    profile_id,
-                )
-
-            if row is None:
-                return None
-            return self._row_to_profile(row)
+        if row is None:
+            return None
+        return self._row_to_profile(row)
 
     async def list_all(self, limit: int = 100) -> list[UserProfile]:
         """List all user profiles."""

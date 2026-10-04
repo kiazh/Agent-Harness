@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -99,9 +100,24 @@ BUILTIN_AGENTS: dict[str, AgentDef] = {
 class AgentRegistry:
     """Looks up database, YAML, and built-in definitions in that order."""
 
+    _FILE_DEFINITIONS_TTL = 60  # seconds
+
+    def __init__(self) -> None:
+        self._file_definitions_cache: dict[str, AgentDef] | None = None
+        self._file_definitions_cache_time: float = 0.0
+
     def _file_definitions(self) -> dict[str, AgentDef]:
+        now = time.monotonic()
+        if (
+            self._file_definitions_cache is not None
+            and now - self._file_definitions_cache_time < self._FILE_DEFINITIONS_TTL
+        ):
+            return self._file_definitions_cache
+
         directory = agents_directory()
         if not directory.is_dir():
+            self._file_definitions_cache = {}
+            self._file_definitions_cache_time = now
             return {}
         definitions: dict[str, AgentDef] = {}
         for path in sorted((*directory.glob("*.yaml"), *directory.glob("*.yml"))):
@@ -138,6 +154,8 @@ class AgentRegistry:
                 )
             except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
                 logger.warning("Skipping agent definition %s: %s", path, exc)
+        self._file_definitions_cache = definitions
+        self._file_definitions_cache_time = now
         return definitions
 
     async def get(self, name: str) -> AgentDef | None:

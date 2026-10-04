@@ -46,16 +46,29 @@ def resolve_path(path: str) -> Path:
                 "description": "Line number to start reading from (1-indexed)",
             },
             "limit": {"type": "integer", "description": "Maximum number of lines to read"},
+            "max_size": {
+                "type": "integer",
+                "description": "Maximum file size in bytes (default: 1048576 = 1 MB)",
+            },
         },
         "required": ["path"],
     },
 )
-async def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
-    """Read a file with optional offset and limit."""
+async def read_file(path: str, offset: int = 1, limit: int = 2000, max_size: int = 1_048_576) -> str:
+    """Read a file with optional offset and limit.
+
+    Args:
+        path: Path to the file to read.
+        offset: Line number to start reading from (1-indexed).
+        limit: Maximum number of lines to read.
+        max_size: Maximum file size in bytes. Files larger than this are rejected.
+    """
     if offset < 1:
         raise ToolError(f"offset must be >= 1, got {offset}")
     if limit < 1:
         raise ToolError(f"limit must be >= 1, got {limit}")
+    if max_size < 1:
+        raise ToolError(f"max_size must be >= 1, got {max_size}")
     try:
         file_path = resolve_path(path)
     except ValueError as e:
@@ -65,6 +78,14 @@ async def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
         raise ToolError(f"File not found: {path}")
     if not file_path.is_file():
         raise ToolError(f"Not a file: {path}")
+
+    # Check file size before reading
+    file_size = file_path.stat().st_size
+    if file_size > max_size:
+        raise ToolError(
+            f"File '{path}' is too large ({file_size} bytes, max {max_size} bytes)"
+        )
+
     try:
 
         def _read():

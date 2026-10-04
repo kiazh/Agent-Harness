@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from ah import services
 from ah.gateway.errors import INVALID_PARAMS, TURN_IN_PROGRESS, RpcError
-from ah.gateway.serializers import session_to_dict
+from ah.gateway.serializers import chunk_preview, session_to_dict
 from ah.core.context import context_manager
 from ah.core.session import session_manager
 
@@ -69,7 +69,7 @@ async def context_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
                 "agent": c.agent_id,
                 "tokens": c.token_count,
                 "createdAt": c.created_at.isoformat() if c.created_at else None,
-                "preview": c.content[:200] if hasattr(c, "content") else "",
+                "preview": chunk_preview(c),
             }
             for c in chunks
         ],
