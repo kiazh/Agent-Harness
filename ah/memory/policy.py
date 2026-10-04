@@ -55,13 +55,15 @@ class MemoryPolicy:
         return tuple(actions)
 
     def probabilities(self, state: MemoryState) -> dict[MemoryAction, float]:
+        return {action: math.exp(value) for action, value in self._log_probabilities(state).items()}
+
+    def _log_probabilities(self, state: MemoryState) -> dict[MemoryAction, float]:
         features = state_features(state)
         actions = self.available_actions(state)
         logits = {a: sum(w * x for w, x in zip(self.weights[a], features)) for a in actions}
         maximum = max(logits.values())
-        exp = {a: math.exp(score - maximum) for a, score in logits.items()}
-        total = sum(exp.values())
-        return {a: value / total for a, value in exp.items()}
+        log_total = math.log(sum(math.exp(score - maximum) for score in logits.values()))
+        return {action: score - maximum - log_total for action, score in logits.items()}
 
     def choose(self, state: MemoryState, *, rng: random.Random | None = None) -> MemoryAction:
         probabilities = self.probabilities(state)
@@ -70,7 +72,7 @@ class MemoryPolicy:
         draw = rng.random()
         for action, probability in probabilities.items():
             draw -= probability
-            if draw <= 0:
+            if draw < 0:
                 return action
         return next(reversed(probabilities))
 
@@ -157,7 +159,8 @@ class GroupRelativeTrainer:
             raise ValueError("states, epochs, and update_passes must be non-empty")
         initial = policy.expected_reward(states, reward)
         reference = {
-            state_index: policy.probabilities(state) for state_index, state in enumerate(states)
+            state_index: policy._log_probabilities(state)
+            for state_index, state in enumerate(states)
         }
         history: list[float] = []
         for _ in range(epochs):
@@ -174,7 +177,8 @@ class GroupRelativeTrainer:
                 advantages = [(value - mean) / (std + 1e-8) for value in rewards]
                 features = state_features(state)
                 for _ in range(update_passes):
-                    current = policy.probabilities(state)
+                    current_log = policy._log_probabilities(state)
+                    current = {action: math.exp(value) for action, value in current_log.items()}
                     logit_gradient = {action: 0.0 for action in current}
                     for action, advantage in zip(actions, advantages):
                         ratio = current[action] / old[action]
@@ -190,11 +194,14 @@ class GroupRelativeTrainer:
                                 / self.group_size
                             )
                     kl = sum(
-                        p * math.log(p / reference[index][action]) for action, p in current.items()
+                        p * (current_log[action] - reference[index][action])
+                        for action, p in current.items()
                     )
                     for action, p in current.items():
                         logit_gradient[action] -= (
-                            self.kl_coefficient * p * (math.log(p / reference[index][action]) - kl)
+                            self.kl_coefficient
+                            * p
+                            * (current_log[action] - reference[index][action] - kl)
                         )
                     for action, gradient in logit_gradient.items():
                         for feature_index, value in enumerate(features):

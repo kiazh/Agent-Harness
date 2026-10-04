@@ -11,6 +11,7 @@ from ah.memory.identity import AgentBelief, IdentityGate
 from ah.memory.policy import GroupRelativeTrainer, MemoryPolicy
 from ah.memory.rl import MemoryAction, MemoryState
 from ah.research.identity_eval import evaluate_identity_scenarios, load_identity_scenarios
+from ah.research.identity_eval import main as identity_main
 from ah.research.locomo import (
     Conversation,
     DialogueTurn,
@@ -52,6 +53,19 @@ def test_policy_masks_actions_without_target_memory():
     assert sum(probabilities.values()) == pytest.approx(1.0)
 
 
+def test_group_relative_policy_handles_underflowed_action_probability():
+    state = _state("retrieve fact")
+    policy = MemoryPolicy()
+    policy.weights[MemoryAction.STORE][0] = -1000.0
+
+    def reward(_state: MemoryState, action: MemoryAction) -> float:
+        return 1.0 if action == MemoryAction.RETRIEVE else -1.0
+
+    report = GroupRelativeTrainer(seed=12).train(policy, [state], reward, epochs=2)
+    assert report.final_expected_reward >= report.initial_expected_reward
+    assert sum(policy.probabilities(state).values()) == pytest.approx(1.0)
+
+
 def test_scored_rollout_training_writes_policy_and_holdout_report(tmp_path):
     data_path = tmp_path / "rollouts.jsonl"
     rows = []
@@ -88,6 +102,35 @@ def test_scored_rollout_training_writes_policy_and_holdout_report(tmp_path):
     data_path.write_text(json.dumps(rows[0]), encoding="utf-8")
     with pytest.raises(ValueError, match="missing outcomes"):
         load_scored_states(data_path)
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"outcomes": []}, "outcomes must be an object"),
+        ({"outcomes": {"store": {"relevance": "high"}}}, "relevance must be a finite number"),
+    ],
+)
+def test_scored_rollout_rejects_malformed_outcomes_with_row_number(tmp_path, change, message):
+    row = {
+        "state": {
+            "task": "store fact",
+            "conversation": [],
+            "budget_remaining": 4000,
+        },
+        "outcomes": {
+            action: {"task_success": True, "persona_consistency": 1.0}
+            for action in ("store", "retrieve", "noop")
+        },
+    }
+    if isinstance(change["outcomes"], dict):
+        row["outcomes"]["store"].update(change["outcomes"]["store"])
+    else:
+        row.update(change)
+    path = tmp_path / "invalid.jsonl"
+    path.write_text(json.dumps(row), encoding="utf-8")
+    with pytest.raises(ValueError, match=f"invalid training row 1: {message}"):
+        load_scored_states(path)
 
 
 def test_locomo_evidence_metrics_and_invalid_ids(tmp_path):
@@ -192,6 +235,20 @@ async def test_labeled_identity_sequence_evaluation_cleans_up(db_pool, monkeypat
     assert result.benign_acceptance_rate == 1
     assert result.quarantined_memories == 1
     assert await db_pool.fetchval("SELECT COUNT(*) FROM agent_belief_history") == before
+
+
+def test_identity_evaluator_requires_explicit_database_selection(monkeypatch):
+    monkeypatch.setenv("AGENT_HARNESS_TEST_DATABASE_URL", "postgresql://test/benchmark")
+    monkeypatch.setattr("sys.argv", ["identity_eval", "scenarios.json"])
+
+    def unexpected_run(coro):
+        coro.close()
+        pytest.fail("benchmark accessed a database without an explicit selection")
+
+    monkeypatch.setattr("ah.research.identity_eval.asyncio.run", unexpected_run)
+    with pytest.raises(SystemExit) as exc:
+        identity_main()
+    assert exc.value.code == 2
 
 
 def test_soulspec_v05_package_preserves_manifest_and_declared_files(tmp_path):

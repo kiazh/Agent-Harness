@@ -1,4 +1,5 @@
 """Tests for the identity gate — AgentBelief, IdentityGate, MemoryProvenance."""
+
 from __future__ import annotations
 
 import uuid
@@ -198,6 +199,40 @@ class TestIdentityGate:
 
         assert result.is_valid is False
         assert "irrelevant" in result.reason.lower() or "relevance" in result.reason.lower()
+
+    async def test_validate_incoming_rejects_when_belief_lookup_fails(self, gate, mock_db):
+        memory = _make_memory(content="Python is a great programming language")
+        mock_db.fetchrow = AsyncMock(side_effect=RuntimeError("database unavailable"))
+
+        with patch("ah.memory.identity.db", mock_db):
+            result = await gate.validate_incoming("harness", memory)
+
+        assert result.is_valid is False
+        assert "belief" in result.reason.lower()
+
+    async def test_validate_incoming_rejects_when_provenance_lookup_fails(self, gate, mock_db):
+        memory = _make_memory(content="Python is a great programming language")
+        mock_db.fetchrow = AsyncMock(
+            side_effect=[_make_belief_row(), RuntimeError("provenance table unavailable")]
+        )
+
+        with patch("ah.memory.identity.db", mock_db):
+            result = await gate.validate_incoming("harness", memory)
+
+        assert result.is_valid is False
+        assert "provenance" in result.reason.lower()
+
+    async def test_validate_incoming_checks_provenance_without_existing_beliefs(
+        self, gate, mock_db
+    ):
+        memory = _make_memory()
+        provenance = MemoryProvenance(memory.id, "harness", "invalid-signature")
+
+        with patch("ah.memory.identity.db", mock_db):
+            result = await gate.validate_incoming("harness", memory, provenance)
+
+        assert result.is_valid is False
+        assert "provenance" in result.reason.lower()
 
     def test_drift_detection(self, gate):
         """Verify drift is detected when beliefs diverge."""

@@ -196,7 +196,13 @@ class IdentityGate:
         # Shared memories require authenticated provenance even for an agent
         # with no established beliefs yet.
         if memory.agent_id != agent_id:
-            provenance = provenance or await self._load_provenance(memory.id)
+            try:
+                provenance = provenance or await self._load_provenance(memory.id)
+            except Exception as exc:
+                logger.warning(
+                    "Provenance lookup failed for memory %s (%s)", memory.id, type(exc).__name__
+                )
+                return ValidationResult(False, 0.0, "Provenance lookup unavailable")
             if (
                 provenance is None
                 or provenance.source_agent != memory.agent_id
@@ -205,42 +211,50 @@ class IdentityGate:
                 return ValidationResult(False, 0.0, "Missing or invalid shared-memory provenance")
 
         # Load agent beliefs
-        belief = await self._load_beliefs(agent_id)
+        try:
+            belief = await self._load_beliefs(agent_id)
+        except Exception as exc:
+            logger.warning("Belief lookup failed for agent %s (%s)", agent_id, type(exc).__name__)
+            return ValidationResult(False, 0.0, "Belief lookup unavailable")
+        if belief is not None:
+            # Reject irrelevant or contradictory content before further lookup.
+            relevance = self._compute_relevance(memory.content, belief)
+            if relevance < self.RELEVANCE_THRESHOLD:
+                return ValidationResult(
+                    is_valid=False,
+                    confidence=0.0,
+                    reason=f"Irrelevant: no overlap with known facts (relevance={relevance:.2f})",
+                )
+
+            consistency = self._compute_consistency(memory.content, belief)
+            if consistency < self.CONSISTENCY_THRESHOLD:
+                return ValidationResult(
+                    is_valid=False,
+                    confidence=0.0,
+                    reason=f"Inconsistent: contradicts existing beliefs (consistency={consistency:.2f})",
+                )
+
+        if memory.agent_id == agent_id:
+            try:
+                provenance = provenance or await self._load_provenance(memory.id)
+            except Exception as exc:
+                logger.warning(
+                    "Provenance lookup failed for memory %s (%s)", memory.id, type(exc).__name__
+                )
+                return ValidationResult(False, 0.0, "Provenance lookup unavailable")
+            if provenance is not None and (
+                provenance.source_agent != memory.agent_id
+                or not provenance.verify(memory.id, memory.content)
+            ):
+                return ValidationResult(False, 0.0, "Provenance verification failed")
+
         if belief is None:
-            # No beliefs yet — accept with low confidence
+            # No beliefs yet — accept with low confidence after provenance validation.
             return ValidationResult(
                 is_valid=True,
                 confidence=0.3,
                 reason="No existing beliefs; accepting with low confidence",
             )
-
-        # Check relevance
-        relevance = self._compute_relevance(memory.content, belief)
-        if relevance < self.RELEVANCE_THRESHOLD:
-            return ValidationResult(
-                is_valid=False,
-                confidence=0.0,
-                reason=f"Irrelevant: no overlap with known facts (relevance={relevance:.2f})",
-            )
-
-        # Check consistency
-        consistency = self._compute_consistency(memory.content, belief)
-        if consistency < self.CONSISTENCY_THRESHOLD:
-            return ValidationResult(
-                is_valid=False,
-                confidence=0.0,
-                reason=f"Inconsistent: contradicts existing beliefs (consistency={consistency:.2f})",
-            )
-
-        # Check provenance if available
-        provenance = await self._load_provenance(memory.id)
-        if provenance is not None:
-            if not provenance.verify(memory.id, memory.content):
-                return ValidationResult(
-                    is_valid=False,
-                    confidence=0.0,
-                    reason="Provenance verification failed: signature mismatch",
-                )
 
         # All checks passed
         confidence = (relevance + consistency) / 2.0
@@ -323,20 +337,16 @@ class IdentityGate:
 
     async def _load_beliefs(self, agent_id: str) -> AgentBelief | None:
         """Load agent beliefs from the database."""
-        try:
-            row = await db.fetchrow(
-                "SELECT agent_id, belief, version, updated_at FROM agent_beliefs WHERE agent_id = $1",
-                agent_id,
-            )
-            if row is None:
-                return None
-            belief = row["belief"]
-            if isinstance(belief, str):
-                belief = json.loads(belief)
-            return AgentBelief.from_dict(belief)
-        except Exception as exc:
-            logger.debug("Failed to load beliefs for %s: %s", agent_id, exc)
+        row = await db.fetchrow(
+            "SELECT agent_id, belief, version, updated_at FROM agent_beliefs WHERE agent_id = $1",
+            agent_id,
+        )
+        if row is None:
             return None
+        belief = row["belief"]
+        if isinstance(belief, str):
+            belief = json.loads(belief)
+        return AgentBelief.from_dict(belief)
 
     async def save_beliefs(self, belief: AgentBelief) -> None:
         """Persist an explicitly supplied agent identity model."""
@@ -448,23 +458,19 @@ class IdentityGate:
 
     async def _load_provenance(self, memory_id: uuid.UUID) -> MemoryProvenance | None:
         """Load memory provenance from the database."""
-        try:
-            row = await db.fetchrow(
-                "SELECT memory_id, source_agent, signature, parent_memory_id, created_at FROM memory_provenance WHERE memory_id = $1",
-                memory_id,
-            )
-            if row is None:
-                return None
-            return MemoryProvenance(
-                memory_id=row["memory_id"],
-                source_agent=row["source_agent"],
-                signature=row["signature"],
-                parent_memory_id=row["parent_memory_id"],
-                created_at=row["created_at"],
-            )
-        except Exception as exc:
-            logger.debug("Failed to load provenance for %s: %s", memory_id, exc)
+        row = await db.fetchrow(
+            "SELECT memory_id, source_agent, signature, parent_memory_id, created_at FROM memory_provenance WHERE memory_id = $1",
+            memory_id,
+        )
+        if row is None:
             return None
+        return MemoryProvenance(
+            memory_id=row["memory_id"],
+            source_agent=row["source_agent"],
+            signature=row["signature"],
+            parent_memory_id=row["parent_memory_id"],
+            created_at=row["created_at"],
+        )
 
     def _compute_relevance(self, content: str, belief: AgentBelief) -> float:
         """Compute semantic relevance between memory content and agent beliefs.

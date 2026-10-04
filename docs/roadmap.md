@@ -2,17 +2,19 @@
 
 **Last updated:** 2026-10-03  
 **Current version:** 0.2.0
-**Test status:** 688 tests passing on Windows (one platform-specific test deselected)
+**Test status:** 901 tests collected on Windows (some platform-specific tests deselected)
 
 ---
 
 ## Executive Summary
 
-AgentHarness has completed Phases 1-6: a ReAct loop, PostgreSQL context and memory, RAG, a terminal UI and JSON-RPC gateway, multi-agent delegation, and production API, scheduling, observability, plugins, and security controls. The Windows test run passes 688 tests, with one platform-specific test deselected.
+AgentHarness has completed Phases 1-6: a ReAct loop, PostgreSQL context and memory, RAG, a terminal UI and JSON-RPC gateway, multi-agent delegation, and production API, scheduling, observability, plugins, and security controls. The Windows test run collects 901 tests, with some platform-specific tests deselected.
 
-Phase 7 starts with **session and agent usage controls**, then improves the
-existing terminal UI and evaluates durable workflows when a concrete use case
-requires them.
+Phase 7 has started with **session and agent usage controls** (shipped: durable
+`llm_usage` accounting, optional token/request budgets, `ah usage` and
+`usage.get`/`GET /api/v1/sessions/<id>/usage`), then improves the existing
+terminal UI and evaluates durable workflows when a concrete use case requires
+them.
 
 ---
 
@@ -34,7 +36,10 @@ ah/
 │   └── session.py       # SessionManager with TTLCache
 ├── db/
 │   ├── connection.py    # asyncpg pool
-│   └── schema.sql       # 3 tables: sessions, context_chunks, memories
+│   └── schema.sql       # sessions, context_chunks, context_archive, memories,
+│                        # pending_memories, user_profiles, agents, agent_messages,
+│                        # audit_events, jobs, persona_memories, llm_usage,
+│                        # agent_beliefs, agent_belief_history, memory_provenance
 ├── tools/
 │   ├── base.py          # ToolRegistry (decorator-based, JSON Schema inference)
 │   ├── builtins.py      # web_search, web_extract, search_files
@@ -51,7 +56,34 @@ ah/
 │   ├── consolidator.py  # MemoryConsolidator (LLM extraction -> scoring -> dedup -> write)
 │   ├── retriever.py     # MemoryRetriever (hybrid search + reranking)
 │   ├── scorer.py        # ImportanceScorer (multi-factor)
-│   └── forgetting.py    # ForgettingModel (Ebbinghaus decay)
+│   ├── forgetting.py    # ForgettingModel (Ebbinghaus decay)
+│   ├── approval.py      # MemoryApprovalGate (human-in-the-loop approval)
+│   ├── redaction.py     # SecretRedactor (PII/secret redaction)
+│   ├── user_profile.py  # UserProfileStore (per-user preferences)
+│   ├── identity.py      # IdentityGate + belief provenance/drift containment
+│   ├── persona.py       # PersonaMemoryStore + EmotionTopology
+│   ├── policy.py        # Group-relative memory policy trainer (research baseline)
+│   └── rl.py            # RL action/reward definitions for memory
+├── gateway/
+│   ├── __main__.py      # stdio JSON-RPC server (protocol on private fds)
+│   ├── server.py        # Gateway dispatch, turns, streaming events
+│   └── features/        # Domain handlers (sessions, memory, skills, jobs, agents, config)
+├── api/
+│   ├── app.py           # FastAPI app (versioned /api/v1 routes, SSE chat)
+│   ├── auth.py          # API-key auth (fail-closed)
+│   └── rate_limit.py    # Per-peer rate limiting
+├── observability/
+│   ├── audit.py         # Bounded async audit-event persistence
+│   ├── metrics.py       # Prometheus text exposition
+│   └── tracing.py       # OpenTelemetry spans
+├── security/
+│   └── secrets.py       # Env/file/Vault/AWS secret resolution
+├── soulspec/
+│   ├── schema.py        # Soul Spec package validation + AgentDef conversion
+│   ├── merge.py, adapters.py, conformance.py
+├── research/
+│   ├── locomo.py        # LoCoMo evidence retrieval benchmark
+│   ├── train_memory_policy.py, identity_eval.py
 ├── rag/
 │   ├── chunker.py       # RecursiveCharacterTextSplitter
 │   ├── embedder.py      # OpenAIEmbedder (LRU cache + batch)
@@ -60,8 +92,10 @@ ah/
 │   ├── reranker.py      # CohereReranker, IdentityReranker
 │   └── search.py        # HybridSearch (BM25 + dense + RRF)
 ├── cli/
-│   ├── __init__.py      # Typer CLI (chat, repl, status, sessions, context, skills, doctor, init, config, memory)
-│   └── interactive.py   # Interactive REPL (prompt_toolkit)
+│   ├── __init__.py      # Typer CLI (chat, sessions, context, compress, skills, memory-*, doctor, init, config, usage, ...)
+│   ├── launcher.py      # Starts the TypeScript UI (checks Node + ui/ deps)
+│   └── output.py        # Plain Rich tables/status lines for admin commands
+├── ../ui/               # TypeScript terminal UI (pi-tui) driving the gateway
 └── __init__.py          # Version 0.2.0
 ```
 
@@ -85,14 +119,13 @@ class AgentDef:
     max_iterations: int = 10
 ```
 
-### 5.2 Multi-Agent Manager (`ah/core/multi_agent.py`)
+### 5.2 Agent Registry & Orchestrator (`ah/core/agent_def.py`, `ah/core/orchestrator.py`)
 
 | Component | Description |
 |---|---|
-| `AgentRegistry` | Register and retrieve agent definitions |
-| `AgentRunner` | Run a specific agent with a specific task |
-| `Orchestrator` | Decompose tasks, delegate to agents, synthesize results |
-| `HandoffManager` | Pass context between agents during handoffs |
+| `AgentRegistry` | Look up definitions: DB → YAML (`agents/*.yaml`) → Soul Spec packages → built-ins |
+| `Orchestrator` | Run delegations sequentially or in parallel, record `agent_messages`, bounded parent-context handoff, hop-count guard |
+| `delegate()` tool | Hand a standalone task to a specialist agent from a running turn |
 
 ### 5.3 Orchestration Patterns
 
@@ -107,7 +140,6 @@ class AgentDef:
 
 - `delegate(agent: str, task: str)` - send a task to another agent
 - `list_agents()` - list available agents
-- `spawn_agent(definition: str)` - dynamically create a new agent
 
 ---
 
@@ -115,17 +147,14 @@ class AgentDef:
 
 **Goal:** Make AgentHarness reliable, observable, and deployable.
 
-### 6.1 Web API Server (`ah/server/`)
+### 6.1 Web API Server (`ah/api/`)
 
 | Component | Description |
 |---|---|
-| `server/app.py` | FastAPI application |
-| `server/routes/sessions.py` | Session CRUD endpoints |
-| `server/routes/chat.py` | Chat endpoint (SSE streaming) |
-| `server/routes/memory.py` | Memory management endpoints |
-| `server/routes/documents.py` | Document indexing/search endpoints |
-| `server/middleware/auth.py` | API key authentication |
-| `server/middleware/rate_limit.py` | Per-client rate limiting |
+| `api/app.py` | FastAPI application (versioned `/api/v1` routes + legacy aliases, SSE chat) |
+| `api/auth.py` | Bearer / `X-API-Key` authentication, fail-closed when unset |
+| `api/rate_limit.py` | Per-transport-peer request rate limiting |
+| `api/__main__.py` | `python -m ah.api` entry point |
 
 **Endpoints:**
 - `POST /api/v1/sessions` - create session

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import uuid
 from dataclasses import asdict, dataclass
@@ -35,6 +36,8 @@ def load_scored_states(path: str | Path) -> list[ScoredState]:
         try:
             row = json.loads(line)
             state_data = row["state"]
+            if not isinstance(state_data, dict):
+                raise ValueError("state must be an object")
             count = state_data.get("current_memory_count", 0)
             if type(count) is not int or count < 0 or count > 1000:
                 raise ValueError("current_memory_count must be between 0 and 1000")
@@ -61,7 +64,10 @@ def load_scored_states(path: str | Path) -> list[ScoredState]:
                 or state.budget_remaining < 0
             ):
                 raise ValueError("invalid state")
-            outcomes = {MemoryAction(key): value for key, value in row["outcomes"].items()}
+            raw_outcomes = row["outcomes"]
+            if not isinstance(raw_outcomes, dict):
+                raise ValueError("outcomes must be an object")
+            outcomes = {MemoryAction(key): value for key, value in raw_outcomes.items()}
             if any(not isinstance(value, dict) for value in outcomes.values()):
                 raise ValueError("outcomes must be objects")
             missing = set(MemoryPolicy().available_actions(state)) - outcomes.keys()
@@ -70,7 +76,18 @@ def load_scored_states(path: str | Path) -> list[ScoredState]:
             for outcome in outcomes.values():
                 if type(outcome.get("task_success")) is not bool:
                     raise ValueError("task_success must be boolean")
-                if not 0 <= outcome.get("persona_consistency", -1) <= 1:
+                for score in ("relevance", "redundancy", "staleness"):
+                    if score in outcome and (
+                        type(outcome[score]) not in (int, float)
+                        or not math.isfinite(outcome[score])
+                    ):
+                        raise ValueError(f"{score} must be a finite number")
+                consistency = outcome.get("persona_consistency")
+                if (
+                    type(consistency) not in (int, float)
+                    or not math.isfinite(consistency)
+                    or not 0 <= consistency <= 1
+                ):
                     raise ValueError("persona_consistency must be between zero and one")
             examples.append(ScoredState(state, outcomes))
         except (KeyError, TypeError, ValueError) as exc:

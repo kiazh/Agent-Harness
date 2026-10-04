@@ -114,12 +114,15 @@ def main() -> None:
     args = parser.parse_args()
     if args.db_url and args.test_db:
         parser.error("use either --db-url or --test-db")
+    if not args.db_url and not args.test_db:
+        parser.error("--db-url or --test-db is required")
+    database_url = args.db_url
     if args.test_db:
         import ah.core.config  # noqa: F401 - loads local test environment
 
-    database_url = args.db_url or os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL")
+        database_url = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL")
     if not database_url:
-        parser.error("--db-url or --test-db is required")
+        parser.error("AGENT_HARNESS_TEST_DATABASE_URL is required with --test-db")
 
     async def run() -> DriftMetrics:
         db.dsn = database_url
