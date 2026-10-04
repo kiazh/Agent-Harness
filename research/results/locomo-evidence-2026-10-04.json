@@ -1,0 +1,22 @@
+{
+  "dataset": "snap-research/locomo:data/locomo10.json",
+  "dataset_sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+  "metric_scope": "annotated dialogue evidence retrieval, not answer accuracy",
+  "k": 5,
+  "lexical": {
+    "questions": 1977,
+    "skipped_questions": 5,
+    "evidence_recall": 0.4395362505757044,
+    "hit_rate": 0.47698533131006576,
+    "mean_reciprocal_rank": 0.35404653515427426,
+    "mean_retrieved_bytes": 1078.5842185128984
+  },
+  "archive": {
+    "questions": 1977,
+    "skipped_questions": 5,
+    "evidence_recall": 0.425924501671247,
+    "hit_rate": 0.4618108244815377,
+    "mean_reciprocal_rank": 0.34574270780644106,
+    "mean_retrieved_bytes": 922.3348507840162
+  }
+}

@@ -22,6 +22,7 @@ from ah.memory.consolidator import MemoryConsolidator
 from ah.memory.forgetting import ForgettingModel
 from ah.memory.identity import (
     AgentBelief,
+    BeliefTransition,
     IdentityGate,
     MemoryProvenance,
     ValidationResult,
@@ -73,6 +74,7 @@ __all__ = [
     "PersonaMemoryStore",
     "persona_memory_store",
     "AgentBelief",
+    "BeliefTransition",
     "IdentityGate",
     "MemoryProvenance",
     "ValidationResult",

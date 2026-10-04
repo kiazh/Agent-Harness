@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections import OrderedDict
 from datetime import UTC, datetime
@@ -41,6 +42,51 @@ def _search_text_for(payload: dict[str, Any]) -> str | None:
         parts.extend(str(v) for v in args.values() if v is not None)
     text = " ".join(parts).strip()
     return text[:20000] or None
+
+
+_SEARCH_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "did",
+    "do",
+    "does",
+    "for",
+    "from",
+    "how",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "was",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+}
+
+
+def _archive_tsquery(query: str) -> str:
+    """Build a bounded OR query from sanitized words for archive recall."""
+    words = [
+        word
+        for word in dict.fromkeys(re.findall(r"[a-z0-9]+", query.lower()))
+        if word not in _SEARCH_STOPWORDS
+    ]
+    return " | ".join(words[:16])
 
 
 class ContextManager:
@@ -437,20 +483,23 @@ class ContextManager:
         """Recall archived conversation without requiring an embedding provider."""
         if not query.strip():
             return []
+        tsquery = _archive_tsquery(query)
+        if not tsquery:
+            return []
         rows = await db.fetch(
             """
             SELECT *, ts_rank(
                 to_tsvector('english', COALESCE(search_text, '')),
-                plainto_tsquery('english', $2)
+                to_tsquery('english', $2)
             ) AS similarity
             FROM context_archive
             WHERE session_id = $1 AND
                 to_tsvector('english', COALESCE(search_text, '')) @@
-                plainto_tsquery('english', $2)
+                to_tsquery('english', $2)
             ORDER BY similarity DESC, archived_at DESC LIMIT $3
             """,
             session_id,
-            query,
+            tsquery,
             top_k,
         )
         result = []

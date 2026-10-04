@@ -158,6 +158,18 @@ class ValidationResult:
     reason: str
 
 
+@dataclass(frozen=True)
+class BeliefTransition:
+    """Recorded result of a proposed identity update."""
+
+    agent_id: str
+    from_version: int
+    to_version: int
+    drift_score: float
+    accepted: bool
+    quarantined_count: int
+
+
 class IdentityGate:
     """Validates shared memories against an agent's belief model."""
 
@@ -339,6 +351,99 @@ class IdentityGate:
             """,
             belief.agent_id,
             json.dumps(belief.to_dict()),
+        )
+
+    async def observe_transition(
+        self,
+        proposed: AgentBelief,
+        *,
+        causal_memory_ids: list[uuid.UUID] | None = None,
+        threshold: float | None = None,
+    ) -> BeliefTransition:
+        """Record and gate a belief transition after consuming shared memories.
+
+        A large change is rejected and the cited memories are quarantined in
+        the same transaction. Callers must supply causal IDs; this method does
+        not infer causality from a change in beliefs.
+        """
+        limit = self.DRIFT_THRESHOLD if threshold is None else threshold
+        if not 0 < limit <= 1:
+            raise ValueError("threshold must be in (0, 1]")
+        for values in (proposed.known_facts, proposed.traits, proposed.values):
+            if any(
+                not isinstance(value, (int, float)) or not 0 <= value <= 1
+                for value in values.values()
+            ):
+                raise ValueError("belief strengths must be between zero and one")
+        causal_ids = list(dict.fromkeys(causal_memory_ids or []))
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT belief, version FROM agent_beliefs WHERE agent_id = $1 FOR UPDATE",
+                    proposed.agent_id,
+                )
+                before = None
+                version = 0
+                if row is not None:
+                    raw = row["belief"]
+                    before = AgentBelief.from_dict(json.loads(raw) if isinstance(raw, str) else raw)
+                    version = row["version"]
+                score = self.detect_drift(before, proposed) if before else 0.0
+                contained = before is not None and score >= limit
+                quarantined_count = 0
+                if contained and causal_ids:
+                    result = await conn.execute(
+                        "UPDATE memories SET quarantined = TRUE "
+                        "WHERE agent_id = $1 AND id = ANY($2::uuid[]) AND quarantined = FALSE",
+                        proposed.agent_id,
+                        causal_ids,
+                    )
+                    from ah.db.connection import parse_command_count
+
+                    quarantined_count = parse_command_count(result)
+                if not contained:
+                    await conn.execute(
+                        """
+                        INSERT INTO agent_beliefs (agent_id, belief, version, updated_at)
+                        VALUES ($1, $2::jsonb, 1, now())
+                        ON CONFLICT (agent_id) DO UPDATE SET
+                            belief = EXCLUDED.belief,
+                            version = agent_beliefs.version + 1,
+                            updated_at = now()
+                        """,
+                        proposed.agent_id,
+                        json.dumps(proposed.to_dict()),
+                    )
+                await conn.execute(
+                    """
+                    INSERT INTO agent_belief_history
+                        (agent_id, from_version, to_version, before_belief,
+                         proposed_belief, drift_score, causal_memory_ids, contained)
+                    VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7::uuid[], $8)
+                    """,
+                    proposed.agent_id,
+                    version,
+                    version if contained else version + 1,
+                    json.dumps(before.to_dict()) if before else None,
+                    json.dumps(proposed.to_dict()),
+                    score,
+                    causal_ids,
+                    contained,
+                )
+        audit_log(
+            "belief_transition",
+            agent_id=proposed.agent_id,
+            drift_score=score,
+            contained=contained,
+            quarantined_count=quarantined_count,
+        )
+        return BeliefTransition(
+            agent_id=proposed.agent_id,
+            from_version=version,
+            to_version=version if contained else version + 1,
+            drift_score=score,
+            accepted=not contained,
+            quarantined_count=quarantined_count,
         )
 
     async def _load_provenance(self, memory_id: uuid.UUID) -> MemoryProvenance | None:

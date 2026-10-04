@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -10,6 +12,175 @@ from typing import Any
 import yaml
 
 from ah.core.agent_def import AgentDef
+
+_LICENSES = {
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC-BY-4.0",
+    "CC0-1.0",
+    "ISC",
+    "Unlicense",
+}
+_PACKAGE_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+_SEMVER = re.compile(
+    r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\Z"
+)
+
+
+def _package_file(root: Path, relative: str) -> Path:
+    """Resolve a declared package file without allowing traversal or symlinks out."""
+    if (
+        not relative
+        or "\\" in relative
+        or relative.startswith("/")
+        or any(part in ("", ".", "..") for part in relative.split("/"))
+    ):
+        raise ValueError(f"invalid package path: {relative!r}")
+    result = (root / relative).resolve()
+    if not result.is_relative_to(root):
+        raise ValueError(f"package path escapes root: {relative!r}")
+    return result
+
+
+def _validate_manifest(manifest: dict[str, Any]) -> dict[str, str]:
+    required = (
+        "specVersion",
+        "name",
+        "displayName",
+        "version",
+        "description",
+        "author",
+        "license",
+        "tags",
+        "category",
+        "files",
+    )
+    missing = [key for key in required if key not in manifest]
+    if missing:
+        raise ValueError(f"soul.json missing required fields: {', '.join(missing)}")
+    if manifest["specVersion"] not in {"0.3", "0.4", "0.5"}:
+        raise ValueError("unsupported Soul Spec version")
+    for key in ("name", "displayName", "version", "description", "license", "category"):
+        if not isinstance(manifest[key], str) or not manifest[key].strip():
+            raise ValueError(f"{key} must be a non-empty string")
+    if not _PACKAGE_NAME.fullmatch(manifest["name"]):
+        raise ValueError("name must be kebab-case")
+    # Semver core is mandatory; prerelease/build suffixes are accepted.
+    if not _SEMVER.fullmatch(manifest["version"]):
+        raise ValueError("version must be semver")
+    if len(manifest["description"]) > 160:
+        raise ValueError("description must be at most 160 characters")
+    if manifest["license"] not in _LICENSES:
+        raise ValueError("license is not in the Soul Spec allowlist")
+    if any(not _PACKAGE_NAME.fullmatch(part) for part in manifest["category"].split("/")):
+        raise ValueError("category must be a path of kebab-case names")
+    if (
+        not isinstance(manifest["author"], dict)
+        or not isinstance(manifest["author"].get("name"), str)
+        or not manifest["author"]["name"].strip()
+    ):
+        raise ValueError("author.name is required")
+    tags = manifest["tags"]
+    if (
+        not isinstance(tags, list)
+        or len(tags) > 10
+        or any(not isinstance(tag, str) or not tag.strip() for tag in tags)
+    ):
+        raise ValueError("tags must be a list of at most ten non-empty strings")
+    files = manifest["files"]
+    if not isinstance(files, dict) or not isinstance(files.get("soul"), str):
+        raise ValueError("files.soul must name SOUL.md")
+    if files["soul"].split("/")[-1] != "SOUL.md":
+        raise ValueError("files.soul must name SOUL.md")
+    references = {}
+    for group in (files, manifest.get("examples", {})):
+        if not isinstance(group, dict):
+            raise ValueError("files and examples must be objects")
+        for key, relative in group.items():
+            if not isinstance(relative, str):
+                raise ValueError(f"{key} must be a file path")
+            references[key] = relative
+    if len(references.values()) != len(set(references.values())):
+        raise ValueError("package files must not alias the same path")
+    for key in ("allowedTools",):
+        if key in manifest and (
+            not isinstance(manifest[key], list)
+            or any(not isinstance(value, str) or not value for value in manifest[key])
+        ):
+            raise ValueError(f"{key} must be a list of strings")
+    skills = manifest.get("recommendedSkills", [])
+    if not isinstance(skills, list) or any(
+        not isinstance(skill, dict)
+        or not isinstance(skill.get("name"), str)
+        or not skill["name"]
+        or ("required" in skill and type(skill["required"]) is not bool)
+        or ("version" in skill and not isinstance(skill["version"], str))
+        for skill in skills
+    ):
+        raise ValueError("recommendedSkills must contain named skill objects")
+    legacy_skills = manifest.get("skills", [])
+    if not isinstance(legacy_skills, list) or any(
+        not isinstance(skill, str) or not skill for skill in legacy_skills
+    ):
+        raise ValueError("legacy skills must be a list of names")
+    disclosure = manifest.get("disclosure", {})
+    if not isinstance(disclosure, dict) or (
+        "summary" in disclosure
+        and (not isinstance(disclosure["summary"], str) or len(disclosure["summary"]) > 200)
+    ):
+        raise ValueError("disclosure.summary must be at most 200 characters")
+    if "deprecated" in manifest and type(manifest["deprecated"]) is not bool:
+        raise ValueError("deprecated must be a boolean")
+    if "supersededBy" in manifest and not isinstance(manifest["supersededBy"], str):
+        raise ValueError("supersededBy must be a string")
+    compatibility = manifest.get("compatibility", {})
+    if not isinstance(compatibility, dict):
+        raise ValueError("compatibility must be an object")
+    for key in ("models", "frameworks"):
+        if key in compatibility and (
+            not isinstance(compatibility[key], list)
+            or any(not isinstance(value, str) for value in compatibility[key])
+        ):
+            raise ValueError(f"compatibility.{key} must be a list of strings")
+    if "openclaw" in compatibility and not isinstance(compatibility["openclaw"], str):
+        raise ValueError("compatibility.openclaw must be a string")
+    if "minTokenContext" in compatibility and (
+        type(compatibility["minTokenContext"]) is not int or compatibility["minTokenContext"] < 1
+    ):
+        raise ValueError("compatibility.minTokenContext must be positive")
+    if manifest.get("environment", "virtual") not in {"virtual", "embodied", "hybrid"}:
+        raise ValueError("invalid environment")
+    if manifest.get("interactionMode", "text") not in {"text", "voice", "multimodal", "gesture"}:
+        raise ValueError("invalid interactionMode")
+    hardware = manifest.get("hardwareConstraints", {})
+    if not isinstance(hardware, dict):
+        raise ValueError("hardwareConstraints must be an object")
+    for key in ("hasDisplay", "hasSpeaker", "hasMicrophone", "hasCamera", "manipulator"):
+        if key in hardware and type(hardware[key]) is not bool:
+            raise ValueError(f"hardwareConstraints.{key} must be boolean")
+    if "mobility" in hardware and hardware["mobility"] not in {"stationary", "mobile", "limited"}:
+        raise ValueError("invalid hardwareConstraints.mobility")
+    safety = manifest.get("safety", {})
+    if not isinstance(safety, dict):
+        raise ValueError("safety must be an object")
+    physical = safety.get("physical", {})
+    if not isinstance(physical, dict):
+        raise ValueError("safety.physical must be an object")
+    for key, allowed in (
+        ("contactPolicy", {"no-contact", "gentle-contact", "full-contact"}),
+        ("emergencyProtocol", {"stop", "alert_operator", "return_home"}),
+        ("operatingZone", {"indoor", "outdoor", "both"}),
+    ):
+        if key in physical and physical[key] not in allowed:
+            raise ValueError(f"invalid safety.physical.{key}")
+    for key in ("sensors", "actuators"):
+        if key in manifest and not isinstance(manifest[key], dict):
+            raise ValueError(f"{key} must be an object")
+    return references
 
 
 @dataclass
@@ -23,6 +194,7 @@ class SoulSpec:
     skills: list[SoulSpec.Skill] = field(default_factory=list)
     config: SoulSpec.Config | None = None
     package_manifest: dict[str, Any] = field(default_factory=dict, repr=False)
+    package_files: dict[str, bytes] = field(default_factory=dict, repr=False)
 
     # ─── Nested dataclasses ──────────────────────────────────────────────
 
@@ -85,46 +257,14 @@ class SoulSpec:
         The older YAML format remains available through ``from_yaml``.
         """
         root = Path(directory).resolve()
-        manifest = json.loads((root / "soul.json").read_text(encoding="utf-8"))
+        manifest = json.loads(_package_file(root, "soul.json").read_text(encoding="utf-8"))
         if not isinstance(manifest, dict):
             raise ValueError("soul.json must contain a JSON object")
-        required = (
-            "specVersion",
-            "name",
-            "displayName",
-            "version",
-            "description",
-            "author",
-            "license",
-            "tags",
-            "category",
-            "files",
-        )
-        missing = [key for key in required if key not in manifest]
-        if missing:
-            raise ValueError(f"soul.json missing required fields: {', '.join(missing)}")
-        if manifest["specVersion"] not in {"0.3", "0.4", "0.5"}:
-            raise ValueError("unsupported Soul Spec version")
-        for key in ("name", "displayName", "version", "description", "license", "category"):
-            if not isinstance(manifest[key], str) or not manifest[key].strip():
-                raise ValueError(f"{key} must be a non-empty string")
-        if len(manifest["description"]) > 160:
-            raise ValueError("description must be at most 160 characters")
-        if not isinstance(manifest["author"], dict) or not manifest["author"].get("name"):
-            raise ValueError("author.name is required")
-        if (
-            not isinstance(manifest["tags"], list)
-            or len(manifest["tags"]) > 10
-            or any(not isinstance(tag, str) for tag in manifest["tags"])
-        ):
-            raise ValueError("tags must be a list of at most ten strings")
-        files = manifest["files"]
-        if not isinstance(files, dict) or not isinstance(files.get("soul"), str):
-            raise ValueError("files.soul must name SOUL.md")
-        soul_path = (root / files["soul"]).resolve()
-        if not soul_path.is_relative_to(root) or soul_path.name != "SOUL.md":
-            raise ValueError("SOUL.md must stay inside the package")
-        soul_text = soul_path.read_text(encoding="utf-8")
+        references = _validate_manifest(manifest)
+        package_files = {}
+        for relative in references.values():
+            package_files[relative] = _package_file(root, relative).read_bytes()
+        soul_text = package_files[manifest["files"]["soul"]].decode("utf-8")
         if not soul_text.strip():
             raise ValueError("SOUL.md is empty")
         return cls(
@@ -136,39 +276,54 @@ class SoulSpec:
                 system_prompt=soul_text,
             ),
             package_manifest=manifest,
+            package_files=package_files,
         )
 
     def write_package(
         self,
         directory: str | Path,
         *,
-        author: str,
-        license: str = "MIT",
-        category: str = "general",
+        author: str | None = None,
+        license: str | None = None,
+        category: str | None = None,
         tags: list[str] | None = None,
     ) -> None:
         """Export the runtime persona as a minimal Soul Spec v0.5 package."""
         if not self.persona or not self.persona.system_prompt.strip():
             raise ValueError("a non-empty persona system prompt is required")
-        root = Path(directory)
-        root.mkdir(parents=True, exist_ok=True)
+        root = Path(directory).resolve()
+        source = deepcopy(self.package_manifest)
+        author_info = deepcopy(source.get("author", {}))
+        if author is not None:
+            author_info["name"] = author
         manifest = {
-            **self.package_manifest,
+            **source,
             "specVersion": "0.5",
             "name": self.name,
             "displayName": self.persona.name or self.name,
             "version": self.version,
             "description": self.persona.description[:160],
-            "author": {"name": author},
-            "license": license,
-            "tags": tags or [],
-            "category": category,
-            "files": {"soul": "SOUL.md"},
+            "author": author_info,
+            "license": license if license is not None else source.get("license", "MIT"),
+            "tags": tags if tags is not None else source.get("tags", []),
+            "category": category if category is not None else source.get("category", "general"),
+            "files": source.get("files", {"soul": "SOUL.md"}),
         }
-        (root / "soul.json").write_text(
+        references = _validate_manifest(manifest)
+        output_files = dict(self.package_files)
+        output_files[manifest["files"]["soul"]] = self.persona.system_prompt.encode("utf-8")
+        for relative in references.values():
+            if relative not in output_files:
+                raise ValueError(f"missing package file: {relative}")
+            _package_file(root, relative)
+        root.mkdir(parents=True, exist_ok=True)
+        for relative in references.values():
+            destination = _package_file(root, relative)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(output_files[relative])
+        _package_file(root, "soul.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
-        (root / "SOUL.md").write_text(self.persona.system_prompt, encoding="utf-8")
 
     @classmethod
     def from_yaml(cls, yaml_str: str) -> SoulSpec:

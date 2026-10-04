@@ -10,11 +10,13 @@ AgentHarness has built a production system (TUI, gateway, API, multi-agent, sche
 
 | Gap | Implemented in the codebase | Research still needed |
 |-----|-----------------------------|-----------------------|
-| Reversible eviction | Byte-preserving archive, transactional eviction, text and vector recall, session cleanup | LoCoMo evaluation, adaptive compression, token-efficiency measurements |
-| Identity propagation | Belief storage, keyed provenance, quarantine on cross-agent ingestion | Shared-bus integration, drift detection over time, adversarial evaluation |
+| Reversible eviction | Byte-preserving archive, transactional eviction, text and vector recall, session cleanup; LoCoMo evidence-retrieval baseline | Adaptive compression, answer-quality and token-efficiency measurements |
+| Identity propagation | Belief storage, keyed provenance, quarantine, recorded drift transitions, labeled sequence evaluator | Shared-bus integration and large adversarial evaluation |
 | Persona memory | Separate factual and persona records, emotion-conditioned retrieval and prompt assembly | Learned persona model, human evaluation, longitudinal consistency |
-| RL memory control | Six action definitions and reward functions | Policy training, GRPO experiments, benchmark comparison |
-| Soul Spec | Internal YAML model, merge rules, conformance checks, package import/export and registry loading | Full v0.5 conformance, round-trip preservation of every package field, cross-framework validation |
+| RL memory control | Six actions, reward functions, finite-action group-relative training and held-out evaluation | Joint LLM training and benchmark comparison |
+| Soul Spec | Internal YAML model, merge rules, v0.5 package validation, declared-file round trip and registry loading | Live cross-framework validation and official conformance certification |
+
+Measured results and reproduction commands are in [research-evaluation.md](research-evaluation.md).
 
 **Core Insight**: The existing `llm_usage` + `context_chunks` + `memories` infrastructure provides the foundation for all 5 gaps. What's missing is the *novel* contribution that makes each gap publishable.
 

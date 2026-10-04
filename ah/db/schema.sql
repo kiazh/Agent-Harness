@@ -304,6 +304,21 @@ CREATE TABLE IF NOT EXISTS agent_beliefs (
 
 CREATE INDEX IF NOT EXISTS idx_agent_beliefs_updated ON agent_beliefs(updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS agent_belief_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id TEXT NOT NULL,
+    from_version INT NOT NULL,
+    to_version INT NOT NULL,
+    before_belief JSONB,
+    proposed_belief JSONB NOT NULL,
+    drift_score DOUBLE PRECISION NOT NULL,
+    causal_memory_ids UUID[] NOT NULL DEFAULT '{}',
+    contained BOOLEAN NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_belief_history_agent
+    ON agent_belief_history(agent_id, created_at DESC);
+
 -- ─── Memory Provenance (Gap 2: Identity Propagation Defense) ───────────────
 
 CREATE TABLE IF NOT EXISTS memory_provenance (

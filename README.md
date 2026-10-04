@@ -186,7 +186,7 @@ agent-harness/
 │   │   └── session.py       # SessionManager (with TTLCache)
 │   ├── db/
 │   │   ├── connection.py    # asyncpg pool
-│   │   └── schema.sql       # PostgreSQL schema (5 tables)
+│   │   └── schema.sql       # PostgreSQL schema and research tables
 │   ├── memory/
 │   │   ├── approval.py      # MemoryApproval (human-in-the-loop approval gate)
 │   │   ├── consolidator.py  # MemoryConsolidator (LLM extraction → scoring → dedup → write)
@@ -213,7 +213,7 @@ agent-harness/
 │       ├── memory.py        # remember, recall
 │       ├── rag.py           # index_document, search_documents
 │       ├── registry.py      # Re-export for backward compat
-│       └── terminal.py      # terminal (allowlist + SSRF protection)
+│       └── terminal.py      # terminal (explicit sandbox opt-in)
 ├── ui/                     # TypeScript terminal UI (pi-tui): src/ app, gateway client, widgets; test/
 ├── communications/         # Design notes, incl. the UI ↔ gateway protocol
 ├── tests/                  # Python test suite (pytest)
@@ -225,7 +225,7 @@ agent-harness/
 
 ## Security & Reliability
 
-- **No shell injection**: `terminal` tool uses `shell=False` with command allowlist
+- **Terminal sandbox**: disabled by default; Docker sandbox is an explicit opt-in
 - **No path traversal**: File tools validate paths against base directory
 - **No SSRF**: Web tools validate URLs against private IP ranges
 - **Rate limiting**: `AsyncTokenBucket` on all LLM calls
@@ -235,6 +235,10 @@ agent-harness/
 - **Streaming**: SSE streaming for real-time output
 
 ## Development
+
+Research reproduction commands, LoCoMo evidence-retrieval results, memory
+policy training, identity-drift scenarios, and Soul Spec package checks are
+documented in [research evaluation](docs/research-evaluation.md).
 
 ```bash
 # Python: tests (DB-backed tests use AGENT_HARNESS_TEST_DATABASE_URL, never DATABASE_URL)
