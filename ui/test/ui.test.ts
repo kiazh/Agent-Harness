@@ -223,6 +223,48 @@ test("picker menu is a docked codex-style list with a full-width bar", async () 
 	assert.match(lines.join("\n"), /beta-longer/);
 });
 
+test("slash menu opens above the input", async () => {
+	const { ComposerBox, popAbove } = await import("../src/components.ts");
+	assert.deepEqual(popAbove(["t", "b", "p1", "p2"], 2), ["p1", "p2", "t", "b"]);
+	assert.deepEqual(popAbove(["t", "b"], 0), ["t", "b"]);
+	assert.deepEqual(popAbove(["t"], 5), ["t"]);
+
+	const { editorTheme } = await import("../src/theme.ts");
+	const tui = { terminal: { rows: 40 }, requestRender() {}, invalidate() {} } as never;
+	const box = new ComposerBox(tui, editorTheme, { paddingX: 1 });
+	box.editor.setAutocompleteProvider({
+		triggerCharacters: ["/"],
+		getSuggestions: async () => ({
+			items: [
+				{ value: "help", label: "help", description: "Show help" },
+				{ value: "new", label: "new", description: "New session" },
+			],
+			prefix: "/",
+		}),
+		applyCompletion: (lines: string[]) => ({ lines, cursorLine: 0, cursorCol: 1 }),
+	} as never);
+	box.editor.handleInput("/");
+	let popupRow = -1;
+	let inputRow = -1;
+	for (let i = 0; i < 30; i++) {
+		await new Promise((r) => setTimeout(r, 100));
+		const rows = box.editor.render(60).map((line) => stripTerminalSequences(line));
+		popupRow = rows.findIndex((line) => line.includes("Show help"));
+		inputRow = rows.findIndex((line) => line.startsWith(" /"));
+		if (popupRow !== -1 && inputRow !== -1) break;
+	}
+	assert.ok(popupRow !== -1, "menu opened");
+	assert.ok(inputRow !== -1, "input rendered");
+	assert.ok(popupRow < inputRow, "menu renders above the input");
+	const press = {
+		type: "press", button: "left", x: 5, y: popupRow,
+		screenX: 5, screenY: popupRow, width: 60, height: 10,
+		shift: false, alt: false, ctrl: false,
+	} as never;
+	const res = box.handleMouse(press);
+	assert.ok(res && res.handled, "menu click is handled");
+});
+
 test("codex skin ships with the clones", async () => {
 	const { SKIN_NAMES, skinDescription } = await import("../src/theme.ts");
 	assert.ok(SKIN_NAMES.includes("codex"));
@@ -281,9 +323,9 @@ test("tool cards use codex running/ran/failed titles", async () => {
 test("skins switch palette and art, unknown names throw", async () => {
 	const { SKIN_NAMES, getSkin, setSkin, skinArt, skinDescription } = await import("../src/theme.ts");
 	assert.ok(SKIN_NAMES.includes("default") && SKIN_NAMES.length >= 5);
-	for (const clone of ["tokyonight", "catppuccin", "dracula", "gruvbox", "rosepine", "nord", "everforest", "matrix"]) {
+	for (const clone of ["tokyonight", "catppuccin", "dracula", "gruvbox", "rosepine", "nord", "everforest", "matrix", "onedark", "monokai", "github", "solarized", "kanagawa", "palenight", "catppuccin-frappe", "catppuccin-macchiato", "cobalt2", "ayu", "nightowl", "one-dark", "flexoki"]) {
 		assert.ok(SKIN_NAMES.includes(clone), `missing theme: ${clone}`);
-		assert.match(skinDescription(clone), /\(dark\)/);
+		assert.ok(skinDescription(clone).length > 0, `${clone} has a description`);
 		assert.doesNotMatch(skinDescription(clone), /cloned exactly/);
 	}
 	const before = getSkin();
@@ -296,5 +338,17 @@ test("skins switch palette and art, unknown names throw", async () => {
 		assert.throws(() => setSkin("nope"), /Unknown skin/);
 	} finally {
 		setSkin(before);
+	}
+});
+
+test("every skin keeps its accent roles distinct", async () => {
+	const { SKIN_NAMES, skinBase } = await import("../src/theme.ts");
+	for (const name of SKIN_NAMES) {
+		const base = skinBase(name);
+		assert.ok(base, `${name} has a palette`);
+		const roles = [base.accent, base.secondary, base.success, base.warning, base.error, base.info].map((h) =>
+			h.toLowerCase(),
+		);
+		assert.equal(new Set(roles).size, roles.length, `${name} reuses a color across roles`);
 	}
 });

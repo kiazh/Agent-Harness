@@ -220,6 +220,22 @@ export function header(version: string, info?: SessionHeaderInfo): Component {
 	};
 }
 
+/** Private Editor layout fields the popup flip needs (read-only use). */
+interface EditorPopupLayout {
+	renderedAutocompleteHeight: number;
+}
+
+/**
+ * Move trailing popup lines above the input block, Codex style. The Editor
+ * renders `[top, text, bottom, ...popup]`; the composer shows
+ * `[...popup, top, text, bottom]` so the `/` menu opens upward into the
+ * transcript area instead of pushing past the footer.
+ */
+export function popAbove(lines: string[], popupHeight: number): string[] {
+	if (!(popupHeight > 0) || popupHeight >= lines.length) return lines;
+	return [...lines.slice(lines.length - popupHeight), ...lines.slice(0, lines.length - popupHeight)];
+}
+
 /**
  * Codex-style composer input: the pi-tui Editor with its rules replaced by
  * filled rows, so the input reads as one solid block instead of ruled lines.
@@ -234,6 +250,24 @@ export class ComposerInput extends Editor {
 	override renderBottomBorder(_width: number, hiddenLineCount: number): string {
 		if (hiddenLineCount > 0) return theme.dim(`↓ ${hiddenLineCount} more`);
 		return "";
+	}
+
+	override render(width: number): string[] {
+		const lines = super.render(width);
+		const { renderedAutocompleteHeight: popupHeight } = this as unknown as EditorPopupLayout;
+		return popAbove(lines, popupHeight);
+	}
+
+	override handleMouse(event: TuiMouseEvent): ReturnType<Editor["handleMouse"]> {
+		const { renderedAutocompleteHeight: popupHeight } = this as unknown as EditorPopupLayout;
+		if (!(popupHeight > 0)) return super.handleMouse(event);
+		// The popup is drawn above the input: map rows back to the
+		// Editor-native coordinates before delegating.
+		const total = this.render(event.width).length;
+		const textBlock = total - popupHeight;
+		if (textBlock <= 0) return super.handleMouse(event);
+		const y = event.y < popupHeight ? event.y + textBlock : event.y - popupHeight;
+		return super.handleMouse({ ...event, y });
 	}
 }
 

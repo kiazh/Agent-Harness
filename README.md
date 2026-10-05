@@ -79,12 +79,12 @@ ah serve --host 0.0.0.0 --port 8000
 
 ### Streaming, Cards, and Skins
 
-The CLI look is a full port of [OpenAI Codex](https://github.com/openai/codex): a one-line `>_` brand header with a dim directory line, a filled borderless composer block with a left accent bar and a dim `Ask AgentHarness to do anything` placeholder on its second row, accent-filled selection rows, braille spinner, and two dim footer lines (`model · dir · branch · tokens`, then `? for shortcuts · / for commands`). Restrained default-foreground text, bold headers, green/red/magenta semantics, `·`-separated segments, exec-style tool titles (`Running`/`Ran`/`Failed`), elapsed `Thinking… Ns` indicator, grouped `/help`, double-Esc to edit the previous message, `Ctrl+L` to clear, and Codex command parity (`/init`, `/review`, `/compact`, `/clear` starts a new chat). Skins recolor the Codex chrome: eleven tuned dark palettes plus house skins. The fullscreen alternate buffer keeps the composer and footer docked to the bottom rows while the transcript scrolls in the flexible area above (Codex layout, follow-end scrolling).
+The CLI look is a full port of [OpenAI Codex](https://github.com/openai/codex): a one-line `>_` brand header with a dim directory line, a filled borderless composer block with a left accent bar and a dim `Ask AgentHarness to do anything` placeholder on its second row, accent-filled selection rows, braille spinner, and two dim footer lines (`model · dir · branch · tokens`, then `? for shortcuts · / for commands`). Restrained default-foreground text, bold headers, green/red/magenta semantics, `·`-separated segments, exec-style tool titles (`Running`/`Ran`/`Failed`), elapsed `Thinking… Ns` indicator, grouped `/help`, double-Esc to edit the previous message, `Ctrl+L` to clear, and Codex command parity (`/init`, `/review`, `/compact`, `/clear` starts a new chat). Skins recolor the Codex chrome: tuned dark palettes plus house skins. The fullscreen alternate buffer keeps the composer and footer docked to the bottom rows while the transcript scrolls in the flexible area above (Codex layout, follow-end scrolling). The `/` autocomplete menu opens upward above the input, with mouse clicks routed to the flipped rows.
 
 - **Streaming Markdown** — token-by-token assistant output rendered in a contrasting card, with tool-call cards showing progress. Tool output gets Codex-style diff coloring: `+` lines green, `-` lines red, `@@` hunks info.
 - **Codex status line** — the footer reads `model · dir · branch · tokens · status` with per-item accent colors (model cyan-ish, paths green, branch magenta), no rules anywhere.
 - **Key hints** — `Enter send · Shift+Enter newline · Esc stop · /help commands`, with bold key labels everywhere hints appear.
-- **Eleven skins** — `/theme` switches the full palette live, no restart. opencode's own theme is the default, plus `tokyonight`, `catppuccin`, `dracula`, `gruvbox`, `rosepine`, `nord`, `everforest`, and `matrix` (dark variants) — a `codex` skin done in Codex's restrained chrome with magenta brand accents — and an accessible `mono` house skin. Every palette is tuned so accents stay distinct (no two roles sharing one color). Saved via `config.theme`, so your skin survives restarts.
+- **Twenty-four skins** — `/theme` switches the full palette live, no restart. opencode's own theme is the default, plus `tokyonight`, `catppuccin`, `catppuccin-frappe`, `catppuccin-macchiato`, `dracula`, `gruvbox`, `rosepine`, `nord`, `everforest`, `matrix`, `onedark`, `monokai`, `github`, `solarized`, `kanagawa`, `palenight`, `cobalt2`, `ayu`, `nightowl`, `one-dark`, and `flexoki` (dark variants) — a `codex` skin done in Codex's restrained chrome with magenta brand accents — and an accessible `mono` house skin. Every palette is tuned so accents stay distinct (no two roles sharing one color). Saved via `config.theme`, so your skin survives restarts.
 - **Menus** — borderless bottom-docked sheets (Codex style) with full-width accent selection bars and `enter select · esc back` hints: sessions, models, themes, keys, recall, confirmations.
 - **Keyboard** — Enter sends, Shift+Enter newline, Esc stops a reply, Tab completes, Ctrl+C exits.
 
@@ -300,7 +300,7 @@ agent-harness/
 │   ├── research/          # LoCoMo, workflow trial, memory-policy training
 │   └── cli/               # Typer CLI (chat, setup, doctor, init, serve) + UI launcher
 ├── ui/                    # TypeScript terminal UI
-│   ├── src/               # pi-tui app (32 slash commands, 11 skins)
+│   ├── src/               # pi-tui app (32 slash commands, 24 skins)
 │   └── test/              # node:test suites
 ├── tests/                 # Python test suite
 ├── skills/                # SKILL.md skill definitions
