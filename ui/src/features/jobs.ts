@@ -6,8 +6,25 @@ import { splitSub } from "../commands.ts";
 import { options, requireArgs, requireSession, type Command, type FeatureHost } from "./types.ts";
 
 async function resolveJobId(host: FeatureHost, sessionId: string, idOrPrefix: string): Promise<string> {
-	const { jobs } = await host.request<{ jobs: JobInfo[] }>("jobs.list", { sessionId });
-	return resolvePrefix(idOrPrefix, jobs.map((j) => j.id), "job");
+	// Normalize braced/URN UUID forms like sessions (Python uuid.UUID accepts them).
+	let wanted = idOrPrefix.trim().toLowerCase();
+	if (wanted.startsWith("urn:uuid:")) wanted = wanted.slice("urn:uuid:".length);
+	if (wanted.startsWith("{") && wanted.endsWith("}")) wanted = wanted.slice(1, -1).trim();
+	if (/^[0-9a-f-]{36}$/.test(wanted)) return wanted;
+	// Paginate through all jobs: a prefix must resolve even when the
+	// matching job is older than the most recent page.
+	let cursor: string | undefined;
+	const ids: string[] = [];
+	for (;;) {
+		const { jobs, nextCursor } = await host.request<{ jobs: JobInfo[] } & { nextCursor?: string }>(
+			"jobs.list",
+			{ sessionId, limit: 500, ...(cursor ? { cursor } : {}) },
+		);
+		ids.push(...jobs.map((j) => j.id));
+		if (!nextCursor) break;
+		cursor = nextCursor;
+	}
+	return resolvePrefix(wanted, ids, "job");
 }
 
 function parseSeconds(value: string): number {

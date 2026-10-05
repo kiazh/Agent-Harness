@@ -33,8 +33,9 @@ def _int(params: dict[str, Any], key: str, default: int, lo: int, hi: int) -> in
 
 
 def _uuid(params: dict[str, Any], key: str) -> uuid.UUID:
+    """Parse a UUID param, accepting canonical, braced, and URN forms."""
     try:
-        return uuid.UUID(str(params.get(key)))
+        return uuid.UUID(str(params.get(key)).strip())
     except (ValueError, TypeError):
         raise RpcError(INVALID_PARAMS, f"{key} must be a UUID") from None
 

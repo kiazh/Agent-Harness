@@ -36,44 +36,50 @@ class ImportanceScorer:
     def score(self, memory: MemoryEntry) -> float:
         """Return importance score in [0, 1].
 
-        Combines:
-        - Category base importance (dominant factor)
-        - Explicit importance (user said "remember this")
-        - Recency boost (decays over 30 days)
-        - Access frequency boost (more accesses = more important)
+        Weighted model (fixed weights, explicit bonus preserves explicit wins):
+            base = 0.5 * category + 0.3 * recency + 0.2 * frequency
+            if explicitly_important: base = 0.5 * base + 0.5 * 1.0
+        Clamped to [0, 1]. For identical inputs an explicitly-important
+        memory always scores higher (base < 1.0 implies 0.5*base+0.5 > base).
         """
-        scores: list[float] = []
-
-        # Category-based base importance
         category_weight = CATEGORY_WEIGHTS.get(memory.category, 0.5)
-        scores.append(category_weight)
-
-        # User explicit importance (if user said "remember this")
-        if memory.explicitly_important:
-            scores.append(1.0)
 
         # Recency boost (decays over RECENCY_WINDOW_DAYS)
-        days_old = int(age_days(memory.created_at))
+        days_old = age_days(memory.created_at)
         recency_score = max(0.0, 1.0 - days_old / RECENCY_WINDOW_DAYS)
-        scores.append(recency_score * 0.3)
 
         # Access frequency boost
         freq_score = min(1.0, memory.access_count / FREQUENCY_NORMALIZATION)
-        scores.append(freq_score * 0.2)
 
-        return min(1.0, max(0.0, sum(scores) / len(scores)))
+        base = 0.5 * category_weight + 0.3 * recency_score + 0.2 * freq_score
+        if memory.explicitly_important:
+            base = 0.5 * base + 0.5 * 1.0
+
+        return min(1.0, max(0.0, base))
 
     def score_with_breakdown(self, memory: MemoryEntry) -> dict[str, float]:
         """Return importance score with factor breakdown for debugging."""
         category_weight = CATEGORY_WEIGHTS.get(memory.category, 0.5)
-        days_old = int(age_days(memory.created_at))
+        days_old = age_days(memory.created_at)
         recency_score = max(0.0, 1.0 - days_old / RECENCY_WINDOW_DAYS)
         freq_score = min(1.0, memory.access_count / FREQUENCY_NORMALIZATION)
 
+        cat_c = 0.5 * category_weight
+        rec_c = 0.3 * recency_score
+        freq_c = 0.2 * freq_score
+        if memory.explicitly_important:
+            explicit_c = 0.5 * 1.0
+            # Blend factor: base halved, so halve the other components too.
+            cat_c *= 0.5
+            rec_c *= 0.5
+            freq_c *= 0.5
+        else:
+            explicit_c = 0.0
+
         return {
-            "category": category_weight,
-            "explicit": 1.0 if memory.explicitly_important else 0.0,
-            "recency": recency_score * 0.3,
-            "frequency": freq_score * 0.2,
+            "category": cat_c,
+            "explicit": explicit_c,
+            "recency": rec_c,
+            "frequency": freq_c,
             "total": self.score(memory),
         }

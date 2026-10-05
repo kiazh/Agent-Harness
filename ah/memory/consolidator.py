@@ -28,9 +28,21 @@ DEFAULT_DEDUP_THRESHOLD = 0.85
 MAX_CHUNKS_PER_CONSOLIDATION = 100
 
 
+def _cosine_similarity(a: list[float] | None, b: list[float] | None) -> float:
+    """Cosine similarity for intra-batch dedup (0.0 when either is missing)."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
+
+
 def _normalize(text: str) -> str:
     """Normalize memory content for duplicate detection."""
-    return " ".join(str(text).lower().split()).strip(" .!?")
+    return " ".join(str(text).lower().split()).strip(" .!?,;:()\"'")
 
 
 # System prompt for memory extraction
@@ -125,8 +137,34 @@ class MemoryConsolidator:
             # Use search_by_embedding for each candidate — this leverages
             # the HNSW index for O(log n) similarity search per candidate,
             # avoiding the O(n*m) nested loop over all existing memories.
+            # Intra-batch seen tracking prevents duplicates within this batch.
+            seen_norms: set[str] = {_normalize(m.content) for m in existing_memories}
+            seen_embeddings: list[list[float]] = []
             for candidate in candidates_with_embedding:
                 is_duplicate = False
+                key = _normalize(candidate.content)
+                if not key:
+                    logger.warning("Skipping empty normalized memory content (batch dedup)")
+                    continue
+                if key in seen_norms:
+                    match = next(
+                        (m for m in existing_memories if _normalize(m.content) == key),
+                        None,
+                    )
+                    if match is not None and getattr(match, "id", None) is not None:
+                        try:
+                            await self.store.update_access(match.id)
+                        except Exception:
+                            pass
+                    is_duplicate = True
+                else:
+                    # Intra-batch embedding similarity against already-accepted batch items
+                    for prev_emb in seen_embeddings:
+                        if _cosine_similarity(candidate.embedding, prev_emb) >= self.dedup_threshold:
+                            is_duplicate = True
+                            break
+                if is_duplicate:
+                    continue
                 # Use the store's vector search with a tight threshold
                 similar = await self.store.search_by_embedding(
                     embedding=candidate.embedding,
@@ -134,11 +172,14 @@ class MemoryConsolidator:
                     limit=5,
                 )
                 for existing, similarity in similar:
-                    if similarity > self.dedup_threshold:
+                    if similarity >= self.dedup_threshold:
                         await self.store.update_access(existing.id)
                         is_duplicate = True
                         break
                 if not is_duplicate:
+                    seen_norms.add(key)
+                    if candidate.embedding:
+                        seen_embeddings.append(candidate.embedding)
                     new_memories.append(candidate)
 
         # Candidates extracted by the LLM carry no embeddings, so the vector
@@ -147,7 +188,10 @@ class MemoryConsolidator:
         seen = {_normalize(m.content) for m in existing_memories}
         for candidate in candidates_without_embedding:
             key = _normalize(candidate.content)
-            if not key or key in seen:
+            if not key:
+                logger.warning("Skipping empty normalized memory content")
+                continue
+            if key in seen:
                 match = next((m for m in existing_memories if _normalize(m.content) == key), None)
                 if match is not None and getattr(match, "id", None) is not None:
                     try:
@@ -211,10 +255,60 @@ class MemoryConsolidator:
         for candidate in candidates:
             candidate.importance = self.scorer.score(candidate)
 
-        written: list[MemoryEntry] = []
-        for memory in candidates:
-            if memory.importance < 0.2:
+        # Dedup (same policy as consolidate_session): normalized-content check
+        # against stored memories + within this batch, plus vector check when
+        # embeddings are present.
+        eligible = [c for c in candidates if c.importance >= 0.2]
+        if not eligible:
+            return []
+        existing_memories = await self.store.search(agent_id=agent_id, limit=1000)
+        seen = {_normalize(m.content) for m in existing_memories}
+        seen_embeddings: list[list[float]] = []
+        new_memories: list[MemoryEntry] = []
+        for memory in eligible:
+            key = _normalize(memory.content)
+            if not key:
+                logger.warning("Skipping empty normalized memory content (from_text)")
                 continue
+            if key in seen:
+                match = next(
+                    (m for m in existing_memories if _normalize(m.content) == key), None
+                )
+                if match is not None and getattr(match, "id", None) is not None:
+                    try:
+                        await self.store.update_access(match.id)
+                    except Exception:
+                        pass
+                continue
+            is_duplicate = False
+            if memory.embedding:
+                for prev_emb in seen_embeddings:
+                    if _cosine_similarity(memory.embedding, prev_emb) >= self.dedup_threshold:
+                        is_duplicate = True
+                        break
+                if not is_duplicate:
+                    try:
+                        similar = await self.store.search_by_embedding(
+                            embedding=memory.embedding,
+                            agent_id=agent_id,
+                            limit=5,
+                        )
+                        for existing, similarity in similar:
+                            if similarity >= self.dedup_threshold:
+                                await self.store.update_access(existing.id)
+                                is_duplicate = True
+                                break
+                    except Exception:
+                        pass
+            if is_duplicate:
+                continue
+            seen.add(key)
+            if memory.embedding:
+                seen_embeddings.append(memory.embedding)
+            new_memories.append(memory)
+
+        written: list[MemoryEntry] = []
+        for memory in new_memories:
             try:
                 entry = await self.store.add(
                     session_id=session_id,
@@ -309,6 +403,10 @@ class MemoryConsolidator:
                         category=item.get("category", "fact"),
                         importance=float(item.get("importance", 0.5)),
                         explicitly_important=bool(item.get("explicitly_important", False)),
+                        # LLM extraction provides no embeddings; embedding stays None
+                        # so the vector dedup path is skipped for these candidates
+                        # (normalized-content dedup applies instead).
+                        embedding=None,
                     )
                     memories.append(memory)
                 except (KeyError, ValueError) as e:

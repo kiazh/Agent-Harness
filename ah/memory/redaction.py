@@ -47,6 +47,19 @@ class RedactionResult:
         return len(self.redactions) > 0
 
 
+def _luhn_valid(digits: str) -> bool:
+    """Return True if *digits* passes the Luhn checksum (CC validation)."""
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        d = ord(ch) - 48
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
+
+
 # ─── Regex patterns for common secret formats ───────────────────────────────
 
 _PATTERNS: list[RedactionPattern] = [
@@ -111,6 +124,12 @@ _PATTERNS: list[RedactionPattern] = [
         ),
         replacement=r"\1=[REDACTED_AWS_SECRET]",
     ),
+    # Bare 40-char base64 AWS-style secret (no key name prefix)
+    RedactionPattern(
+        name="aws_secret_key_bare",
+        pattern=re.compile(r"\b[a-zA-Z0-9/+=]{40}\b"),
+        replacement="[REDACTED_AWS_SECRET]",
+    ),
     # GitHub tokens
     RedactionPattern(
         name="github_token",
@@ -121,6 +140,21 @@ _PATTERNS: list[RedactionPattern] = [
         name="github_oauth_token",
         pattern=re.compile(r"gho_[a-zA-Z0-9]{36}"),
         replacement="[REDACTED_GITHUB_OAUTH_TOKEN]",
+    ),
+    RedactionPattern(
+        name="github_pat",
+        pattern=re.compile(r"github_pat_[a-zA-Z0-9_]{22,255}"),
+        replacement="[REDACTED_GITHUB_TOKEN]",
+    ),
+    RedactionPattern(
+        name="github_app_token",
+        pattern=re.compile(r"ghs_[a-zA-Z0-9]{36}"),
+        replacement="[REDACTED_GITHUB_TOKEN]",
+    ),
+    RedactionPattern(
+        name="github_user_token",
+        pattern=re.compile(r"ghu_[a-zA-Z0-9]{36}"),
+        replacement="[REDACTED_GITHUB_TOKEN]",
     ),
     # Slack tokens
     RedactionPattern(
@@ -147,6 +181,12 @@ _PATTERNS: list[RedactionPattern] = [
     RedactionPattern(
         name="ssn",
         pattern=re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
+        replacement="[REDACTED_SSN]",
+    ),
+    # Contiguous 9-digit SSN (word boundaries to avoid matching longer numbers)
+    RedactionPattern(
+        name="ssn_contiguous",
+        pattern=re.compile(r"\b\d{9}\b"),
         replacement="[REDACTED_SSN]",
     ),
     # JWT tokens
@@ -190,6 +230,19 @@ class SecretRedactor:
         redactions: list[str] = []
 
         for rp in self._patterns:
+            if rp.name == "credit_card":
+                # Only redact digit runs that pass the Luhn checksum to reduce FPs.
+                def _cc_repl(m: re.Match[str]) -> str:
+                    digits = re.sub(r"\D", "", m.group(0))
+                    if 13 <= len(digits) <= 19 and _luhn_valid(digits):
+                        return rp.replacement
+                    return m.group(0)
+
+                new_text = rp.pattern.sub(_cc_repl, redacted)
+                if new_text != redacted:
+                    redactions.append(rp.name)
+                    redacted = new_text
+                continue
             if rp.pattern.search(redacted):
                 redacted = rp.pattern.sub(rp.replacement, redacted)
                 redactions.append(rp.name)
@@ -206,23 +259,64 @@ class SecretRedactor:
         return RedactionResult(text=str(redacted_dict), redactions=all_redactions)
 
     def _redact_mapping(self, data: dict) -> tuple[dict, list[str]]:
-        """Return ``(redacted_dict, redaction_names)`` for a mapping."""
+        """Return ``(redacted_dict, redaction_names)`` for a mapping.
+
+        Nested dicts stay dicts; lists/tuples/sets/bytes are redacted
+        recursively with container types preserved (tuples/sets rebuilt).
+        """
         redacted_dict: dict = {}
         all_redactions: list[str] = []
 
         for key, value in data.items():
-            if isinstance(value, str):
-                result = self.redact(value)
-                redacted_dict[key] = result.text
-                all_redactions.extend(result.redactions)
-            elif isinstance(value, dict):
-                nested, nested_redactions = self._redact_mapping(value)
-                redacted_dict[key] = nested
-                all_redactions.extend(nested_redactions)
-            else:
-                redacted_dict[key] = value
+            redacted_value, names = self._redact_value(value)
+            redacted_dict[key] = redacted_value
+            all_redactions.extend(names)
 
         return redacted_dict, all_redactions
+
+    def _redact_value(self, value: object) -> tuple[object, list[str]]:
+        """Redact a single value, preserving container types."""
+        if isinstance(value, str):
+            result = self.redact(value)
+            return result.text, result.redactions
+        if isinstance(value, dict):
+            return self._redact_mapping(value)
+        if isinstance(value, list):
+            out: list[object] = []
+            names: list[str] = []
+            for item in value:
+                redacted_item, item_names = self._redact_value(item)
+                out.append(redacted_item)
+                names.extend(item_names)
+            return out, names
+        if isinstance(value, tuple):
+            items: list[object] = []
+            names = []
+            for item in value:
+                redacted_item, item_names = self._redact_value(item)
+                items.append(redacted_item)
+                names.extend(item_names)
+            return tuple(items), names
+        if isinstance(value, set):
+            items_set: set[object] = set()
+            names = []
+            for item in value:
+                redacted_item, item_names = self._redact_value(item)
+                try:
+                    items_set.add(redacted_item)  # type: ignore[arg-type]
+                except TypeError:
+                    # Unhashable after redaction (e.g. dict) — fall back to frozenset repr
+                    items_set.add(str(redacted_item))
+                names.extend(item_names)
+            return items_set, names
+        if isinstance(value, bytes):
+            try:
+                text = value.decode("utf-8")
+            except UnicodeDecodeError:
+                return value, []
+            result = self.redact(text)
+            return result.text.encode("utf-8"), result.redactions
+        return value, []
 
     def has_secrets(self, text: str) -> bool:
         """Quick check if text contains any known secret patterns."""

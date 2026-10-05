@@ -102,7 +102,10 @@ class TestPromptAssemblerProperties:
         """Property: Token estimate for empty text is 0."""
         assembler = PromptAssembler()
         tokens = assembler._estimate_tokens(text)
-        assert tokens >= 0
+        if not text:
+            assert tokens == 0
+        else:
+            assert tokens >= 0
 
     @given(
         text1=st.text(min_size=1, max_size=1000),
@@ -222,7 +225,7 @@ class TestPromptAssemblerProperties:
             query=query,
         )
         prompt_tokens = assembler._estimate_tokens(prompt)
-        assert prompt_tokens <= max(budget, mandatory_tokens) + 20
+        assert prompt_tokens <= max(budget, mandatory_tokens) + 5
 
     @given(
         num_chunks=st.integers(min_value=0, max_value=20),
@@ -351,9 +354,8 @@ class TestToolRegistryProperties:
         assert "a" in schema["properties"]
         assert "b" in schema["properties"]
         assert schema["properties"]["a"]["type"] == "string"
-        # Note: _infer_schema maps int to "integer" but the type annotation
-        # may not always be preserved correctly in all Python versions
-        assert schema["properties"]["b"]["type"] in ("integer", "string")
+        assert schema["properties"]["b"]["type"] == "integer"
+        assert schema["properties"]["c"]["type"] == "number"
         assert "a" in schema["required"]
         assert "b" in schema["required"]
         assert "c" not in schema["required"]
@@ -515,10 +517,23 @@ class TestValidationProperties:
     )
     @settings(max_examples=100)
     def test_validate_messages_rejects_empty(self, messages):
-        """Property: Empty message list is rejected."""
+        """Property: Empty message list is rejected; non-empty valid passes."""
+        from hypothesis import assume
         if not messages:
             with pytest.raises(ValueError):
                 _validate_messages(messages)
+        else:
+            # Only assert no-raise for well-formed messages; invalid shapes
+            # must raise (hypothesis generates both).
+            valid = all(
+                isinstance(m, dict) and "role" in m and "content" in m
+                for m in messages
+            )
+            if valid:
+                _validate_messages(messages)
+            else:
+                with pytest.raises(ValueError):
+                    _validate_messages(messages)
 
     @given(
         messages=st.lists(

@@ -13,7 +13,8 @@ import msgpack
 
 from ah.core.models import ContextChunk
 from ah.core.provider import audit_log
-from ah.core.serialization import embedding_to_str
+from ah.core.serialization import embedding_to_str, str_to_embedding
+from ah.core.text_search import build_or_tsquery
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,9 @@ class HybridSearch:
         Runs both retrievals concurrently for lower latency.
         """
         k = top_k or self._final_top_k
-        retrieval_k = max(self._top_k, k * 2)
+        # Pipeline already passes k*2 for reranking headroom; do not multiply
+        # again here (would over-retrieve k*4).
+        retrieval_k = max(self._top_k, k)
 
         # Run dense and sparse retrieval concurrently
         dense_task = self._dense_search(session_id, query_embedding, retrieval_k, db)
@@ -78,13 +81,19 @@ class HybridSearch:
             dense_task, sparse_task, return_exceptions=True
         )
 
-        # Handle exceptions gracefully
+        # Handle exceptions gracefully: use whichever branch survived, but
+        # mark the result set degraded (scores kept, fusion continues).
+        degraded = False
         if isinstance(dense_results, Exception):
             logger.error("Dense search failed: %s", dense_results)
             dense_results = []
+            degraded = True
         if isinstance(sparse_results, Exception):
             logger.error("BM25 search failed: %s", sparse_results)
             sparse_results = []
+            degraded = True
+        if degraded:
+            logger.warning("Hybrid search degraded: one retrieval branch failed")
 
         # Fuse with RRF
         fused = self._rrf_fuse(dense_results, sparse_results)
@@ -100,6 +109,7 @@ class HybridSearch:
             sparse_results=len(sparse_results),
             fused_results=len(fused),
             top_k=k,
+            degraded=degraded,
         )
 
         return fused[:k]
@@ -164,22 +174,26 @@ class HybridSearch:
 
         Returns empty results if search_text column is not available.
         """
+        # Cap query terms via shared helper (max 16 OR terms) to bound FTS cost.
+        tsquery = build_or_tsquery(query_text)
+        if not tsquery:
+            return []
         # Try FTS first
         try:
             rows = await db.fetch(
                 """
                 SELECT id, session_id, agent_id, chunk_type, payload_msgpack,
                        token_count, embedding, created_at, accessed_at,
-                       ts_rank(to_tsvector('english', search_text), plainto_tsquery('english', $2)) AS rank
+                       ts_rank(to_tsvector('english', search_text), to_tsquery('english', $2)) AS rank
                 FROM context_chunks
                 WHERE session_id = $1
                   AND search_text IS NOT NULL
-                  AND to_tsvector('english', search_text) @@ plainto_tsquery('english', $2)
+                  AND to_tsvector('english', search_text) @@ to_tsquery('english', $2)
                 ORDER BY rank DESC
                 LIMIT $3
                 """,
                 session_id,
-                query_text,
+                tsquery,
                 top_k,
             )
         except asyncpg.UndefinedColumnError:
@@ -249,7 +263,7 @@ class HybridSearch:
         payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
         embedding = None
         if row["embedding"] is not None:
-            embedding = [float(x) for x in str(row["embedding"]).strip("[]").split(",")]
+            embedding = str_to_embedding(row["embedding"])
 
         return ContextChunk(
             id=row["id"],

@@ -67,16 +67,19 @@ class SoulSpecMerger:
         # Traits: union by name
         traits = SoulSpecMerger._merge_persona_traits(base.traits, override.traits)
 
-        # Voice: override wins for non-default fields
+        # Voice: override wins for explicitly set (non-None) fields, so an
+        # explicit "neutral"/"concise" can override a non-default base.
         voice = base.voice
         if override.voice:
             if voice is None:
                 voice = override.voice
             else:
                 voice = SoulSpec.Voice(
-                    tone=override.voice.tone if override.voice.tone != "neutral" else voice.tone,
+                    tone=override.voice.tone
+                    if override.voice.tone is not None
+                    else voice.tone,
                     style=override.voice.style
-                    if override.voice.style != "concise"
+                    if override.voice.style is not None
                     else voice.style,
                 )
 
@@ -178,14 +181,29 @@ class SoulSpecMerger:
     def _merge_permissions(
         base: SoulSpec.Permissions | None, override: SoulSpec.Permissions | None
     ) -> SoulSpec.Permissions | None:
-        """Intersection of allowed_tools; union of denied_tools."""
+        """Intersection of allowed_tools; union of denied_tools.
+
+        An empty allowlist means unrestricted, but only when BOTH sides are
+        empty. If exactly one side is empty (unrestricted) the other side
+        wins; otherwise intersect (most restrictive wins). This avoids the
+        widening bug where ``[] & anything == []`` (unrestricted).
+        """
         if base is None:
             return override
         if override is None:
             return base
 
-        # Intersection of allowed_tools (most restrictive)
-        allowed = sorted(set(base.allowed_tools) & set(override.allowed_tools))
+        base_allowed = base.allowed_tools or []
+        override_allowed = override.allowed_tools or []
+        if not base_allowed and override_allowed:
+            allowed = sorted(set(override_allowed))
+        elif base_allowed and not override_allowed:
+            allowed = sorted(set(base_allowed))
+        elif not base_allowed and not override_allowed:
+            allowed = []
+        else:
+            # Intersection of allowed_tools (most restrictive)
+            allowed = sorted(set(base_allowed) & set(override_allowed))
         # Union of denied_tools
         denied = sorted(set(base.denied_tools) | set(override.denied_tools))
 

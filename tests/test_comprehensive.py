@@ -1093,12 +1093,9 @@ class TestCLI:
             mock_db.connect = AsyncMock(side_effect=Exception("Connection refused"))
             mock_db.pool = None
             result = runner.invoke(app, ["status"])
-            # CLI should handle DB errors gracefully (either exit non-zero or show error)
-            assert (
-                result.exit_code != 0
-                or "error" in result.output.lower()
-                or "unavailable" in result.output.lower()
-            )
+            # CLI handles DB errors gracefully with non-zero exit
+            assert result.exit_code != 0
+            assert "connection failed" in result.output.lower()
 
     def test_chat_no_message(self):
         """Test chat command without message."""
@@ -1114,8 +1111,9 @@ class TestCLI:
             mock_sm.get_last_active = AsyncMock(return_value=None)
             mock_cm.get_recent_context = AsyncMock(return_value=[])
             result = runner.invoke(app, ["chat"])
-            # Should exit with code 0 and show help message
-            assert result.exit_code == 0 or "No message" in result.output
+            # chat without message prints guidance and exits non-zero
+            assert result.exit_code != 0
+            assert "No message" in result.output
 
     def test_chat_help(self):
         """Test chat command help."""
@@ -1131,8 +1129,9 @@ class TestCLI:
             mock_db.close = AsyncMock()
             mock_session_db.fetch = AsyncMock(return_value=[])
             result = runner.invoke(app, ["sessions"])
-            # Should handle DB failure gracefully
-            assert result.exit_code == 0 or "connection failed" in result.output.lower()
+            # Empty store lists gracefully with exit 0 and a message
+            assert result.exit_code == 0
+            assert "No sessions found" in result.output
 
     def test_context_command_no_args(self):
         """Test context command without arguments."""
@@ -1147,8 +1146,9 @@ class TestCLI:
             mock_session_db.fetchrow = AsyncMock(return_value=None)
             mock_context_db.fetch = AsyncMock(return_value=[])
             result = runner.invoke(app, ["context"])
-            # Should handle no sessions gracefully
-            assert result.exit_code == 0 or "No active sessions" in result.output
+            # No sessions -> exit 0 with guidance message
+            assert result.exit_code == 0
+            assert "No active sessions" in result.output
 
     def test_init_command_help(self):
         """Test init command help."""
@@ -1534,7 +1534,7 @@ class TestBuiltinTools:
         test_file = temp_dir / "output.txt"
         with patch("ah.tools.file._BASE_DIR", temp_dir):
             result = asyncio.run(write_file(str(test_file), "test content"))
-        assert "Written" in result or "Successfully" in result
+        assert "Successfully wrote" in result
         assert test_file.read_text() == "test content"
 
     def test_write_file_creates_dirs(self, temp_dir):

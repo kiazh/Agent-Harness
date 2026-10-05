@@ -60,9 +60,11 @@ async def _serve() -> None:
     from ah.gateway.server import Gateway
 
     gateway = Gateway(_write)
-    # Use the token from AH_GATEWAY_TOKEN if set (by the UI launcher),
-    # otherwise generate one for standalone use.
-    gateway._auth_token = os.environ.get("AH_GATEWAY_TOKEN") or secrets.token_hex(32)
+    # Gateway.__init__ already picks up AH_GATEWAY_TOKEN from the environment
+    # (set by the UI launcher). Only generate one for standalone use; None
+    # stays open for local stdio (Gateway logs a warning in that case).
+    if gateway._auth_token is None:
+        gateway._auth_token = secrets.token_hex(32)
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     _start_stdin_reader(asyncio.get_running_loop(), queue)
     try:

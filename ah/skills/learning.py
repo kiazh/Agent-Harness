@@ -302,6 +302,9 @@ class LearningReviewer:
         triggers = [redact_secrets(value).text for value in triggers]
         try:
             SkillParser._validate_content(content)
+            SkillParser._scan_injection(description)
+            for _t in triggers:
+                SkillParser._scan_injection(_t)
         except ValueError:
             return None
         return name, description, triggers, content

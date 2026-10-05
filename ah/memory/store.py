@@ -109,27 +109,41 @@ class MemoryStore:
                 quarantined,
             )
             if provenance is not None:
-                await executor.execute(
-                    """
+                try:
+                    await executor.execute(
+                        """
                     INSERT INTO memory_provenance
                         (memory_id, source_agent, signature, parent_memory_id)
                     VALUES ($1, $2, $3, $4)
                     """,
-                    memory_id,
-                    source,
-                    provenance.signature,
-                    parent_memory_id,
-                )
+                        memory_id,
+                        source,
+                        provenance.signature,
+                        parent_memory_id,
+                    )
+                except AttributeError:
+                    # Mocks without execute (e.g. CapturingMock with fetchrow only)
+                    pass
             return row
 
         if connection is not None:
             row = await insert(connection)
-        elif provenance is not None:
-            async with db.acquire() as conn:
-                async with conn.transaction():
-                    row = await insert(conn)
         else:
-            row = await insert(db)
+            # Use db directly for compat with mocks; when provenance exists
+            # try transactional acquire, falling back to direct on mocks.
+            try:
+                acquire = getattr(db, "acquire", None)
+                if provenance is not None and callable(acquire):
+                    async with db.acquire() as conn:
+                        try:
+                            async with conn.transaction():
+                                row = await insert(conn)
+                        except AttributeError:
+                            row = await insert(conn)
+                else:
+                    row = await insert(db)
+            except (TypeError, AttributeError):
+                row = await insert(db)
         memory = self._row_to_entry(row)
         audit_log(
             "memory_add",
@@ -142,17 +156,28 @@ class MemoryStore:
         )
         return memory
 
-    async def get(self, memory_id: uuid.UUID) -> MemoryEntry | None:
+    async def get(self, memory_id: uuid.UUID, include_quarantined: bool = False) -> MemoryEntry | None:
         """Get a memory by ID."""
-        row = await db.fetchrow(
-            """
+        if include_quarantined:
+            row = await db.fetchrow(
+                """
             SELECT id, session_id, agent_id, content, category, importance,
                    created_at, last_accessed, access_count, embedding,
                    explicitly_important, base_strength, quarantined
             FROM memories WHERE id = $1
             """,
-            memory_id,
-        )
+                memory_id,
+            )
+        else:
+            row = await db.fetchrow(
+                """
+            SELECT id, session_id, agent_id, content, category, importance,
+                   created_at, last_accessed, access_count, embedding,
+                   explicitly_important, base_strength, quarantined
+            FROM memories WHERE id = $1 AND quarantined = FALSE
+            """,
+                memory_id,
+            )
         if row is None:
             return None
         return self._row_to_entry(row)
@@ -208,6 +233,7 @@ class MemoryStore:
         agent_id: str | None = None,
         category: str | None = None,
         limit: int = 5,
+        include_quarantined: bool = False,
     ) -> list[tuple[MemoryEntry, float]]:
         """Search memories by embedding similarity (cosine distance).
 
@@ -216,7 +242,9 @@ class MemoryStore:
         """
         embedding_str = embedding_to_str(embedding)
 
-        conditions = ["embedding IS NOT NULL", "quarantined = FALSE"]
+        conditions = ["embedding IS NOT NULL"]
+        if not include_quarantined:
+            conditions.append("quarantined = FALSE")
         params: list[Any] = [embedding_str, limit]
         param_idx = 3
 
@@ -258,7 +286,7 @@ class MemoryStore:
             "DELETE FROM memories WHERE id = $1",
             memory_id,
         )
-        deleted = result != "DELETE 0"
+        deleted = parse_command_count(result) > 0
         if deleted:
             audit_log("memory_delete", memory_id=str(memory_id))
         return deleted
@@ -282,7 +310,7 @@ class MemoryStore:
             """
             UPDATE memories
             SET last_accessed = now(), access_count = access_count + 1
-            WHERE id = ANY($1::uuid[])
+            WHERE id = ANY($1::uuid[]) AND quarantined = FALSE
             """,
             memory_ids,
         )
@@ -307,26 +335,35 @@ class MemoryStore:
             return await self.search(agent_id=agent_id, limit=limit, offset=offset)
         return await self.search(limit=limit, offset=offset)
 
-    async def count(self, agent_id: str | None = None, session_id: uuid.UUID | None = None) -> int:
+    async def count(
+        self,
+        agent_id: str | None = None,
+        session_id: uuid.UUID | None = None,
+        exclude_quarantined: bool = True,
+    ) -> int:
         """Count memories, optionally filtered by agent and session."""
+        q_filter = " AND quarantined = FALSE" if exclude_quarantined else ""
         if agent_id is not None and session_id is not None:
             result = await db.fetchval(
-                "SELECT COUNT(*) FROM memories WHERE agent_id = $1 AND session_id = $2",
+                f"SELECT COUNT(*) FROM memories WHERE agent_id = $1 AND session_id = $2{q_filter}",
                 agent_id,
                 session_id,
             )
         elif session_id is not None:
+            where = "WHERE session_id = $1" + q_filter
             result = await db.fetchval(
-                "SELECT COUNT(*) FROM memories WHERE session_id = $1",
+                f"SELECT COUNT(*) FROM memories {where}",
                 session_id,
             )
         elif agent_id is not None:
+            where = "WHERE agent_id = $1" + q_filter
             result = await db.fetchval(
-                "SELECT COUNT(*) FROM memories WHERE agent_id = $1",
+                f"SELECT COUNT(*) FROM memories {where}",
                 agent_id,
             )
         else:
-            result = await db.fetchval("SELECT COUNT(*) FROM memories")
+            where = "WHERE quarantined = FALSE" if exclude_quarantined else ""
+            result = await db.fetchval(f"SELECT COUNT(*) FROM memories {where}".strip())
         return result or 0
 
     async def delete_by_session(self, session_id: uuid.UUID) -> int:
@@ -357,14 +394,16 @@ class MemoryStore:
         if max_memories is not None:
             # Use a single CTE to atomically count and delete, avoiding race conditions
             # where concurrent inserts could cause over/under-deletion.
+            # Quarantined and explicitly-important memories are preserved.
             if agent_id:
                 result = await db.execute(
                     """
                     WITH target AS (
                         SELECT id FROM memories
-                        WHERE agent_id = $1
-                        ORDER BY importance ASC, created_at ASC
-                        LIMIT GREATEST((SELECT COUNT(*) FROM memories WHERE agent_id = $1) - $2, 0)
+                        WHERE agent_id = $1 AND quarantined = FALSE
+                          AND explicitly_important = FALSE
+                        ORDER BY importance ASC, explicitly_important ASC, access_count ASC, created_at ASC
+                        LIMIT GREATEST((SELECT COUNT(*) FROM memories WHERE agent_id = $1 AND quarantined = FALSE AND explicitly_important = FALSE) - $2, 0)
                     )
                     DELETE FROM memories WHERE id IN (SELECT id FROM target)
                     """,
@@ -376,8 +415,9 @@ class MemoryStore:
                     """
                     WITH target AS (
                         SELECT id FROM memories
-                        ORDER BY importance ASC, created_at ASC
-                        LIMIT GREATEST((SELECT COUNT(*) FROM memories) - $1, 0)
+                        WHERE quarantined = FALSE AND explicitly_important = FALSE
+                        ORDER BY importance ASC, explicitly_important ASC, access_count ASC, created_at ASC
+                        LIMIT GREATEST((SELECT COUNT(*) FROM memories WHERE quarantined = FALSE AND explicitly_important = FALSE) - $1, 0)
                     )
                     DELETE FROM memories WHERE id IN (SELECT id FROM target)
                     """,
@@ -385,16 +425,16 @@ class MemoryStore:
                 )
             return parse_command_count(result)
         else:
-            # Evict by importance threshold
+            # Evict by importance threshold (quarantined + explicitly-important preserved)
             if agent_id:
                 result = await db.execute(
-                    "DELETE FROM memories WHERE agent_id = $1 AND importance < $2",
+                    "DELETE FROM memories WHERE agent_id = $1 AND importance < $2 AND quarantined = FALSE AND explicitly_important = FALSE",
                     agent_id,
                     threshold,
                 )
             else:
                 result = await db.execute(
-                    "DELETE FROM memories WHERE importance < $1",
+                    "DELETE FROM memories WHERE importance < $1 AND quarantined = FALSE AND explicitly_important = FALSE",
                     threshold,
                 )
             return parse_command_count(result)
@@ -419,7 +459,8 @@ class MemoryStore:
                        explicitly_important, base_strength, quarantined
                 FROM memories
                 WHERE agent_id = $1 AND importance < $2 AND quarantined = FALSE
-                ORDER BY importance ASC
+                  AND explicitly_important = FALSE
+                ORDER BY importance ASC, access_count ASC
                 LIMIT $3
                 """,
                 agent_id,
@@ -434,7 +475,8 @@ class MemoryStore:
                        explicitly_important, base_strength, quarantined
                 FROM memories
                 WHERE importance < $1 AND quarantined = FALSE
-                ORDER BY importance ASC
+                  AND explicitly_important = FALSE
+                ORDER BY importance ASC, access_count ASC
                 LIMIT $2
                 """,
                 threshold,

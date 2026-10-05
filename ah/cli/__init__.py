@@ -53,9 +53,13 @@ def _run(coro):
 
 
 def _parse_uuid(s: str) -> uuid.UUID | None:
-    """Parse a UUID string, returning None if invalid."""
+    """Parse a UUID string, returning None if invalid.
+
+    Accepts canonical, braced ({...}), and URN (urn:uuid:...) forms via
+    stdlib uuid.UUID; surrounding whitespace is ignored.
+    """
     try:
-        return uuid.UUID(s)
+        return uuid.UUID(s.strip() if isinstance(s, str) else s)
     except (ValueError, AttributeError, TypeError):
         return None
 

@@ -99,6 +99,21 @@ MAX_TOKEN_BUDGET = 50_000
 MAX_PENDING_LEARNING_REVIEWS = 16
 _pending_learning_reviews: set[asyncio.Task] = set()
 
+# Per-tool execution timeouts. Delegation-style tools fan out to sub-agents
+# and legitimately run long; everything else must answer quickly to keep
+# turns responsive.
+_TOOL_TIMEOUTS: dict[str, float] = {"delegate": 60.0, "share_memory": 60.0}
+_TOOL_TIMEOUT_DEFAULT = 1.0
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    """True for HTTP 429 failures (duck-typed so no httpx import is needed).
+
+    The provider layer already retried these with backoff, so the agent
+    layer must not retry them again.
+    """
+    return getattr(getattr(exc, "response", None), "status_code", None) == 429
+
 
 class BaseReActAgent:
     """Base class for ReAct agents — Template Method pattern.
@@ -191,6 +206,10 @@ class BaseReActAgent:
                 raise
             except Exception as e:
                 last_exception = e
+                if _is_rate_limit_error(e):
+                    # Provider already retried 429s with backoff — re-raising
+                    # here avoids amplifying one rate limit into many requests.
+                    raise
                 if attempt < 3:
                     delay = 2**attempt  # 1s, 2s, 4s
                     logger.warning(
@@ -253,6 +272,9 @@ class BaseReActAgent:
                 # Once a delta reached the caller, replaying the request would
                 # duplicate text (and could repeat a tool call).
                 if emitted:
+                    raise
+                if _is_rate_limit_error(e):
+                    # Provider already retried 429s with backoff — don't amplify.
                     raise
                 if attempt < 3:
                     delay = 2**attempt  # 1s, 2s, 4s
@@ -542,6 +564,7 @@ class BaseReActAgent:
             )
 
             start = time.monotonic()
+            tool_timeout = _TOOL_TIMEOUTS.get(tool_name, _TOOL_TIMEOUT_DEFAULT)
             try:
                 with span("agent.tool", tool_name=tool_name, session_id=str(session_id)):
                     await plugin_registry.dispatch("on_tool_call", tool_name, tool_args)
@@ -560,7 +583,7 @@ class BaseReActAgent:
                         try:
                             result = await asyncio.wait_for(
                                 registry.execute(tool_name, **tool_args),
-                                timeout=1,
+                                timeout=tool_timeout,
                             )
                         finally:
                             current_agent_id.reset(agent_token)
@@ -568,7 +591,7 @@ class BaseReActAgent:
                     else:
                         result = await asyncio.wait_for(
                             registry.execute(tool_name, **tool_args),
-                            timeout=1,
+                            timeout=tool_timeout,
                         )
             except Exception as e:
                 logger.exception("Tool execution failed for '%s'", tool_name)

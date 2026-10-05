@@ -301,3 +301,5 @@ export class RpcError extends Error {
 export const DATABASE_UNAVAILABLE = 1001;
 export const SESSION_NOT_FOUND = 1002;
 export const TURN_IN_PROGRESS = 1003;
+export const OPERATION_FAILED = 1004;
+export const UNAUTHORIZED = 1005;

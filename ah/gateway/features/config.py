@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 async def config_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """Get current configuration."""
+    gw.require_db()
     snapshot = _config_snapshot()
     snapshot["model"], snapshot["provider"] = gw.model, gw.provider
     return {"config": snapshot, "secrets": sorted(SECRET_KEYS)}

@@ -68,12 +68,17 @@ export class App implements FeatureHost {
 	/** The session ID of the most recent in-flight turn (for cancel). */
 	private inFlightSessionId: string | undefined;
 	private sessionTokens = 0;
+	/** Preserved token counts per session so switchTo does not lose them. */
+	private readonly sessionTokensById = new Map<string, number>();
 	private overlay: OverlayHandle | undefined;
 	private exiting = false;
 	private resolveExit: () => void = () => {};
 	private inputListenerDisposer: (() => void) | undefined;
 
-	private static readonly IN_FLIGHT_TIMEOUT_MS = 120_000;
+	// Match the server turn timeout (turn_timeout=300s) so the UI does not
+	// time out and unlock while the server is still running the turn (which
+	// would surface as a confusing TURN_IN_PROGRESS on the next submit).
+	private static readonly IN_FLIGHT_TIMEOUT_MS = 300_000;
 
 	constructor(tui: TUI, client: GatewayClient, options: AppOptions = {}) {
 		this.tui = tui;
@@ -185,12 +190,13 @@ export class App implements FeatureHost {
 	}
 
 	switchTo(session: SessionInfo, history: HistoryEntry[]): void {
+		if (this.current) this.sessionTokensById.set(this.current.id, this.sessionTokens);
 		this.updateSession(session);
 		this.transcript.clear();
 		this.transcriptView.addChild(header(this.version, this.headerInfo(session)));
 		this.transcript.replay(history);
-		this.sessionTokens = 0;
-		this.footer.tokens = 0;
+		this.sessionTokens = this.sessionTokensById.get(session.id) ?? 0;
+		this.footer.tokens = this.sessionTokens;
 		this.setRunning(this.inFlight.has(session.id));
 		this.tui.requestRender();
 	}
@@ -383,15 +389,18 @@ export class App implements FeatureHost {
 	}
 
 	private cancel(): void {
-		const sessionId = this.inFlightSessionId;
-		if (!sessionId) return;
-		// Don't setRunning(false) if the session is still in inFlight —
+		if (this.inFlight.size === 0) return;
+		// Cancel every in-flight turn, not just the most recent: two sessions
+		// can each have a turn running after a quick switch.
+		for (const sessionId of [...this.inFlight]) {
+			this.client.request("prompt.cancel", { sessionId }).catch(() => {});
+		}
+		// Don't setRunning(false) while any session is still in inFlight —
 		// the completion event hasn't arrived yet and the guard will reject
 		// the next submit if we clear running now.
-		if (!this.inFlight.has(sessionId)) {
+		if (this.current && !this.inFlight.has(this.current.id)) {
 			this.setRunning(false);
 		}
-		this.client.request("prompt.cancel", { sessionId }).catch(() => {});
 	}
 
 	private setRunning(running: boolean): void {
@@ -421,6 +430,7 @@ export class App implements FeatureHost {
 		} else if (summary) {
 			this.clearInFlight(event.sessionId);
 			this.sessionTokens += summary.tokens;
+			this.sessionTokensById.set(event.sessionId, this.sessionTokens);
 			this.footer.tokens = this.sessionTokens;
 			this.setRunning(this.inFlight.has(event.sessionId));
 		}

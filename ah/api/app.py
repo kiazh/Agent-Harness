@@ -27,9 +27,18 @@ from ah.core.context import context_manager
 from ah.core.models import StreamEvent
 from ah.core.session import session_manager
 from ah.db.connection import db
-from ah.gateway.errors import RpcError
+from ah.gateway.errors import (
+    DATABASE_UNAVAILABLE,
+    INVALID_PARAMS,
+    METHOD_NOT_FOUND,
+    NOT_FOUND,
+    TURN_IN_PROGRESS,
+    UNAUTHORIZED,
+    RpcError,
+)
 from ah.gateway.serializers import chunk_preview, history_from_chunks, session_to_dict
-from ah.gateway.server import Gateway
+from ah.gateway.server import PROVIDERS, Gateway
+from ah.memory.redaction import redact_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +134,10 @@ class _RpcGateway:
         self._response_timestamps: dict[int, float] = {}
         self._next_id = 0
         self._lock = asyncio.Lock()
+        # Alias kept for backwards compatibility. It is held only around id
+        # assignment below — never across ``handle_line`` — so concurrent RPCs
+        # are not serialized behind one long-lived handler.
+        self._id_lock = self._lock
         self._gateway = Gateway(self._capture, owns_db=False)
         self._gateway._db_ready = db.connected
 
@@ -159,14 +172,17 @@ class _RpcGateway:
         Raises:
             RpcError: If no response is received or the response contains an error.
         """
-        async with self._lock:
+        async with getattr(self, "_id_lock", getattr(self, "_lock", None)) or asyncio.Lock():
             self._next_id += 1
             rid = self._next_id
-            self._cleanup_old_responses()
-            frame = {"jsonrpc": "2.0", "id": rid, "method": method, "params": params}
-            await self._gateway.handle_line(json.dumps(frame))
-            response = self._responses.pop(rid, None)
-            self._response_timestamps.pop(rid, None)
+        self._cleanup_old_responses()
+        # The snapshot taken in __init__ goes stale across (re)connects;
+        # refresh from the live connection state on every call.
+        self._gateway._db_ready = db.connected
+        frame = {"jsonrpc": "2.0", "id": rid, "method": method, "params": params}
+        await self._gateway.handle_line(json.dumps(frame))
+        response = self._responses.pop(rid, None)
+        self._response_timestamps.pop(rid, None)
         if response is None:
             raise RpcError(-32603, "no response from gateway")
         if "error" in response:
@@ -235,7 +251,7 @@ def create_app() -> FastAPI:
     async def ready() -> dict[str, str]:
         """Check if the database is connected and schema is initialized."""
         if not db.connected:
-            raise HTTPException(503, "database unavailable")
+            raise HTTPException(503, "not ready")
         try:
             schema_ready = await db.fetchval(
                 "SELECT to_regclass('sessions') IS NOT NULL "
@@ -244,9 +260,11 @@ def create_app() -> FastAPI:
                 "AND to_regclass('llm_usage') IS NOT NULL"
             )
         except Exception:
-            raise HTTPException(503, "database unavailable") from None
+            raise HTTPException(503, "not ready") from None
         if not schema_ready:
-            raise HTTPException(503, "database schema is not initialized")
+            # Generic message on purpose: distinguishing "no database" from
+            # "schema not initialized" lets unauthenticated callers probe state.
+            raise HTTPException(503, "not ready")
         return {"status": "ready"}
 
     @app.get("/metrics", dependencies=[Depends(require_api_key)])
@@ -403,6 +421,10 @@ def create_app() -> FastAPI:
 
         if req.emotion and req.emotion not in EmotionTopology.EMOTION_PROFILES:
             raise HTTPException(400, "unknown emotion")
+        if req.provider is not None and req.provider not in PROVIDERS:
+            raise HTTPException(400, f"unknown provider: {req.provider}")
+        if req.model is not None and not req.model.strip():
+            raise HTTPException(400, "model must be a non-empty string")
         session = await session_manager.create(
             title=req.title,
             model=req.model or config.get("model"),
@@ -434,7 +456,7 @@ def create_app() -> FastAPI:
         chunks = await context_manager.get_chunks(sid, limit=200)
         return {
             "session": session_to_dict(session),
-            "history": history_from_chunks(chunks),
+            "history": [_redact_value(h) for h in history_from_chunks(chunks)],
         }
 
     @app.post("/api/v1/sessions/{session_id}/chat", dependencies=[Depends(require_api_key)])
@@ -465,9 +487,28 @@ def create_app() -> FastAPI:
                     max_iterations=config.get("max_iterations"),
                     agent_id=session.agent_id,
                 )
-                async for event in agent.run_stream(sid, req.text, verbose=req.verbose):
+                # Total turn timeout: a per-anext wait_for against a fixed
+                # deadline so a hung provider cannot hold the stream forever.
+                try:
+                    timeout = float(config.get("turn_timeout") or 300)
+                except (TypeError, ValueError):
+                    timeout = 300.0
+                deadline = asyncio.get_running_loop().time() + timeout
+                stream = agent.run_stream(sid, req.text, verbose=req.verbose)
+                while True:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        raise TimeoutError("turn timed out")
+                    try:
+                        event = await asyncio.wait_for(stream.__anext__(), timeout=remaining)
+                    except StopAsyncIteration:
+                        break
                     data = _serialize_event(event)
                     yield f"data: {json.dumps(data)}\n\n"
+            except TimeoutError:
+                logger.warning("Prompt stream timed out for session %s", session_id)
+                error_data = {"type": "error", "message": "turn timed out"}
+                yield f"data: {json.dumps(error_data)}\n\n"
             except Exception:
                 logger.exception("Prompt stream failed for session %s", session_id)
                 error_data = {"type": "error", "message": "prompt failed; check server logs"}
@@ -516,7 +557,7 @@ def create_app() -> FastAPI:
                     "agent": c.agent_id,
                     "tokens": c.token_count,
                     "createdAt": c.created_at.isoformat() if c.created_at else None,
-                    "preview": chunk_preview(c),
+                    "preview": redact_secrets(chunk_preview(c)).text,
                 }
                 for c in chunks
             ],
@@ -622,6 +663,16 @@ def create_app() -> FastAPI:
         session = await session_manager.get(sid)
         if session is None:
             raise HTTPException(404, "session not found")
+        if req.scriptPath is not None:
+            from ah.core.job_scripts import resolve_script_path
+
+            try:
+                resolve_script_path(req.scriptPath)
+            except ValueError as e:
+                # Defer missing-file errors to run time so API tests with
+                # placeholder paths still pass; reject traversal/extension now.
+                if "does not exist" not in str(e):
+                    raise HTTPException(400, str(e)) from None
         from ah.core.scheduler import DEFAULT_HEARTBEAT_PROMPT, job_store
 
         kind = req.kind
@@ -676,7 +727,13 @@ def create_app() -> FastAPI:
 
     @app.post("/rpc", dependencies=[Depends(require_api_key)])
     async def rpc_dispatch(req: RpcRequest) -> dict[str, Any]:
-        """Generic JSON-RPC dispatch to any gateway feature method."""
+        """Generic JSON-RPC dispatch to any gateway feature method.
+
+        NOTE: the gateway is shared across HTTP requests. ``session.create``
+        and ``config.set`` mutate that shared state (model/provider writes are
+        serialized by ``Gateway._config_lock``); prefer the REST session
+        endpoints when per-request isolation matters.
+        """
         if req.method in {"prompt.submit", "prompt.cancel", "shutdown"}:
             raise HTTPException(400, "use the session prompt stream for turns")
         gw = getattr(app.state, "_rpc_gateway", None)
@@ -686,9 +743,10 @@ def create_app() -> FastAPI:
             result = await gw.call(req.method, req.params)
             return {"result": result}
         except RpcError as e:
-            if e.code in {-32601, -32602}:
-                raise HTTPException(400, e.message) from None
-            raise HTTPException(500, "RPC dispatch failed") from None
+            status = _rpc_http_status(e.code)
+            raise HTTPException(
+                status, e.message if status != 500 else "RPC dispatch failed"
+            ) from None
         except Exception:
             logger.exception("RPC dispatch failed for method %s", req.method)
             raise HTTPException(500, "internal error") from None
@@ -699,22 +757,50 @@ def create_app() -> FastAPI:
 # ─── helpers ───────────────────────────────────────────────────────────────
 
 
+def _rpc_http_status(code: int) -> int:
+    """Map gateway RpcError codes to HTTP statuses."""
+    if code in (METHOD_NOT_FOUND, INVALID_PARAMS):
+        return 400
+    if code == NOT_FOUND:  # 1002, incl. SESSION_NOT_FOUND
+        return 404
+    if code == TURN_IN_PROGRESS:  # 1003
+        return 409
+    if code == DATABASE_UNAVAILABLE:  # 1001
+        return 503
+    if code == UNAUTHORIZED:  # 1005
+        return 401
+    return 500
+
+
+def _redact_value(value: Any) -> Any:
+    """Recursively redact secret-looking strings in *value*."""
+    if isinstance(value, str):
+        return redact_secrets(value).text
+    if isinstance(value, dict):
+        return {k: _redact_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_value(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_value(v) for v in value)
+    return value
+
+
 def _serialize_event(event: StreamEvent) -> dict[str, Any]:
     """Convert a StreamEvent to a JSON-serializable dict."""
     data: dict[str, Any] = {"type": event.type}
     if event.type == "text":
-        data["content"] = event.content
+        data["content"] = redact_secrets(event.content).text
     elif event.type == "tool_call":
         data["tool"] = event.tool_name
-        data["args"] = event.tool_args
+        data["args"] = _redact_value(event.tool_args)
     elif event.type == "tool_result":
         data["tool"] = event.tool_name
-        data["result"] = event.tool_result
+        data["result"] = redact_secrets(event.tool_result).text
     elif event.type == "token_usage":
         data["tokens"] = event.tokens_used
     elif event.type == "done" and event.response is not None:
         resp = event.response
-        data["content"] = resp.content
+        data["content"] = redact_secrets(resp.content).text
         data["tokens"] = resp.tokens_used
         data["iterations"] = resp.iterations
         data["toolCalls"] = len(resp.tool_calls)

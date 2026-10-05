@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ah.db.connection import db
+from ah.memory.redaction import redact_secrets
 
 __all__ = [
     "PersonaMemory",
@@ -193,6 +194,7 @@ class PersonaMemoryStore:
         confidence: float = 0.5,
     ) -> PersonaMemory:
         """Add a new persona memory."""
+        interpretation = redact_secrets(interpretation).text
         emotional_valence = max(-1.0, min(1.0, emotional_valence))
         emotional_arousal = max(0.0, min(1.0, emotional_arousal))
         confidence = max(0.0, min(1.0, confidence))
@@ -318,6 +320,7 @@ class PersonaMemoryStore:
         param_idx = 1
 
         if interpretation is not None:
+            interpretation = redact_secrets(interpretation).text
             updates.append(f"interpretation = ${param_idx}")
             params.append(interpretation)
             param_idx += 1

@@ -41,6 +41,24 @@ def resolve_path(path: str) -> Path:
     ):
         raise ValueError(f"Path '{path}' is private")
 
+    # Re-stat with O_NOFOLLOW semantics where possible to catch TOCTOU swaps.
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow and candidate.exists() and not candidate.is_dir():
+        try:
+            fd = os.open(candidate, os.O_RDONLY | nofollow)
+        except OSError as e:
+            raise ValueError(f"Path '{path}' is not accessible (symlink?)") from e
+        try:
+            # Verify the opened file still resolves inside the base dir.
+            try:
+                real = Path(f"/proc/self/fd/{fd}").resolve()
+                if not real.is_relative_to(_BASE_DIR):
+                    raise ValueError(f"Path '{path}' escapes the allowed base directory")
+            except OSError:
+                pass
+        finally:
+            os.close(fd)
+
     return candidate
 
 
@@ -81,6 +99,7 @@ async def read_file(
         raise ToolError(f"limit must be >= 1, got {limit}")
     if max_size < 1:
         raise ToolError(f"max_size must be >= 1, got {max_size}")
+    effective_max = min(max_size, 5_242_880)
     try:
         file_path = resolve_path(path)
     except ValueError as e:
@@ -93,18 +112,26 @@ async def read_file(
 
     # Check file size before reading
     file_size = file_path.stat().st_size
-    if file_size > max_size:
-        raise ToolError(f"File '{path}' is too large ({file_size} bytes, max {max_size} bytes)")
+    if file_size > effective_max:
+        raise ToolError(f"File '{path}' is too large ({file_size} bytes, max {effective_max} bytes)")
 
     try:
 
         def _read():
             with open(file_path, encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
+                data = f.read(effective_max + 1)
+            if len(data.encode("utf-8", errors="replace")) > effective_max:
+                # Re-check by bytes to avoid over-read on multi-byte chars.
+                raw = data.encode("utf-8", errors="replace")[: effective_max + 1]
+                if len(raw) > effective_max:
+                    raise ValueError(f"File '{path}' exceeds max size during read")
+            lines = data.splitlines(keepends=True)
             end = offset + limit - 1
             return "".join(lines[offset - 1 : end])
 
         return await asyncio.to_thread(_read)
+    except ToolError:
+        raise
     except Exception as e:
         raise ToolError(f"Error reading file: {e}") from e
 
@@ -158,6 +185,15 @@ async def write_file(path: str, content: str) -> str:
 )
 async def list_files(path: str = ".", pattern: str = "*") -> str:
     """List files in a directory."""
+    # Sanitize glob pattern: reject traversal, absolute, drive/namespace, backslash.
+    if (
+        ".." in pattern
+        or ":" in pattern
+        or "\\" in pattern
+        or Path(pattern).is_absolute()
+        or pattern.startswith(("/", "\\"))
+    ):
+        raise ToolError(f"Invalid glob pattern: {pattern}")
     try:
         dir_path = resolve_path(path)
     except ValueError as e:
@@ -170,14 +206,20 @@ async def list_files(path: str = ".", pattern: str = "*") -> str:
     try:
 
         def _list():
-            files = list(dir_path.glob(pattern))
+            files = list(dir_path.glob(pattern))[:200]
             if not files:
                 return f"No files found matching '{pattern}' in {path}"
             lines = []
-            for f in sorted(files):
+            for f in sorted(files)[:200]:
                 try:
                     resolve_path(str(f))
                 except ValueError:
+                    continue
+                # Skip symlink dirs (and any symlink) to avoid escape.
+                try:
+                    if f.is_symlink():
+                        continue
+                except OSError:
                     continue
                 if f.is_file():
                     size = f.stat().st_size
@@ -187,5 +229,7 @@ async def list_files(path: str = ".", pattern: str = "*") -> str:
             return "\n".join(lines)
 
         return await asyncio.to_thread(_list)
+    except ToolError:
+        raise
     except Exception as e:
         raise ToolError(f"Error listing files: {e}") from e

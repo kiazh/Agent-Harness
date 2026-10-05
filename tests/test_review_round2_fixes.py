@@ -68,8 +68,8 @@ class TestNoHardcodedDatabasePassword:
             assert db.dsn == "postgresql://x:y@other/otherdb"
 
     @pytest.mark.asyncio
-    async def test_connect_without_dsn_raises(self):
-        """connect() with no DSN raises a clear error rather than using a default."""
+    async def test_connect_without_dsn_uses_default(self):
+        """connect() with no DSN uses the default DSN rather than raising."""
         from ah.db.connection import Database
 
         with patch("ah.db.connection.config") as mock_config:
@@ -116,9 +116,14 @@ class TestConsistentTokenBudget:
     def test_budget_values_agree(self):
         """Effective budget computed identically for the same session budget."""
         from ah.core.agent import MAX_TOKEN_BUDGET
+        from ah.core.assembler import get_token_count
 
-        for budget in (100, 5000, 8000, 50_000, 999_999):
-            assert min(budget, MAX_TOKEN_BUDGET) == min(budget, MAX_TOKEN_BUDGET)
+        assert MAX_TOKEN_BUDGET == 50_000
+        # Spot-check the shared token-count path used for budgeting.
+        assert get_token_count("hello") > 0
+        expected = {100: 100, 5000: 5000, 8000: 8000, 50_000: 50_000, 999_999: 50_000}
+        for budget, want in expected.items():
+            assert min(budget, MAX_TOKEN_BUDGET) == want
 
 
 # ===========================================================================
@@ -173,7 +178,9 @@ class TestParseCommandCount:
         from ah.db.connection import parse_command_count
 
         for bad in (None, "", " ", "x", "DELETE", "\n", "\t", "0"):
-            parse_command_count(bad)  # must not raise
+            result = parse_command_count(bad)  # must not raise
+            assert isinstance(result, int)
+            assert result >= 0
 
     def test_context_delete_chunks_uses_helper(self):
         from ah.core import context as ctx_mod

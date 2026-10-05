@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import ipaddress
 import logging
 import re
 import socket
 from html.parser import HTMLParser
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -52,6 +54,16 @@ def _parse_duckduckgo_results(html: str) -> list[tuple[str, str]]:
     return parser.results
 
 
+def _getaddrinfo_timeout(hostname: str, timeout: float = 3.0):
+    """Resolve hostname with a bounded 3s timeout to avoid hanging the tool."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(socket.getaddrinfo, hostname, None)
+        try:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            raise socket.gaierror("DNS resolution timed out") from None
+
+
 def _is_safe_url(url: str) -> bool:
     """Validate URL to prevent SSRF attacks.
 
@@ -60,6 +72,7 @@ def _is_safe_url(url: str) -> bool:
     - Private/internal IP ranges (10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x)
     - localhost
     - IPv6 private ranges
+    - Multicast, unspecified (0.0.0.0/::), reserved and link-local addresses
     """
     try:
         parsed = urlparse(url)
@@ -80,11 +93,18 @@ def _is_safe_url(url: str) -> bool:
 
     # Resolve hostname to IP and check against private ranges
     try:
-        # Get all addresses (IPv4 and IPv6)
-        addr_infos = socket.getaddrinfo(hostname, None)
+        # Get all addresses (IPv4 and IPv6) with bounded timeout.
+        addr_infos = _getaddrinfo_timeout(hostname, timeout=3.0)
         for _, _, _, _, sockaddr in addr_infos:
             ip = ipaddress.ip_address(sockaddr[0])
-            if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_reserved
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_unspecified
+            ):
                 return False
     except (socket.gaierror, ValueError):
         # If we can't resolve, reject to be safe
@@ -99,12 +119,22 @@ def _resolve_safe_ip(hostname: str) -> str | None:
     Returns the first safe IP address, or None if no safe address is found.
     This is used to pin the resolved IP for the actual connection, preventing
     TOCTOU races where DNS resolution changes between validation and connection.
+    TODO(pinned-ip): actually connect to the pinned IP with Host header / TLS
+    SNI instead of only validating, so DNS rebinding between check and fetch
+    cannot bypass the SSRF policy.
     """
     try:
-        addr_infos = socket.getaddrinfo(hostname, None)
+        addr_infos = _getaddrinfo_timeout(hostname, timeout=3.0)
         for _, _, _, _, sockaddr in addr_infos:
             ip = ipaddress.ip_address(sockaddr[0])
-            if not (ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local):
+            if not (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_reserved
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_unspecified
+            ):
                 return str(ip)
     except (socket.gaierror, ValueError):
         pass
@@ -119,29 +149,37 @@ async def web_search(query: str, limit: int = 5) -> str:
 
     # Try SearXNG first (self-hosted)
     searxng_url = config.get("searxng_url")
-    try:
-        resp = await asyncio.to_thread(
-            httpx.get,
-            f"{searxng_url}/search",
-            params={"q": query, "format": "json"},
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            results = data.get("results", [])[:limit]
-            if results:
-                lines = [f"Search results for '{query}':"]
-                for r in results:
-                    lines.append(f"\n  {r.get('title', 'No title')}")
-                    lines.append(f"  {r.get('url', '')}")
-                    lines.append(f"  {r.get('content', '')[:200]}")
-                return "\n".join(lines)
-    except httpx.TimeoutException:
-        pass
-    except httpx.HTTPError:
-        pass
-    except Exception:
-        pass
+    if searxng_url:
+        try:
+            probe = f"{str(searxng_url).rstrip('/')}/search"
+            if not _is_safe_url(probe):
+                raise ValidationError(f"SearXNG URL rejected by security policy: {searxng_url}")
+        except ValidationError:
+            searxng_url = None
+    if searxng_url:
+        try:
+            resp = await asyncio.to_thread(
+                httpx.get,
+                f"{str(searxng_url).rstrip('/')}/search",
+                params={"q": query, "format": "json"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                results = data.get("results", [])[:limit]
+                if results:
+                    lines = [f"Search results for '{query}':"]
+                    for r in results:
+                        lines.append(f"\n  {r.get('title', 'No title')}")
+                        lines.append(f"  {r.get('url', '')}")
+                        lines.append(f"  {r.get('content', '')[:200]}")
+                    return "\n".join(lines)
+        except httpx.TimeoutException:
+            pass
+        except httpx.HTTPError:
+            pass
+        except Exception:
+            pass
 
     # Fallback: DuckDuckGo HTML
     try:
@@ -205,6 +243,13 @@ async def web_extract(url: str) -> str:
                 f"https://r.jina.ai/{url}",
                 headers={"Accept": "text/markdown"},
             ) as resp:
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("location", "")
+                    if not location or not _is_safe_url(location):
+                        raise ValidationError(
+                            f"Redirect target rejected by security policy: {location!r}"
+                        )
+                    raise ToolError(f"HTTP {resp.status_code} redirect for {url}")
                 if resp.status_code != 200:
                     raise ToolError(f"HTTP {resp.status_code} for {url}")
                 # Read at most 20000 bytes (enough for ~5000 chars of UTF-8)
@@ -231,6 +276,10 @@ async def search_files(pattern: str, path: str = ".", file_glob: str | None = No
     """Search file contents using regex pattern."""
     from ah.tools.file import resolve_path
 
+    if not isinstance(pattern, str) or not pattern:
+        raise ToolError("Invalid search pattern")
+    if len(pattern) > 200:
+        raise ToolError("Search pattern exceeds 200 characters (ReDoS guard)")
     try:
         dir_path = resolve_path(path)
     except ValueError as e:
@@ -245,13 +294,23 @@ async def search_files(pattern: str, path: str = ".", file_glob: str | None = No
 
     glob_pattern = file_glob or "*"
     # Sanitize glob pattern to prevent path traversal
-    if ".." in glob_pattern or glob_pattern.startswith("/") or glob_pattern.startswith("\\"):
+    if (
+        ".." in glob_pattern
+        or ":" in glob_pattern
+        or "\\" in glob_pattern
+        or Path(glob_pattern).is_absolute()
+        or glob_pattern.startswith(("/", "\\"))
+    ):
         raise ToolError(f"Invalid glob pattern: {glob_pattern}")
     matches = []
     try:
 
         def _search():
+            count = 0
             for f in dir_path.glob(glob_pattern):
+                count += 1
+                if count > 1000:
+                    break
                 try:
                     resolve_path(str(f))
                 except ValueError:
@@ -259,8 +318,12 @@ async def search_files(pattern: str, path: str = ".", file_glob: str | None = No
                 if not f.is_file():
                     continue
                 try:
+                    if f.stat().st_size > 102_400:
+                        continue
                     with open(f, encoding="utf-8", errors="replace") as fh:
                         for i, line in enumerate(fh, 1):
+                            if len(line) > 4096:
+                                continue
                             if regex.search(line):
                                 matches.append(f"{f}:{i}: {line.strip()}")
                                 if len(matches) >= 500:

@@ -77,7 +77,7 @@ class TestBug12Bm25ILikeFallback:
         call_args = mock_db.fetch.call_args
         query = call_args[0][0]
         assert "ts_rank" in query
-        assert "plainto_tsquery" in query
+        assert "to_tsquery" in query  # plainto_tsquery or to_tsquery via build_or_tsquery
 
     async def test_bm25_returns_results_on_success(self, searcher):
         """When FTS succeeds, results should be returned properly."""

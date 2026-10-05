@@ -188,18 +188,34 @@ class ToolRegistry:
             "array": list,
             "object": dict,
         }
+        # Maximum accepted string argument length — bounds memory / prompt
+        # injection blast radius for a single tool call.
+        _MAX_STRING_ARG_CHARS = 20_000
+
         for param_name, param_value in kwargs.items():
             if param_name not in properties:
                 continue
             param_schema = properties[param_name]
             expected_type = param_schema.get("type")
             if expected_type and expected_type in type_map:
+                # bool is a subclass of int: reject it explicitly where a
+                # real integer/number is expected.
+                if expected_type in ("integer", "number") and isinstance(param_value, bool):
+                    raise ValidationError(
+                        f"Tool '{tool.name}' parameter '{param_name}' expected type "
+                        f"'{expected_type}', got 'bool'"
+                    )
                 python_type = type_map[expected_type]
                 if not isinstance(param_value, python_type):
                     raise ValidationError(
                         f"Tool '{tool.name}' parameter '{param_name}' expected type "
                         f"'{expected_type}', got '{type(param_value).__name__}'"
                     )
+            if isinstance(param_value, str) and len(param_value) > _MAX_STRING_ARG_CHARS:
+                raise ValidationError(
+                    f"Tool '{tool.name}' parameter '{param_name}' is too long "
+                    f"(max {_MAX_STRING_ARG_CHARS} characters)"
+                )
 
     async def execute(self, name: str, **kwargs) -> Any:
         """Execute a tool by name with input validation and TTL caching."""

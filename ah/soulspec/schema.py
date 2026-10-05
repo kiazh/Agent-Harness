@@ -204,8 +204,11 @@ class SoulSpec:
 
     @dataclass
     class Voice:
-        tone: str = "neutral"
-        style: str = "concise"
+        # None means "unspecified" (inherit on merge). Display/serialization
+        # defaults to "neutral"/"concise" only when the value is None, so an
+        # explicit "neutral"/"concise" override is distinguishable.
+        tone: str | None = None
+        style: str | None = None
 
     @dataclass
     class PersonaValue:
@@ -352,8 +355,8 @@ class SoulSpec:
             voice = None
             if p.get("voice"):
                 voice = cls.Voice(
-                    tone=p["voice"].get("tone", "neutral"),
-                    style=p["voice"].get("style", "concise"),
+                    tone=p["voice"].get("tone"),
+                    style=p["voice"].get("style"),
                 )
             persona = cls.Persona(
                 name=p.get("name", ""),
@@ -435,8 +438,12 @@ class SoulSpec:
                 ]
             if self.persona.voice:
                 p["voice"] = {
-                    "tone": self.persona.voice.tone,
-                    "style": self.persona.voice.style,
+                    "tone": self.persona.voice.tone
+                    if self.persona.voice.tone is not None
+                    else "neutral",
+                    "style": self.persona.voice.style
+                    if self.persona.voice.style is not None
+                    else "concise",
                 }
             if self.persona.system_prompt:
                 p["system_prompt"] = self.persona.system_prompt

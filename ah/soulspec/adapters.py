@@ -5,6 +5,16 @@ from __future__ import annotations
 from ah.core.agent_def import AgentDef
 from ah.soulspec.schema import SoulSpec
 
+try:
+    from ah.soulspec.schema import _NO_TOOLS_SENTINEL
+except ImportError:  # pragma: no cover - sentinel always defined
+    _NO_TOOLS_SENTINEL = object()
+
+
+def _visible_tools(tools: list) -> list[str]:
+    """Return only real tool names, filtering out the no-tools sentinel."""
+    return [t for t in tools if isinstance(t, str) and t is not _NO_TOOLS_SENTINEL]
+
 
 class AgentHarnessAdapter:
     """Export AgentHarness config to/from SoulSpec."""
@@ -21,12 +31,11 @@ class AgentHarnessAdapter:
             model=agent_def.model,
             max_iterations=agent_def.max_iterations,
         )
+        visible = _visible_tools(list(agent_def.tools) if agent_def.tools else [])
         return SoulSpec(
             name=agent_def.name,
             persona=persona,
-            workflow=[SoulSpec.Workflow(name="agent-tools", tools=list(agent_def.tools))]
-            if agent_def.tools
-            else [],
+            workflow=[SoulSpec.Workflow(name="agent-tools", tools=visible)] if visible else [],
             config=config,
         )
 
@@ -58,9 +67,11 @@ class ClaudeCodeAdapter:
                 traits_str = ", ".join(f"{t.name} ({t.strength})" for t in spec.persona.traits)
                 sections.append(f"## Traits\n{traits_str}\n")
             if spec.persona.voice:
-                sections.append(
-                    f"## Voice\nTone: {spec.persona.voice.tone}, Style: {spec.persona.voice.style}\n"
+                tone = spec.persona.voice.tone if spec.persona.voice.tone is not None else "neutral"
+                style = (
+                    spec.persona.voice.style if spec.persona.voice.style is not None else "concise"
                 )
+                sections.append(f"## Voice\nTone: {tone}, Style: {style}\n")
 
         # Workflow
         if spec.workflow:
@@ -122,9 +133,11 @@ class CodexAdapter:
                 traits_lines = [f"- **{t.name}**: {t.strength}" for t in spec.persona.traits]
                 sections.append("## Traits\n" + "\n".join(traits_lines) + "\n")
             if spec.persona.voice:
-                sections.append(
-                    f"## Communication\n- Tone: {spec.persona.voice.tone}\n- Style: {spec.persona.voice.style}\n"
+                tone = spec.persona.voice.tone if spec.persona.voice.tone is not None else "neutral"
+                style = (
+                    spec.persona.voice.style if spec.persona.voice.style is not None else "concise"
                 )
+                sections.append(f"## Communication\n- Tone: {tone}\n- Style: {style}\n")
 
         # Workflow
         if spec.workflow:

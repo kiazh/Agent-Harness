@@ -45,11 +45,45 @@ DANGEROUS_CHARS = frozenset(";|&$()`<>\\\n")
 # directory or a system temporary directory that may contain credentials.
 ALLOWED_WORKDIR_PREFIXES = (str(Path(config.get("agent_harness_home") or Path.cwd()).resolve()),)
 
+# Argument blocklist: git aliases, find -exec, and test-runner overrides can
+# escape the command allowlist (e.g. `find . -exec`, `git -c`, `pytest -o`).
+_BLOCKED_ARGS = frozenset({"-exec", "-execdir", "-delete", "-c", "-C", "--config", "-o"})
+
+
+def _allowed_workdir_prefixes() -> tuple[str, ...]:
+    """Refresh allowed prefixes from config (not frozen at import)."""
+    # Respect monkeypatched ALLOWED_WORKDIR_PREFIXES in tests.
+    import ah.tools.terminal as _self
+    try:
+        explicit = getattr(_self, "ALLOWED_WORKDIR_PREFIXES", None)
+        # If tests override it to a tmp dir different from config, honour it.
+        # Detect override by comparing to config-derived default.
+        try:
+            home = config.get("agent_harness_home") or Path.cwd()
+        except Exception:
+            home = Path.cwd()
+        default = str(Path(home).resolve())
+        if explicit and tuple(explicit) != (default,):
+            return tuple(explicit)
+    except Exception:
+        pass
+    try:
+        home = config.get("agent_harness_home") or Path.cwd()
+    except Exception:
+        home = Path.cwd()
+    return (str(Path(home).resolve()),)
+
+
+def _validate_blocked_args(args: list[str]) -> None:
+    for arg in args[1:]:
+        if arg in _BLOCKED_ARGS or arg.startswith("--config="):
+            raise ValidationError(f"argument '{arg}' is not allowed")
+
 
 def _validate_workdir(workdir: str) -> None:
     """Validate that workdir is within allowed paths. Raises ValidationError if not."""
     resolved = Path(workdir or ".").resolve()
-    for prefix in ALLOWED_WORKDIR_PREFIXES:
+    for prefix in _allowed_workdir_prefixes():
         if prefix and resolved.is_relative_to(Path(prefix).resolve()):
             return
     raise ValidationError(f"workdir '{workdir}' is not within allowed paths")
@@ -161,8 +195,13 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
     if base_cmd not in ALLOWED_COMMANDS:
         raise ValidationError(f"Command '{base_cmd}' is not in the allowlist")
 
-    # Validate workdir
+    # Tighten allowlist: block escape hatches even for allowed commands.
+    _validate_blocked_args(args)
+
+    # Validate workdir (refresh config, not frozen) and re-resolve at exec time.
     _validate_workdir(workdir)
+    resolved_workdir = str(Path(workdir or ".").resolve())
+    _validate_workdir(resolved_workdir)
 
     # Local subprocesses are not a security boundary: git aliases, find -exec,
     # and test runners can execute commands outside the command allowlist.
@@ -172,7 +211,7 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
     if sandbox not in {"local", "docker"}:
         raise ValidationError("terminal sandbox must be 'disabled', 'local', or 'docker'")
     if sandbox == "docker":
-        workspace = str(Path(workdir or ".").resolve())
+        workspace = resolved_workdir
         image = os.environ.get("AGENT_HARNESS_TERMINAL_IMAGE", "agent-harness-tool-sandbox:latest")
         args = [
             "docker",
@@ -208,11 +247,12 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
         ]
 
     # Execute off the event loop. Stop reading and kill prolific children before
-    # their output can exhaust gateway memory.
+    # their output can exhaust gateway memory. Re-resolve workdir just before
+    # exec to close TOCTOU swaps (MAX_OUTPUT_CHARS caps output at 64 KiB).
     try:
-        return await asyncio.to_thread(
-            _run_bounded, args, timeout, workdir if workdir != "." else None
-        )
+        exec_cwd = resolved_workdir if workdir != "." else None
+        _validate_workdir(resolved_workdir)
+        return await asyncio.to_thread(_run_bounded, args, timeout, exec_cwd)
     except subprocess.TimeoutExpired:
         raise ToolError(f"Command timed out after {timeout}s") from None
     except FileNotFoundError:

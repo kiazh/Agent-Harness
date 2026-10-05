@@ -33,10 +33,12 @@ def _field(text: str, minimum: int, maximum: int) -> set[int]:
 
 
 def next_cron_time(expression: str, after: datetime) -> datetime:
-    """Return the first matching minute after *after*, using UTC.
+    """Return the first matching minute strictly after *after*, using UTC.
 
     Supports numbers, ranges, comma lists, and steps. Day-of-month and
-    day-of-week use standard cron OR semantics when both are restricted.
+    day-of-week use standard cron OR semantics when both are restricted
+    (both fields not exactly "*"); otherwise AND. Only a candidate with
+    ``candidate > after_utc`` is returned (strictly-after).
     """
     fields = expression.split()
     if len(fields) != 5:
@@ -60,9 +62,13 @@ def next_cron_time(expression: str, after: datetime) -> datetime:
             continue
         day_matches = current.day in day
         weekday_matches = (current.weekday() + 1) % 7 in weekday
-        # Cron's OR rule depends on the field syntax, not on the size of the
-        # resulting set: an explicit 1-31 or 0-6 is still restricted.
-        if "*" not in fields[2] and "*" not in fields[4]:
+        # Cron's OR rule depends on whether each field is exactly "*",
+        # not on substring containment: "*/2" contains "*" but is still
+        # restricted. Only when both DOM and DOW are restricted (neither
+        # field is exactly "*") do they combine with OR; otherwise AND.
+        dom_star = fields[2] == "*"
+        dow_star = fields[4] == "*"
+        if not dom_star and not dow_star:
             date_matches = day_matches or weekday_matches
         else:
             date_matches = day_matches and weekday_matches

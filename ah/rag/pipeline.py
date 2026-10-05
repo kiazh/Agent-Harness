@@ -19,6 +19,7 @@ from ah.core.serialization import (
     row_to_chunk,
 )
 from ah.db.connection import db
+from ah.memory.redaction import redact_secrets
 from ah.rag.chunker import Chunk, RecursiveCharacterTextSplitter
 from ah.rag.embedder import Embedder, OpenAIEmbedder
 from ah.rag.loaders import Document, FileLoader
@@ -118,7 +119,10 @@ class RAGPipeline:
         chunks = self._chunk_document(doc, metadata)
 
         # Embed in batch
-        texts = [c.text for c in chunks]
+        texts = [redact_secrets(c.text).text for c in chunks]
+        # Keep redacted text for storage so secrets never reach the DB.
+        for chunk, redacted_text in zip(chunks, texts, strict=True):
+            chunk.text = redacted_text
         embeddings = await self._embedder.embed_batch(texts)
 
         # Store in database (batch)
@@ -215,14 +219,23 @@ class RAGPipeline:
             top_k=k,
         )
 
-        # Check TTL cache
-        cache_key = (session_id, hashlib.sha256(query.encode()).hexdigest(), k, rerank)
+        # Check TTL cache (namespaced by embedder model + retrieval flags).
+        embed_model = getattr(self._embedder, "model_name", getattr(self._embedder, "_model", ""))
+        cache_key = (
+            session_id,
+            hashlib.sha256(query.encode()).hexdigest(),
+            k,
+            rerank,
+            str(embed_model),
+            bool(self._config.enable_reranking),
+            bool(self._config.enable_hybrid_search),
+        )
         now = time.monotonic()
         if cache_key in self._search_cache:
             cached_time, cached_results = self._search_cache[cache_key]
             if now - cached_time < self._search_cache_ttl:
                 logger.debug("RAG search cache hit for session %s", session_id)
-                return cached_results[:k]
+                return list(cached_results)[:k]
             else:
                 # Expired
                 del self._search_cache[cache_key]
@@ -264,8 +277,8 @@ class RAGPipeline:
 
         final_results = results[:k]
 
-        # Store in TTL cache
-        self._search_cache[cache_key] = (now, final_results)
+        # Store in TTL cache (store a copy so callers cannot mutate the cache).
+        self._search_cache[cache_key] = (now, list(final_results))
         # Evict oldest if cache is full (simple approach)
         if len(self._search_cache) > self._search_cache_max_size:
             oldest_key = min(self._search_cache, key=lambda k: self._search_cache[k][0])
@@ -340,6 +353,20 @@ class RAGPipeline:
         """Remove cached search results for *session_id* (after re-indexing)."""
         for key in [k for k in self._search_cache if k[0] == session_id]:
             self._search_cache.pop(key, None)
+
+    async def delete_session_context(self, session_id: uuid.UUID) -> int:
+        """Delete indexed chunks for a session and invalidate cached searches."""
+        result = await db.execute(
+            "DELETE FROM context_chunks WHERE session_id = $1",
+            session_id,
+        )
+        self._invalidate_search_cache(session_id)
+        try:
+            from ah.db.connection import parse_command_count
+
+            return parse_command_count(result)
+        except Exception:
+            return 0
 
     def _chunk_document(
         self,

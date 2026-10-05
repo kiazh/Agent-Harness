@@ -118,7 +118,7 @@ class AgentRegistry:
         if not directory.is_dir():
             self._file_definitions_cache = {}
             self._file_definitions_cache_time = now
-            return {}
+            return self._file_definitions_cache
         definitions: dict[str, AgentDef] = {}
         for path in sorted((*directory.glob("*.yaml"), *directory.glob("*.yml"))):
             try:

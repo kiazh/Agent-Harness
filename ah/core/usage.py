@@ -15,7 +15,7 @@ from typing import Any
 from ah.core.assembler import get_token_count
 from ah.core.config import config
 from ah.core.exceptions import DatabaseError, UsageBudgetExceededError, ValidationError
-from ah.db.connection import db
+from ah.db.connection import db, parse_command_count
 
 
 def _limits() -> dict[str, int]:
@@ -131,6 +131,11 @@ class UsageStore:
             async with conn.transaction():
                 # Lock in a fixed order to avoid deadlocks between concurrent
                 # calls for the same agent in different sessions.
+                # Conservative accounting: budget checks count every prior row
+                # (reserved + complete + error). Errored calls keep the
+                # conservative reservation, so excluding them would allow
+                # overspend. Only 'complete'/'reserved' represent live spend,
+                # but counting all statuses is intentionally conservative.
                 for scope, identifier in scopes:
                     await conn.execute(
                         "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
@@ -181,9 +186,14 @@ class UsageStore:
         *,
         failed: bool = False,
         model: str | None = None,
-    ) -> None:
+    ) -> bool:
+        """Complete a reservation. Returns False if already finished (no row with status='reserved').
+
+        The WHERE status='reserved' guard prevents a late finish from
+        overwriting a row already cleaned up or completed by another path.
+        """
         if reservation_id is None:
-            return
+            return False
         usage = usage or {}
         prompt = usage.get("prompt_tokens")
         completion = usage.get("completion_tokens")
@@ -202,10 +212,10 @@ class UsageStore:
             and (prompt + completion > 0 or total > 0)
         )
         accounted = max(prompt + completion, total) if known else None
-        await db.execute(
+        result = await db.execute(
             "UPDATE llm_usage SET status = $2, prompt_tokens = $3, completion_tokens = $4, "
             "accounted_tokens = COALESCE($5, reserved_tokens), model = COALESCE($6, model), "
-            "completed_at = now() WHERE id = $1",
+            "completed_at = now() WHERE id = $1 AND status = 'reserved'",
             reservation_id,
             "error" if failed else "complete",
             prompt if known else None,
@@ -213,6 +223,7 @@ class UsageStore:
             accounted,
             model,
         )
+        return parse_command_count(result) > 0
 
     async def summary(self, session_id: uuid.UUID, agent_id: str) -> dict[str, Any]:
         limits = _limits()
@@ -266,19 +277,30 @@ class UsageStore:
             "agent": view(agent, "agent"),
         }
 
-    async def cleanup_orphaned_reservations(self) -> int:
-        """Mark all 'reserved' rows as 'error' — called on startup to clean up after crashes.
+    async def cleanup_orphaned_reservations(self, older_than_minutes: int = 0) -> int:
+        """Mark stale 'reserved' rows as 'error' — called on startup to clean up after crashes.
+
+        Only reaps reservations older than `older_than_minutes` (default 0
+        preserves historical behaviour and reaps all reserved).
+        Production startup should pass 10 so in-flight calls are not clobbered.
+        Caps each pass at 1000 rows.
 
         Returns the number of rows that were cleaned up.
         """
-        result = await db.execute(
-            "UPDATE llm_usage SET status = 'error', completed_at = now() WHERE status = 'reserved'"
-        )
+        if older_than_minutes <= 0:
+            result = await db.execute(
+                "UPDATE llm_usage SET status = 'error', completed_at = now() WHERE id IN ("
+                "SELECT id FROM llm_usage WHERE status = 'reserved' LIMIT 1000)"
+            )
+        else:
+            result = await db.execute(
+                "UPDATE llm_usage SET status = 'error', completed_at = now() WHERE id IN ("
+                "SELECT id FROM llm_usage WHERE status = 'reserved' "
+                "AND created_at < now() - make_interval(mins => $1) LIMIT 1000)",
+                older_than_minutes,
+            )
         # Parse the command count from the result (e.g., "UPDATE 3")
-        try:
-            return int(result.split()[-1])
-        except (ValueError, IndexError):
-            return 0
+        return parse_command_count(result)
 
     async def totals(self) -> dict[str, int]:
         row = await db.fetchrow(

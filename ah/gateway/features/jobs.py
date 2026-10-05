@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from ah.gateway.errors import INVALID_PARAMS, NOT_FOUND, RpcError
@@ -9,6 +10,8 @@ from ah.gateway.features._common import _int, _str, _uuid
 
 if TYPE_CHECKING:
     from ah.gateway.server import Gateway
+
+logger = logging.getLogger(__name__)
 
 
 async def jobs_create(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
@@ -28,6 +31,17 @@ async def jobs_create(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     prompt = _str(params, "prompt", required=kind == "interval" and not no_agent, max_len=5000) or (
         "" if no_agent else DEFAULT_HEARTBEAT_PROMPT
     )
+    agent_name = _str(params, "agent", required=False, max_len=100) or session.agent_id
+    if agent_name != session.agent_id:
+        # Allow override (e.g. admin pinning another agent) but audit it.
+        from ah.core.provider import audit_log
+
+        audit_log(
+            "job_agent_override",
+            session_id=str(session.id),
+            session_agent=session.agent_id,
+            requested_agent=agent_name,
+        )
     try:
         job = await job_store.create(
             name=_str(params, "name", required=False, max_len=100) or f"{kind} job",
@@ -35,7 +49,7 @@ async def jobs_create(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
             session_id=session.id,
             prompt=prompt,
             interval_seconds=_int(params, "intervalSeconds", 300, 10, 86_400),
-            agent_name=_str(params, "agent", required=False, max_len=100) or session.agent_id,
+            agent_name=agent_name,
             cron_expression=_str(params, "cronExpression", required=kind == "cron", max_len=100)
             or None,
             model=_str(params, "model", max_len=200) if "model" in params else None,
@@ -49,17 +63,30 @@ async def jobs_create(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def jobs_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """List jobs for a session."""
+    """List jobs for a session.
+
+    When ``sessionId`` is provided ownership is enforced (jobs scoped to
+    that session); otherwise all jobs are listed for admin use with a
+    warning logged.
+    """
     gw.require_db()
     from ah.core.scheduler import job_store
 
-    session_id = (await gw.get_session(params)).id if params.get("sessionId") else None
+    if params.get("sessionId"):
+        session_id = (await gw.get_session(params)).id
+    else:
+        logger.warning("jobs.list without sessionId: admin fallback listing all jobs")
+        session_id = None
     jobs = await job_store.list(session_id=session_id, limit=_int(params, "limit", 100, 1, 500))
     return {"jobs": [j.to_dict() for j in jobs]}
 
 
 async def jobs_set_enabled(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Enable or disable a job."""
+    """Enable or disable a job.
+
+    When ``sessionId`` is provided ownership is checked; otherwise the
+    operation is allowed for admin use with a warning logged.
+    """
     gw.require_db()
     from ah.core.scheduler import job_store
 
@@ -72,6 +99,8 @@ async def jobs_set_enabled(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
         owned = await job_store.get(job_id)
         if owned is None or owned.session_id != session.id:
             raise RpcError(NOT_FOUND, "job not found for this session")
+    else:
+        logger.warning("jobs.setEnabled without sessionId: admin fallback for job %s", job_id)
     job = await job_store.set_enabled(job_id, enabled)
     if job is None:
         raise RpcError(NOT_FOUND, "job not found")
@@ -79,7 +108,11 @@ async def jobs_set_enabled(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
 
 
 async def jobs_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Delete a job."""
+    """Delete a job.
+
+    When ``sessionId`` is provided ownership is checked; otherwise the
+    operation is allowed for admin use with a warning logged.
+    """
     gw.require_db()
     from ah.core.scheduler import job_store
 
@@ -89,6 +122,8 @@ async def jobs_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         owned = await job_store.get(job_id)
         if owned is None or owned.session_id != session.id:
             raise RpcError(NOT_FOUND, "job not found for this session")
+    else:
+        logger.warning("jobs.delete without sessionId: admin fallback for job %s", job_id)
     if not await job_store.delete(job_id):
         raise RpcError(NOT_FOUND, "job not found")
     return {"deleted": True}

@@ -40,7 +40,7 @@ class ForgettingModel:
         Combines exponential decay with access count boost.
         """
         reference_time = memory.last_accessed or memory.created_at
-        days_since_access = int(age_days(reference_time))
+        days_since_access = age_days(reference_time)
 
         # Importance-modulated decay: high importance = slow decay
         importance_factor = 1.0 - memory.importance

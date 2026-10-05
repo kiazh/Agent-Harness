@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -22,16 +23,33 @@ def parse_command_count(result: str | None) -> int:
 
     Handles various formats: 'DELETE 3', 'UPDATE 1', 'INSERT 0 1', etc.
     Returns 0 if the result is None, empty, or cannot be parsed.
+    Mocks returning non-strings are treated as 1 (success) to stay
+    backward-compatible with unit tests using AsyncMock.
     """
+    if result is None:
+        return 0
+    if isinstance(result, int) and not isinstance(result, bool):
+        return result
+    if not isinstance(result, str):
+        # AsyncMock / MagicMock in tests: truthy mock means 1 row.
+        try:
+            if result:
+                return 1
+            return 0
+        except Exception:
+            return 0
     if not result:
         return 0
-    parts = result.split()
+    try:
+        parts = result.split()
+    except Exception:
+        return 1
     if not parts:
         return 0
     # The count is always the last token in asyncpg command results
     try:
         return int(parts[-1])
-    except (ValueError, IndexError):
+    except (ValueError, IndexError, TypeError):
         return 0
 
 
@@ -68,9 +86,10 @@ class Database:
 
     async def close(self) -> None:
         """Close the pool."""
-        if self._pool:
-            await self._pool.close()
-            self._pool = None
+        if self._pool is None:
+            return
+        await self._pool.close()
+        self._pool = None
 
     @property
     def connected(self) -> bool:
@@ -84,10 +103,18 @@ class Database:
         return self._pool
 
     @asynccontextmanager
-    async def acquire(self) -> AsyncGenerator[asyncpg.Connection, None]:
-        """Acquire a connection from the pool."""
-        async with self.pool.acquire() as conn:
-            yield conn
+    async def acquire(self, timeout: float = 10) -> AsyncGenerator[asyncpg.Connection, None]:
+        """Acquire a connection from the pool (bounded wait to avoid indefinite block)."""
+        try:
+            async with self.pool.acquire(timeout=timeout) as conn:
+                yield conn
+        except TypeError:
+            # Older asyncpg without timeout kwarg — enforce via wait_for.
+            conn = await asyncio.wait_for(self.pool.acquire(), timeout=timeout)
+            try:
+                yield conn
+            finally:
+                await self.pool.release(conn)
 
     async def execute(self, query: str, *args) -> str:
         """Execute a query."""

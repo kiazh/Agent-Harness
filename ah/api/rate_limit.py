@@ -13,6 +13,14 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Sliding-window per-client request throttle.
+
+    A limit of 0 disables throttling (explicit opt-out); negative values are
+    normalized to 0. Client identity is the transport peer only — the
+    ``X-Forwarded-For`` header is never trusted (trivially spoofable) unless
+    the deployment strips/sets it at a trusted edge proxy.
+    """
+
     def __init__(self, app, requests_per_minute: int | None = None) -> None:
         super().__init__(app)
         self.limit = (
@@ -20,11 +28,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             if requests_per_minute is not None
             else int(os.environ.get("AGENT_HARNESS_HTTP_RATE_LIMIT", "120"))
         )
+        if self.limit < 0:
+            self.limit = 0
         self._calls: dict[str, deque[float]] = defaultdict(deque)
         self._lock = asyncio.Lock()
 
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in {"/health", "/ready"} or self.limit <= 0:
+        if request.url.path in {"/health", "/ready"} or self.limit == 0:
             return await call_next(request)
         # Use the transport peer, never an untrusted forwarded header.
         client = request.client.host if request.client else "unknown"

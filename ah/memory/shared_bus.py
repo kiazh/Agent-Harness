@@ -6,8 +6,10 @@ import uuid
 from dataclasses import dataclass
 from typing import Literal
 
+import asyncpg
+
 from ah.core.provider import audit_log
-from ah.db.connection import db
+from ah.db.connection import db, parse_command_count
 from ah.memory.identity import MemoryProvenance, identity_gate
 from ah.memory.models import MemoryEntry
 from ah.memory.store import memory_store
@@ -119,18 +121,44 @@ class SharedMemoryBus:
                         )
                         target_id = copy.id
 
-                await conn.execute(
-                    """
-                    INSERT INTO shared_memory_deliveries
-                        (source_memory_id, recipient_agent, target_memory_id, status, reason)
-                    VALUES ($1, $2, $3, $4, $5)
-                    """,
-                    source_memory_id,
-                    recipient_agent,
-                    target_id,
-                    status,
-                    reason,
-                )
+                try:
+                    insert_result = await conn.execute(
+                        """
+                        INSERT INTO shared_memory_deliveries
+                            (source_memory_id, recipient_agent, target_memory_id, status, reason)
+                        VALUES ($1, $2, $3, $4, $5)
+                        ON CONFLICT (source_memory_id, recipient_agent) DO NOTHING
+                        """,
+                        source_memory_id,
+                        recipient_agent,
+                        target_id,
+                        status,
+                        reason,
+                    )
+                except asyncpg.exceptions.UniqueViolationError:
+                    # Lost the race: a concurrent deliver inserted first.
+                    existing = await conn.fetchrow(
+                        """
+                        SELECT source_memory_id, recipient_agent, target_memory_id, status, reason
+                        FROM shared_memory_deliveries
+                        WHERE source_memory_id = $1 AND recipient_agent = $2
+                        """,
+                        source_memory_id,
+                        recipient_agent,
+                    )
+                    return DeliveryReceipt(**dict(existing))
+                if parse_command_count(insert_result) == 0:
+                    # ON CONFLICT DO NOTHING skipped the insert — re-SELECT winner.
+                    existing = await conn.fetchrow(
+                        """
+                        SELECT source_memory_id, recipient_agent, target_memory_id, status, reason
+                        FROM shared_memory_deliveries
+                        WHERE source_memory_id = $1 AND recipient_agent = $2
+                        """,
+                        source_memory_id,
+                        recipient_agent,
+                    )
+                    return DeliveryReceipt(**dict(existing))
 
         receipt = DeliveryReceipt(source_memory_id, recipient_agent, target_id, status, reason)
         audit_log(

@@ -47,7 +47,15 @@ async def require_api_key(
         )
     presented = _extract(authorization, x_api_key)
     # Constant-time comparison so a wrong key cannot be guessed by timing.
-    if presented is None or not hmac.compare_digest(presented, expected):
+    try:
+        ok = (
+            hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
+            if presented is not None
+            else False
+        )
+    except (TypeError, UnicodeError, Exception):
+        ok = False
+    if not ok:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
             "invalid or missing API key",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections import OrderedDict
@@ -57,6 +58,10 @@ class ContextManager:
         # LRU cache: session_id -> list of recent context dicts
         self._recent_cache: OrderedDict[uuid.UUID, list[dict[str, Any]]] = OrderedDict()
         self._cache_size = cache_size
+        # Guard _recent_cache: OrderedDict is not thread/coroutine-safe.
+        self._cache_lock = asyncio.Lock()
+        # Alias for callers/tests expecting `self._lock`.
+        self._lock = self._cache_lock
 
     async def add_chunk(
         self,
@@ -87,7 +92,8 @@ class ContextManager:
             _search_text_for(payload),
         )
         # Invalidate cache for this session
-        self._recent_cache.pop(session_id, None)
+        async with self._cache_lock:
+            self._recent_cache.pop(session_id, None)
         return self._row_to_chunk(row)
 
     async def add_chunks_batch(
@@ -143,8 +149,9 @@ class ContextManager:
 
         session_ids = list({c["session_id"] for c in chunks})
         # Invalidate cache for all affected sessions
-        for sid in session_ids:
-            self._recent_cache.pop(sid, None)
+        async with self._cache_lock:
+            for sid in session_ids:
+                self._recent_cache.pop(sid, None)
         rows = await db.fetch(
             """
             SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
@@ -201,41 +208,44 @@ class ContextManager:
         # Check cache first. Entries store (fetched_limit, rows); a hit is only
         # valid if the cached fetch covered at least the requested limit, or the
         # session simply had fewer rows than were asked for.
-        if session_id in self._recent_cache:
-            cached_limit, cached = self._recent_cache[session_id]
-            if cached_limit >= limit or len(cached) < cached_limit:
-                self._recent_cache.move_to_end(session_id)
-                return cached[:limit]
+        # Hold _cache_lock across miss-check + fill so a concurrent writer
+        # cannot invalidate between the check and the fill (stale fill).
+        async with self._cache_lock:
+            if session_id in self._recent_cache:
+                cached_limit, cached = self._recent_cache[session_id]
+                if cached_limit >= limit or len(cached) < cached_limit:
+                    self._recent_cache.move_to_end(session_id)
+                    return cached[:limit]
 
-        rows = await db.fetch(
-            """
-            SELECT payload_msgpack, chunk_type, token_count
-            FROM context_chunks
-            WHERE session_id = $1
-            ORDER BY created_at DESC
-            LIMIT $2
-            """,
-            session_id,
-            limit,
-        )
-        results = []
-        for r in rows:
-            payload = msgpack.unpackb(r["payload_msgpack"], raw=False)
-            results.append(
-                {
-                    "type": r["chunk_type"],
-                    "payload": payload,
-                    "tokens": r["token_count"],
-                }
+            rows = await db.fetch(
+                """
+                SELECT payload_msgpack, chunk_type, token_count
+                FROM context_chunks
+                WHERE session_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+                """,
+                session_id,
+                limit,
             )
+            results = []
+            for r in rows:
+                payload = msgpack.unpackb(r["payload_msgpack"], raw=False)
+                results.append(
+                    {
+                        "type": r["chunk_type"],
+                        "payload": payload,
+                        "tokens": r["token_count"],
+                    }
+                )
 
-        # Cache the results with the limit they were fetched at
-        self._recent_cache[session_id] = (limit, results)
-        self._recent_cache.move_to_end(session_id)
-        if len(self._recent_cache) > self._cache_size:
-            self._recent_cache.popitem(last=False)  # Evict LRU
+            # Cache the results with the limit they were fetched at
+            self._recent_cache[session_id] = (limit, results)
+            self._recent_cache.move_to_end(session_id)
+            if len(self._recent_cache) > self._cache_size:
+                self._recent_cache.popitem(last=False)  # Evict LRU
 
-        return results
+            return results
 
     async def search_by_embedding(
         self,
@@ -313,7 +323,8 @@ class ContextManager:
                         """,
                         records,
                     )
-        self._recent_cache.pop(session_id, None)
+        async with self._cache_lock:
+            self._recent_cache.pop(session_id, None)
         return len(records)
 
     async def delete_chunks(self, session_id: uuid.UUID) -> int:
@@ -322,6 +333,8 @@ class ContextManager:
             "DELETE FROM context_chunks WHERE session_id = $1",
             session_id,
         )
+        async with self._cache_lock:
+            self._recent_cache.pop(session_id, None)
         from ah.db.connection import parse_command_count
 
         return parse_command_count(result)
@@ -386,6 +399,7 @@ class ContextManager:
 
         Queries context_archive for chunks semantically similar to the query,
         increments resurrection_count, and returns (chunk, similarity) tuples.
+        Threshold is applied in SQL so LIMIT returns only qualifying rows.
         """
         embedding_str = embedding_to_str(query_embedding)
         rows = await db.fetch(
@@ -393,18 +407,18 @@ class ContextManager:
             SELECT *, 1 - (embedding <=> $1::vector) AS similarity
             FROM context_archive
             WHERE session_id = $2 AND embedding IS NOT NULL
+              AND 1 - (embedding <=> $1::vector) > $4
             ORDER BY embedding <=> $1::vector
             LIMIT $3
             """,
             embedding_str,
             session_id,
             top_k,
+            threshold,
         )
         results = []
         for row in rows:
             sim = row["similarity"]
-            if sim < threshold:
-                continue
             # Increment resurrection_count
             await db.execute(
                 """
@@ -435,7 +449,11 @@ class ContextManager:
     async def search_archive_text(
         self, session_id: uuid.UUID, query: str, top_k: int = 3
     ) -> list[tuple[ContextChunk, float]]:
-        """Recall archived conversation without requiring an embedding provider."""
+        """Recall archived conversation without requiring an embedding provider.
+
+        Read-only: unlike resurrect_context, text search does not bump
+        resurrection_count (only an actual resurrect increments it).
+        """
         if not query.strip():
             return []
         tsquery = build_or_tsquery(query)
@@ -459,11 +477,6 @@ class ContextManager:
         )
         result = []
         for row in rows:
-            await db.execute(
-                "UPDATE context_archive SET resurrection_count = resurrection_count + 1, "
-                "last_resurrected = now() WHERE id = $1",
-                row["id"],
-            )
             result.append(
                 (
                     ContextChunk(
@@ -634,7 +647,8 @@ class ContextManager:
 
         if evicted > 0:
             # Invalidate cache
-            self._recent_cache.pop(session_id, None)
+            async with self._cache_lock:
+                self._recent_cache.pop(session_id, None)
             logger.info(
                 "Evicted %d chunks (freed %d tokens) from session %s",
                 evicted,

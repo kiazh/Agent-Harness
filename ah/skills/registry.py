@@ -61,7 +61,27 @@ class SkillParser:
         re.compile(r"forget\s+(all\s+)?previous\s+instructions", re.IGNORECASE),
         re.compile(r"system\s*:\s*(you\s+are|ignore|disregard|forget|override)", re.IGNORECASE),
         re.compile(r"<\s*system\s*>", re.IGNORECASE),
+        re.compile(
+            r"reveal\s+(your\s+|the\s+)?(system|developer|hidden|secret)\s*(prompt|message|instruction)",
+            re.IGNORECASE,
+        ),
+        re.compile(r"bypass\s+(safety|safe|guardrail|filter|restriction)", re.IGNORECASE),
+        re.compile(r"jailbreak", re.IGNORECASE),
+        re.compile(r"exfiltrat\w*", re.IGNORECASE),
+        re.compile(r"system\s+prompt", re.IGNORECASE),
+        re.compile(r"developer\s+message", re.IGNORECASE),
+        re.compile(r"decode\s+base64|base64\s+decode|from\s*base64", re.IGNORECASE),
+        re.compile(r"override\s+(safety|guardrail|instruction|system)", re.IGNORECASE),
     ]
+
+    @staticmethod
+    def _scan_injection(text: str) -> None:
+        for pattern in SkillParser._PROMPT_INJECTION_PATTERNS:
+            if pattern.search(text or ""):
+                raise ValueError(
+                    f"Skill content contains potential prompt injection pattern "
+                    f"(matched: {pattern.pattern[:30]}...)"
+                )
 
     @staticmethod
     def _validate_metadata(name: Any, description: Any, triggers: Any) -> None:
@@ -82,18 +102,15 @@ class SkillParser:
         """Validate skill content for prompt injection attempts.
 
         Returns the content if safe, raises ValueError if suspicious patterns found.
+        Also scans the text regardless of caller; description/triggers are
+        scanned separately via _scan_injection by callers.
         """
         if len(content) > SkillParser.MAX_CONTENT_SIZE:
             raise ValueError(
                 f"Skill content exceeds maximum size of {SkillParser.MAX_CONTENT_SIZE} characters"
             )
 
-        for pattern in SkillParser._PROMPT_INJECTION_PATTERNS:
-            if pattern.search(content):
-                raise ValueError(
-                    f"Skill content contains potential prompt injection pattern "
-                    f"(matched: {pattern.pattern[:30]}...)"
-                )
+        SkillParser._scan_injection(content)
 
         return content
 
@@ -138,6 +155,13 @@ class SkillParser:
         description = metadata.get("description", "")
         triggers = metadata.get("triggers", [])
         SkillParser._validate_metadata(name, description, triggers)
+        # Scan description + triggers as well as content for injection.
+        if isinstance(description, str):
+            SkillParser._scan_injection(description)
+        if isinstance(triggers, list):
+            for _t in triggers:
+                if isinstance(_t, str):
+                    SkillParser._scan_injection(_t)
         created_at = metadata.get("created_at")
         if isinstance(created_at, str):
             try:
@@ -329,10 +353,13 @@ class SkillRegistry:
         version: str = "1.0.0",
     ) -> Skill:
         """Create a new skill and persist it to the skills directory."""
-        # Validate content for prompt injection
+        # Validate content for prompt injection (content + description/triggers).
         content = SkillParser._validate_content(content)
         triggers = triggers or []
         SkillParser._validate_metadata(name, description, triggers)
+        SkillParser._scan_injection(description)
+        for _t in triggers:
+            SkillParser._scan_injection(_t)
 
         # Sanitize name for directory
         safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", name.lower())
@@ -390,10 +417,14 @@ class SkillRegistry:
             return None
 
         if description is not None:
+            SkillParser._scan_injection(description)
             skill.description = description
         if content is not None:
-            skill.content = content
+            skill.content = SkillParser._validate_content(content, skill.file_path)
         if triggers is not None:
+            for _t in triggers:
+                SkillParser._scan_injection(_t)
+            SkillParser._validate_metadata(skill.name, skill.description, triggers)
             skill.triggers = triggers
 
         # Rebuild SKILL.md

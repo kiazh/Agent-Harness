@@ -6,7 +6,10 @@ import type { ContextResult, RecallResult, RecallWindowResult, ResumeResult, Ses
 import { confirm, requireArgs, requireSession, type Command, type FeatureHost } from "./types.ts";
 
 async function resolveSessionId(host: FeatureHost, idOrPrefix: string): Promise<string> {
-	const wanted = idOrPrefix.trim().toLowerCase();
+	let wanted = idOrPrefix.trim().toLowerCase();
+	// Accept braced ({...}) and URN (urn:uuid:...) forms like Python's uuid.UUID.
+	if (wanted.startsWith("urn:uuid:")) wanted = wanted.slice("urn:uuid:".length);
+	if (wanted.startsWith("{") && wanted.endsWith("}")) wanted = wanted.slice(1, -1).trim();
 	if (/^[0-9a-f-]{36}$/.test(wanted)) return wanted;
 	// Paginate through all sessions: a prefix must resolve even when the
 	// matching session is older than the most recent page.

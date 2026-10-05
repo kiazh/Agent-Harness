@@ -30,13 +30,31 @@ def resolve_script_path(script_path: str) -> Path:
     candidate = Path(script_path)
     if not script_path or candidate.is_absolute():
         raise ValueError("script must be relative to the scripts directory")
-    target = (root / candidate).resolve()
+    raw = root / candidate
+    # Reject symlinks outright to close TOCTOU swaps outside the scripts dir.
+    try:
+        if raw.is_symlink():
+            raise ValueError("script must not be a symlink")
+    except OSError:
+        raise ValueError("script must stay inside the scripts directory") from None
+    target = raw.resolve()
     if not target.is_relative_to(root):
         raise ValueError("script must stay inside the scripts directory")
     if target.suffix.lower() not in {".py", ".sh", ".bash"}:
         raise ValueError("script extension must be .py, .sh, or .bash")
     if not target.is_file():
         raise ValueError("script does not exist in the scripts directory")
+    # O_NOFOLLOW final check where supported: reject symlink races.
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        try:
+            fd = os.open(target, os.O_RDONLY | nofollow)
+        except OSError as e:
+            raise ValueError("script must not be a symlink") from e
+        else:
+            os.close(fd)
+    elif target.is_symlink():
+        raise ValueError("script must not be a symlink")
     return target
 
 
@@ -82,7 +100,24 @@ async def run_job_script(script_path: str) -> str:
     if target.suffix.lower() == ".py":
         command = [sys.executable, str(target)]
     else:
-        bash = shutil.which("bash")
+        bash = shutil.which("bash", path="/usr/bin:/bin")
+        if bash is None:
+            raise ValueError("bash is required for shell scripts")
+        command = [bash, str(target)]
+    # Re-resolve just before exec to close TOCTOU swaps.
+    target = resolve_script_path(script_path)
+    # cwd is target.parent; resolve_script_path guarantees target is inside
+    # the scripts dir, so validate the working directory stays inside it too.
+    _scripts_root = Path(
+        os.environ.get("AGENT_HARNESS_SCRIPTS_DIR") or Path.home() / ".agent-harness" / "scripts"
+    ).resolve()
+    _cwd = target.parent.resolve()
+    if not _cwd.is_relative_to(_scripts_root):
+        raise ValueError("script working directory escapes scripts directory")
+    if target.suffix.lower() == ".py":
+        command = [sys.executable, str(target)]
+    else:
+        bash = shutil.which("bash", path="/usr/bin:/bin")
         if bash is None:
             raise ValueError("bash is required for shell scripts")
         command = [bash, str(target)]
@@ -91,11 +126,13 @@ async def run_job_script(script_path: str) -> str:
         for key in ("PATH", "SystemRoot", "WINDIR", "TMP", "TEMP", "TMPDIR")
         if (value := os.environ.get(key)) is not None
     }
+    if os.name != "nt":
+        environment["PATH"] = "/usr/bin:/bin"
     windows = os.name == "nt"
     process_options = {} if windows else {"start_new_session": True}
     process = await asyncio.create_subprocess_exec(
         *([sys.executable, "-c", _WINDOWS_BOOTSTRAP, *command] if windows else command),
-        cwd=str(target.parent),
+        cwd=str(_cwd),
         env=environment,
         stdin=asyncio.subprocess.PIPE if windows else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
@@ -129,4 +166,4 @@ async def run_job_script(script_path: str) -> str:
     if process.returncode:
         detail = redact_secrets(stderr.decode("utf-8", errors="replace")[:500]).text
         raise RuntimeError(f"script exited {process.returncode}: {detail}")
-    return stdout.decode("utf-8", errors="replace").strip()
+    return redact_secrets(stdout.decode("utf-8", errors="replace").strip()).text

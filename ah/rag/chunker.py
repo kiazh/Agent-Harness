@@ -83,25 +83,35 @@ class RecursiveCharacterTextSplitter:
 
         base_metadata = metadata or {}
         chunks: list[Chunk] = []
-        current_heading = ""
+        # Stack of (level, title) for nested heading paths.
+        heading_stack: list[tuple[int, str]] = []
         current_text = ""
+
+        def _heading_path() -> str:
+            return " > ".join(title for _, title in heading_stack)
 
         for line in text.split("\n"):
             header_match = self._MD_HEADER.match(line)
             if header_match:
                 # Save previous section
                 if current_text.strip():
-                    section_meta = {**base_metadata, "heading": current_heading}
+                    section_meta = {**base_metadata, "heading": _heading_path()}
                     sub_chunks = self.split_text(current_text.strip(), section_meta)
                     chunks.extend(sub_chunks)
-                current_heading = header_match.group(1).strip()
+                header_text = header_match.group(1).strip()
+                level = len(header_text) - len(header_text.lstrip("#"))
+                title = header_text.lstrip("#").strip()
+                # Pop stack to parent level, then push new heading.
+                while heading_stack and heading_stack[-1][0] >= level:
+                    heading_stack.pop()
+                heading_stack.append((level, title))
                 current_text = line + "\n"
             else:
                 current_text += line + "\n"
 
         # Last section
         if current_text.strip():
-            section_meta = {**base_metadata, "heading": current_heading}
+            section_meta = {**base_metadata, "heading": _heading_path()}
             sub_chunks = self.split_text(current_text.strip(), section_meta)
             chunks.extend(sub_chunks)
 
@@ -127,7 +137,7 @@ class RecursiveCharacterTextSplitter:
         # Simple heuristic: split on function/class definitions
         if language in ("python", "javascript", "typescript", "java", "go", "rust"):
             pattern = re.compile(
-                r"^(\s*(?:def|class|function|func|pub fn|pub async fn|async fn)\s+\w+)",
+                r"^(\s*(?:async\s+def\s+\w+|def\s+\w+|class\s+\w+|function\s+\w+|func\s+\w+|pub fn\s+\w+|pub async fn\s+\w+|async fn\s+\w+|@[A-Za-z_][\w.]*.*))",
                 re.MULTILINE,
             )
             matches = list(pattern.finditer(text))
@@ -261,29 +271,32 @@ class RecursiveCharacterTextSplitter:
             prev_text = result[-1].text
             current_text = chunks[i].text
 
-            # Take the end of the previous chunk as overlap
-            if len(prev_text) > overlap_chars:
-                overlap_text = prev_text[-overlap_chars:]
-                # Find a good break point
-                for sep in ["\n\n", "\n", ". ", " "]:
-                    idx = overlap_text.find(sep)
-                    if idx >= 0:
-                        overlap_text = overlap_text[idx + len(sep) :]
-                        break
-                merged = overlap_text + current_text
-            else:
-                merged = prev_text + current_text
+            # Tail slice of previous chunk as overlap (handles prev <= overlap).
+            overlap_text = prev_text[max(0, len(prev_text) - overlap_chars) :]
+            # Find the last good break point so overlap starts at a boundary.
+            for sep in ["\n\n", "\n", ". ", " "]:
+                idx = overlap_text.rfind(sep)
+                if idx >= 0:
+                    # Keep the separator at the start of the overlap.
+                    overlap_text = overlap_text[idx:]
+                    break
+            merged = overlap_text + current_text if overlap_text else current_text
 
             # Post-merge size check: split if merged exceeds chunk_size
+            # Preserve metadata boundaries: copy source metadata with overlap offset.
+            base_meta = dict(chunks[i].metadata)
+            base_meta["overlap_offset"] = max(0, len(prev_text) - len(overlap_text))
             if len(merged) > max_chars:
                 # Split the merged text into pieces that fit within max_chars
                 for j in range(0, len(merged), max_chars):
                     piece = merged[j : j + max_chars]
                     if piece:
+                        piece_meta = dict(base_meta)
+                        piece_meta["overlap_piece"] = j // max_chars
                         result.append(
                             Chunk(
                                 text=piece,
-                                metadata=chunks[i].metadata,
+                                metadata=piece_meta,
                                 token_count=self._estimate_tokens(piece),
                             )
                         )
@@ -291,7 +304,7 @@ class RecursiveCharacterTextSplitter:
                 result.append(
                     Chunk(
                         text=merged,
-                        metadata=chunks[i].metadata,
+                        metadata=dict(base_meta),
                         token_count=self._estimate_tokens(merged),
                     )
                 )

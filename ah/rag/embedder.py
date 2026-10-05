@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import threading
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 
@@ -54,6 +56,12 @@ class OpenAIEmbedder(Embedder):
     DEFAULT_CACHE_SIZE = 1024
     DEFAULT_BATCH_SIZE = 100
 
+    MODEL_DIMENSIONS: dict[str, int] = {
+        "text-embedding-3-small": 1536,
+        "text-embedding-3-large": 3072,
+        "text-embedding-ada-002": 1536,
+    }
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -62,6 +70,7 @@ class OpenAIEmbedder(Embedder):
         cache_size: int = DEFAULT_CACHE_SIZE,
         batch_size: int = DEFAULT_BATCH_SIZE,
         timeout: float = 30.0,
+        dimensions: int | None = None,
     ) -> None:
         self.api_key = api_key or config.get("openai_api_key") or ""
         if not self.api_key:
@@ -79,9 +88,17 @@ class OpenAIEmbedder(Embedder):
         self._batch_size = batch_size
         self._timeout = timeout
         self._cache_size = cache_size
+        env_dim = os.getenv("EMBEDDING_DIMENSIONS")
+        if dimensions is not None:
+            self._dimensions = dimensions
+        elif env_dim and env_dim.isdigit():
+            self._dimensions = int(env_dim)
+        else:
+            self._dimensions = self.MODEL_DIMENSIONS.get(model, 1536)
 
-        # LRU cache: hash(text) → embedding
+        # LRU cache: hash(model:base_url:text) → embedding (guarded by lock)
         self._cache: OrderedDict[str, list[float]] = OrderedDict()
+        self._cache_lock = threading.Lock()
 
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
@@ -94,7 +111,8 @@ class OpenAIEmbedder(Embedder):
 
     @property
     def dimensions(self) -> int:
-        return 1536  # text-embedding-3-small
+        # Fallback for tests constructing via __new__ without __init__.
+        return getattr(self, "_dimensions", 1536)
 
     @property
     def model_name(self) -> str:
@@ -102,29 +120,50 @@ class OpenAIEmbedder(Embedder):
 
     async def embed(self, text: str) -> list[float]:
         """Embed a single text string (with LRU cache)."""
+        # Lazily init cache attrs for tests using __new__ without __init__.
+        if not hasattr(self, "_cache_lock"):
+            import threading as _th
+            from collections import OrderedDict as _OD
+            self._cache_lock = _th.Lock()  # type: ignore[attr-defined]
+            if not hasattr(self, "_cache"):
+                self._cache = _OD()  # type: ignore[attr-defined]
+            if not hasattr(self, "_cache_size"):
+                self._cache_size = 1024  # type: ignore[attr-defined]
         if not text:
             return [0.0] * self.dimensions
 
         cache_key = self._cache_key(text)
-        if cache_key in self._cache:
-            # Move to end (most recently used)
-            self._cache.move_to_end(cache_key)
-            return self._cache[cache_key]
+        with self._cache_lock:  # type: ignore[attr-defined]
+            if cache_key in self._cache:
+                # Move to end (most recently used)
+                self._cache.move_to_end(cache_key)
+                return list(self._cache[cache_key])
 
         result = await self._embed_uncached([text])
         embedding = result[0] if result else [0.0] * self.dimensions
 
         # Cache the result
-        self._cache[cache_key] = embedding
-        if len(self._cache) > self._cache_size:
-            self._cache.popitem(last=False)  # Evict LRU
+        with self._cache_lock:
+            self._cache[cache_key] = embedding
+            if len(self._cache) > self._cache_size:
+                self._cache.popitem(last=False)  # Evict LRU
 
-        return embedding
+        return list(embedding)
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch of texts, using cache where possible."""
         if not texts:
             return []
+        if not hasattr(self, "_cache_lock"):
+            import threading as _th2
+            from collections import OrderedDict as _OD2
+            self._cache_lock = _th2.Lock()  # type: ignore[attr-defined]
+            if not hasattr(self, "_cache"):
+                self._cache = _OD2()  # type: ignore[attr-defined]
+            if not hasattr(self, "_cache_size"):
+                self._cache_size = 1024  # type: ignore[attr-defined]
+            if not hasattr(self, "_batch_size"):
+                self._batch_size = 100  # type: ignore[attr-defined]
 
         results: list[list[float] | None] = [None] * len(texts)
         uncached_indices: list[int] = []
@@ -136,12 +175,13 @@ class OpenAIEmbedder(Embedder):
                 results[i] = [0.0] * self.dimensions
                 continue
             cache_key = self._cache_key(text)
-            if cache_key in self._cache:
-                self._cache.move_to_end(cache_key)
-                results[i] = self._cache[cache_key]
-            else:
-                uncached_indices.append(i)
-                uncached_texts.append(text)
+            with self._cache_lock:
+                if cache_key in self._cache:
+                    self._cache.move_to_end(cache_key)
+                    results[i] = list(self._cache[cache_key])
+                else:
+                    uncached_indices.append(i)
+                    uncached_texts.append(text)
 
         # Embed uncached texts in batches
         if uncached_texts:
@@ -153,12 +193,13 @@ class OpenAIEmbedder(Embedder):
                 batch_embeddings = await self._embed_uncached(batch_texts)
 
                 for idx, embedding in zip(batch_indices, batch_embeddings, strict=True):
-                    results[idx] = embedding
+                    results[idx] = list(embedding)
                     # Cache
                     cache_key = self._cache_key(texts[idx])
-                    self._cache[cache_key] = embedding
-                    if len(self._cache) > self._cache_size:
-                        self._cache.popitem(last=False)
+                    with self._cache_lock:
+                        self._cache[cache_key] = list(embedding)
+                        if len(self._cache) > self._cache_size:
+                            self._cache.popitem(last=False)
 
         # Fill any remaining None with zero vectors
         for i in range(len(results)):
@@ -208,8 +249,11 @@ class OpenAIEmbedder(Embedder):
         return embeddings
 
     def _cache_key(self, text: str) -> str:
-        """Generate a cache key for a text string."""
-        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+        """Generate a cache key for a text string (namespaced by model + base_url)."""
+        model = getattr(self, "_model", "text-embedding-3-small")
+        base = getattr(self, "_base_url", "https://api.openai.com/v1")
+        scoped = f"{model}:{base}:{text}"
+        return hashlib.sha256(scoped.encode("utf-8")).hexdigest()
 
     async def close(self) -> None:
         """Close the HTTP client."""

@@ -150,7 +150,14 @@ class Gateway:
         self._db_ready = False
         self._job_runner = None
         self._turns: dict[str, asyncio.Task[None]] = {}
-        self._auth_token: str | None = None
+        self._turn_locks: dict[str, asyncio.Lock] = {}
+        self._turn_progress: dict[str, dict[str, int]] = {}
+        self._config_lock = asyncio.Lock()
+        # Token-based auth for the stdio channel. Local UIs set
+        # AH_GATEWAY_TOKEN; None means "open" (stdio local use) with a warning.
+        self._auth_token: str | None = os.environ.get("AH_GATEWAY_TOKEN")
+        if self._auth_token is None:
+            logger.warning("AH_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests")
         self._methods: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] = {
             "initialize": self._initialize,
             "session.create": self._session_create,
@@ -168,6 +175,8 @@ class Gateway:
         self, name: str, handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
     ) -> None:
         """Register an extra JSON-RPC method (used by ``ah.gateway.features``)."""
+        if name in self._methods:
+            logger.debug("method already registered, overwriting: %s", name)
         self._methods[name] = handler
 
     def turn_running(self, session_id: uuid.UUID) -> bool:
@@ -292,10 +301,16 @@ class Gateway:
         from ah.plugins.loader import load_plugins
 
         load_plugins()
-        if params.get("model"):
-            self._set_model(params["model"])
-        if params.get("provider"):
-            self._set_provider(params["provider"])
+        # Pick up a token set after construction (e.g. tests / late env).
+        if self._auth_token is None:
+            env_token = os.environ.get("AH_GATEWAY_TOKEN")
+            if env_token:
+                self._auth_token = env_token
+        async with self._config_lock:
+            if params.get("model"):
+                self._set_model(params["model"])
+            if params.get("provider"):
+                self._set_provider(params["provider"])
         if not self._db_ready:
             try:
                 await db.connect()
@@ -313,17 +328,21 @@ class Gateway:
             "version": __version__,
             "model": self.model,
             "provider": self.provider,
-            "cwd": os.getcwd(),
+            # Redacted to the basename: the full working-directory path can
+            # leak usernames / machine layout to unauthenticated callers.
+            "cwd": os.path.basename(os.getcwd()),
             "branch": _git_branch(),
         }
 
     async def _session_create(self, params: dict[str, Any]) -> dict[str, Any]:
         self.require_db()
         title = str(params.get("title") or "").strip()[:80] or "New session"
+        async with self._config_lock:
+            model, provider = self.model, self.provider
         session = await session_manager.create(
             title=title,
-            model=self.model,
-            provider=self.provider,
+            model=model,
+            provider=provider,
             context_budget=config.get("context_budget"),
         )
         return {"session": session_to_dict(session)}
@@ -340,6 +359,8 @@ class Gateway:
             offset = int(cursor)
         else:
             raise RpcError(INVALID_PARAMS, "cursor must be a non-negative integer string")
+        if offset > 100_000:
+            raise RpcError(INVALID_PARAMS, "cursor offset too large (max 100000)")
         sessions = await session_manager.list_sessions(limit=limit + 1, offset=offset)
         result: dict[str, Any] = {
             "sessions": [session_to_dict(s) for s in sessions[:limit]],
@@ -370,16 +391,24 @@ class Gateway:
         text = params.get("text")
         if not isinstance(text, str) or not text.strip():
             raise RpcError(INVALID_PARAMS, "text must be a non-empty string")
+        text = text.strip()
+        if len(text) > 20_000:
+            raise RpcError(INVALID_PARAMS, "text is too long (max 20000 characters)")
         key = str(session.id)
-        running = self._turns.get(key)
-        if running is not None and not running.done():
-            raise RpcError(TURN_IN_PROGRESS, "a turn is already running for this session")
-        turn_id = uuid.uuid4().hex[:12]
-        logger.info("Turn %s started for session %s", turn_id, session.id)
-        self._turns[key] = asyncio.create_task(
-            self._run_turn_with_timeout(session.id, turn_id, text.strip())
-        )
-        return {"turnId": turn_id}
+        # Per-session lock: closes the check-then-act race between the
+        # running-turn check and task creation for concurrent submitters.
+        # setdefault is synchronous, so both racers share the same lock.
+        lock = self._turn_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            running = self._turns.get(key)
+            if running is not None and not running.done():
+                raise RpcError(TURN_IN_PROGRESS, "a turn is already running for this session")
+            turn_id = uuid.uuid4().hex[:12]
+            logger.info("Turn %s started for session %s", turn_id, session.id)
+            self._turns[key] = asyncio.create_task(
+                self._run_turn_with_timeout(session.id, turn_id, text)
+            )
+            return {"turnId": turn_id}
 
     async def _prompt_cancel(self, params: dict[str, Any]) -> dict[str, Any]:
         key = str(_parse_session_id(params))
@@ -387,6 +416,15 @@ class Gateway:
         if task is None or task.done():
             return {"cancelled": False}
         task.cancel()
+        await asyncio.sleep(0)  # let the cancellation deliver before reporting
+        try:
+            # Best-effort join so the turn's cleanup runs before we answer.
+            # shield() keeps a cancelled turn from cancelling this handler.
+            await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+        except (asyncio.CancelledError, TimeoutError, Exception):
+            pass
+        # Entry removal is left to _run_turn's finally block, which deletes
+        # only if the stored task is still the current one (identity check).
         return {"cancelled": True}
 
     async def _config_set(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -396,20 +434,24 @@ class Gateway:
         from ah.core.config import DEFAULTS, SECRET_KEYS
 
         key, value = params.get("key"), params.get("value")
-        if key == "model":
-            self._set_model(value)
-        elif key == "provider":
-            self._set_provider(value)
-        elif key in SECRET_KEYS:
-            raise RpcError(INVALID_PARAMS, f"{key} is a secret; use /keys or .env instead")
-        elif isinstance(key, str) and key in DEFAULTS:
-            config.set(
-                key, features.coerce_config_value(key, value), persist=bool(params.get("persist"))
-            )
-        else:
-            raise RpcError(INVALID_PARAMS, f"unknown setting: {key}")
-        if params.get("persist") and key in ("model", "provider"):
-            config.set(key, value, persist=True)
+        persist = bool(params.get("persist"))
+        async with self._config_lock:
+            if key == "model":
+                self._set_model(value)
+                value = self.model
+            elif key == "provider":
+                self._set_provider(value)
+                value = self.provider
+            elif key in SECRET_KEYS:
+                raise RpcError(INVALID_PARAMS, f"{key} is a secret; use /keys or .env instead")
+            elif isinstance(key, str) and key in DEFAULTS:
+                # Coerce first so invalid values raise; persist the coerced value.
+                value = features.coerce_config_value(key, value)
+                config.set(key, value, persist=persist)
+            else:
+                raise RpcError(INVALID_PARAMS, f"unknown setting: {key}")
+            if persist and key in ("model", "provider"):
+                config.set(key, value, persist=True)
         result: dict[str, Any] = {"model": self.model, "provider": self.provider, "key": key}
         result["value"] = getattr(self, key) if key in ("model", "provider") else config.get(key)
         return result
@@ -437,14 +479,16 @@ class Gateway:
             emit(
                 "message.complete",
                 text=final.content if final is not None else "",
-                tokens=final.tokens_used if final is not None else tokens,
+                # Prefer the agent's final accounting; fall back to the tokens
+                # accumulated from token_usage events along the way.
+                tokens=(final.tokens_used or tokens) if final is not None else tokens,
                 iterations=final.iterations if final is not None else 0,
                 toolCalls=len(final.tool_calls) if final is not None else 0,
                 cancelled=cancelled,
             )
 
         emit("message.start")
-        open_tools: list[tuple[str, str]] = []  # (tool id, tool name), in start order
+        open_tools: dict[str, str] = {}  # tool id -> tool name, in start order
         tool_count = 0
         tokens = 0
         final = None
@@ -456,25 +500,55 @@ class Gateway:
                 elif event.type == "tool_call":
                     tool_count += 1
                     tool_id = f"{turn_id}-{tool_count}"
-                    open_tools.append((tool_id, event.tool_name))
+                    open_tools[tool_id] = event.tool_name
+                    self._turn_progress[turn_id] = {
+                        "tokens": tokens,
+                        "iterations": 0,
+                        "toolCalls": tool_count,
+                    }
                     emit("tool.start", id=tool_id, name=event.tool_name, args=event.tool_args)
                 elif event.type == "tool_result":
-                    match = next((t for t in open_tools if t[1] == event.tool_name), None)
-                    if match is not None:
-                        open_tools.remove(match)
+                    # Pair by tool-call id when the event carries one;
+                    # otherwise fall back to the oldest open call with the
+                    # same name (FIFO).
+                    result_id = getattr(event, "tool_call_id", None) or getattr(event, "id", None)
+                    match_id: str | None = None
+                    if result_id is not None and str(result_id) in open_tools:
+                        match_id = str(result_id)
+                    else:
+                        for tid, tname in open_tools.items():
+                            if tname == event.tool_name:
+                                match_id = tid
+                                break
+                    if match_id is not None:
+                        del open_tools[match_id]
                     result = str(event.tool_result)
+                    truncated = len(result) > MAX_TOOL_RESULT_CHARS
                     emit(
                         "tool.complete",
-                        id=match[0] if match else f"{turn_id}-{tool_count}",
+                        id=match_id if match_id else f"{turn_id}-{tool_count}",
                         name=event.tool_name,
                         result=result[:MAX_TOOL_RESULT_CHARS],
+                        truncated=truncated,
                         isError=result.startswith("Error:"),
                     )
                 elif event.type == "token_usage":
                     tokens += event.tokens_used
+                    self._turn_progress[turn_id] = {
+                        "tokens": tokens,
+                        "iterations": 0,
+                        "toolCalls": tool_count,
+                    }
                     emit("usage", tokens=tokens)
                 elif event.type == "done":
                     final = event.response
+                    self._turn_progress[turn_id] = {
+                        "tokens": (getattr(final, "tokens_used", 0) or tokens),
+                        "iterations": (getattr(final, "iterations", 0) or 0),
+                        "toolCalls": len(getattr(final, "tool_calls", None) or []),
+                    }
+                else:
+                    logger.warning("Unknown stream event type: %s", getattr(event, "type", "?"))
         except asyncio.CancelledError:
             complete(cancelled=True)
             return
@@ -489,13 +563,26 @@ class Gateway:
         complete(final)
 
     async def _run_turn_with_timeout(self, session_id: uuid.UUID, turn_id: str, text: str) -> None:
-        """Run a turn with a configurable timeout."""
+        """Run a turn with a configurable timeout.
+
+        ``wait_for`` cancels the inner turn on timeout, and the turn's own
+        ``CancelledError`` handler already emits ``message.complete`` — so a
+        timeout must not emit a second ``complete`` when cleanup already ran.
+        """
         timeout = config.get("turn_timeout")
+        sid = str(session_id)
+        current = asyncio.current_task()
         try:
             await asyncio.wait_for(self._run_turn(session_id, turn_id, text), timeout=timeout)
         except TimeoutError:
+            # Inner turn already emitted message.complete(cancelled=True) while
+            # handling the cancellation: skip the duplicate if it cleaned up.
+            if self._turns.get(sid) is not current:
+                return
             logger.warning("Turn %s timed out after %ss", turn_id, timeout)
-            sid = str(session_id)
+            progress = self._turn_progress.get(
+                turn_id, {"tokens": 0, "iterations": 0, "toolCalls": 0}
+            )
             self._write(
                 {
                     "jsonrpc": "2.0",
@@ -517,20 +604,29 @@ class Gateway:
                         "sessionId": sid,
                         "turnId": turn_id,
                         "text": "",
-                        "tokens": 0,
-                        "iterations": 0,
-                        "toolCalls": 0,
+                        "tokens": progress.get("tokens", 0),
+                        "iterations": progress.get("iterations", 0),
+                        "toolCalls": progress.get("toolCalls", 0),
                         "cancelled": False,
                     },
                 }
             )
-            # Clean up the turns dict
-            if self._turns.get(sid) is not None:
+            # Delete only if the stored task is still this timed-out turn.
+            if self._turns.get(sid) is current:
                 del self._turns[sid]
+        except asyncio.CancelledError:
+            # prompt.cancel won the race; the inner turn already emitted
+            # message.complete(cancelled=True). Preserve that, just tidy up.
+            if self._turns.get(sid) is current:
+                del self._turns[sid]
+            raise
+        finally:
+            self._turn_progress.pop(turn_id, None)
 
 
 def _parse_session_id(params: dict[str, Any]) -> uuid.UUID:
+    """Parse sessionId, accepting canonical, braced, and URN UUID forms."""
     try:
-        return uuid.UUID(str(params.get("sessionId")))
+        return uuid.UUID(str(params.get("sessionId")).strip())
     except (ValueError, TypeError):
         raise RpcError(INVALID_PARAMS, "sessionId must be a UUID") from None

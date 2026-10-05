@@ -135,7 +135,8 @@ class SessionManager:
             "UPDATE sessions SET last_activity = now() WHERE id = $1",
             session_id,
         )
-        # Don't invalidate cache — let it expire naturally
+        # Invalidate so readers never see stale last_activity for up to 60s.
+        await self._cache_invalidate(session_id)
 
     async def set_goal(self, session_id: uuid.UUID, goal: str) -> None:
         """Update session goal."""
@@ -190,34 +191,48 @@ class SessionManager:
         return [self._row_to_session(r) for r in rows]
 
     async def fork(self, session_id: uuid.UUID, title: str | None = None) -> Session:
-        """Fork a session — create a new session with copied state and context."""
+        """Fork a session — create a new session with copied state and context.
+
+        Atomic: session creation and the INSERT ... SELECT chunk copy run in
+        a single transaction, so a copy failure cannot leave an orphan fork.
+        """
         source = await self.get(session_id)
         if source is None:
             raise ValueError(f"Session {session_id} not found")
 
-        new_session = await self.create(
-            title=title or f"Fork of {source.title or 'untitled'}",
-            agent_id=source.agent_id,
-            state=source.state,
-            goal=source.goal,
-            model=source.model,
-            provider=source.provider,
-            context_budget=source.context_budget,
-        )
+        fork_title = title or f"Fork of {source.title or 'untitled'}"
+        state_msgpack = msgpack.packb(source.state or {}, use_bin_type=True)
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO sessions (title, agent_id, state_msgpack, status, goal, model, provider, context_budget)
+                    VALUES ($1, $2, $3, 'active', $4, $5, $6, $7)
+                    RETURNING id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, created_at, last_activity
+                    """,
+                    fork_title,
+                    source.agent_id,
+                    state_msgpack,
+                    source.goal,
+                    source.model,
+                    source.provider,
+                    source.context_budget,
+                )
+                new_session = self._row_to_session(row)
 
-        # Copy context chunks, keeping their timestamps: a single INSERT ... SELECT
-        # would otherwise stamp every copy with the same now(), scrambling order.
-        await db.execute(
-            """
-            INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, created_at, accessed_at)
-            SELECT $2, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, created_at, accessed_at
-            FROM context_chunks
-            WHERE session_id = $1
-            """,
-            session_id,
-            new_session.id,
-        )
-
+                # Copy context chunks, keeping their timestamps: a single INSERT ... SELECT
+                # would otherwise stamp every copy with the same now(), scrambling order.
+                await conn.execute(
+                    """
+                    INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, created_at, accessed_at)
+                    SELECT $2, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, created_at, accessed_at
+                    FROM context_chunks
+                    WHERE session_id = $1
+                    """,
+                    session_id,
+                    new_session.id,
+                )
+        await self._cache_put(new_session)
         return new_session
 
     async def list_sessions(

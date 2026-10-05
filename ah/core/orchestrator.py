@@ -208,6 +208,7 @@ class Orchestrator:
         steps: list[tuple[str, str]],
         *,
         parent_session_id: uuid.UUID | None = None,
+        _hop_count: int = 0,
     ) -> list[DelegationResult]:
         """Run (agent, task) steps in order; each task is prefixed with prior results."""
         results: list[DelegationResult] = []
@@ -222,6 +223,7 @@ class Orchestrator:
                     prompt,
                     from_agent="orchestrator",
                     parent_session_id=parent_session_id,
+                    _hop_count=_hop_count + 1,
                 )
             )
         return results
@@ -231,22 +233,28 @@ class Orchestrator:
         tasks: list[tuple[str, str]],
         *,
         parent_session_id: uuid.UUID | None = None,
-    ) -> list[DelegationResult]:
-        """Run (agent, task) delegations concurrently."""
-        return list(
-            await asyncio.gather(
-                *(
-                    self.delegate(
-                        agent_name,
-                        task,
-                        from_agent="orchestrator",
-                        parent_session_id=parent_session_id,
-                    )
-                    for agent_name, task in tasks
-                ),
-                return_exceptions=True,
-            )
+        _hop_count: int = 0,
+    ) -> list[DelegationResult | Exception]:
+        """Run (agent, task) delegations concurrently.
+
+        Children inherit ``_hop_count + 1`` so circular delegation is still
+        bounded. Individual failures are returned as exceptions in place
+        (return_exceptions=True) so callers never lose results.
+        """
+        raw = await asyncio.gather(
+            *(
+                self.delegate(
+                    agent_name,
+                    task,
+                    from_agent="orchestrator",
+                    parent_session_id=parent_session_id,
+                    _hop_count=_hop_count + 1,
+                )
+                for agent_name, task in tasks
+            ),
+            return_exceptions=True,
         )
+        return list(raw)
 
     # ─── persistence ──────────────────────────────────────────────────────
     async def _record_start(

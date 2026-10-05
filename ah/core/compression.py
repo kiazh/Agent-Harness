@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import copy
 import logging
 import uuid
 from dataclasses import dataclass
@@ -335,13 +336,23 @@ class ContextCompressor:
 
         # Sort back to original order (by created_at)
         selected.sort(key=lambda c: c.created_at, reverse=True)
+        dropped = len(chunks) - len(selected)
+        if dropped > 0:
+            # Dropped chunks are evicted (archived by the caller); log for audit.
+            logger.info(
+                "Truncate compression dropped %d of %d chunks (target %d tokens)",
+                dropped,
+                len(chunks),
+                target_tokens,
+            )
         return selected
 
     def _truncate_chunk(self, chunk: ContextChunk, max_tokens: int) -> ContextChunk | None:
         """Truncate a chunk's payload to fit within max_tokens."""
         max_chars = max_tokens * 4  # Rough estimate: 4 chars per token
 
-        payload = chunk.payload.copy()
+        # Deep copy so nested dict truncation never aliases the original chunk.
+        payload = copy.deepcopy(chunk.payload)
         truncated = False
 
         # Truncate string values in payload
@@ -363,6 +374,7 @@ class ContextCompressor:
         if new_tokens > max_tokens:
             # Still too big, truncate the string representation
             payload = {"content": new_text[:max_chars] + "..."}
+            # Recompute token count after final truncation (no stale counts).
             new_tokens = get_token_count(str(payload))
 
         return ContextChunk(

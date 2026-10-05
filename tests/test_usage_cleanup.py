@@ -50,7 +50,8 @@ async def test_cleanup_orphaned_reservations_marks_them_failed(db_pool):
     assert row1["status"] == "error"
     assert row2["status"] == "error"
     assert row3["status"] == "complete"  # untouched
-    assert cleaned == 2
+    # Shared test DB may contain orphans from other tests; at least ours cleaned.
+    assert cleaned >= 2
 
     # Cleanup
     await db_pool.execute("DELETE FROM llm_usage WHERE session_id = $1", session_id)
@@ -64,6 +65,8 @@ async def test_cleanup_orphaned_reservations_returns_zero_when_none(db_pool):
     from ah.core.usage import UsageStore
 
     store = UsageStore()
+    # Drain any leftovers from other tests first for isolation.
+    await store.cleanup_orphaned_reservations()
     cleaned = await store.cleanup_orphaned_reservations()
     assert cleaned == 0
 

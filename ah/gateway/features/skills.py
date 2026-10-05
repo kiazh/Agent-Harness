@@ -21,11 +21,13 @@ def _registry():
 
 async def skills_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """List all skills."""
+    gw.require_db()
     return {"skills": [_skill(s) for s in sorted(_registry().list_skills(), key=lambda s: s.name)]}
 
 
 async def skills_show(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """Show a skill by name."""
+    gw.require_db()
     skill = _registry().get(_str(params, "name", max_len=200))
     if skill is None:
         raise RpcError(NOT_FOUND, f"skill {params.get('name')!r} not found")
@@ -34,6 +36,7 @@ async def skills_show(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 async def skills_learn(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """Learn a new skill from a file, URL, or existing skill."""
+    gw.require_db()
     triggers = params.get("triggers")
     if triggers is not None and (
         not isinstance(triggers, list) or not all(isinstance(t, str) for t in triggers)
@@ -52,6 +55,7 @@ async def skills_learn(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def skills_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    gw.require_db()
     name = _str(params, "name", max_len=200)
     if not _registry().delete_skill(name):
         raise RpcError(NOT_FOUND, f"skill {name!r} not found")
@@ -59,6 +63,7 @@ async def skills_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def skills_curator(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    gw.require_db()
     from ah.skills.registry import SkillCurator
 
     curator = SkillCurator(_registry())

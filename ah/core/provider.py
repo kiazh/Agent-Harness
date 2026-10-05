@@ -35,7 +35,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Retry with backoff for rate-limited (429) responses
 # ---------------------------------------------------------------------------
-_MAX_RETRIES = 4
+# The provider retries 429s a small fixed number of times; the agent layer
+# must NOT retry 429s again (see ah.core.agent._is_rate_limit_error), or one
+# rate limit would fan out into dozens of requests.
+_MAX_RETRIES = 2
 _RETRY_BASE_DELAY = 1.0  # seconds; doubles each attempt
 
 
@@ -46,7 +49,7 @@ async def _post_with_retry(
 ) -> httpx.Response:
     """POST with exponential backoff on 429 (rate limit) responses.
 
-    Retries up to _MAX_RETRIES times with delays of 1s, 2s, 4s, 8s.
+    Retries up to _MAX_RETRIES times with delays of 1s, 2s.
     Non-429 errors are raised immediately.
     """
     last_exc: Exception | None = None
@@ -186,12 +189,24 @@ class AsyncTokenBucket:
             await asyncio.sleep(wait_time)
 
 
-def _get_rate_limiter() -> AsyncTokenBucket:
-    """Build a rate limiter from configuration."""
-    calls_per_minute = int(config.get("rate_limit_calls_per_minute"))
-    if calls_per_minute < 0:
-        raise ValidationError("rate_limit_calls_per_minute must be non-negative")
-    return AsyncTokenBucket(rate=calls_per_minute / 60.0, capacity=calls_per_minute)
+def _get_rate_limiter(provider_key: str = "default") -> AsyncTokenBucket:
+    """Return the shared rate limiter for *provider_key*.
+
+    One bucket per provider (process-wide singleton): per-instance limiters
+    let N provider instances issue N× the configured rate.
+    """
+    limiter = _RATE_LIMITERS.get(provider_key)
+    if limiter is None:
+        calls_per_minute = int(config.get("rate_limit_calls_per_minute"))
+        if calls_per_minute < 0:
+            raise ValidationError("rate_limit_calls_per_minute must be non-negative")
+        limiter = AsyncTokenBucket(rate=calls_per_minute / 60.0, capacity=calls_per_minute)
+        _RATE_LIMITERS[provider_key] = limiter
+    return limiter
+
+
+# Process-wide limiter buckets, keyed by provider name (see _get_rate_limiter).
+_RATE_LIMITERS: dict[str, AsyncTokenBucket] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +303,7 @@ class OpenRouterProvider(LLMProvider):
         if not self.api_key:
             raise ValidationError("OPENROUTER_API_KEY not set")
         self.model = model
-        self._rate_limiter = _get_rate_limiter()
+        self._rate_limiter = _get_rate_limiter("openrouter")
         self.client = httpx.AsyncClient(
             base_url=self.BASE_URL,
             headers={
@@ -498,7 +513,12 @@ class OpenRouterProvider(LLMProvider):
                         if func.get("name"):
                             tc["name"] = func["name"]
                         if func.get("arguments"):
-                            tc["arguments"] += func["arguments"]
+                            frag = func["arguments"]
+                            if isinstance(frag, dict):
+                                # Some gateways emit structured args; stringify
+                                # before concatenating the streamed fragments.
+                                frag = json.dumps(frag)
+                            tc["arguments"] += frag
         except Exception as e:
             if reservation_id is not None:
                 await usage_store.finish(reservation_id, failed=True)
@@ -569,7 +589,7 @@ class OllamaProvider(LLMProvider):
     def __init__(self, model: str = "llama3.1", base_url: str = "http://localhost:11434") -> None:
         self.model = model
         self.base_url = base_url
-        self._rate_limiter = _get_rate_limiter()
+        self._rate_limiter = _get_rate_limiter("ollama")
         self.client = httpx.AsyncClient(base_url=base_url, timeout=120.0)
 
     async def complete(
@@ -758,7 +778,18 @@ class OllamaProvider(LLMProvider):
                     # Ollama streaming tool calls
                     tc = message.get("tool_calls", [])
                     if tc:
-                        tool_calls.extend(tc)
+                        for call in tc:
+                            if isinstance(call, dict):
+                                fn = call.get("function", {}) or {}
+                                args = fn.get("arguments", "")
+                                if isinstance(args, dict):
+                                    # Normalize structured args to a string so
+                                    # downstream json.loads / concat keeps working.
+                                    call = {
+                                        **call,
+                                        "function": {**fn, "arguments": json.dumps(args)},
+                                    }
+                            tool_calls.append(call)
 
                     if data.get("done"):
                         break
