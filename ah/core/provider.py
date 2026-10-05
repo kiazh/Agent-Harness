@@ -33,6 +33,40 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Retry with backoff for rate-limited (429) responses
+# ---------------------------------------------------------------------------
+_MAX_RETRIES = 4
+_RETRY_BASE_DELAY = 1.0  # seconds; doubles each attempt
+
+
+async def _post_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict[str, Any],
+) -> httpx.Response:
+    """POST with exponential backoff on 429 (rate limit) responses.
+
+    Retries up to _MAX_RETRIES times with delays of 1s, 2s, 4s, 8s.
+    Non-429 errors are raised immediately.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_RETRIES + 1):
+        resp = await client.post(url, json=payload)
+        if resp.status_code != 429:
+            return resp
+        last_exc = httpx.HTTPStatusError(
+            f"429 Too Many Requests (attempt {attempt + 1}/{_MAX_RETRIES + 1})",
+            request=resp.request,
+            response=resp,
+        )
+        if attempt < _MAX_RETRIES:
+            delay = _RETRY_BASE_DELAY * (2 ** attempt)
+            logger.warning("429 rate limited, retrying in %.1fs (attempt %d/%d)", delay, attempt + 1, _MAX_RETRIES + 1)
+            await asyncio.sleep(delay)
+    raise last_exc  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
 # Audit logging
 # ---------------------------------------------------------------------------
 _audit_logger = logging.getLogger("ah.audit")
@@ -309,7 +343,7 @@ class OpenRouterProvider(LLMProvider):
 
         start = time.monotonic()
         try:
-            resp = await self.client.post("/chat/completions", json=payload)
+            resp = await _post_with_retry(self.client, "/chat/completions", payload)
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
