@@ -523,7 +523,16 @@ class ContextManager:
         cursor_time: datetime | None = None
         cursor_id: uuid.UUID | None = None
 
-        async def archive_and_delete(conn: asyncpg.Connection, row: Any) -> None:
+        async def archive_and_delete(conn: asyncpg.Connection, row: Any) -> bool:
+            # Claim the live row before archiving. If a concurrent eviction
+            # already archived and deleted it, this returns None (the lock
+            # waits, then re-reads the committed delete) and we skip it, so a
+            # chunk is never archived twice.
+            claimed = await conn.fetchval(
+                "SELECT id FROM context_chunks WHERE id = $1 FOR UPDATE", row["id"]
+            )
+            if claimed is None:
+                return False
             payload_msgpack = row.get("payload_msgpack") or b""
             embedding_raw = row.get("embedding")
             embedding = str_to_embedding(embedding_raw) if embedding_raw else None
@@ -542,6 +551,7 @@ class ContextManager:
             if archived is None:
                 raise RuntimeError("archive insert returned no row")
             await conn.execute("DELETE FROM context_chunks WHERE id = $1", row["id"])
+            return True
 
         while remaining_evictable > 0:
             page_limit = min(100, remaining_evictable)
@@ -554,6 +564,16 @@ class ContextManager:
                     $2::timestamptz IS NULL OR
                     (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
                     > ($2, $3::uuid)
+                )
+                AND id NOT IN (
+                    -- Hard floor: never select a chunk among the newest ten.
+                    -- Concurrent callers each hold their own stale snapshot, so
+                    -- without this a second caller's cursor advances past the
+                    -- rows the first already deleted and removes the survivors.
+                    SELECT id FROM context_chunks
+                    WHERE session_id = $1
+                    ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) DESC, id DESC
+                    LIMIT 10
                 )
                 ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id
                 LIMIT $4
@@ -586,8 +606,10 @@ class ContextManager:
             try:
                 async with db.acquire() as conn:
                     async with conn.transaction():
+                        successful = []
                         for row in selected:
-                            await archive_and_delete(conn, row)
+                            if await archive_and_delete(conn, row):
+                                successful.append(row)
             except Exception as batch_error:
                 # A bad row must not turn eviction into data loss or block all
                 # other rows; retry individually only on this exceptional path.
@@ -597,12 +619,10 @@ class ContextManager:
                     try:
                         async with db.acquire() as conn:
                             async with conn.transaction():
-                                await archive_and_delete(conn, row)
-                        successful.append(row)
+                                if await archive_and_delete(conn, row):
+                                    successful.append(row)
                     except Exception as error:
                         logger.warning("Failed to archive chunk %s: %s", row["id"], error)
-            else:
-                successful = selected
 
             tokens_freed += sum(row["token_count"] for row in successful)
             chunks_freed += len(successful)

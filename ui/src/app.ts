@@ -97,7 +97,8 @@ export class App implements FeatureHost {
 		this.client.start();
 
 		try {
-			const init = await this.client.initialize<InitializeResult>(
+			const init = await this.client.request<InitializeResult>(
+				"initialize",
 				{ model: this.options.model, provider: this.options.provider },
 				60_000,
 			);

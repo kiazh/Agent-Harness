@@ -434,3 +434,9 @@ CREATE TABLE IF NOT EXISTS learning_reviews (
 );
 CREATE INDEX IF NOT EXISTS idx_learning_reviews_agent
     ON learning_reviews(agent_id, created_at DESC);
+
+-- Lease-based recovery: a 'reviewing' row whose lease has expired is orphaned
+-- (process died mid-call) and can be re-claimed by a new process.
+ALTER TABLE learning_reviews ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_learning_reviews_lease
+    ON learning_reviews(status, lease_expires_at) WHERE status = 'reviewing';

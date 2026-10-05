@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import uuid
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from ah.core.config import config
@@ -18,11 +19,102 @@ from ah.skills.registry import SkillParser, SkillRegistry, skill_registry
 
 logger = logging.getLogger(__name__)
 
+LEASE_SECONDS = 60  # A 'reviewing' row older than this is orphaned and re-claimable.
+
 _SKILL_NAME = re.compile(r"^[a-z][a-z0-9_-]{2,63}$")
 _TRIGGER = re.compile(
     r"\b(document|repeatable|workflow|procedure|runbook|remember how|automate|standardize|template|checklist|guideline|best practice|process|steps to|how to)\b",
     re.I,
 )
+
+# ``learning_reviews.status`` values that represent a proposal an agent made and
+# a human could act on. ``reviewing`` is in-flight and never counted.
+_PROPOSAL_STATUSES = frozenset({"pending", "approved", "rejected"})
+_DECIDED_STATUSES = frozenset({"approved", "rejected"})
+# Terminal non-proposal outcomes: the reviewer ran but staged nothing.
+_NO_SKILL_STATUSES = frozenset({"none"})
+_ERROR_STATUSES = frozenset({"error"})
+_IN_FLIGHT_STATUSES = frozenset({"reviewing"})
+
+
+@dataclass(frozen=True)
+class LearningPrecisionMetrics:
+    """Precision of post-turn skill proposals over a set of review statuses.
+
+    Ratios use ``None`` — never ``0.0`` — when their denominator is empty, so
+    "no proposals yet" cannot be mistaken for "proposals that were all wrong".
+    """
+
+    review_attempts: int
+    proposals: int
+    accepted: int
+    rejected: int
+    pending: int
+    no_skill: int
+    errors: int
+    acceptance_rate: float | None
+    precision: float | None
+    recall_proxy: float | None
+    accepted_with_usage: int = 0
+    usage_rate: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def compute_learning_precision(statuses: list[str]) -> LearningPrecisionMetrics:
+    """Compute proposal precision from raw ``learning_reviews`` statuses.
+
+    Definitions:
+      * ``proposals``      — reviews that staged a skill (pending/approved/rejected).
+      * ``acceptance_rate``— accepted / proposals; how much of what the agent
+        proposed a human actually approved.
+      * ``precision``      — accepted / decided (pending excluded); of the
+        proposals a human ruled on, the accepted share. This is the headline
+        metric — noise shows up as a low value.
+      * ``recall_proxy``   — proposals / review_attempts; of the turns the
+        reviewer spent budget on, the share that yielded any proposal.
+    """
+    counts: dict[str, int] = {}
+    for status in statuses:
+        counts[status] = counts.get(status, 0) + 1
+
+    attempts = sum(count for status, count in counts.items() if status not in _IN_FLIGHT_STATUSES)
+    proposals = sum(counts.get(status, 0) for status in _PROPOSAL_STATUSES)
+    accepted = counts.get("approved", 0)
+    rejected = counts.get("rejected", 0)
+    pending = counts.get("pending", 0)
+    decided = sum(counts.get(status, 0) for status in _DECIDED_STATUSES)
+    no_skill = sum(counts.get(status, 0) for status in _NO_SKILL_STATUSES)
+    errors = sum(counts.get(status, 0) for status in _ERROR_STATUSES)
+
+    return LearningPrecisionMetrics(
+        review_attempts=attempts,
+        proposals=proposals,
+        accepted=accepted,
+        rejected=rejected,
+        pending=pending,
+        no_skill=no_skill,
+        errors=errors,
+        acceptance_rate=accepted / proposals if proposals else None,
+        precision=accepted / decided if decided else None,
+        recall_proxy=proposals / attempts if attempts else None,
+    )
+
+
+def compute_accepted_usage_rate(
+    accepted_names: list[str | None], usage_by_name: dict[str, int]
+) -> float | None:
+    """Of the accepted skills, the share that have been used at least once.
+
+    A skill that is approved but never triggered is latent noise, so this is the
+    relevance proxy for precision. Returns ``None`` when nothing was accepted.
+    """
+    names = [name for name in accepted_names if name]
+    if not names:
+        return None
+    used = sum(1 for name in names if usage_by_name.get(name, 0) > 0)
+    return used / len(names)
 
 
 class LearningReviewer:
@@ -76,24 +168,50 @@ class LearningReviewer:
                 if owner != agent_id:
                     raise PermissionError("session belongs to a different agent")
                 existing = await conn.fetchrow(
-                    "SELECT * FROM learning_reviews WHERE session_id = $1 AND turn_hash = $2",
+                    "SELECT * FROM learning_reviews WHERE session_id = $1 AND turn_hash = $2 FOR UPDATE",
                     session_id,
                     digest,
                 )
                 if existing is not None:
-                    return self._serialize(existing) if existing["status"] == "pending" else None
-                count = await conn.fetchval(
-                    "SELECT COUNT(*) FROM learning_reviews WHERE session_id = $1", session_id
-                )
-                if count >= max_reviews:
-                    return None
-                row = await conn.fetchrow(
-                    """INSERT INTO learning_reviews (session_id, agent_id, turn_hash, status)
-                       VALUES ($1, $2, $3, 'reviewing') RETURNING *""",
-                    session_id,
-                    agent_id,
-                    digest,
-                )
+                    if existing["status"] == "pending":
+                        return self._serialize(existing)
+                    if existing["status"] == "reviewing":
+                        # Re-claim an orphaned 'reviewing' row (process died mid-call).
+                        # FOR UPDATE SKIP LOCKED ensures only one concurrent caller wins.
+                        claimed = await conn.fetchrow(
+                            """UPDATE learning_reviews
+                               SET lease_expires_at = now() + ($2 * interval '1 second')
+                               WHERE id = (
+                                   SELECT id FROM learning_reviews
+                                   WHERE id = $1 AND status = 'reviewing'
+                                     AND (lease_expires_at IS NULL OR lease_expires_at < now())
+                                   FOR UPDATE SKIP LOCKED
+                               )
+                               RETURNING *""",
+                            existing["id"],
+                            LEASE_SECONDS,
+                        )
+                        if claimed is None:
+                            # Another process claimed it first, or lease hasn't expired
+                            return None
+                        # Re-claimed — proceed with the LLM call below
+                        row = claimed
+                    else:
+                        return None
+                else:
+                    count = await conn.fetchval(
+                        "SELECT COUNT(*) FROM learning_reviews WHERE session_id = $1", session_id
+                    )
+                    if count >= max_reviews:
+                        return None
+                    row = await conn.fetchrow(
+                        """INSERT INTO learning_reviews (session_id, agent_id, turn_hash, status, lease_expires_at)
+                           VALUES ($1, $2, $3, 'reviewing', now() + ($4 * interval '1 second')) RETURNING *""",
+                        session_id,
+                        agent_id,
+                        digest,
+                        LEASE_SECONDS,
+                    )
 
         # Redact before sending to the provider; bound both input and output.
         prompt = (
@@ -123,7 +241,7 @@ class LearningReviewer:
             normalized = self._validate(candidate)
             if normalized is None:
                 await db.execute(
-                    "UPDATE learning_reviews SET status = 'none', reason = 'no valid novel skill' WHERE id = $1",
+                    "UPDATE learning_reviews SET status = 'none', reason = 'no valid novel skill', lease_expires_at = NULL WHERE id = $1",
                     row["id"],
                 )
                 return None
@@ -134,13 +252,14 @@ class LearningReviewer:
                 or (self.registry.skills_dir / name / "SKILL.md").exists()
             ):
                 await db.execute(
-                    "UPDATE learning_reviews SET status = 'none', reason = 'skill already exists' WHERE id = $1",
+                    "UPDATE learning_reviews SET status = 'none', reason = 'skill already exists', lease_expires_at = NULL WHERE id = $1",
                     row["id"],
                 )
                 return None
             staged = await db.fetchrow(
                 """UPDATE learning_reviews SET status = 'pending', name = $2,
-                          description = $3, triggers = $4::jsonb, content = $5
+                          description = $3, triggers = $4::jsonb, content = $5,
+                          lease_expires_at = NULL
                    WHERE id = $1 RETURNING *""",
                 row["id"],
                 name,
@@ -152,7 +271,7 @@ class LearningReviewer:
         except Exception as exc:
             logger.warning("Post-turn learning review failed for %s: %s", session_id, exc)
             await db.execute(
-                "UPDATE learning_reviews SET status = 'error', reason = $2 WHERE id = $1",
+                "UPDATE learning_reviews SET status = 'error', reason = $2, lease_expires_at = NULL WHERE id = $1",
                 row["id"],
                 type(exc).__name__,
             )
@@ -194,6 +313,32 @@ class LearningReviewer:
             min(max(limit, 1), 100),
         )
         return [self._serialize(row) for row in rows]
+
+    async def precision(self, agent_id: str) -> dict[str, Any]:
+        """Measure proposal precision for one agent from real review records.
+
+        Reads every ``learning_reviews`` status for *agent_id* and folds them
+        through the pure :func:`compute_learning_precision`, then adds the
+        accepted-skill usage rate from registry telemetry. Never raises on an
+        empty history: ratios come back as ``None`` per the documented
+        convention.
+        """
+        rows = await db.fetch(
+            "SELECT status, name FROM learning_reviews WHERE agent_id = $1", agent_id
+        )
+        metrics = compute_learning_precision([row["status"] for row in rows])
+        accepted_names = [row["name"] for row in rows if row["status"] == "approved"]
+        self.registry.load_all()
+        usage_by_name = {
+            skill.name: skill.usage_count for skill in self.registry.list_skills()
+        }
+        accepted_with_usage = sum(
+            1 for name in accepted_names if name and usage_by_name.get(name, 0) > 0
+        )
+        report = metrics.to_dict()
+        report["accepted_with_usage"] = accepted_with_usage
+        report["usage_rate"] = compute_accepted_usage_rate(accepted_names, usage_by_name)
+        return report
 
     async def approve(self, review_id: uuid.UUID, *, agent_id: str) -> dict[str, Any]:
         async with db.acquire() as conn:

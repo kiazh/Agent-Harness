@@ -1,7 +1,8 @@
-"""Evidence-retrieval evaluation for the official LoCoMo JSON layout.
+"""Evidence-retrieval and answer-accuracy evaluation for the official LoCoMo JSON layout.
 
-This scores retrieval of annotated dialogue IDs. It does not score generated
-answers and must not be reported as LoCoMo question-answering accuracy.
+Retrieval scoring measures whether the retriever surfaced the right memory
+chunks. Answer-accuracy scoring measures whether a generated answer matches
+the ground-truth answer using token F1 (the metric used by the LoCoMo paper).
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import time
 import uuid
 from collections import Counter
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ class Question:
     text: str
     evidence: tuple[str, ...]
     category: int | None = None
+    answer: str = ""
 
 
 @dataclass(frozen=True)
@@ -91,7 +93,7 @@ def load_locomo(path: str | Path) -> tuple[Conversation, ...]:
                 # into partial matches ("1:1", "D1").
                 identifiers = re.findall(r"\bD?\d+:\d+\b", entry)
                 normalized.extend(identifiers or [entry])
-            questions.append(Question(qa["question"], tuple(normalized), qa.get("category")))
+            questions.append(Question(qa["question"], tuple(normalized), qa.get("category"), qa.get("answer", "")))
         conversations.append(Conversation(tuple(turns), tuple(questions)))
     return tuple(conversations)
 
@@ -288,6 +290,168 @@ async def evaluate_session_recall(
     metrics = evaluate_rankings(conversations, rankings, k=k)
     mean_latency_ms = 1000 * sum(query_seconds) / len(query_seconds) if query_seconds else 0.0
     return metrics, mean_latency_ms
+
+
+# ---------------------------------------------------------------------------
+# Answer-accuracy evaluation
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AnswerMetrics:
+    """Answer-accuracy metrics for LoCoMo question answering."""
+
+    questions: int
+    skipped_questions: int
+    mean_f1: float
+    exact_match_rate: float
+    scores: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class StubProvider:
+    """Deterministic offline LLM provider for testing.
+
+    Returns a pre-configured answer regardless of the prompt. Tracks the
+    number of calls made. This keeps the test suite hermetic — no network
+    calls, no API keys.
+    """
+
+    def __init__(self, answer: str = "I don't know") -> None:
+        self.answer = answer
+        self.call_count = 0
+
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+        **kwargs: Any,
+    ) -> Any:
+        from ah.core.models import LLMResponse
+
+        self.call_count += 1
+        return LLMResponse(content=self.answer, model="stub", usage={})
+
+
+def _normalize_answer(text: str) -> str:
+    """Lowercase, remove punctuation, and collapse whitespace."""
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", "", text)
+    return " ".join(text.split())
+
+
+def token_f1(prediction: str, ground_truth: str) -> float:
+    """Compute token-level F1 score (SQuAD-style).
+
+    This is the primary scoring metric used by the LoCoMo paper. It is
+    deterministic, offline, and handles partial credit for overlapping
+    tokens. Case-insensitive and punctuation-insensitive.
+    """
+    pred_tokens = _normalize_answer(prediction).split()
+    gt_tokens = _normalize_answer(ground_truth).split()
+    if not pred_tokens or not gt_tokens:
+        return 0.0
+    common = Counter(pred_tokens) & Counter(gt_tokens)
+    num_common = sum(common.values())
+    if num_common == 0:
+        return 0.0
+    precision = num_common / len(pred_tokens)
+    recall = num_common / len(gt_tokens)
+    return 2 * precision * recall / (precision + recall)
+
+
+async def generate_answer(
+    provider: Any,
+    question: str,
+    evidence_texts: Sequence[str],
+) -> str:
+    """Generate an answer using the LLM provider.
+
+    Builds a prompt with the question and retrieved evidence, then calls
+    the provider's ``complete`` method. Returns the generated text.
+    """
+    evidence_block = "\n".join(
+        f"[Evidence {i + 1}] {text}" for i, text in enumerate(evidence_texts)
+    )
+    prompt = (
+        f"Answer the question based on the evidence below. "
+        f"Give a concise answer.\n\n"
+        f"Evidence:\n{evidence_block}\n\n"
+        f"Question: {question}\n\n"
+        f"Answer:"
+    )
+    response = await provider.complete(
+        [{"role": "user", "content": prompt}],
+        temperature=0.0,
+        max_tokens=256,
+    )
+    return response.content.strip()
+
+
+async def evaluate_answers(
+    conversations: Sequence[Conversation],
+    provider: Any,
+) -> AnswerMetrics:
+    """Evaluate answer accuracy across all conversations.
+
+    For each question with evidence, generates an answer using the provider
+    and scores it against the ground-truth answer using token F1.
+
+    Questions without evidence (adversarial) are skipped.
+    """
+    if not conversations:
+        raise ValueError("no conversations to evaluate")
+
+    scores: list[dict[str, Any]] = []
+    total_f1 = 0.0
+    total_exact = 0
+    count = 0
+    skipped = 0
+
+    for conversation in conversations:
+        texts = {turn.dia_id: turn.text for turn in conversation.turns}
+        for question in conversation.questions:
+            if not question.evidence:
+                skipped += 1
+                continue
+            # Collect evidence text for the question's evidence IDs
+            evidence_texts = []
+            for dia_id in question.evidence:
+                if dia_id in texts:
+                    evidence_texts.append(texts[dia_id])
+
+            prediction = await generate_answer(
+                provider, question.text, evidence_texts
+            )
+            ground_truth = question.answer
+
+            f1 = token_f1(prediction, ground_truth)
+            exact = _normalize_answer(prediction) == _normalize_answer(ground_truth)
+
+            scores.append(
+                {
+                    "question": question.text,
+                    "prediction": prediction,
+                    "ground_truth": ground_truth,
+                    "f1": f1,
+                    "exact_match": exact,
+                }
+            )
+            total_f1 += f1
+            total_exact += int(exact)
+            count += 1
+
+    if count == 0:
+        raise ValueError("no questions with evidence to evaluate")
+
+    return AnswerMetrics(
+        questions=count,
+        skipped_questions=skipped,
+        mean_f1=total_f1 / count,
+        exact_match_rate=total_exact / count,
+        scores=scores,
+    )
 
 
 def main() -> None:

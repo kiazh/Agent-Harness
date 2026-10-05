@@ -94,10 +94,21 @@ Suggestions are stored in `learning_reviews`; approval through the gateway or
 `/skills approve <id>` creates a skill only if the name is still unused.
 
 The current tests cover staging, redaction, duplicate turns, rejected
-injection text, approval/rejection, and overwrite prevention. They do not
-measure suggestion precision or skill-use improvement. The reviewer runs as
-a process-local background task; restart recovery is still required before
-this can be called durable learning.
+injection text, approval/rejection, and overwrite prevention. Proposal quality
+is now measured: `ah.skills.learning.compute_learning_precision` folds the
+`learning_reviews` statuses into an acceptance rate (accepted / proposals), a
+precision (accepted / decided, pending excluded), and a recall proxy
+(proposals / review attempts), and `LearningReviewer.precision` reads the real
+records per agent and adds the accepted-skill usage rate as a relevance signal.
+Every ratio is `None`, not `0.0`, when its denominator is empty. Skill-use
+*improvement* is still not measured.
+
+Durable review recovery is now implemented: a review is written as a
+`reviewing` row with a lease (`lease_expires_at`); if the process dies mid-call
+the lease expires and a new process re-claims the row with `FOR UPDATE SKIP
+LOCKED`, so a completed review is never lost or double-processed. The reviewer
+still runs as a background task within the process, but its pending work
+survives a restart.
 
 ## Durable approval workflow trial
 

@@ -155,14 +155,11 @@ export class GatewayClient {
 
 	request<T>(method: string, params: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
 		if (!this.channel) return Promise.reject(new Error("gateway not started"));
-		return this.channel.request<T>(method, params, timeoutMs);
-	}
-
-	/** Initialize the gateway, including the auth token if one is configured. */
-	initialize<T = unknown>(params: Record<string, unknown> = {}, timeoutMs = 60_000): Promise<T> {
+		// The gateway rejects every method except `initialize` unless the caller
+		// presents the auth token, so attach it to each request when configured.
 		const token = this.options.token ?? process.env.AH_GATEWAY_TOKEN;
-		const initParams = token ? { ...params, token } : params;
-		return this.request<T>("initialize", initParams, timeoutMs);
+		const withToken = token ? { ...params, token } : params;
+		return this.channel.request<T>(method, withToken, timeoutMs);
 	}
 
 	stderr(): string[] {

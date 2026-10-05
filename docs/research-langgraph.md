@@ -1,8 +1,9 @@
 # LangGraph Decision for AgentHarness
 
 **Reviewed:** 2026-10-04  
-**Status:** Narrow PostgreSQL recovery trial completed; production integration
-remains undecided.
+**Status:** CLOSED — 2026-10-04. Native PostgreSQL path retained as the
+runtime; LangGraph remains an optional research dependency behind the
+`workflow-trial` extra.
 
 ## What changed
 
@@ -31,30 +32,32 @@ cross-thread memory primitive; adopting a checkpointer would not replace
 AgentHarness's memory, usage accounting, or context archive. An in-memory
 saver would not satisfy process-restart recovery.
 
-## Decision
+## Final Decision (2026-10-04)
 
-Do **not** replace the existing ReAct loop merely to obtain a graph-shaped
-implementation. Do evaluate LangGraph as the durable coordinator for one
-specific workflow: a delegated task that pauses for a tool or skill-write
-approval, survives a process restart, and resumes exactly once. Keep the
-existing provider, tool registry, PostgreSQL context, audit and budget
-boundaries inside the workflow nodes. A native checkpoint prototype should
-run the same scenario for comparison.
+**Keep the native PostgreSQL path as the runtime.** LangGraph stays an
+optional research dependency behind the `workflow-trial` extra. The
+migration boundary is an isolated per-workflow opt-in if a real delegated
+approval workflow ever proves a recovery benefit.
 
-The trial passes only if it demonstrates all of the following:
+**Reason:** The trial measured 3.618 ms mean for native start-plus-approval
+versus 18.608 ms for LangGraph — a 5.1x latency overhead for the same
+scenario. The native path is simpler, faster, and already integrated into
+AgentHarness's existing PostgreSQL infrastructure. LangGraph's checkpoint
+tables and dependency footprint are not justified for the current workflow
+scope. The trial did not exercise usage budgets, gateway streaming, audit
+parity, or external side effects, so the production decision gate was not
+passed.
 
-1. A run resumes after killing and restarting the worker, using PostgreSQL
-   persistence rather than an in-memory saver.
-2. An approval is linked to the exact proposed action and can be denied;
-   cancellation and a second resume cannot execute the action again.
-3. Tool side effects are idempotent or have a persisted execution receipt.
-   LangGraph can replay a node after interruption, so a checkpoint alone
-   cannot guarantee exactly-once effects.
-4. Token and request budgets, audit events, agent ownership, and streaming
-   events match the current gateway behavior.
-5. The dependency, schema, latency, and recovery behavior are measured with
-   a reproducible integration test. A failed trial leaves the current loop
-   as the runtime and records the reason.
+**What would change the decision:**
+- A real delegated approval workflow that requires pause/resume across
+  process restarts and proves a recovery benefit that the native path
+  cannot provide.
+- LangGraph demonstrating significantly better recovery semantics for
+  multi-step delegated tasks that the native row-state approach cannot
+  match.
+- A production requirement for graph-level checkpointing that justifies
+  the operational complexity of checkpoint tables, schema migrations, and
+  the additional dependency.
 
 ## Trial result (2026-10-04)
 
@@ -84,6 +87,10 @@ sessions, and scheduled jobs at once would create duplicate persistence
 models before recovery semantics are understood. If the trial succeeds,
 rollout should be opt-in per workflow with an explicit checkpoint retention
 policy and a migration path for paused runs.
+
+**Decision recorded:** The native PostgreSQL path is retained as the
+runtime. LangGraph remains an optional research dependency. See
+[Final Decision](#final-decision-2026-10-04) above.
 
 ## Findings and corrections to the earlier document
 
