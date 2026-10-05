@@ -6,12 +6,35 @@
 [![Node.js 22+](https://img.shields.io/badge/node.js-22+-green.svg)](https://nodejs.org/)
 [![PostgreSQL 16+](https://img.shields.io/badge/postgresql-16+-blue.svg)](https://www.postgresql.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/kiazh/Agent-Harness/actions/workflows/ci.yml/badge.svg)](https://github.com/kiazh/Agent-Harness/actions/workflows/ci.yml)
 
 ---
 
-## What This Is
+## Contents
 
-AgentHarness is a complete AI agent framework that runs on your machine. You chat with agents in a streaming terminal UI. The agents remember things across sessions, search the web, run tools in a sandbox, follow schedules, and delegate work to each other. Everything is stored in PostgreSQL with pgvector for semantic search.
+- [What this is](#what-this-is)
+- [Quick start](#quick-start)
+  - [Option A — local](#option-a--local-python--node--postgres)
+  - [Option B — Docker Compose](#option-b--docker-compose)
+- [Terminal UI](#terminal-ui)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Configuration](#configuration)
+- [HTTP API](#http-api)
+- [Research implemented](#research-implemented)
+- [Performance & tests](#performance--tests)
+- [Development](#development)
+- [Project structure](#project-structure)
+- [Troubleshooting](#troubleshooting)
+- [Production-ready vs research](#production-ready-vs-research)
+- [Technology stack](#technology-stack)
+- [License](#license)
+
+---
+
+## What this is
+
+AgentHarness is a complete AI agent framework that runs on your machine. You chat with agents in a streaming terminal UI. Agents remember things across sessions, search the web, run tools in a sandbox, follow schedules, and delegate work to each other. Everything is stored in PostgreSQL with pgvector for semantic search.
 
 ```
 >_ AgentHarness (v0.2.0)
@@ -20,150 +43,139 @@ AgentHarness is a complete AI agent framework that runs on your machine. You cha
 
 ---
 
-## Quick Start
+## Quick start
 
 ### Prerequisites
 
 - Python 3.11+
-- Node.js 22+
-- PostgreSQL 16+ with the pgvector extension
+- Node.js 22.19+
+- PostgreSQL 16+ with the pgvector extension (`pgvector/pgvector:pg16` works)
 
-### Installation
+### Option A — local (Python + Node + Postgres)
 
 ```bash
-# Clone and enter
 git clone https://github.com/kiazh/Agent-Harness.git
 cd Agent-Harness
 
-# Python environment
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 
-# Terminal UI dependencies
 npm install --ignore-scripts --prefix ui
 ```
 
-### First-Launch Setup
-
 ```bash
-# Interactive setup — creates .env, prompts for each API key
-ah setup
+cp .env.example .env   # then fill in DATABASE_URL + at least one LLM key
 
-# Or start blank (fill keys in later via /keys in the UI)
-ah setup --non-interactive
+ah setup               # interactive: creates .env, prompts per API key
+# ah setup --non-interactive  # blank .env, fill keys later via /keys
 
-# Verify, then create the database schema
-ah doctor
-ah init
+ah doctor              # checks python, node, DB, pgvector, keys
+ah init                # creates schema (sessions, chunks, memories, jobs, …)
 ```
 
-`ah setup` writes the git-ignored `.env` next to the project (or at `$AH_ENV_FILE`), with one slot per model family — OpenRouter, OpenAI, Anthropic, Google, Mistral, Groq, Together, DeepSeek, xAI, Cohere. Existing values are kept when you press Enter; `--force` starts over.
+```bash
+ah                     # interactive terminal UI
+ah chat "What is the capital of France?"   # one-shot CLI
+ah serve --host 127.0.0.1 --port 8000      # HTTP API server
+```
 
-### Usage
+### Option B — Docker Compose
 
 ```bash
-# Interactive terminal UI
-ah
+cp .env.example .env
+# set at minimum: AGENT_HARNESS_API_KEY, OPENROUTER_API_KEY, DATABASE_URL is prewired
 
-# One-shot CLI
-ah chat "What is the capital of France?"
-
-# HTTP API server
-ah serve --host 0.0.0.0 --port 8000
+docker compose up --build
+# app: http://127.0.0.1:8000  (ah init + ah serve run automatically)
+# db:  pgvector/pgvector:pg16 with healthcheck
 ```
+
+`ah setup` writes the git-ignored `.env` next to the project (or at `$AH_ENV_FILE`), one slot per model family — OpenRouter, OpenAI, Anthropic, Google, Mistral, Groq, Together, DeepSeek, xAI, Cohere. Existing values are kept when you press Enter.
 
 ---
 
 ## Terminal UI
 
-### Streaming, Cards, and Skins
+Codex-style fullscreen TUI: `>_` brand header, filled borderless composer with accent bar, accent selection rows, braille spinner, docked composer + footer (`model · dir · branch · tokens`, then `? for shortcuts · / for commands`), follow-end scrolling, `/` menu opening upward, mouse support.
 
-The CLI look is a full port of [OpenAI Codex](https://github.com/openai/codex): a one-line `>_` brand header with a dim directory line, a filled borderless composer block with a left accent bar and a dim `Ask AgentHarness to do anything` placeholder on its second row, accent-filled selection rows, braille spinner, and two dim footer lines (`model · dir · branch · tokens`, then `? for shortcuts · / for commands`). Restrained default-foreground text, bold headers, green/red/magenta semantics, `·`-separated segments, exec-style tool titles (`Running`/`Ran`/`Failed`), elapsed `Thinking… Ns` indicator, grouped `/help`, double-Esc to edit the previous message, `Ctrl+L` to clear, and Codex command parity (`/init`, `/review`, `/compact`, `/clear` starts a new chat). Skins recolor the Codex chrome: tuned dark palettes plus house skins. The fullscreen alternate buffer keeps the composer and footer docked to the bottom rows while the transcript scrolls in the flexible area above (Codex layout, follow-end scrolling). The `/` autocomplete menu opens upward above the input, with mouse clicks routed to the flipped rows.
+- **Streaming Markdown** — token-by-token output in a contrasting card; tool cards (`Running`/`Ran`/`Failed`) with diff coloring (`+` green, `-` red, `@@` info).
+- **24 skins** — `/theme` switches live, persisted via `config.theme`: default + `codex`, `mono`, `tokyonight`, `catppuccin` (+frappe/macchiato), `dracula`, `gruvbox`, `rosepine`, `nord`, `everforest`, `matrix`, `onedark`, `one-dark`, `monokai`, `github`, `solarized`, `kanagawa`, `palenight`, `cobalt2`, `ayu`, `nightowl`, `flexoki`.
+- **Keyboard** — Enter send, Shift+Enter newline, Esc stop, Tab complete, Ctrl+C exit, Ctrl+L clear, double-Esc edits last prompt. `/init`, `/review`, `/compact` (=compress), `/clear` for Codex parity.
 
-- **Streaming Markdown** — token-by-token assistant output rendered in a contrasting card, with tool-call cards showing progress. Tool output gets Codex-style diff coloring: `+` lines green, `-` lines red, `@@` hunks info.
-- **Codex status line** — the footer reads `model · dir · branch · tokens · status` with per-item accent colors (model cyan-ish, paths green, branch magenta), no rules anywhere.
-- **Key hints** — `Enter send · Shift+Enter newline · Esc stop · /help commands`, with bold key labels everywhere hints appear.
-- **Twenty-four skins** — `/theme` switches the full palette live, no restart. opencode's own theme is the default, plus `tokyonight`, `catppuccin`, `catppuccin-frappe`, `catppuccin-macchiato`, `dracula`, `gruvbox`, `rosepine`, `nord`, `everforest`, `matrix`, `onedark`, `monokai`, `github`, `solarized`, `kanagawa`, `palenight`, `cobalt2`, `ayu`, `nightowl`, `one-dark`, and `flexoki` (dark variants) — a `codex` skin done in Codex's restrained chrome with magenta brand accents — and an accessible `mono` house skin. Every palette is tuned so accents stay distinct (no two roles sharing one color). Saved via `config.theme`, so your skin survives restarts.
-- **Menus** — borderless bottom-docked sheets (Codex style) with full-width accent selection bars and `enter select · esc back` hints: sessions, models, themes, keys, recall, confirmations.
-- **Keyboard** — Enter sends, Shift+Enter newline, Esc stops a reply, Tab completes, Ctrl+C exits.
-
-### API Keys Without Leaving the UI
+### Keys without leaving the UI
 
 ```
-/keys                  # picker menu — status of every key, values never shown
-/keys list             # table of keys + set/not-set status
-/keys set KEY VALUE    # applies now, saves to .env (add --no-save for session only)
+/keys                  # picker: status of every key, values never shown
+/keys list             # table + set/not-set
+/keys set KEY VALUE    # applies now, saves to .env (--no-save = session only)
 /keys clear KEY        # removes from session and .env
 ```
 
-Setting a key takes effect on the next turn. Secrets are never echoed, never enter input history, and never touch `config.yaml`.
+Secrets never echo, never enter history, never touch `config.yaml`.
 
-### Model Switching
+### Models
 
 ```
-/models                # picker over a curated OpenRouter + Ollama list
-/models <query>        # filter the list, e.g. /models llama
-/model <id>            # anything off-list, e.g. /model anthropic/claude-3.5-sonnet
+/models                # picker over curated OpenRouter + Ollama list
+/models <query>        # filter, e.g. /models llama
+/model <id>            # off-list, e.g. /model anthropic/claude-3.5-sonnet
 /provider <name>       # openrouter | ollama
 ```
 
-### All 32 Slash Commands
+### All slash commands
 
 | Command | What it does |
 |---------|--------------|
-| `new`, `sessions`, `resume` | Create, list, and resume sessions |
-| `rename`, `goal`, `fork`, `delete`, `export` | Manage the current session |
+| `new`, `sessions`, `resume` | Create, list, resume sessions |
+| `rename`, `goal`, `fork`, `delete`, `export` | Manage current session |
 | `init`, `review` | Scaffold `AGENTS.md`; agent-driven change review |
 | `search`, `recall` | Full-text session search; anchored cross-session recall |
-| `context`, `compress` | Inspect token usage; compact context |
+| `context`, `compress` | Token usage; compact context |
 | `memory` | `list · search · add · forget · share · pending · approve · reject · stats` |
 | `skills` | `list · show · learn · proposals · approve · reject · delete · curator` |
 | `agents`, `delegate` | List/show/save agents; delegate a task |
 | `jobs` | `list · add · script · heartbeat · cron · on · off · delete` |
-| `keys` | API-key menu (`list · set · clear`) |
-| `models`, `model`, `provider` | Curated model picker; custom model; provider |
-| `config` | Show/set settings (`--save` persists to `config.yaml`) |
-| `theme` | Switch UI skin |
-| `profile`, `profiles` | Your preferences and topics |
-| `status`, `usage` | System health; token/request budgets |
-| `clear` (`/compact` → `compress`), `help`, `exit` | Clear + new chat; grouped help; quit |
+| `keys` | `list · set · clear` |
+| `models`, `model`, `provider` | Picker; custom model; provider |
+| `config` | Show/set settings (`--save` persists) |
+| `theme` | Switch skin |
+| `profile`, `profiles` | Preferences and topics |
+| `status`, `usage` | Health; token/request budgets |
+| `clear`, `help`, `exit` | New chat; grouped help; quit |
 
 ---
 
 ## Features
 
-### Core Agent
+### Core agent
 
-- **ReAct Loop** — Thought → Action → Observation with streaming output and configurable iteration limits.
-- **Tool Registry** — decorator-based, JSON Schema inference, input validation, result caching. Built-ins: `web_search`, `web_extract`, `read_file`, `write_file`, `list_files`, `search_files`, `remember`, `recall`, `delegate`, `list_agents`, `share_memory`, `session_recall`, `skill_list`, `skill_read`, `terminal` (sandboxed).
-- **Skills System** — `SKILL.md` files with YAML frontmatter. Trigger matching, curator health reports, hub publish/install, and progressive disclosure (agents list and read skills; bodies are never auto-inserted into prompts).
+- **ReAct loop** — Thought → Action → Observation, streaming, configurable iterations, 50k token budget, per-tool timeouts (60s for delegation).
+- **Tool registry** — decorator-based, JSON Schema inference, `bool`-safe type checks, 20k arg cap. Built-ins: `web_search`, `web_extract`, `read_file`, `write_file`, `list_files`, `search_files`, `remember`, `recall`, `delegate`, `list_agents`, `share_memory`, `session_recall`, `skill_list`, `skill_read`, `terminal`.
+- **Skills** — `SKILL.md` + YAML frontmatter, trigger matching, curator health, hub publish/install, progressive disclosure (bodies via `skill_read` only), injection scanning on create/update.
 
-### Context & Memory
+### Context & memory
 
-- **PostgreSQL Context** — asyncpg pooling, MessagePack payloads, pgvector embeddings, reversible eviction into `context_archive` (old chunks stay searchable, never deleted).
-- **Cross-Session Recall** — agent-scoped full-text search across live and archived transcripts with anchored context windows.
-- **Long-Term Memory** — LLM extraction, importance scoring, Ebbinghaus forgetting, hybrid retrieval (BM25 + dense + RRF), approval gate, secret redaction, identity/belief drift gating — and **persona-conditioned retrieval on by default** (emotion-weighted interpretations via `persona_default_emotion`, disable with `persona_memory_enabled=false`).
-- **Context Compression** — token-budget-aware, preserves recent context.
+- **PostgreSQL context** — asyncpg pool, MessagePack payloads, pgvector, `context_archive` reversible eviction (paginated, transactional, keep-newest-10).
+- **Cross-session recall** — agent-scoped FTS over live + archive with anchored windows.
+- **Long-term memory** — LLM extraction with dedup (`>=` threshold + intra-batch), importance scoring (explicit always wins), Ebbinghaus forgetting, hybrid retrieval (BM25 + dense + RRF + rerank), approval gate, 17-pattern redaction (+Luhn, nested/list support), identity/belief drift gating, persona-conditioned retrieval default-on (`persona_default_emotion=trust`).
+- **Compression** — budget-aware, deep-copy safe, token recount.
 
 ### RAG
 
-- **Document Pipeline** — indexing, recursive chunking, OpenAI embeddings, hybrid search (BM25 + dense + RRF), reranking with Cohere or identity-aware rerankers.
+Index → recursive chunk (overlap `rfind`, heading stack, `async def` aware) → OpenAI embeddings (model-keyed LRU) → hybrid BM25 + dense + RRF → Cohere/identity rerank. Redacted before store; cache keyed by model/flags.
 
-### Multi-Agent
+### Multi-agent
 
-- **Agent Definitions** — YAML files, database records, or Soul Spec packages, each with its own system prompt, tool allowlist, and model override.
-- **Orchestration** — sequential and parallel delegation with bounded context handoff and hop-count guards.
-- **Shared Memory** — gated cross-agent delivery with HMAC-signed provenance.
+YAML / DB / Soul Spec v0.5 definitions with tool allowlists and model overrides. Sequential + parallel delegation with hop-count inheritance. Shared memory via HMAC provenance (`AGENT_HARNESS_PROVENANCE_KEY`), quarantine on failure.
 
 ### Production
 
-- **HTTP API** — FastAPI with versioned `/api/v1` routes, SSE chat streaming, API-key auth, per-peer rate limiting, `/health`, `/ready`, `/metrics`.
-- **Usage Accounting** — durable `llm_usage` with per-session/per-agent token and request budgets that survive missing provider metadata.
-- **Scheduling** — durable interval, heartbeat, and five-field UTC cron jobs; atomic claim via `FOR UPDATE SKIP LOCKED`; script-only jobs that run without an LLM.
-- **Observability** — sanitized audit events in PostgreSQL, OpenTelemetry spans, Prometheus metrics, gateway file+console logging (`~/.agent-harness/logs/gateway.log`).
-- **Security** — command allowlist (no shell injection), base-directory validation (no path traversal), private-IP rejection (no SSRF), rate limiting, audit logging, PII redaction, opt-in Docker-sandboxed terminal.
-- **Retry Logic** — exponential backoff on LLM calls (1s/2s/4s/8s); non-429 errors pass through immediately.
+- **Usage accounting** — durable `llm_usage`, advisory-lock budgets, `reserved → complete/error`, orphan reaper.
+- **Scheduling** — interval / heartbeat / UTC cron + script-only jobs; `FOR UPDATE SKIP LOCKED` claim, 300s lease + renewal, DB-clock reschedule.
+- **Observability** — sanitized Postgres audit, OpenTelemetry spans, Prometheus `/metrics`, gateway log `~/.agent-harness/logs/gateway.log`.
+- **Security** — allowlisted terminal (blocks `-exec`, `git -c`), jail-checked paths (symlink/O_NOFOLLOW aware), SSRF private/multicast/redirect checks, per-IP rate limit, `.env` atomic writes + newline-injection reject, Vault/AWS/file secrets.
+- **Retry** — 429 backoff (provider 2x + agent guard, no double-stack); global rate buckets.
 
 ---
 
@@ -174,168 +186,206 @@ Setting a key takes effect on the next turn. Secrets are never echoed, never ent
 │                    Terminal UI (TypeScript)              │
 │         pi-tui · streaming Markdown · skins · tools      │
 └──────────────────────────┬──────────────────────────────┘
-                            │ JSON-RPC 2.0 (stdio)
+                             │ JSON-RPC 2.0 (stdio)
 ┌──────────────────────────▼──────────────────────────────┐
 │                   Gateway (Python)                       │
 │  method dispatch · turn streaming · auth · secrets · log │
 └──────────────────────────┬──────────────────────────────┘
-                            │
+                             │
 ┌──────────────────────────▼──────────────────────────────┐
 │                    Agent Core (Python)                   │
 │  ReAct loop · context · memory · RAG · tools · skills    │
 └──────────────────────────┬──────────────────────────────┘
-                            │
+                             │
 ┌──────────────────────────▼──────────────────────────────┐
 │              PostgreSQL + pgvector                        │
 │  sessions · context_chunks · memories · llm_usage · jobs │
 └─────────────────────────────────────────────────────────┘
 ```
 
-The UI and the agent share only the JSON-RPC protocol — the same split Hermes Agent (`ui-tui` ↔ `tui_gateway`) and opencode use. The HTTP API (`ah serve`) sits beside the gateway and reuses the same core.
-
----
-
-## Research Implemented
-
-Five research gaps, each test-driven:
-
-### 1. Reversible Eviction
-
-Context windows are finite; deleting old chunks loses information. Evicted chunks move to `context_archive` instead — searchable alongside live context, paginated (LIMIT 100) and archived+deleted in one transaction. Load testing found two real bugs: concurrent eviction could wipe the keep-newest-10 floor (fixed with `NOT IN (SELECT id FROM context_archive)`) and double-archive rows (fixed with a `FOR UPDATE` claim).
-
-### 2. Shared Memory Identity Propagation
-
-When Agent A shares a memory with Agent B, B needs provenance. Each memory carries an HMAC signature from its source agent; recipients verify before accepting. Tampered or unsigned memories are rejected.
-
-### 3. Persona-Conditioned Memory
-
-The same fact means different things to different personas. `PersonaMemoryStore` + `EmotionTopology` (Plutchik wheel) tag memories with emotional context and re-rank retrieval per persona. Now default-on in the runtime.
-
-### 4. End-to-End RL for Memory
-
-Which memories to keep, forget, or promote? RL action/reward definitions plus a group-relative policy trainer learn from outcome data. Research baseline — not wired into the runtime.
-
-### 5. SoulSpec Standard
-
-Agent definitions are fragmented across frameworks. Soul Spec v0.5 manifest validation, package files, and `AgentDef` conversion, with cross-framework adapters (not compatibility certification).
+UI and agent share only JSON-RPC (`communications/ui-gateway-protocol.md`). `ah serve` reuses the same core over HTTP.
 
 ---
 
 ## Configuration
 
-Non-secret settings live in `~/.agent-harness/config.yaml` (or `AGENT_HARNESS_<KEY>` env vars); **secrets live only in `.env`**:
+Non-secrets in `~/.agent-harness/config.yaml` or `AGENT_HARNESS_<KEY>` env. **Secrets only in `.env`.**
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DATABASE_URL` | PostgreSQL connection string | — |
-| `OPENROUTER_API_KEY` | OpenRouter API key (default provider) | — |
-| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `TOGETHER_API_KEY`, `DEEPSEEK_API_KEY`, `XAI_API_KEY`, `COHERE_API_KEY` | Per-family keys, as needed | — |
-| `AGENT_HARNESS_MODEL` | LLM model identifier | `openrouter/free` |
-| `AGENT_HARNESS_USAGE_SESSION_TOKEN_LIMIT` | Per-session token budget | unlimited |
-| `AGENT_HARNESS_USAGE_AGENT_TOKEN_LIMIT` | Per-agent token budget | unlimited |
-| `AGENT_HARNESS_API_KEY` | API key for HTTP server | — |
+| `AGENT_HARNESS_TEST_DATABASE_URL` | Test DB (tests never touch prod) | — |
+| `OPENROUTER_API_KEY` | Default provider key | — |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `TOGETHER_API_KEY`, `DEEPSEEK_API_KEY`, `XAI_API_KEY`, `COHERE_API_KEY` | Per-family keys | — |
+| `AGENT_HARNESS_MODEL` | Model id | `openrouter/free` |
+| `AGENT_HARNESS_API_KEY` | HTTP API key (fail-closed 503 if unset) | — |
 | `AGENT_HARNESS_PROVENANCE_KEY` | HMAC key for memory sharing | — |
-| `AGENT_HARNESS_PERSONA_MEMORY_ENABLED` | Persona-conditioned retrieval | `true` |
-| `AGENT_HARNESS_PERSONA_DEFAULT_EMOTION` | Fallback emotion weight | `trust` |
-| `SEARXNG_URL` | Self-hosted SearXNG for web search | — |
+| `AGENT_HARNESS_PERSONA_MEMORY_ENABLED` | Persona rerank | `true` |
+| `AGENT_HARNESS_PERSONA_DEFAULT_EMOTION` | Fallback emotion | `trust` |
+| `AGENT_HARNESS_USAGE_SESSION_TOKEN_LIMIT` / `_REQUEST_LIMIT` | Session budgets (0 = unlimited) | `0` |
+| `AGENT_HARNESS_USAGE_AGENT_TOKEN_LIMIT` / `_REQUEST_LIMIT` | Agent budgets | `0` |
+| `AGENT_HARNESS_HTTP_RATE_LIMIT` | Req/min per IP (0 = off) | `120` |
+| `AGENT_HARNESS_TERMINAL_SANDBOX` | `disabled` \| `local` \| `docker` | `disabled` |
+| `SEARXNG_URL` | Self-hosted search | — |
+| `AH_ENV_FILE` | `.env` override path | repo `.env` |
+| `AH_GATEWAY_TOKEN` | Gateway stdio token | random per launch |
 
 ---
 
-## Performance
+## HTTP API
 
-- **Test suite** — 1284+ Python tests pass (~83s); 83 UI tests pass (3 e2e skipped without a live DB); 99.81% coverage on Phase 7 modules (scheduler, session_recall, text_search, usage at 100%).
-- **Concurrency** — two real eviction bugs found via load testing; usage accounting uses advisory locks with fixed agent→session ordering to prevent deadlocks.
-- **Workflow trial** — native PostgreSQL start-plus-approval **3.618 ms** vs LangGraph **18.608 ms** (5.1x overhead); native path retained, LangGraph optional.
-- **Provider resilience** — OpenRouter free tier hard-429s under sustained calls; verified 429-then-200 recovers, all-429 raises after 5 attempts.
+```bash
+export AGENT_HARNESS_API_KEY=...   # Bearer or X-API-Key
+ah serve --host 127.0.0.1 --port 8000
+```
 
-Coverage journey (Phase 7: **65% → 99.81%**):
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/health`, `/ready`, `/metrics` | Open (ready is generic, no oracle) |
+| POST | `/api/v1/sessions` | `{title}` |
+| GET | `/api/v1/sessions?limit&cursor` | Capped 200, offset-capped |
+| GET/PATCH/DELETE | `/api/v1/sessions/{id}` | Resume/history, rename/goal, delete (blocked mid-turn) |
+| POST | `/api/v1/sessions/{id}/prompt` | SSE stream (`text/event-stream`), `turn_timeout` enforced |
+| GET | `/api/v1/sessions/{id}/context` | Redacted previews |
+| GET | `/api/v1/sessions/{id}/usage` | Session + agent budgets |
+| POST | `/api/v1/sessions/{id}/jobs` | `interval/heartbeat/cron`, `scriptPath` validated |
+| GET/POST | `/api/v1/memory`, `/api/v1/documents` | Add/search (agent-scoped) |
+| POST | `/rpc` | Generic bridge (blocks `prompt.*`, `shutdown`) |
 
-| Module | Before | After |
-|--------|--------|-------|
-| scheduler.py | 45% | 100% |
-| session_recall.py | 60% | 100% |
-| text_search.py | 71% | 100% |
-| usage.py | 84% | 100% |
-| learning.py | 82% | 99% |
+Errors: `1002 → 404`, `1003 → 409`, `1001 → 503`, `1005 → 401`, `32601/32602 → 400`.
+
+```bash
+curl -N -H "Authorization: Bearer $AGENT_HARNESS_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Hello"}' \
+  http://127.0.0.1:8000/api/v1/sessions/<id>/prompt
+```
+
+---
+
+## Research implemented
+
+Five test-driven gaps:
+
+1. **Reversible eviction** — archive-before-delete, `FOR UPDATE` claim, keep-10 floor (two concurrency wipe/double-archive bugs found by load tests).
+2. **Shared identity** — HMAC provenance per memory, recipient `validate_incoming`, quarantine on tamper.
+3. **Persona memory** — `PersonaMemoryStore` + Plutchik `EmotionTopology`, default-on rerank.
+4. **RL memory** — action/reward + GRPO trainer (baseline, not wired into runtime).
+5. **SoulSpec** — v0.5 manifest/packages, `AgentDef` round-trip, Claude/Codex adapters, most-restrictive permission merge.
+
+Plus LoCoMo harness (`ah/research/locomo.py`), identity eval (`identity_eval.py`), memory-policy training, native-vs-LangGraph trial (`workflow_trial.py`).
+
+---
+
+## Performance & tests
+
+- **Python:** 1288 passed, coverage **~80%** (gate 60%). Phase-7 modules (scheduler, recall, text_search, usage) at ~100%.
+- **UI:** 85 passed, 3 e2e skipped without live DB (`npm --prefix ui test`).
+- **Concurrency:** advisory-lock usage (agent→session order), atomic job claim, per-session turn locks.
+- **Workflow trial:** native Postgres approval **~3.6 ms** vs LangGraph **~18.6 ms** (5.1x overhead); native retained.
+- **Resilience:** 429-then-200 recovers; sustained 429 raises after retries.
+
+```bash
+pytest tests/ -q                                          # all (needs AGENT_HARNESS_TEST_DATABASE_URL for DB tests)
+pytest tests/ -q -k "not test_graph" --cov=ah --cov-fail-under=60
+npm --prefix ui test
+```
 
 ---
 
 ## Development
 
 ```bash
-# Run all tests
-pytest tests/ -q
-
-# Coverage
 pytest tests/ -q --cov=ah --cov-report=html
-
-# Lint
-ruff check ah/
-ruff format --check ah/
-
-# Type check + UI tests
-cd ui && npm run typecheck
-cd ui && npm test
+ruff check ah/ && ruff format --check ah/
+bandit -r ah/ -ll -x ah/cli/
+npm --prefix ui run typecheck && npm --prefix ui test
 ```
+
+Conventions: `ruff line-length 100`, `asyncio_mode = auto`, raw SQL via asyncpg, MessagePack for blobs, `B904` (`raise … from`), no `utcnow` (aware datetimes).
 
 ---
 
-## Project Structure
+## Project structure
 
 ```
 agent-harness/
-├── ah/                    # Python package
-│   ├── core/              # Agent loop, context, provider, session, usage, scheduler
-│   ├── db/                # asyncpg pool + schema
-│   ├── gateway/           # JSON-RPC server (stdio) + feature handlers
-│   ├── api/               # FastAPI HTTP server
-│   ├── memory/            # Long-term memory subsystem
-│   ├── rag/               # RAG pipeline
-│   ├── tools/             # Tool registry + builtins
-│   ├── skills/            # Skill parser + learning
-│   ├── observability/     # Audit, metrics, tracing
-│   ├── security/          # Secrets, .env management
-│   ├── soulspec/          # Soul Spec validation
-│   ├── plugins/           # Plugin system
-│   ├── research/          # LoCoMo, workflow trial, memory-policy training
-│   └── cli/               # Typer CLI (chat, setup, doctor, init, serve) + UI launcher
-├── ui/                    # TypeScript terminal UI
-│   ├── src/               # pi-tui app (32 slash commands, 24 skins)
-│   └── test/              # node:test suites
-├── tests/                 # Python test suite
-├── skills/                # SKILL.md skill definitions
-├── Dockerfile
-├── docker-compose.yml
+├── ah/
+│   ├── core/            # agent, assembler, compression, config, container, context,
+│   │                    # cron, exceptions, job_scripts, metrics, models, orchestrator,
+│   │                    # provider, scheduler, serialization, session, session_recall,
+│   │                    # text_search, usage, windows_job
+│   ├── db/              # asyncpg pool + schema.sql
+│   ├── gateway/         # JSON-RPC stdio server + features/ (agents, config, jobs,
+│   │                    # memory, secrets, sessions, skills)
+│   ├── api/             # FastAPI (app, auth, rate_limit)
+│   ├── memory/          # store, retriever, consolidator, approval, scorer, forgetting,
+│   │                    # identity, persona, policy, rl, redaction, shared_bus, user_profile
+│   ├── rag/             # chunker, embedder, loaders, pipeline, reranker, search
+│   ├── tools/           # registry + builtins (web/file/memory/rag/recall/skills/terminal/agents)
+│   ├── skills/          # parser, registry, curator, hub, learning, runtime
+│   ├── soulspec/        # schema, merge, adapters, conformance
+│   ├── security/        # secrets (env/file/Vault/AWS), env_file
+│   ├── observability/   # audit, metrics, tracing
+│   ├── plugins/         # entry-point loader + registry
+│   ├── research/        # locomo, identity_eval, train_memory_policy, workflow_*
+│   └── cli/             # typer app (chat/setup/doctor/init/serve/…) + UI launcher
+├── ui/src/              # pi-tui app + features/ (32 commands, 24 skins)
+├── ui/test/             # node:test suites
+├── tests/               # ~80 pytest modules + workflow_trial/
+├── skills/              # 21 SKILL.md playbooks
+├── research/            # example identity scenarios
+├── Dockerfile / Dockerfile.sandbox / docker-compose.yml
 └── pyproject.toml
 ```
 
 ---
 
-## Production-Ready vs. Research
+## Troubleshooting
 
-**Production-ready:** ReAct loop, PostgreSQL context, cross-session recall, long-term memory (now persona-conditioned by default), RAG, multi-agent delegation, scheduling, HTTP API, usage accounting, tool registry, skills, terminal UI with skins, observability, security sandboxing, retry logic.
+| Symptom | Fix |
+|---------|-----|
+| `database unavailable` / `503 API key not configured` | Set `DATABASE_URL`, run `ah init`; set `AGENT_HARNESS_API_KEY` |
+| `pgvector` missing | Use `pgvector/pgvector:pg16`, `CREATE EXTENSION vector; pg_trgm;` |
+| `401 invalid API key` | `Authorization: Bearer …` or `X-API-Key`; non-ASCII → 401 not 500 |
+| `409 a turn is already running` | `prompt.cancel`, wait for `message.complete`; UI timeout is 300s = server |
+| `429 rate limit exceeded` | `Retry-After` header; bump `AGENT_HARNESS_HTTP_RATE_LIMIT`, check proxy single-bucket |
+| `.env path escapes allowed roots` | Default `.env` must be under cwd/repo/home/tmp; use `AH_ENV_FILE` for elsewhere |
+| `script must stay inside …` | `noAgent` scripts must be relative `*.py\|*.sh\|*.bash` under `~/.agent-harness/scripts` |
+| `terminal` blocked / `workdir … not within allowed` | `AGENT_HARNESS_TERMINAL_SANDBOX=local\|docker`; workdir under `agent_harness_home` |
+| `graph` workflow `no pq wrapper` | `pip install "psycopg[binary]"`; native trial needs no extra deps |
+| UI `TURN_IN_PROGRESS` after retry | Server holds 300s; cancel first, don't double-submit |
 
-**Research baseline (not wired into runtime):** RL-trained memory policy; SoulSpec cross-framework runs (adapters, not certification); LoCoMo answer accuracy (harness works, needs live LLM budget).
+`ah doctor` prints versions, DB/pgvector reachability, and key presence. Gateway logs: `~/.agent-harness/logs/gateway.log`.
 
 ---
 
-## Technology Stack
+## Production-ready vs research
 
-| Component | Choice | Rationale |
-|-----------|--------|-----------|
+**Ready:** ReAct loop, Postgres context + recall, persona-on memory, RAG, delegation, scheduling, HTTP API + SSE, usage budgets, tools, skills, TUI + skins, observability, sandboxing, retries.
+
+**Baseline (not in hot path):** RL policy trainer output; SoulSpec cross-runs (adapters, not cert); LoCoMo accuracy (needs live LLM budget).
+
+---
+
+## Technology stack
+
+| Component | Choice | Why |
+|-----------|--------|-----|
 | Language | Python 3.11+ | Async-native |
-| Database | PostgreSQL 16+ + pgvector | ACID + vector search |
-| ORM/Query | asyncpg + raw SQL | Performance, control |
-| Binary format | MessagePack | Compact, fast |
-| Token counting | tiktoken (cl100k_base) | Accurate token counts |
-| CLI | Typer | Type-hint-driven |
-| Terminal UI | TypeScript + @earendil-works/pi-tui | Differential rendering, flicker-free |
-| UI ↔ agent | JSON-RPC 2.0 over stdio | Same split as Hermes / opencode |
-| Provider | OpenRouter | Multi-model, OpenAI-compatible |
-| Local LLM | Ollama (optional) | Free, self-hosted |
+| DB | PostgreSQL 16 + pgvector | ACID + vectors |
+| Queries | asyncpg + raw SQL | Control + speed |
+| Blobs | MessagePack | Compact |
+| Tokens | tiktoken `cl100k_base` | Accurate |
+| CLI | Typer + Rich | Typed UX |
+| TUI | TypeScript + pi-tui | Flicker-free |
+| UI↔agent | JSON-RPC 2.0 stdio | Hermes/opencode split |
+| Cloud LLM | OpenRouter | Multi-model compat |
+| Local LLM | Ollama | Self-hosted |
+| Search | SearXNG → DDG → Jina | Self-host first |
 
 ---
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) — © 2026 Kiarad Zafar Heidari.
