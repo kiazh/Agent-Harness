@@ -1,6 +1,6 @@
 # AgentHarness Roadmap
 
-**Last updated:** 2026-10-04  
+**Last updated:** 2026-10-05  
 **Current version:** 0.2.0  
 **Test status:** 1279 Python tests pass, 0 skipped; 54 UI tests pass. Phase 7
 modules at 99% coverage.
@@ -39,7 +39,7 @@ ah/
 │   ├── container.py     # DI container (production / testing)
 │   ├── agent.py         # ReActAgent + BaseReActAgent (Template Method)
 │   ├── context.py       # ContextManager (CRUD + embedding search)
-│   ├── provider.py      # LLMProvider (OpenRouter, Ollama) + rate limiting + audit
+│   ├── provider.py      # LLMProvider (OpenRouter, Ollama) + rate limiting + audit + 429 retry
 │   ├── metrics.py       # MetricsCollector (latency, counters, errors, tokens)
 │   ├── exceptions.py    # Custom exception hierarchy
 │   ├── serialization.py # Shared serialization utilities
@@ -91,7 +91,7 @@ ah/
 │   └── rl.py            # RL action/reward definitions for memory
 ├── gateway/
 │   ├── __main__.py      # stdio JSON-RPC server (protocol on private fds)
-│   ├── server.py        # Gateway dispatch, turns, streaming events
+│   ├── server.py        # Gateway dispatch, turns, streaming events, file+console logging
 │   └── features/        # Domain handlers (sessions, memory, skills, jobs, agents, config)
 ├── api/
 │   ├── app.py           # FastAPI app (versioned /api/v1 routes, SSE chat)
@@ -463,6 +463,9 @@ ui/ -> gateway/ (JSON-RPC over stdio)
 - [x] Improve the existing terminal UI based on user workflows (session search, context/memory views, streaming feedback)
 - [x] Decide whether durable workflows need an external graph engine — DECIDED 2026-10-04: native PostgreSQL path retained; LangGraph stays optional
 - [x] 90%+ coverage for new Phase 7 code — measured 99%
+- [x] Provider retry-with-backoff for 429 rate limits
+- [x] Gateway file+console logging (requests, turns, errors)
+- [x] UI auto-detects venv Python and passes auth token
 - [x] Answer-quality measurement (LoCoMo token-F1)
 - [x] Learning-precision measurement
 - [x] Durable review recovery (lease-based reclaim)

@@ -14,7 +14,7 @@
 
 ## Executive Summary
 
-AgentHarness has **audit logging** (sanitized JSON events to stderr via the `ah.audit` logger, persisted asynchronously to the `audit_events` table) and **standard Python logging** (`logging.getLogger(__name__)`). This still falls short of production observability in the five key areas below:
+AgentHarness has **audit logging** (sanitized JSON events to stderr via the `ah.audit` logger, persisted asynchronously to the `audit_events` table), **standard Python logging** (`logging.getLogger(__name__)`), and **gateway file+console logging** (rotating file handler to `~/.agent-harness/logs/gateway.log`, console handler for WARNING+, request/response logging at DEBUG, turn lifecycle at INFO). This still falls short of production observability in the five key areas below:
 
 1. **No distributed tracing** — a single agent run fans out to 10–30+ LLM calls and tool executions with no causal chain.
 2. **No metrics** — token counts, latency, cost, and success rates are logged but never aggregated.

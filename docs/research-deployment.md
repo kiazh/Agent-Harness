@@ -13,7 +13,7 @@ AgentHarness is a Python 3.11+ async framework with:
 |-----------|-----------|-------|
 | CLI | Typer + Rich | `ah` command, `asyncio.run()` per invocation |
 | Database | PostgreSQL + pgvector | asyncpg pool (2-10 connections), 15+ tables |
-| LLM Provider | OpenRouter / Ollama | httpx async clients, token-bucket rate limiting |
+| LLM Provider | OpenRouter / Ollama | httpx async clients, token-bucket rate limiting, 429 retry-with-backoff |
 | Context Store | MessagePack in BYTEA | `context_chunks` with HNSW embedding index |
 | Skills | File-based registry | YAML frontmatter, loaded from `skills/` |
 | Tools | In-process registry | `ah/tools/builtins.py` |
@@ -22,7 +22,7 @@ AgentHarness is a Python 3.11+ async framework with:
 
 **Key deployment characteristics:**
 - **Stateless compute** — agent runs are ephemeral; all state lives in PostgreSQL
-- **Single-process compute with two entry points** — the one-shot CLI (`ah chat`), a long-running gateway (`python -m ah.gateway`) driven by the UI, and the HTTP API server (`ah serve`) are available today
+- **Single-process compute with two entry points** — the one-shot CLI (`ah chat`), a long-running gateway (`python -m ah.gateway`) driven by the UI, and the HTTP API server (`ah serve`) are available today. The gateway has file+console logging and the UI auto-detects the venv Python.
 - **External LLM dependency** — OpenRouter API or local Ollama
 - **pgvector required** — `CREATE EXTENSION vector` in schema.sql
 
