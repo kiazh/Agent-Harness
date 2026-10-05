@@ -77,16 +77,13 @@ class TestEvictionLogic:
         """No eviction when within limits."""
         session_id = uuid.uuid4()
         # Mock db calls
-        with patch.object(
-            context_manager, "get_token_usage", new_callable=AsyncMock, return_value=100
-        ):
-            with patch("ah.core.context.db") as mock_db:
-                mock_db.fetchval = AsyncMock(return_value=5)
-                mock_db.fetch = AsyncMock(return_value=[])
-                result = await context_manager.evict_old_chunks(
-                    session_id, max_tokens=1000, max_chunks=50
-                )
-                assert result == 0
+        with patch("ah.core.context.db") as mock_db:
+            mock_db.fetchrow = AsyncMock(return_value={"total_chunks": 5, "total_tokens": 100})
+            mock_db.fetch = AsyncMock(return_value=[])
+            result = await context_manager.evict_old_chunks(
+                session_id, max_tokens=1000, max_chunks=50
+            )
+            assert result == 0
 
     @pytest.mark.asyncio
     async def test_evict_old_chunks_over_token_limit(self, context_manager):
@@ -169,23 +166,20 @@ class TestEvictionLogic:
         ]
         for row in mock_rows:
             row.update(agent_id="harness", payload_msgpack=b"\x80", embedding=None)
-        with patch.object(
-            context_manager, "get_token_usage", new_callable=AsyncMock, return_value=1200
-        ):
-            with patch("ah.core.context.db") as mock_db:
-                mock_db.fetchval = AsyncMock(return_value=12)
-                mock_db.fetch = AsyncMock(return_value=mock_rows)
-                mock_db.fetchrow = AsyncMock(return_value={"id": uuid.uuid4()})
-                mock_db.execute = AsyncMock(return_value="DELETE 1")
-                connection = AsyncMock()
-                connection.fetchrow.return_value = {"id": uuid.uuid4()}
-                connection.transaction = MagicMock()
-                mock_db.acquire = MagicMock()
-                mock_db.acquire.return_value.__aenter__.return_value = connection
-                result = await context_manager.evict_old_chunks(
-                    session_id, max_tokens=500, max_chunks=None
-                )
-                assert result > 0
+        with patch("ah.core.context.db") as mock_db:
+            mock_db.fetchrow = AsyncMock(return_value={"total_chunks": 12, "total_tokens": 1200})
+            mock_db.fetch = AsyncMock(return_value=mock_rows)
+            mock_db.execute = AsyncMock(return_value="DELETE 1")
+            connection = AsyncMock()
+            connection.fetch = AsyncMock(return_value=[{"id": row["id"]} for row in mock_rows])
+            connection.fetchrow = AsyncMock(return_value={"id": uuid.uuid4()})
+            connection.transaction = MagicMock()
+            mock_db.acquire = MagicMock()
+            mock_db.acquire.return_value.__aenter__.return_value = connection
+            result = await context_manager.evict_old_chunks(
+                session_id, max_tokens=500, max_chunks=None
+            )
+            assert result > 0
 
     @pytest.mark.asyncio
     async def test_evict_old_chunks_over_chunk_limit(self, context_manager):
@@ -202,23 +196,20 @@ class TestEvictionLogic:
         ]
         for row in mock_rows:
             row.update(agent_id="harness", payload_msgpack=b"\x80", embedding=None)
-        with patch.object(
-            context_manager, "get_token_usage", new_callable=AsyncMock, return_value=150
-        ):
-            with patch("ah.core.context.db") as mock_db:
-                mock_db.fetchval = AsyncMock(return_value=15)
-                mock_db.fetch = AsyncMock(return_value=mock_rows)
-                mock_db.fetchrow = AsyncMock(return_value={"id": uuid.uuid4()})
-                mock_db.execute = AsyncMock(return_value="DELETE 1")
-                connection = AsyncMock()
-                connection.fetchrow.return_value = {"id": uuid.uuid4()}
-                connection.transaction = MagicMock()
-                mock_db.acquire = MagicMock()
-                mock_db.acquire.return_value.__aenter__.return_value = connection
-                result = await context_manager.evict_old_chunks(
-                    session_id, max_tokens=None, max_chunks=5
-                )
-                assert result > 0
+        with patch("ah.core.context.db") as mock_db:
+            mock_db.fetchrow = AsyncMock(return_value={"total_chunks": 15, "total_tokens": 150})
+            mock_db.fetch = AsyncMock(return_value=mock_rows)
+            mock_db.execute = AsyncMock(return_value="DELETE 1")
+            connection = AsyncMock()
+            connection.fetch = AsyncMock(return_value=[{"id": row["id"]} for row in mock_rows])
+            connection.fetchrow = AsyncMock(return_value={"id": uuid.uuid4()})
+            connection.transaction = MagicMock()
+            mock_db.acquire = MagicMock()
+            mock_db.acquire.return_value.__aenter__.return_value = connection
+            result = await context_manager.evict_old_chunks(
+                session_id, max_tokens=None, max_chunks=5
+            )
+            assert result > 0
 
     @pytest.mark.asyncio
     async def test_evict_old_chunks_preserves_recent(self, context_manager):
@@ -236,24 +227,21 @@ class TestEvictionLogic:
         ]
         for row in mock_rows:
             row.update(agent_id="harness", payload_msgpack=b"\x80", embedding=None)
-        with patch.object(
-            context_manager, "get_token_usage", new_callable=AsyncMock, return_value=1500
-        ):
-            with patch("ah.core.context.db") as mock_db:
-                mock_db.fetchval = AsyncMock(return_value=15)
-                mock_db.fetch = AsyncMock(return_value=mock_rows)
-                mock_db.fetchrow = AsyncMock(return_value={"id": uuid.uuid4()})
-                mock_db.execute = AsyncMock(return_value="DELETE 1")
-                connection = AsyncMock()
-                connection.fetchrow.return_value = {"id": uuid.uuid4()}
-                connection.transaction = MagicMock()
-                mock_db.acquire = MagicMock()
-                mock_db.acquire.return_value.__aenter__.return_value = connection
-                result = await context_manager.evict_old_chunks(
-                    session_id, max_tokens=500, max_chunks=None
-                )
-                # Should evict 5 chunks (15 - 10 preserved = 5 evictable, need 1000 tokens freed)
-                assert result == 5
+        with patch("ah.core.context.db") as mock_db:
+            mock_db.fetchrow = AsyncMock(return_value={"total_chunks": 15, "total_tokens": 1500})
+            mock_db.fetch = AsyncMock(return_value=mock_rows)
+            mock_db.execute = AsyncMock(return_value="DELETE 1")
+            connection = AsyncMock()
+            connection.fetch = AsyncMock(return_value=[{"id": row["id"]} for row in mock_rows])
+            connection.fetchrow = AsyncMock(return_value={"id": uuid.uuid4()})
+            connection.transaction = MagicMock()
+            mock_db.acquire = MagicMock()
+            mock_db.acquire.return_value.__aenter__.return_value = connection
+            result = await context_manager.evict_old_chunks(
+                session_id, max_tokens=500, max_chunks=None
+            )
+            # Should evict 5 chunks (15 - 10 preserved = 5 evictable, need 1000 tokens freed)
+            assert result == 5
 
 
 # ============================================================================

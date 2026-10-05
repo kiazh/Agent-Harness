@@ -81,17 +81,19 @@ class TestProviderMalformedJSON:
         return provider
 
     async def test_missing_choices_key_does_not_crash(self):
-        """Provider response missing 'choices' key should raise, not silently succeed."""
+        """Provider response missing 'choices' key should raise ProviderError, not KeyError."""
+        from ah.core.exceptions import ProviderError
         provider = self._make_provider({"model": "test-model"})  # no choices
-        with pytest.raises((KeyError, TypeError)):
+        with pytest.raises(ProviderError):
             await provider.complete(
                 messages=[{"role": "user", "content": "hello"}],
             )
 
     async def test_choices_empty_list_raises(self):
-        """Provider response with empty choices list should raise IndexError."""
+        """Provider response with empty choices list should raise ProviderError, not IndexError."""
+        from ah.core.exceptions import ProviderError
         provider = self._make_provider({"choices": [], "usage": {}})
-        with pytest.raises(IndexError):
+        with pytest.raises(ProviderError):
             await provider.complete(
                 messages=[{"role": "user", "content": "hello"}],
             )
@@ -736,26 +738,26 @@ class TestContextEvictionInterrupted:
         ]
 
         database = MagicMock()
-        database.fetchval = AsyncMock(return_value=12)
+        database.fetchrow = AsyncMock(return_value={"total_chunks": 12, "total_tokens": 12})
         database.fetch = AsyncMock(return_value=rows)
 
         # First call (batch) fails, second call (individual) succeeds
         connection = AsyncMock()
         connection.transaction = MagicMock()
         call_count = 0
-        async def mock_fetchrow(*args, **kwargs):
+        async def mock_fetch(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count <= 12:  # Batch calls fail
                 raise Exception("batch archive failed")
-            return {"id": uuid.uuid4()}  # Individual calls succeed
-        connection.fetchrow = mock_fetchrow
+            return [{"id": uuid.uuid4()}]  # Individual calls succeed
+        connection.fetch = mock_fetch
+        connection.fetchrow = AsyncMock(return_value={"id": uuid.uuid4()})
         connection.execute = AsyncMock(return_value="DELETE 1")
         database.acquire.return_value.__aenter__.return_value = connection
 
         monkeypatch.setattr(ctx_mod, "db", database)
         manager = ContextManager()
-        manager.get_token_usage = AsyncMock(return_value=12)
 
         # Should not raise — falls back to individual
         evicted = await manager.evict_old_chunks(session_id, max_chunks=10)
@@ -781,11 +783,12 @@ class TestContextEvictionInterrupted:
         ]
 
         database = MagicMock()
-        database.fetchval = AsyncMock(return_value=12)
+        database.fetchrow = AsyncMock(return_value={"total_chunks": 12, "total_tokens": 12})
         database.fetch = AsyncMock(return_value=rows)
 
         connection = AsyncMock()
         connection.transaction = MagicMock()
+        connection.fetch = AsyncMock(return_value=[{"id": row["id"]} for row in rows])
         connection.fetchrow = AsyncMock(return_value={"id": uuid.uuid4()})
         # Delete fails
         connection.execute = AsyncMock(side_effect=Exception("delete failed"))
@@ -793,7 +796,6 @@ class TestContextEvictionInterrupted:
 
         monkeypatch.setattr(ctx_mod, "db", database)
         manager = ContextManager()
-        manager.get_token_usage = AsyncMock(return_value=12)
 
         # Should not raise — the batch fails, individual retries also fail
         # but the error is caught and logged
@@ -821,18 +823,18 @@ class TestContextEvictionInterrupted:
         ]
 
         database = MagicMock()
-        database.fetchval = AsyncMock(return_value=15)
+        database.fetchrow = AsyncMock(return_value={"total_chunks": 15, "total_tokens": 15})
         database.fetch = AsyncMock(return_value=rows)
 
         connection = AsyncMock()
         connection.transaction = MagicMock()
+        connection.fetch = AsyncMock(return_value=[{"id": row["id"]} for row in rows])
         connection.fetchrow = AsyncMock(return_value={"id": uuid.uuid4()})
         connection.execute = AsyncMock(return_value="DELETE 1")
         database.acquire.return_value.__aenter__.return_value = connection
 
         monkeypatch.setattr(ctx_mod, "db", database)
         manager = ContextManager()
-        manager.get_token_usage = AsyncMock(return_value=15)
 
         evicted = await manager.evict_old_chunks(session_id, max_chunks=10)
         # 15 total - 10 preserved = 5 evictable
@@ -843,12 +845,11 @@ class TestContextEvictionInterrupted:
         from ah.core import context as ctx_mod
 
         database = MagicMock()
-        database.fetchval = AsyncMock(return_value=0)
+        database.fetchrow = AsyncMock(return_value={"total_chunks": 0, "total_tokens": 0})
         database.fetch = AsyncMock(return_value=[])
         monkeypatch.setattr(ctx_mod, "db", database)
 
         manager = ContextManager()
-        manager.get_token_usage = AsyncMock(return_value=0)
 
         evicted = await manager.evict_old_chunks(uuid.uuid4(), max_chunks=10)
         assert evicted == 0
@@ -1284,6 +1285,7 @@ class TestAgentStreamInterruption:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -1322,6 +1324,7 @@ class TestAgentStreamInterruption:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -1359,6 +1362,7 @@ class TestAgentProviderEdgeCases:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -1386,6 +1390,7 @@ class TestAgentProviderEdgeCases:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -1417,6 +1422,7 @@ class TestAgentProviderEdgeCases:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -1463,6 +1469,12 @@ class TestUsageStoreConcurrent:
                 if "INSERT INTO llm_usage" in query:
                     return {"id": uuid.uuid4()}
                 return {"requests": 0, "tokens": 0}
+
+            async def fetch(self, *a, **k):
+                return [
+                    {"scope": "agent", "requests": 0, "tokens": 0},
+                    {"scope": "session", "requests": 0, "tokens": 0},
+                ]
 
             async def fetchval(self, *a, **k):
                 return 0
@@ -1589,70 +1601,7 @@ class TestUsageStoreConcurrent:
             )
 
 
-# ===========================================================================
-# Context Manager Chaos — Cache Invalidation
-# ===========================================================================
 
-
-class TestContextCacheInvalidation:
-    """Context manager cache invalidation — no stale data."""
-
-    async def test_add_chunk_invalidates_cache(self, monkeypatch):
-        """Adding a chunk should invalidate the recent context cache."""
-        from ah.core import context as ctx_mod
-
-        database = MagicMock()
-        database.fetch = AsyncMock(return_value=[])
-        database.fetchrow = AsyncMock(return_value={
-            "id": uuid.uuid4(),
-            "session_id": uuid.uuid4(),
-            "agent_id": "test-agent",
-            "chunk_type": "user_message",
-            "payload_msgpack": b"\x81\xa7content\xa5hello",
-            "token_count": 10,
-            "embedding": None,
-            "created_at": datetime.now(UTC),
-            "accessed_at": None,
-        })
-        database.fetchval = AsyncMock(return_value=0)
-        database.execute = AsyncMock(return_value="INSERT 0 1")
-        monkeypatch.setattr(ctx_mod, "db", database)
-
-        manager = ContextManager()
-        session_id = uuid.uuid4()
-
-        # First call populates cache
-        await manager.get_recent_context(session_id, limit=10)
-        assert session_id in manager._recent_cache
-
-        # Adding chunk should invalidate
-        await manager.add_chunk(
-            session_id=session_id,
-            agent_id="test",
-            chunk_type="user_message",
-            payload={"content": "hello"},
-        )
-        assert session_id not in manager._recent_cache
-
-    async def test_cache_hit_with_sufficient_limit_returns_cached(self, monkeypatch):
-        """Cache hit with sufficient limit should return cached data."""
-        from ah.core import context as ctx_mod
-
-        database = MagicMock()
-        database.fetch = AsyncMock(return_value=[])
-        monkeypatch.setattr(ctx_mod, "db", database)
-
-        manager = ContextManager()
-        session_id = uuid.uuid4()
-
-        # Populate cache with limit=10
-        await manager.get_recent_context(session_id, limit=10)
-        assert session_id in manager._recent_cache
-
-        # Request with limit=5 should hit cache
-        database.fetch = AsyncMock(side_effect=AssertionError("Should not query DB"))
-        results = await manager.get_recent_context(session_id, limit=5)
-        assert results == []
 
 
 # ===========================================================================

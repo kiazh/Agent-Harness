@@ -14,11 +14,10 @@ async def test_eviction_queries_a_bounded_page(monkeypatch):
     from ah.core import context
 
     database = MagicMock()
-    database.fetchval = AsyncMock(return_value=1000)
+    database.fetchrow = AsyncMock(return_value={"total_chunks": 1000, "total_tokens": 0})
     database.fetch = AsyncMock(return_value=[])
     monkeypatch.setattr(context, "db", database)
     manager = ContextManager()
-    manager.get_token_usage = AsyncMock(return_value=1000)
     assert await manager.evict_old_chunks(uuid.uuid4(), max_chunks=1) == 0
     assert "LIMIT" in database.fetch.await_args.args[0]
 
@@ -41,15 +40,14 @@ async def test_eviction_uses_one_transaction_for_a_page(monkeypatch):
         for i in range(12)
     ]
     database = MagicMock()
-    database.fetchval = AsyncMock(return_value=12)
+    database.fetchrow = AsyncMock(return_value={"total_chunks": 12, "total_tokens": 12})
     database.fetch = AsyncMock(return_value=rows)
     connection = AsyncMock()
     connection.transaction = MagicMock()
+    connection.fetch = AsyncMock(return_value=[{"id": row["id"]} for row in rows])
     database.acquire.return_value.__aenter__.return_value = connection
     monkeypatch.setattr(context, "db", database)
     manager = ContextManager()
-    manager.get_token_usage = AsyncMock(return_value=12)
-    manager.archive_chunk = AsyncMock(return_value={"id": uuid.uuid4()})
     assert await manager.evict_old_chunks(session, max_chunks=10) == 2
     assert database.acquire.call_count == 1
     assert connection.transaction.call_count == 1

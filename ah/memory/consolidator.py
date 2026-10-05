@@ -9,6 +9,8 @@ import json
 import logging
 import uuid
 
+logger = logging.getLogger(__name__)
+
 from ah.core.context import context_manager
 from ah.core.models import ContextChunk
 from ah.core.provider import LLMProvider, audit_log
@@ -299,7 +301,7 @@ class MemoryConsolidator:
                                 is_duplicate = True
                                 break
                     except Exception:
-                        pass
+                        logger.warning("search_by_embedding failed during dedup", exc_info=True)
             if is_duplicate:
                 continue
             seen.add(key)

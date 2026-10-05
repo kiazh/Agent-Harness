@@ -40,6 +40,49 @@ class UsageBudgetExceededError(AgentHarnessError, RuntimeError):
     """Raised before an LLM call when a persistent usage budget is exhausted."""
 
 
+class _StatusShim:
+    """Minimal stand-in for an httpx.Response carrying only a status code.
+
+    Lets ``getattr(exc.response, "status_code", None) == 429`` style detection
+    (see ``ah.core.agent._is_rate_limit_error``) keep working without this
+    module importing httpx.
+    """
+
+    __slots__ = ("status_code",)
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+
+class RateLimitError(AgentHarnessError, RuntimeError):
+    """Raised when a provider rate limit (HTTP 429) blocks the request.
+
+    A quota that resets at a fixed wall-clock time cannot be waited out with a
+    few seconds of backoff, so callers must NOT retry this exception — retrying
+    burns more of the very quota that is exhausted. ``reset_at`` is a UNIX
+    timestamp (seconds) when the provider said the quota returns, when known.
+
+    ``status_code`` and the ``response`` shim are provided so existing
+    duck-typed 429 detection keeps working.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 429,
+        reset_at: float | None = None,
+        daily_limit: int | None = None,
+        remaining: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.reset_at = reset_at
+        self.daily_limit = daily_limit
+        self.remaining = remaining
+        self.response = _StatusShim(status_code)
+
+
 __all__ = [
     "AgentHarnessError",
     "ToolError",
@@ -49,4 +92,5 @@ __all__ = [
     "SessionNotFoundError",
     "ContextBudgetExceededError",
     "UsageBudgetExceededError",
+    "RateLimitError",
 ]

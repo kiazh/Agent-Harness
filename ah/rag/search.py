@@ -143,7 +143,7 @@ class HybridSearch:
         rows = await db.fetch(
             """
             SELECT id, session_id, agent_id, chunk_type, payload_msgpack,
-                   token_count, embedding, created_at, accessed_at,
+                   token_count, created_at, accessed_at,
                    1 - (embedding <=> $1::vector) AS similarity
             FROM context_chunks
             WHERE session_id = $2 AND embedding IS NOT NULL

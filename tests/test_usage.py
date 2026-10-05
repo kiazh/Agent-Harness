@@ -281,6 +281,12 @@ async def test_reserve_propagates_db_exceptions(monkeypatch):
         async def fetchrow(self, *args, **kwargs):
             return {"requests": 0, "tokens": 0, "id": uuid.uuid4()}
 
+        async def fetch(self, *args, **kwargs):
+            return [
+                {"scope": "agent", "requests": 0, "tokens": 0},
+                {"scope": "session", "requests": 0, "tokens": 0},
+            ]
+
     class FakeDB:
         connected = True
 
@@ -421,6 +427,12 @@ async def test_reserve_locks_agent_before_session(monkeypatch):
 
         async def fetchrow(self, *args, **kwargs):
             return {"requests": 0, "tokens": 0, "id": uuid.uuid4()}
+
+        async def fetch(self, *args, **kwargs):
+            return [
+                {"scope": "agent", "requests": 0, "tokens": 0},
+                {"scope": "session", "requests": 0, "tokens": 0},
+            ]
 
     class FakeDB:
         connected = True

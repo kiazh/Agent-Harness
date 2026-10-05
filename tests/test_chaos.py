@@ -67,6 +67,7 @@ class TestLLMChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -102,6 +103,7 @@ class TestLLMChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -137,6 +139,7 @@ class TestLLMChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -171,6 +174,7 @@ class TestLLMChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -191,6 +195,7 @@ class TestLLMChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -211,6 +216,7 @@ class TestLLMChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -237,6 +243,7 @@ class TestLLMChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -264,6 +271,7 @@ class TestLLMChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -290,6 +298,7 @@ class TestLLMChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -368,6 +377,7 @@ class TestToolChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):
@@ -407,24 +417,31 @@ class TestToolChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):
-                    agent = ReActAgent(provider=provider, max_iterations=5)
+                    # Pin a short per-tool timeout so this test exercises the
+                    # timeout *mechanism* deterministically, independent of the
+                    # production default (which is sized for slow network tools).
+                    with patch.dict("ah.core.agent._TOOL_TIMEOUTS", {"slow_tool": 0.5}):
+                        agent = ReActAgent(provider=provider, max_iterations=5)
 
-                    # Agent should have its own timeout mechanism for tool execution
-                    # The tool will sleep for 1000s, but the agent should timeout
-                    # and return an error response, not hang forever
-                    response = await asyncio.wait_for(
-                        agent.run(mock_session.id, "test", verbose=False),
-                        timeout=10,
-                    )
-                    assert response is not None
-                    # Agent should complete within the timeout window (not hang)
-                    # and return a response indicating something went wrong
-                    assert response.iterations >= 1
-                    # The tool calls should show errors (from timeout)
-                    assert any("Error" in tc.get("result_preview", "") for tc in response.tool_calls)
+                        # Agent should have its own timeout mechanism for tool execution
+                        # The tool will sleep for 1000s, but the agent should timeout
+                        # and return an error response, not hang forever
+                        response = await asyncio.wait_for(
+                            agent.run(mock_session.id, "test", verbose=False),
+                            timeout=10,
+                        )
+                        assert response is not None
+                        # Agent should complete within the timeout window (not hang)
+                        # and return a response indicating something went wrong
+                        assert response.iterations >= 1
+                        # The tool calls should show errors (from timeout)
+                        assert any(
+                            "Error" in tc.get("result_preview", "") for tc in response.tool_calls
+                        )
 
     async def test_agent_handles_tool_returning_none(self, mock_session):
         """Agent should handle tool returning None."""
@@ -458,6 +475,7 @@ class TestToolChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):
@@ -498,6 +516,7 @@ class TestToolChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):
@@ -541,6 +560,7 @@ class TestToolChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):
@@ -576,6 +596,7 @@ class TestContextChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 # Simulate context overflow by returning huge context
                 mock_cm.get_recent_context = AsyncMock(
                     return_value=[
@@ -611,6 +632,7 @@ class TestContextChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 # Return corrupted context
                 mock_cm.get_recent_context = AsyncMock(
                     return_value=[
@@ -673,8 +695,9 @@ class TestDatabaseChaos:
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
-                with pytest.raises(Exception, match="Connection lost"):
-                    await agent.run(mock_session.id, "test", verbose=False)
+                # Agent should handle DB errors gracefully (log and continue)
+                response = await agent.run(mock_session.id, "test", verbose=False)
+                assert response is not None
 
     async def test_agent_handles_slow_db(self, mock_session):
         """Agent should handle slow database queries."""
@@ -727,8 +750,9 @@ class TestDatabaseChaos:
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
-                with pytest.raises(Exception, match="Pool exhausted"):
-                    await agent.run(mock_session.id, "test", verbose=False)
+                # Agent should handle DB errors gracefully (log and continue)
+                response = await agent.run(mock_session.id, "test", verbose=False)
+                assert response is not None
 
 
 # ===========================================================================
@@ -757,6 +781,7 @@ class TestStreamingChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -793,6 +818,7 @@ class TestStreamingChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -830,6 +856,7 @@ class TestConcurrentChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -876,6 +903,7 @@ class TestConcurrentChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):
@@ -966,6 +994,7 @@ class TestRecoveryChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):
@@ -1004,6 +1033,7 @@ class TestRecoveryChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):

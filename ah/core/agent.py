@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -101,9 +102,22 @@ _pending_learning_reviews: set[asyncio.Task] = set()
 
 # Per-tool execution timeouts. Delegation-style tools fan out to sub-agents
 # and legitimately run long; everything else must answer quickly to keep
-# turns responsive.
-_TOOL_TIMEOUTS: dict[str, float] = {"delegate": 60.0, "share_memory": 60.0}
-_TOOL_TIMEOUT_DEFAULT = 1.0
+# turns responsive. The default must exceed the slowest legitimate tool
+# (web_search/web_extract allow 10-30s, terminal 60s, RAG embeddings longer) —
+# a 1s cap aborted healthy network tools, which then cost *another* LLM call
+# to react to a failure that never happened.
+_TOOL_TIMEOUTS: dict[str, float] = {
+    "delegate": 120.0,
+    "share_memory": 60.0,
+    "web_extract": 45.0,
+    "index_document": 120.0,
+    "terminal": 60.0,
+}
+_TOOL_TIMEOUT_DEFAULT = 30.0
+
+# Independent tool calls in one assistant message run concurrently, capped so a
+# model that emits a large batch cannot spawn unbounded subprocesses / queries.
+_MAX_PARALLEL_TOOLS = 8
 
 
 def _is_rate_limit_error(exc: BaseException) -> bool:
@@ -113,6 +127,12 @@ def _is_rate_limit_error(exc: BaseException) -> bool:
     layer must not retry them again.
     """
     return getattr(getattr(exc, "response", None), "status_code", None) == 429
+
+
+def _is_transient_error(exc: BaseException) -> bool:
+    """True for HTTP 502, 503, 504 failures (transient server errors)."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status in (502, 503, 504)
 
 
 class BaseReActAgent:
@@ -190,10 +210,10 @@ class BaseReActAgent:
     ):
         """Call provider.complete() with exponential backoff retry.
 
-        Retries up to 3 times on failure with delays of 1s, 2s, 4s.
+        Retries once on transient errors (502, 503, 504) with a 1s delay.
         """
         last_exception: Exception | None = None
-        for attempt in range(4):  # 1 initial + 3 retries
+        for attempt in range(2):  # 1 initial + 1 retry
             try:
                 return await usage_store.complete_call(
                     self.provider,
@@ -210,12 +230,14 @@ class BaseReActAgent:
                     # Provider already retried 429s with backoff — re-raising
                     # here avoids amplifying one rate limit into many requests.
                     raise
-                if attempt < 3:
-                    delay = 2**attempt  # 1s, 2s, 4s
+                if not _is_transient_error(e):
+                    raise
+                if attempt < 1:
+                    delay = 2**attempt  # 1s
                     logger.warning(
                         "LLM call failed (attempt %d/%d): %s — retrying in %ds",
                         attempt + 1,
-                        4,
+                        2,
                         e,
                         delay,
                     )
@@ -237,9 +259,10 @@ class BaseReActAgent:
         """Call provider.stream_complete() with exponential backoff retry.
 
         Yields StreamEvent objects as they arrive from the provider.
+        Retries once on transient errors (502, 503, 504) with a 1s delay.
         """
         last_exception: Exception | None = None
-        for attempt in range(4):  # 1 initial + 3 retries
+        for attempt in range(2):  # 1 initial + 1 retry
             emitted = False
             try:
                 reservation = await self._reserve_usage(session_id, messages, tools)
@@ -276,12 +299,14 @@ class BaseReActAgent:
                 if _is_rate_limit_error(e):
                     # Provider already retried 429s with backoff — don't amplify.
                     raise
-                if attempt < 3:
-                    delay = 2**attempt  # 1s, 2s, 4s
+                if not _is_transient_error(e):
+                    raise
+                if attempt < 1:
+                    delay = 2**attempt  # 1s
                     logger.warning(
                         "LLM stream failed (attempt %d/%d): %s — retrying in %ds",
                         attempt + 1,
-                        4,
+                        2,
                         e,
                         delay,
                     )
@@ -337,6 +362,7 @@ class BaseReActAgent:
         session_id: uuid.UUID,
         user_message: str,
         include_memory: bool = True,
+        pending_chunks: list[dict[str, Any]] | None = None,
     ) -> tuple[Session, list[dict[str, Any]]]:
         """Prepare session, context, and prompt messages.
 
@@ -347,6 +373,8 @@ class BaseReActAgent:
             session_id: The session ID.
             user_message: The user's message.
             include_memory: Whether to include memory retrieval. Defaults to True.
+            pending_chunks: If provided, chunks are accumulated here instead of
+                being inserted immediately. The caller is responsible for flushing.
 
         Returns:
             A tuple of (Session, messages list).
@@ -364,13 +392,22 @@ class BaseReActAgent:
         assembler = PromptAssembler(session.context_budget)
 
         # Store user message in context
-        await context_manager.add_chunk(
-            session_id=session_id,
-            agent_id=self.agent_id,
-            chunk_type="user_message",
-            payload={"content": user_message},
-            token_count=len(user_message) // 4,
-        )
+        if pending_chunks is not None:
+            pending_chunks.append({
+                "session_id": session_id,
+                "agent_id": self.agent_id,
+                "chunk_type": "user_message",
+                "payload": {"content": user_message},
+                "token_count": len(user_message) // 4,
+            })
+        else:
+            await context_manager.add_chunk(
+                session_id=session_id,
+                agent_id=self.agent_id,
+                chunk_type="user_message",
+                payload={"content": user_message},
+                token_count=len(user_message) // 4,
+            )
 
         # Get recent context for prompt assembly
         recent = await context_manager.get_recent_context(session_id, limit=3)
@@ -473,6 +510,7 @@ class BaseReActAgent:
         tool_calls_made: list[dict[str, Any]],
         session_id: uuid.UUID,
         verbose: bool,
+        pending_chunks: list[dict[str, Any]] | None = None,
     ) -> None:
         """Execute tool calls for the non-streaming loop.
 
@@ -480,7 +518,7 @@ class BaseReActAgent:
         implementation) that prints progress when *verbose* is set.
         """
         async for event in self._execute_tool_calls_stream(
-            response, messages, tool_calls_made, session_id
+            response, messages, tool_calls_made, session_id, pending_chunks
         ):
             if not verbose:
                 continue
@@ -497,6 +535,7 @@ class BaseReActAgent:
         messages: list[dict[str, Any]],
         tool_calls_made: list[dict[str, Any]],
         session_id: uuid.UUID,
+        pending_chunks: list[dict[str, Any]] | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Execute tool calls from an LLM response, yielding StreamEvents.
 
@@ -504,7 +543,19 @@ class BaseReActAgent:
         invalid JSON arguments, execution with timing, audit logging, context
         storage, and message updates. Modifies *messages* and
         *tool_calls_made* in place.
+
+        Independent tool calls in one assistant message run **concurrently**
+        (bounded by ``_MAX_PARALLEL_TOOLS``) instead of one after another, so a
+        batch of N reads costs roughly max(latency) rather than sum(latency).
+        Every ``tool_call`` event is emitted up front, then results are
+        replayed in the original order so the transcript stays deterministic.
+
+        If *pending_chunks* is provided, tool_call chunks are accumulated there
+        instead of being inserted immediately. The caller is responsible for
+        flushing them via ``context_manager.add_chunks_batch``.
         """
+        # ── Phase A: parse and validate the whole batch ─────────────────────
+        planned: list[dict[str, Any]] = []
         for tc in response.tool_calls:
             function_data = tc.get("function", {})
             tool_name = function_data.get("name")
@@ -515,8 +566,8 @@ class BaseReActAgent:
                     session_id=str(session_id),
                     error="missing_name",
                 )
-                self._append_tool_messages(
-                    messages, response, tc, "Error: tool call missing 'name' field"
+                planned.append(
+                    {"tc": tc, "name": None, "args": {}, "result": "Error: tool call missing 'name' field"}
                 )
                 continue
 
@@ -538,8 +589,8 @@ class BaseReActAgent:
                     tool_name=tool_name,
                     error=str(e),
                 )
-                self._append_tool_messages(
-                    messages, response, tc, f"Error: invalid tool arguments: {e}"
+                planned.append(
+                    {"tc": tc, "name": None, "args": {}, "result": f"Error: invalid tool arguments: {e}"}
                 )
                 continue
 
@@ -551,18 +602,18 @@ class BaseReActAgent:
                     tool_name=tool_name,
                     agent_id=self.agent_id,
                 )
-                yield StreamEvent(type="tool_call", tool_name=tool_name, tool_args=tool_args)
-                yield StreamEvent(type="tool_result", tool_name=tool_name, tool_result=result_str)
-                self._append_tool_messages(messages, response, tc, result_str)
+                planned.append(
+                    {"tc": tc, "name": tool_name, "args": tool_args, "result": result_str}
+                )
                 continue
 
-            yield StreamEvent(type="tool_call", tool_name=tool_name, tool_args=tool_args)
-            audit_log(
-                "tool_call_start",
-                session_id=str(session_id),
-                tool_name=tool_name,
-            )
+            planned.append({"tc": tc, "name": tool_name, "args": tool_args, "result": None})
 
+        # ── Phase B: execute the callable tools concurrently ────────────────
+        async def _run_one(item: dict[str, Any]) -> None:
+            tool_name = item["name"]
+            tool_args = item["args"]
+            audit_log("tool_call_start", session_id=str(session_id), tool_name=tool_name)
             start = time.monotonic()
             tool_timeout = _TOOL_TIMEOUTS.get(tool_name, _TOOL_TIMEOUT_DEFAULT)
             try:
@@ -603,32 +654,76 @@ class BaseReActAgent:
                     duration_ms=int((time.monotonic() - start) * 1000),
                 )
                 result = f"Error: {e}"
+            item["result"] = str(result)
+            item["elapsed_ms"] = (time.monotonic() - start) * 1000
 
-            result_str = str(result)
-            metrics.record_latency(f"tool.{tool_name}", (time.monotonic() - start) * 1000)
-            metrics.increment_counter(f"tool.{tool_name}.calls")
-            if result_str.startswith("Error:"):
-                metrics.record_error(f"tool.{tool_name}")
-            await plugin_registry.dispatch("on_tool_result", tool_name, result_str)
-            audit_log(
-                "tool_call_complete",
-                session_id=str(session_id),
-                tool_name=tool_name,
-                duration_ms=int((time.monotonic() - start) * 1000),
+        runnable = [item for item in planned if item["result"] is None]
+        if runnable:
+            semaphore = asyncio.Semaphore(_MAX_PARALLEL_TOOLS)
+
+            async def _bounded(item: dict[str, Any]) -> None:
+                async with semaphore:
+                    await _run_one(item)
+
+            # A tool never raises out of _run_one (errors become results), so
+            # gather is safe; return_exceptions guards against a bug in that.
+            await asyncio.gather(
+                *(_bounded(item) for item in runnable), return_exceptions=True
             )
+
+        # ── Phase C: replay results, metrics, and persistence in order ──────
+        for item in planned:
+            tool_name = item["name"]
+            tool_args = item["args"]
+            result_str = item["result"]
+            tc = item["tc"]
+
+            if tool_name is None:
+                # Missing name / unparsable args: no events, just the reply.
+                self._append_tool_messages(messages, response, tc, result_str)
+                continue
+
+            yield StreamEvent(type="tool_call", tool_name=tool_name, tool_args=tool_args)
+
+            if "elapsed_ms" in item:
+                metrics.record_latency(f"tool.{tool_name}", item["elapsed_ms"])
+                metrics.increment_counter(f"tool.{tool_name}.calls")
+                if result_str.startswith("Error:"):
+                    metrics.record_error(f"tool.{tool_name}")
+                await plugin_registry.dispatch("on_tool_result", tool_name, result_str)
+                audit_log(
+                    "tool_call_complete",
+                    session_id=str(session_id),
+                    tool_name=tool_name,
+                    duration_ms=int(item["elapsed_ms"]),
+                )
+
             yield StreamEvent(type="tool_result", tool_name=tool_name, tool_result=result_str)
 
-            await context_manager.add_chunk(
-                session_id=session_id,
-                agent_id=self.agent_id,
-                chunk_type="tool_call",
-                payload={
-                    "tool": tool_name,
-                    "args": tool_args,
-                    "result_preview": result_str[:500],
-                },
-                token_count=len(result_str) // 4,
-            )
+            if pending_chunks is not None:
+                pending_chunks.append({
+                    "session_id": session_id,
+                    "agent_id": self.agent_id,
+                    "chunk_type": "tool_call",
+                    "payload": {
+                        "tool": tool_name,
+                        "args": tool_args,
+                        "result_preview": result_str[:500],
+                    },
+                    "token_count": len(result_str) // 4,
+                })
+            else:
+                await context_manager.add_chunk(
+                    session_id=session_id,
+                    agent_id=self.agent_id,
+                    chunk_type="tool_call",
+                    payload={
+                        "tool": tool_name,
+                        "args": tool_args,
+                        "result_preview": result_str[:500],
+                    },
+                    token_count=len(result_str) // 4,
+                )
             tool_calls_made.append(
                 {
                     "tool": tool_name,
@@ -637,6 +732,16 @@ class BaseReActAgent:
                 }
             )
             self._append_tool_messages(messages, response, tc, result_str[:1000])
+
+    async def _flush_pending_chunks(
+        self, pending_chunks: list[dict[str, Any]]
+    ) -> None:
+        """Insert all pending chunks in a single batch operation."""
+        if pending_chunks:
+            result = context_manager.add_chunks_batch(pending_chunks)
+            if inspect.isawaitable(result):
+                await result
+            pending_chunks.clear()
 
     def _schedule_memory_consolidation(self, session_id: uuid.UUID) -> None:
         """Schedule memory consolidation as a background task.
@@ -721,8 +826,9 @@ class ReActAgent(BaseReActAgent):
         audit_log("agent_run_start", session_id=str(session_id), agent_id=self.agent_id)
 
         # Prepare context (includes memory retrieval)
+        pending_chunks: list[dict[str, Any]] = []
         session, messages = await self._prepare_context(
-            session_id, user_message, include_memory=True
+            session_id, user_message, include_memory=True, pending_chunks=pending_chunks
         )
 
         total_tokens = 0
@@ -746,6 +852,8 @@ class ReActAgent(BaseReActAgent):
                     total_tokens=total_tokens,
                     max_budget=effective_budget,
                 )
+                # Flush any pending chunks before returning
+                await self._flush_pending_chunks(pending_chunks)
                 # Consolidate memories before returning
                 self._schedule_memory_consolidation(session_id)
                 return AgentResponse(
@@ -766,6 +874,7 @@ class ReActAgent(BaseReActAgent):
                     session_id=session_id,
                 )
             except UsageBudgetExceededError as e:
+                await self._flush_pending_chunks(pending_chunks)
                 audit_log("agent_run_budget_exceeded", session_id=str(session_id), error=str(e))
                 return AgentResponse(
                     content=str(e),
@@ -774,6 +883,7 @@ class ReActAgent(BaseReActAgent):
                     iterations=iteration,
                 )
             except Exception as e:
+                await self._flush_pending_chunks(pending_chunks)
                 logger.error("LLM call ultimately failed: %s", e)
                 audit_log(
                     "agent_run_llm_error",
@@ -801,13 +911,14 @@ class ReActAgent(BaseReActAgent):
             if not response.tool_calls:
                 # No tool calls — final answer
                 content = response.content or ""
-                await context_manager.add_chunk(
-                    session_id=session_id,
-                    agent_id=self.agent_id,
-                    chunk_type="assistant_message",
-                    payload={"content": content},
-                    token_count=len(content) // 4,
-                )
+                pending_chunks.append({
+                    "session_id": session_id,
+                    "agent_id": self.agent_id,
+                    "chunk_type": "assistant_message",
+                    "payload": {"content": content},
+                    "token_count": len(content) // 4,
+                })
+                await self._flush_pending_chunks(pending_chunks)
                 await session_manager.update_activity(session_id)
                 audit_log(
                     "agent_run_complete",
@@ -828,7 +939,7 @@ class ReActAgent(BaseReActAgent):
                 return completed
 
             # Execute tool calls
-            await self._execute_tool_calls(response, messages, tool_calls_made, session_id, verbose)
+            await self._execute_tool_calls(response, messages, tool_calls_made, session_id, verbose, pending_chunks)
 
         # Max iterations reached
         audit_log(
@@ -837,6 +948,8 @@ class ReActAgent(BaseReActAgent):
             max_iterations=self.max_iterations,
             total_tokens=total_tokens,
         )
+        # Flush any pending chunks before returning
+        await self._flush_pending_chunks(pending_chunks)
         # Consolidate memories before returning
         self._schedule_memory_consolidation(session_id)
         return AgentResponse(
@@ -866,8 +979,9 @@ class ReActAgent(BaseReActAgent):
         audit_log("agent_run_stream_start", session_id=str(session_id), agent_id=self.agent_id)
 
         # Prepare context (includes memory retrieval, same as run())
+        pending_chunks: list[dict[str, Any]] = []
         session, messages = await self._prepare_context(
-            session_id, user_message, include_memory=True
+            session_id, user_message, include_memory=True, pending_chunks=pending_chunks
         )
 
         total_tokens = 0
@@ -891,6 +1005,7 @@ class ReActAgent(BaseReActAgent):
                     total_tokens=total_tokens,
                     max_budget=effective_budget,
                 )
+                await self._flush_pending_chunks(pending_chunks)
                 yield StreamEvent(
                     type="done",
                     response=AgentResponse(
@@ -932,6 +1047,7 @@ class ReActAgent(BaseReActAgent):
                     raise RuntimeError("Stream completed without a final response")
 
             except UsageBudgetExceededError as e:
+                await self._flush_pending_chunks(pending_chunks)
                 audit_log("agent_run_budget_exceeded", session_id=str(session_id), error=str(e))
                 yield StreamEvent(
                     type="done",
@@ -944,6 +1060,7 @@ class ReActAgent(BaseReActAgent):
                 )
                 return
             except Exception as e:
+                await self._flush_pending_chunks(pending_chunks)
                 logger.error("LLM stream ultimately failed: %s", e)
                 audit_log(
                     "agent_run_llm_error",
@@ -968,13 +1085,14 @@ class ReActAgent(BaseReActAgent):
             if not response.tool_calls:
                 # No tool calls — final answer
                 content = response.content or ""
-                await context_manager.add_chunk(
-                    session_id=session_id,
-                    agent_id=self.agent_id,
-                    chunk_type="assistant_message",
-                    payload={"content": content},
-                    token_count=len(content) // 4,
-                )
+                pending_chunks.append({
+                    "session_id": session_id,
+                    "agent_id": self.agent_id,
+                    "chunk_type": "assistant_message",
+                    "payload": {"content": content},
+                    "token_count": len(content) // 4,
+                })
+                await self._flush_pending_chunks(pending_chunks)
                 await session_manager.update_activity(session_id)
                 audit_log(
                     "agent_run_complete",
@@ -999,7 +1117,7 @@ class ReActAgent(BaseReActAgent):
 
             # Execute tool calls with streaming events
             async for event in self._execute_tool_calls_stream(
-                response, messages, tool_calls_made, session_id
+                response, messages, tool_calls_made, session_id, pending_chunks
             ):
                 yield event
 
@@ -1010,6 +1128,7 @@ class ReActAgent(BaseReActAgent):
             max_iterations=self.max_iterations,
             total_tokens=total_tokens,
         )
+        await self._flush_pending_chunks(pending_chunks)
         self._schedule_memory_consolidation(session_id)
         yield StreamEvent(
             type="done",

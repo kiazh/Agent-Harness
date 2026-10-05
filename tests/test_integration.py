@@ -165,6 +165,7 @@ class TestAgentWithRealTools:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -215,6 +216,7 @@ class TestAgentWithRealTools:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 # Patch _BASE_DIR to allow writing to temp_dir
@@ -263,6 +265,7 @@ class TestAgentWithRealTools:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -303,6 +306,7 @@ class TestAgentWithRealTools:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -368,6 +372,7 @@ class TestAgentWithRealTools:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=10)
@@ -405,13 +410,14 @@ class TestAgentWithMockedDB:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
                 await agent.run(mock_session.id, "test message", verbose=False)
 
                 # Should have stored user message and assistant response
-                assert mock_cm.add_chunk.call_count >= 2
+                assert mock_cm.add_chunks_batch.call_count >= 1
 
     async def test_agent_retrieves_recent_context(self, mock_session):
         """Test that agent retrieves recent context for prompt assembly."""
@@ -427,6 +433,7 @@ class TestAgentWithMockedDB:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(
                     return_value=[
                         {"type": "user_message", "payload": {"content": "previous"}, "tokens": 1},
@@ -452,6 +459,7 @@ class TestAgentWithMockedDB:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -601,7 +609,6 @@ class TestSessionContextIntegration:
         mock_db = AsyncMock()
         session_id = uuid.uuid4()
 
-        mock_db.executemany = AsyncMock()
         mock_db.fetch = AsyncMock(
             return_value=[
                 {
@@ -631,7 +638,7 @@ class TestSessionContextIntegration:
             ]
             result = await context_manager.add_chunks_batch(chunks)
             assert len(result) == 5
-            mock_db.executemany.assert_called_once()
+            mock_db.fetch.assert_called_once()
 
 
 # ===========================================================================
@@ -784,6 +791,7 @@ class TestFullFlowIntegration:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -800,7 +808,7 @@ class TestFullFlowIntegration:
                 assert response.tool_calls[0]["tool"] == "read_file"
 
                 # Verify context was stored
-                assert mock_cm.add_chunk.call_count >= 2
+                assert mock_cm.add_chunks_batch.call_count >= 1
 
     async def test_multi_turn_conversation(self, mock_session):
         """Test multi-turn conversation with context accumulation."""
@@ -817,6 +825,7 @@ class TestFullFlowIntegration:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -850,6 +859,7 @@ class TestFullFlowIntegration:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
+                mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)

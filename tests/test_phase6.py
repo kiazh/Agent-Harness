@@ -220,6 +220,7 @@ async def test_agent_lifecycle_and_tool_hooks(monkeypatch):
     monkeypatch.setattr(agent_module.session_manager, "get", AsyncMock(return_value=session))
     monkeypatch.setattr(agent_module.session_manager, "update_activity", AsyncMock())
     monkeypatch.setattr(agent_module.context_manager, "add_chunk", AsyncMock())
+    monkeypatch.setattr(agent_module.context_manager, "add_chunks_batch", AsyncMock())
     monkeypatch.setattr(agent_module.context_manager, "get_recent_context", AsyncMock(return_value=[]))
     monkeypatch.setattr(agent_module.registry, "execute", AsyncMock(return_value="agents listed"))
     agent = ReActAgent(provider=Provider(), max_iterations=2)

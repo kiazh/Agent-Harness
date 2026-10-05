@@ -421,7 +421,7 @@ class Gateway:
             # Best-effort join so the turn's cleanup runs before we answer.
             # shield() keeps a cancelled turn from cancelling this handler.
             await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
-        except (asyncio.CancelledError, TimeoutError, Exception):
+        except TimeoutError:
             pass
         # Entry removal is left to _run_turn's finally block, which deletes
         # only if the stored task is still the current one (identity check).

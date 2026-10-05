@@ -116,7 +116,8 @@ def _run_bounded(args: list[str], timeout: int, cwd: str | None) -> str:
         timer.daemon = True
         timer.start()
         try:
-            assert process.stdout is not None
+            if process.stdout is None:
+                raise RuntimeError("process.stdout is None")
             # Read output in a separate thread to avoid deadlock on large output
             # (blocking read() may not return promptly after kill on Windows)
             output_parts = []

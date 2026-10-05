@@ -24,6 +24,11 @@ class AuditPersistence:
         if self._task is None or self._task.done():
             self._queue = asyncio.Queue(maxsize=self._max_pending)
             self._task = asyncio.create_task(self._run(), name="ah-audit-writer")
+            self._task.add_done_callback(lambda t: self._clear_task())
+
+    def _clear_task(self) -> None:
+        self._task = None
+        self._queue = []
 
     def submit(self, entry: dict[str, Any]) -> None:
         if self._task is None or self._task.done() or self._queue is None:

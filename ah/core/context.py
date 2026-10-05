@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
-from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -55,13 +53,6 @@ class ContextManager:
     def __init__(self, batch_size: int = 50, cache_size: int = 128) -> None:
         self._batch_size = batch_size
         self._pending: list[dict[str, Any]] = []
-        # LRU cache: session_id -> list of recent context dicts
-        self._recent_cache: OrderedDict[uuid.UUID, list[dict[str, Any]]] = OrderedDict()
-        self._cache_size = cache_size
-        # Guard _recent_cache: OrderedDict is not thread/coroutine-safe.
-        self._cache_lock = asyncio.Lock()
-        # Alias for callers/tests expecting `self._lock`.
-        self._lock = self._cache_lock
 
     async def add_chunk(
         self,
@@ -91,9 +82,6 @@ class ContextManager:
             embedding_str,
             _search_text_for(payload),
         )
-        # Invalidate cache for this session
-        async with self._cache_lock:
-            self._recent_cache.pop(session_id, None)
         return self._row_to_chunk(row)
 
     async def add_chunks_batch(
@@ -138,28 +126,22 @@ class ContextManager:
         chunk_ids = [uuid.uuid4() for _ in records]
         records_with_ids = [(cid, *rec) for cid, rec in zip(chunk_ids, records, strict=True)]
 
-        # Use executemany for batch insert
-        await db.executemany(
-            """
-            INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            """,
-            records_with_ids,
-        )
-
-        session_ids = list({c["session_id"] for c in chunks})
-        # Invalidate cache for all affected sessions
-        async with self._cache_lock:
-            for sid in session_ids:
-                self._recent_cache.pop(sid, None)
+        # Use a single execute with RETURNING to insert all rows and get them
+        # back in one round-trip, avoiding the executemany + extra fetch.
         rows = await db.fetch(
             """
-            SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
-            FROM context_chunks
-            WHERE id = ANY($1::uuid[])
-            ORDER BY created_at DESC, id DESC
+            INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
+            SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::bytea[], $6::int[], $7::text[]::vector[], $8::text[])
+            RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
             """,
-            chunk_ids,
+            [r[0] for r in records_with_ids],
+            [r[1] for r in records_with_ids],
+            [r[2] for r in records_with_ids],
+            [r[3] for r in records_with_ids],
+            [r[4] for r in records_with_ids],
+            [r[5] for r in records_with_ids],
+            [r[6] for r in records_with_ids],
+            [r[7] for r in records_with_ids],
         )
         return [self._row_to_chunk(r) for r in rows]
 
@@ -200,52 +182,29 @@ class ContextManager:
     async def get_recent_context(
         self, session_id: uuid.UUID, limit: int = 10
     ) -> list[dict[str, Any]]:
-        """Get recent context as a list of payloads (for prompt assembly).
-
-        Uses an LRU cache per session to avoid redundant DB queries.
-        Cache is invalidated when new chunks are added to the session.
-        """
-        # Check cache first. Entries store (fetched_limit, rows); a hit is only
-        # valid if the cached fetch covered at least the requested limit, or the
-        # session simply had fewer rows than were asked for.
-        # Hold _cache_lock across miss-check + fill so a concurrent writer
-        # cannot invalidate between the check and the fill (stale fill).
-        async with self._cache_lock:
-            if session_id in self._recent_cache:
-                cached_limit, cached = self._recent_cache[session_id]
-                if cached_limit >= limit or len(cached) < cached_limit:
-                    self._recent_cache.move_to_end(session_id)
-                    return cached[:limit]
-
-            rows = await db.fetch(
-                """
-                SELECT payload_msgpack, chunk_type, token_count
-                FROM context_chunks
-                WHERE session_id = $1
-                ORDER BY created_at DESC
-                LIMIT $2
-                """,
-                session_id,
-                limit,
+        """Get recent context as a list of payloads (for prompt assembly)."""
+        rows = await db.fetch(
+            """
+            SELECT payload_msgpack, chunk_type, token_count
+            FROM context_chunks
+            WHERE session_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            session_id,
+            limit,
+        )
+        results = []
+        for r in rows:
+            payload = msgpack.unpackb(r["payload_msgpack"], raw=False)
+            results.append(
+                {
+                    "type": r["chunk_type"],
+                    "payload": payload,
+                    "tokens": r["token_count"],
+                }
             )
-            results = []
-            for r in rows:
-                payload = msgpack.unpackb(r["payload_msgpack"], raw=False)
-                results.append(
-                    {
-                        "type": r["chunk_type"],
-                        "payload": payload,
-                        "tokens": r["token_count"],
-                    }
-                )
-
-            # Cache the results with the limit they were fetched at
-            self._recent_cache[session_id] = (limit, results)
-            self._recent_cache.move_to_end(session_id)
-            if len(self._recent_cache) > self._cache_size:
-                self._recent_cache.popitem(last=False)  # Evict LRU
-
-            return results
+        return results
 
     async def search_by_embedding(
         self,
@@ -323,8 +282,6 @@ class ContextManager:
                         """,
                         records,
                     )
-        async with self._cache_lock:
-            self._recent_cache.pop(session_id, None)
         return len(records)
 
     async def delete_chunks(self, session_id: uuid.UUID) -> int:
@@ -333,8 +290,6 @@ class ContextManager:
             "DELETE FROM context_chunks WHERE session_id = $1",
             session_id,
         )
-        async with self._cache_lock:
-            self._recent_cache.pop(session_id, None)
         from ah.db.connection import parse_command_count
 
         return parse_command_count(result)
@@ -417,17 +372,20 @@ class ContextManager:
             threshold,
         )
         results = []
-        for row in rows:
-            sim = row["similarity"]
-            # Increment resurrection_count
+        # Batch the resurrection_count updates into a single query instead of
+        # one UPDATE per row (N+1 pattern).
+        if rows:
+            ids = [row["id"] for row in rows]
             await db.execute(
                 """
                 UPDATE context_archive
                 SET resurrection_count = resurrection_count + 1, last_resurrected = now()
-                WHERE id = $1
+                WHERE id = ANY($1::uuid[])
                 """,
-                row["id"],
+                ids,
             )
+        for row in rows:
+            sim = row["similarity"]
             # Build a ContextChunk from the archived row
             from ah.core.serialization import str_to_embedding
 
@@ -515,12 +473,18 @@ class ContextManager:
         if max_tokens is None and max_chunks is None:
             return 0
 
-        # Get current token usage
-        total_tokens = await self.get_token_usage(session_id)
-        total_chunks = await db.fetchval(
-            "SELECT COUNT(*) FROM context_chunks WHERE session_id = $1",
+        # Combine SUM and COUNT into a single query to avoid two full-table scans
+        row = await db.fetchrow(
+            """
+            SELECT COUNT(*) AS total_chunks, COALESCE(SUM(token_count), 0) AS total_tokens
+            FROM context_chunks WHERE session_id = $1
+            """,
             session_id,
         )
+        if row is None:
+            return 0
+        total_chunks = int(row["total_chunks"])
+        total_tokens = int(row["total_tokens"])
 
         if (max_tokens is None or total_tokens <= max_tokens) and (
             max_chunks is None or total_chunks <= max_chunks
@@ -535,36 +499,6 @@ class ContextManager:
         chunks_freed = 0
         cursor_time: datetime | None = None
         cursor_id: uuid.UUID | None = None
-
-        async def archive_and_delete(conn: asyncpg.Connection, row: Any) -> bool:
-            # Claim the live row before archiving. If a concurrent eviction
-            # already archived and deleted it, this returns None (the lock
-            # waits, then re-reads the committed delete) and we skip it, so a
-            # chunk is never archived twice.
-            claimed = await conn.fetchval(
-                "SELECT id FROM context_chunks WHERE id = $1 FOR UPDATE", row["id"]
-            )
-            if claimed is None:
-                return False
-            payload_msgpack = row.get("payload_msgpack") or b""
-            embedding_raw = row.get("embedding")
-            embedding = str_to_embedding(embedding_raw) if embedding_raw else None
-            archived = await self.archive_chunk(
-                session_id=session_id,
-                chunk_id=row["id"],
-                payload_msgpack=payload_msgpack,
-                embedding=embedding,
-                archive_reason="evicted",
-                agent_id=row["agent_id"],
-                chunk_type=row["chunk_type"],
-                token_count=row["token_count"],
-                created_at=row["created_at"],
-                connection=conn,
-            )
-            if archived is None:
-                raise RuntimeError("archive insert returned no row")
-            await conn.execute("DELETE FROM context_chunks WHERE id = $1", row["id"])
-            return True
 
         while remaining_evictable > 0:
             page_limit = min(100, remaining_evictable)
@@ -619,10 +553,46 @@ class ContextManager:
             try:
                 async with db.acquire() as conn:
                     async with conn.transaction():
-                        successful = []
-                        for row in selected:
-                            if await archive_and_delete(conn, row):
-                                successful.append(row)
+                        # Claim all rows at once to prevent concurrent eviction
+                        # from archiving the same chunk twice.
+                        claimed_rows = await conn.fetch(
+                            "SELECT id FROM context_chunks WHERE id = ANY($1::uuid[]) FOR UPDATE",
+                            [row["id"] for row in selected],
+                        )
+                        claimed_ids = {r["id"] for r in claimed_rows}
+                        rows_to_archive = [row for row in selected if row["id"] in claimed_ids]
+
+                        if rows_to_archive:
+                            # Batch insert into context_archive
+                            await conn.executemany(
+                                """
+                                INSERT INTO context_archive
+                                    (session_id, chunk_id, payload_msgpack, embedding, archive_reason,
+                                     agent_id, chunk_type, token_count, original_created_at, search_text)
+                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                                """,
+                                [
+                                    (
+                                        session_id,
+                                        row["id"],
+                                        row.get("payload_msgpack") or b"",
+                                        embedding_to_str(str_to_embedding(row["embedding"])) if row.get("embedding") else None,
+                                        "evicted",
+                                        row["agent_id"],
+                                        row["chunk_type"],
+                                        row["token_count"],
+                                        row["created_at"],
+                                        _search_text_for(msgpack.unpackb(row.get("payload_msgpack") or b"", raw=False)),
+                                    )
+                                    for row in rows_to_archive
+                                ],
+                            )
+                            # Batch delete
+                            await conn.execute(
+                                "DELETE FROM context_chunks WHERE id = ANY($1::uuid[])",
+                                [row["id"] for row in rows_to_archive],
+                            )
+                        successful = rows_to_archive
             except Exception as batch_error:
                 # A bad row must not turn eviction into data loss or block all
                 # other rows; retry individually only on this exceptional path.
@@ -632,8 +602,30 @@ class ContextManager:
                     try:
                         async with db.acquire() as conn:
                             async with conn.transaction():
-                                if await archive_and_delete(conn, row):
-                                    successful.append(row)
+                                claimed = await conn.fetchval(
+                                    "SELECT id FROM context_chunks WHERE id = $1 FOR UPDATE", row["id"]
+                                )
+                                if claimed is None:
+                                    continue
+                                payload_msgpack = row.get("payload_msgpack") or b""
+                                embedding_raw = row.get("embedding")
+                                embedding = str_to_embedding(embedding_raw) if embedding_raw else None
+                                archived = await self.archive_chunk(
+                                    session_id=session_id,
+                                    chunk_id=row["id"],
+                                    payload_msgpack=payload_msgpack,
+                                    embedding=embedding,
+                                    archive_reason="evicted",
+                                    agent_id=row["agent_id"],
+                                    chunk_type=row["chunk_type"],
+                                    token_count=row["token_count"],
+                                    created_at=row["created_at"],
+                                    connection=conn,
+                                )
+                                if archived is None:
+                                    raise RuntimeError("archive insert returned no row")
+                                await conn.execute("DELETE FROM context_chunks WHERE id = $1", row["id"])
+                                successful.append(row)
                     except Exception as error:
                         logger.warning("Failed to archive chunk %s: %s", row["id"], error)
 
@@ -646,9 +638,6 @@ class ContextManager:
                 break
 
         if evicted > 0:
-            # Invalidate cache
-            async with self._cache_lock:
-                self._recent_cache.pop(session_id, None)
             logger.info(
                 "Evicted %d chunks (freed %d tokens) from session %s",
                 evicted,

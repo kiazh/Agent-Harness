@@ -141,28 +141,34 @@ class UsageStore:
                         "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                         f"llm_usage:{scope}:{identifier}",
                     )
-                agent_row = await conn.fetchrow(
-                    "SELECT COUNT(*) AS requests, COALESCE(SUM(accounted_tokens), 0) AS tokens "
-                    "FROM llm_usage WHERE agent_id = $1",
+                # Combine both scope aggregates into a single query with UNION ALL
+                scope_rows = await conn.fetch(
+                    """
+                    SELECT 'agent' AS scope, COUNT(*) AS requests,
+                           COALESCE(SUM(accounted_tokens), 0) AS tokens
+                    FROM llm_usage WHERE agent_id = $1
+                    UNION ALL
+                    SELECT 'session' AS scope, COUNT(*) AS requests,
+                           COALESCE(SUM(accounted_tokens), 0) AS tokens
+                    FROM llm_usage WHERE session_id = $2
+                    """,
                     agent_id,
-                )
-                session_row = await conn.fetchrow(
-                    "SELECT COUNT(*) AS requests, COALESCE(SUM(accounted_tokens), 0) AS tokens "
-                    "FROM llm_usage WHERE session_id = $1",
                     session_id,
                 )
+                agent_data = next(r for r in scope_rows if r["scope"] == "agent")
+                session_data = next(r for r in scope_rows if r["scope"] == "session")
                 _check_limit(
                     "agent",
-                    int(agent_row["requests"]),
-                    int(agent_row["tokens"]),
+                    int(agent_data["requests"]),
+                    int(agent_data["tokens"]),
                     limits["usage_agent_request_limit"],
                     limits["usage_agent_token_limit"],
                     reserved,
                 )
                 _check_limit(
                     "session",
-                    int(session_row["requests"]),
-                    int(session_row["tokens"]),
+                    int(session_data["requests"]),
+                    int(session_data["tokens"]),
                     limits["usage_session_request_limit"],
                     limits["usage_session_token_limit"],
                     reserved,

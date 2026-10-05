@@ -195,6 +195,43 @@ class SkillRegistry:
         self.skills_dir = Path(skills_dir) if skills_dir is not None else default_skills_dir()
         self._skills: dict[str, Skill] = {}
         self._telemetry_file = self.skills_dir / "telemetry.json"
+        # ``load_all()`` is called on every skill tool call and by every CLI /
+        # gateway skill handler. Re-reading and re-parsing every SKILL.md plus
+        # telemetry.json each time is pure waste, so the parsed result is
+        # cached and validated against a cheap on-disk signature. That keeps
+        # reload semantics (out-of-band edits are still picked up) without
+        # paying for a full parse on every call.
+        self._signature_cache: tuple | None = None
+
+    def _invalidate(self) -> None:
+        """Mark the parsed skill cache stale so the next load_all() re-reads."""
+        self._signature_cache = None
+
+    def _signature(self) -> tuple:
+        """Cheap fingerprint of the on-disk skill set used to validate the cache.
+
+        Stats only — no file contents are read. A changed mtime or size on any
+        SKILL.md, or on telemetry.json, invalidates the cached parse.
+        """
+        entries: list[tuple[str, int, int]] = []
+        try:
+            children = sorted(self.skills_dir.iterdir())
+        except OSError:
+            children = []
+        for child in children:
+            if not child.is_dir():
+                continue
+            try:
+                stat = (child / "SKILL.md").stat()
+            except OSError:
+                continue
+            entries.append((child.name, stat.st_mtime_ns, stat.st_size))
+        try:
+            telemetry_stat = self._telemetry_file.stat()
+            telemetry = (telemetry_stat.st_mtime_ns, telemetry_stat.st_size)
+        except OSError:
+            telemetry = None
+        return (tuple(entries), telemetry)
 
     def _load_telemetry(self) -> None:
         """Load telemetry data from JSON file into skill objects."""
@@ -213,7 +250,7 @@ class SkillRegistry:
                     if last_activity:
                         skill.last_activity_at = datetime.fromisoformat(last_activity)
         except (json.JSONDecodeError, OSError, ValueError):
-            pass
+            logger.warning("Failed to load telemetry", exc_info=True)
 
     def _save_telemetry(self) -> None:
         """Persist telemetry data to JSON file."""
@@ -229,29 +266,38 @@ class SkillRegistry:
         try:
             self._telemetry_file.write_text(json.dumps(telemetry, indent=2), encoding="utf-8")
         except OSError:
-            pass
+            logger.warning("Failed to save telemetry", exc_info=True)
+        self._invalidate()
 
-    def load_all(self) -> None:
-        """Load all skills from the skills directory.
+    def load_all(self, *, refresh: bool = False) -> None:
+        """Load all skills from the skills directory (reload semantics, cached).
 
         A single malformed or rejected SKILL.md (e.g. it trips the
         prompt-injection filter) is skipped with a warning rather than
         aborting the whole load.
+
+        Repeated calls with no on-disk change are cheap no-ops: the parsed
+        result is cached and validated against a stat-only signature, so
+        out-of-band edits are still picked up. ``refresh=True`` forces a
+        re-parse even when the signature matches.
         """
-        self._skills.clear()
-        if not self.skills_dir.exists():
+        signature = self._signature()
+        if self._signature_cache is not None and signature == self._signature_cache and not refresh:
             return
-        for skill_dir in sorted(self.skills_dir.iterdir()):
-            if skill_dir.is_dir():
-                skill_file = skill_dir / "SKILL.md"
-                if skill_file.exists():
-                    try:
-                        skill = SkillParser.parse(skill_file)
-                    except (ValueError, OSError, UnicodeDecodeError) as e:
-                        logger.warning("Skipping skill %s: %s", skill_file, e)
-                        continue
-                    self._skills[skill.name] = skill
-        self._load_telemetry()
+        self._skills.clear()
+        if self.skills_dir.exists():
+            for skill_dir in sorted(self.skills_dir.iterdir()):
+                if skill_dir.is_dir():
+                    skill_file = skill_dir / "SKILL.md"
+                    if skill_file.exists():
+                        try:
+                            skill = SkillParser.parse(skill_file)
+                        except (ValueError, OSError, UnicodeDecodeError) as e:
+                            logger.warning("Skipping skill %s: %s", skill_file, e)
+                            continue
+                        self._skills[skill.name] = skill
+            self._load_telemetry()
+        self._signature_cache = signature
 
     def get(self, name: str) -> Skill | None:
         return self._skills.get(name)
@@ -402,6 +448,7 @@ class SkillRegistry:
             created_at=created_at,
         )
         self._skills[name] = skill
+        self._invalidate()
         return skill
 
     def update_skill(
@@ -442,6 +489,7 @@ class SkillRegistry:
         skill_content = f"---\n{yaml_text}---\n{skill.content}\n"
 
         Path(skill.file_path).write_text(skill_content, encoding="utf-8")
+        self._invalidate()
         return skill
 
     def set_enabled(self, name: str, enabled: bool) -> Skill | None:
@@ -456,6 +504,7 @@ class SkillRegistry:
         """Delete a skill by name."""
         skill = self._skills.pop(name, None)
         if skill:
+            self._invalidate()
             skill_path = Path(skill.file_path)
             if skill_path.exists():
                 skill_path.unlink()

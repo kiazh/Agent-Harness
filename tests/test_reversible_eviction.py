@@ -47,12 +47,17 @@ class TestEvictionArchivesBeforeDelete:
             }
             for i in range(11)
         ]
-        mock_db.fetch = AsyncMock(return_value=rows)
-        mock_db.fetchval = AsyncMock(
-            side_effect=lambda sql, *_: 1100 if "SUM(token_count)" in sql else 11
+        # The cursor query has LIMIT 1 (remaining_evictable = max(0, 11 - 10) = 1),
+        # so the mock must return only 1 row, not all 11.
+        mock_db.fetch = AsyncMock(return_value=rows[:1])
+        mock_db.fetchrow = AsyncMock(
+            return_value={"total_chunks": 11, "total_tokens": 1100}
         )
         connection = AsyncMock()
         connection.fetchrow.return_value = {"id": uuid.uuid4()}
+        connection.fetch = AsyncMock(return_value=[{"id": r["id"]} for r in rows[:1]])
+        connection.executemany = AsyncMock()
+        connection.execute = AsyncMock(return_value="DELETE 1")
         connection.transaction = MagicMock()
         mock_db.acquire = MagicMock()
         mock_db.acquire.return_value.__aenter__.return_value = connection
@@ -61,13 +66,13 @@ class TestEvictionArchivesBeforeDelete:
             evicted = await manager.evict_old_chunks(session_id, max_tokens=50)
 
         assert evicted == 1
-        # Verify archive INSERT was called (via fetchrow for INSERT...RETURNING)
-        all_calls = list(connection.fetchrow.call_args_list) + list(
+        # Verify archive INSERT was called (via executemany for batch insert)
+        all_calls = list(connection.executemany.call_args_list) + list(
             connection.execute.call_args_list
         )
         archive_inserted = any("context_archive" in str(call) for call in all_calls)
         assert archive_inserted, "Expected INSERT INTO context_archive before DELETE"
-        connection.execute.assert_awaited_once()
+        connection.executemany.assert_awaited_once()
 
 
 class TestResurrectionViaEmbedding:

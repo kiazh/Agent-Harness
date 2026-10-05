@@ -194,7 +194,7 @@ class TestPromptAssemblerProperties:
         query=st.text(min_size=0, max_size=100),
         budget=st.integers(min_value=100, max_value=50000),
     )
-    @settings(max_examples=100, deadline=None)
+    @settings(max_examples=100)
     def test_assemble_respects_budget(self, system_prompt, goal, query, budget):
         """Property: optional (retrieved) context never pushes the prompt past
         the budget. System prompt, goal and query are always included, so the
@@ -381,7 +381,7 @@ class TestToolRegistryProperties:
 
     @given(
         args=st.dictionaries(
-            keys=st.text(min_size=1, max_size=10).filter(lambda k: k != "self"),
+            keys=st.text(min_size=1, max_size=10).filter(lambda k: k not in ("self", "name")),
             values=st.integers(),
         ),
     )

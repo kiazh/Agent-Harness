@@ -212,14 +212,13 @@ async def test_eviction_keeps_source_when_archive_fails(monkeypatch):
     ]
     fake_db = AsyncMock()
     fake_db.fetch = AsyncMock(return_value=rows)
-    fake_db.fetchval = AsyncMock(return_value=11)
+    fake_db.fetchrow = AsyncMock(return_value={"total_chunks": 11, "total_tokens": 110})
     connection = AsyncMock()
     connection.transaction = MagicMock()
     fake_db.acquire = MagicMock()
     fake_db.acquire.return_value.__aenter__.return_value = connection
     with (
         patch("ah.core.context.db", fake_db),
-        patch.object(manager, "get_token_usage", AsyncMock(return_value=110)),
         patch.object(manager, "archive_chunk", AsyncMock(side_effect=RuntimeError("archive down"))),
     ):
         assert await manager.evict_old_chunks(session_id, max_chunks=10) == 0

@@ -10,6 +10,8 @@ import json
 import logging
 import re
 import uuid
+
+logger = logging.getLogger(__name__)
 from datetime import datetime
 from typing import Any
 
@@ -123,25 +125,42 @@ class MemoryRetriever:
         Returns:
             List of RetrievedMemory objects, sorted by relevance score.
         """
-        # Step 1: Dense vector search (if embedding available)
-        dense_results: list[tuple[MemoryEntry, float]] = []
+        # Step 1 & 2: Run dense vector search and sparse keyword search concurrently
+        dense_task = None
         if query_embedding:
-            dense_results = await self.store.search_by_embedding(
+            dense_task = self.store.search_by_embedding(
                 embedding=query_embedding,
                 agent_id=agent_id,
                 category=category,
                 limit=self.top_k * 2,  # Get more candidates for re-ranking
             )
-            # Filter by minimum similarity
-            dense_results = [(m, s) for m, s in dense_results if s >= MIN_SIMILARITY_THRESHOLD]
-
-        # Step 2: Sparse keyword search
-        sparse_results = await self._keyword_search(
+        sparse_task = self._keyword_search(
             query=query,
             agent_id=agent_id,
             category=category,
             limit=self.top_k * 2,
         )
+
+        tasks = [t for t in (dense_task, sparse_task) if t is not None]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        dense_results: list[tuple[MemoryEntry, float]] = []
+        sparse_results: list[tuple[MemoryEntry, float]] = []
+
+        idx = 0
+        if dense_task is not None:
+            dense_res = results[idx]
+            idx += 1
+            if isinstance(dense_res, Exception):
+                logger.warning("Dense search failed: %s", dense_res)
+            else:
+                dense_results = [(m, s) for m, s in dense_res if s >= MIN_SIMILARITY_THRESHOLD]
+
+        sparse_res = results[idx]
+        if isinstance(sparse_res, Exception):
+            logger.warning("Sparse search failed: %s", sparse_res)
+        else:
+            sparse_results = sparse_res
 
         # Defense in depth: never pass quarantined rows to the agent, even if
         # a custom store or an older query returned them.
@@ -183,7 +202,7 @@ class MemoryRetriever:
             try:
                 await self.store.batch_update_access(ids_to_update)
             except Exception:
-                pass  # Don't fail retrieval due to access update failure
+                logger.warning("batch_update_access failed", exc_info=True)
 
         return candidates[: self.top_k]
 
@@ -276,7 +295,7 @@ class MemoryRetriever:
             try:
                 await self.store.batch_update_access(ids_to_update)
             except Exception:
-                pass
+                logger.warning("batch_update_access failed", exc_info=True)
         return retrieved
 
     async def _keyword_search(

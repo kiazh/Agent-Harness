@@ -68,7 +68,6 @@ def reset_singletons():
 
     from ah.core.context import context_manager
 
-    context_manager._recent_cache.clear()
     context_manager._pending.clear()
 
     from ah.core.session import session_manager
@@ -78,6 +77,10 @@ def reset_singletons():
     from ah.tools.base import registry
 
     registry._result_cache.clear()
+
+    from ah.core import provider as provider_module
+
+    provider_module._cache_clear()
 
     yield
 
