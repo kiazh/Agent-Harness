@@ -52,6 +52,48 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Gateway logging — file + console
+# ---------------------------------------------------------------------------
+def _setup_gateway_logging() -> None:
+    """Configure gateway logging to file and console."""
+    log_dir = os.path.join(os.path.expanduser("~"), ".agent-harness", "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, "gateway.log")
+
+    # File handler — rotating
+    from logging.handlers import RotatingFileHandler
+    file_handler = RotatingFileHandler(
+        log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    ))
+    file_handler.setLevel(logging.DEBUG)
+
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s"
+    ))
+    console_handler.setLevel(logging.WARNING)
+
+    # Root logger for ah.gateway
+    gw_logger = logging.getLogger("ah.gateway")
+    gw_logger.setLevel(logging.DEBUG)
+    gw_logger.addHandler(file_handler)
+    gw_logger.addHandler(console_handler)
+
+    # Also capture ah.core logs
+    core_logger = logging.getLogger("ah.core")
+    core_logger.setLevel(logging.DEBUG)
+    core_logger.addHandler(file_handler)
+
+    logger.info("Gateway logging initialized: %s", log_file)
+
+
+_setup_gateway_logging()
+
 PROVIDERS = ("openrouter", "ollama")
 MAX_TOOL_RESULT_CHARS = 4000
 
@@ -138,6 +180,7 @@ class Gateway:
         try:
             message = json.loads(line)
         except json.JSONDecodeError as e:
+            logger.warning("Parse error: %s", e)
             self._send_error(None, PARSE_ERROR, f"parse error: {e}")
             return
 
@@ -147,11 +190,13 @@ class Gateway:
             or message.get("jsonrpc") != "2.0"
             or not isinstance(message.get("method"), str)
         ):
+            logger.warning("Invalid request: %s", line[:200])
             self._send_error(rid, INVALID_REQUEST, "invalid request")
             return
 
         params = message.get("params") or {}
         if not isinstance(params, dict):
+            logger.warning("Invalid params (not an object) for method %s", message.get("method"))
             self._send_error(rid, INVALID_PARAMS, "params must be an object")
             return
 
@@ -161,17 +206,21 @@ class Gateway:
         if self._auth_token is not None and method != "initialize":
             token = params.get("token")
             if not isinstance(token, str) or not secrets.compare_digest(token, self._auth_token):
+                logger.warning("Unauthorized attempt: method=%s", method)
                 self._send_error(rid, UNAUTHORIZED, "unauthorized")
                 return
 
         handler = self._methods.get(method)
         if handler is None:
+            logger.warning("Unknown method: %s", method)
             self._send_error(rid, METHOD_NOT_FOUND, f"unknown method: {method}")
             return
 
+        logger.debug("→ %s (id=%s)", method, rid)
         try:
             result = await handler(params)
         except RpcError as e:
+            logger.warning("← %s error %d: %s (id=%s)", method, e.code, e.message, rid)
             self._send_error(rid, e.code, e.message)
             return
         except Exception:  # never let a handler crash the gateway
@@ -179,6 +228,7 @@ class Gateway:
             self._send_error(rid, INTERNAL_ERROR, "internal error")
             return
 
+        logger.debug("← %s ok (id=%s)", method, rid)
         if rid is not None:
             self._write({"jsonrpc": "2.0", "id": rid, "result": result})
 
@@ -238,6 +288,7 @@ class Gateway:
 
     # ─── methods ────────────────────────────────────────────────────────────
     async def _initialize(self, params: dict[str, Any]) -> dict[str, Any]:
+        logger.info("Gateway initialize: model=%s provider=%s", self.model, self.provider)
         from ah.plugins.loader import load_plugins
 
         load_plugins()
@@ -324,6 +375,7 @@ class Gateway:
         if running is not None and not running.done():
             raise RpcError(TURN_IN_PROGRESS, "a turn is already running for this session")
         turn_id = uuid.uuid4().hex[:12]
+        logger.info("Turn %s started for session %s", turn_id, session.id)
         self._turns[key] = asyncio.create_task(
             self._run_turn_with_timeout(session.id, turn_id, text.strip())
         )
@@ -363,6 +415,7 @@ class Gateway:
         return result
 
     async def _shutdown(self, params: dict[str, Any]) -> dict[str, Any]:
+        logger.info("Gateway shutdown requested")
         self.closing = True
         return {}
 
