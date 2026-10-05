@@ -130,6 +130,28 @@ class TestOrchestrator:
         with pytest.raises(AgentNotFoundError):
             await orch.delegate("nobody", "task")
 
+    async def test_cancelled_status_is_recorded(self, orch):
+        from ah.db.connection import db
+
+        # Apply the 'cancelled' CHECK migration in case the database was
+        # initialized from an older schema revision.
+        await db.execute(
+            "ALTER TABLE agent_messages DROP CONSTRAINT IF EXISTS agent_messages_status_check"
+        )
+        await db.execute(
+            "ALTER TABLE agent_messages ADD CONSTRAINT agent_messages_status_check "
+            "CHECK (status IN ('pending', 'complete', 'error', 'cancelled'))"
+        )
+        message_id = await orch._record_start(None, "orchestrator", "coder", "task")
+        try:
+            await orch._record_end(message_id, status="cancelled", response="cancelled", tokens=0)
+            status = await db.fetchval(
+                "SELECT status FROM agent_messages WHERE id = $1", message_id
+            )
+            assert status == "cancelled"
+        finally:
+            await db.execute("DELETE FROM agent_messages WHERE id = $1", message_id)
+
     async def test_sequential_passes_prior_results_forward(self, orch):
         captured: list[str] = []
 

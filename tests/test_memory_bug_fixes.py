@@ -280,7 +280,7 @@ class TestRerankTimeout:
         ]
 
         # Patch asyncio.wait_for to verify it's called
-        with patch("ah.memory.retriever.asyncio.wait_for", side_effect=TimeoutError()) as mock_wait:
+        with patch("ah.memory.retriever.asyncio.wait_for", side_effect=TimeoutError()):
             result = await retriever._rerank("test", candidates)
             # Should fall back to original candidates on timeout
             assert result == candidates

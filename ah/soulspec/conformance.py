@@ -33,9 +33,9 @@ class TestSoulSpecConformance:
                 errors.append("persona.name must be non-empty when persona is present")
 
         if spec.config:
-            if spec.config.max_iterations < 1:
+            if spec.config.max_iterations is not None and spec.config.max_iterations < 1:
                 errors.append("config.max_iterations must be >= 1")
-            if spec.config.context_budget < 1:
+            if spec.config.context_budget is not None and spec.config.context_budget < 1:
                 errors.append("config.context_budget must be >= 1")
 
         for skill in spec.skills:

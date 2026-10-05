@@ -804,7 +804,7 @@ pytest --cov=ah --cov-fail-under=85
 
 ### 10.4 Current State
 
-AgentHarness has **901 tests** with unknown coverage. Based on the critique document, coverage is likely:
+AgentHarness has **~1,030 tests** with unknown coverage. Based on the critique document, coverage is likely:
 - **High** for `PromptAssembler`, `ToolRegistry`, `SkillParser` (well-tested)
 - **Medium** for `ReActAgent` (mocked tests, doesn't verify real behavior)
 - **Low** for `Database`, `ContextManager`, `SessionManager` (mocked DB tests)
@@ -824,7 +824,7 @@ AgentHarness has **901 tests** with unknown coverage. Based on the critique docu
 | Property-based tests | 0 | N/A | No Hypothesis tests |
 | Chaos tests | 0 | N/A | No fault injection tests |
 | Load tests | 0 | N/A | No performance tests |
-| **Total** | **901** | | **Mixed** | |
+| **Total** | **~1,030** | | **Mixed** | |
 
 ### 11.2 Critical Gaps
 

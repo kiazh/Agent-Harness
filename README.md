@@ -275,7 +275,9 @@ agent-harness/
 │   ├── research/
 │   │   ├── locomo.py        # LoCoMo evidence-retrieval benchmark
 │   │   ├── train_memory_policy.py  # Offline memory-policy training
-│   │   └── identity_eval.py # Identity-drift scenario evaluator
+│   │   ├── identity_eval.py # Identity-drift scenario evaluator
+│   │   ├── workflow_trial.py  # Isolated native-vs-LangGraph approval trial
+│   │   └── workflow_benchmark.py # Reproducible latency comparison
 │   ├── services.py          # Shared service ops (export, compress, learn skill, status)
 │   ├── rag/
 │   │   ├── chunker.py       # RecursiveCharacterTextSplitter
@@ -286,15 +288,17 @@ agent-harness/
 │   │   └── search.py        # HybridSearch (BM25 + dense + RRF)
 │   ├── skills/
 │   │   ├── registry.py      # SkillParser + SkillRegistry (SKILL.md + YAML frontmatter)
-│   │   └── learning.py      # Opt-in post-turn skill proposals and reviews
+│   │   ├── learning.py      # Opt-in post-turn skill proposals and reviews
+│   │   └── runtime.py       # Prompt catalog for matching skills
 │   └── tools/
 │       ├── base.py          # ToolRegistry (decorator, validation, caching)
 │       ├── builtins.py      # web_search, web_extract, search_files
 │       ├── file.py          # read_file, write_file, list_files
 │       ├── memory.py        # remember, recall
 │       ├── rag.py           # index_document, search_documents
-│       ├── agents.py        # delegate, list_agents
+│       ├── agents.py        # delegate, list_agents, share_memory
 │       ├── session_recall.py # session_recall, session_recall_window
+│       ├── skills.py          # skill_list, skill_read
 │       ├── registry.py      # Re-export for backward compat
 │       └── terminal.py      # terminal (explicit sandbox opt-in)
 ├── ui/                     # TypeScript terminal UI (pi-tui): src/ app, gateway client, widgets; test/

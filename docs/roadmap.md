@@ -9,7 +9,7 @@ the earlier 901-test snapshot is no longer current.
 
 ## Executive Summary
 
-AgentHarness has completed Phases 1-6: a ReAct loop, PostgreSQL context and memory, RAG, a terminal UI and JSON-RPC gateway, multi-agent delegation, and production API, scheduling, observability, plugins, and security controls. The Windows test run collects 901 tests, with some platform-specific tests deselected.
+AgentHarness has completed Phases 1-6: a ReAct loop, PostgreSQL context and memory, RAG, a terminal UI and JSON-RPC gateway, multi-agent delegation, and production API, scheduling, observability, plugins, and security controls. The Windows test run collects ~1,030 tests, with some platform-specific tests deselected.
 
 Phase 7 has started with **session and agent usage controls** (shipped: durable
 `llm_usage` accounting, optional token/request budgets, `ah usage` and
@@ -45,7 +45,8 @@ ah/
 │   ├── cron.py          # Five-field UTC cron parser
 │   ├── job_scripts.py   # User-managed scripts for script-only jobs
 │   ├── session_recall.py # Agent-scoped transcript evidence discovery
-│   └── text_search.py   # Shared bounded OR-tsquery builder
+│   ├── text_search.py   # Shared bounded OR-tsquery builder
+│   └── windows_job.py   # Windows Job Object ownership for script trees
 ├── db/
 │   ├── connection.py    # asyncpg pool
 │   └── schema.sql       # sessions, context_chunks, context_archive, memories,
@@ -59,12 +60,14 @@ ah/
 │   ├── terminal.py      # terminal (allowlist + SSRF protection)
 │   ├── memory.py        # remember, recall
 │   ├── rag.py           # index_document, search_documents
-│   ├── agents.py        # delegate, list_agents
+│   ├── agents.py        # delegate, list_agents, share_memory
 │   ├── session_recall.py # session_recall, session_recall_window
+│   ├── skills.py          # skill_list, skill_read
 │   └── registry.py      # Re-export for backward compat
 ├── skills/
 │   ├── registry.py      # SkillParser + SkillRegistry (SKILL.md + YAML frontmatter)
-│   └── learning.py      # Opt-in post-turn skill proposals and reviews
+│   ├── learning.py      # Opt-in post-turn skill proposals and reviews
+│   └── runtime.py       # Prompt catalog for matching skills
 ├── memory/
 │   ├── models.py        # MemoryEntry, RetrievedMemory
 │   ├── store.py         # MemoryStore (CRUD)
@@ -100,6 +103,8 @@ ah/
 ├── research/
 │   ├── locomo.py        # LoCoMo evidence retrieval benchmark
 │   ├── train_memory_policy.py, identity_eval.py
+│   ├── workflow_trial.py  # Isolated native-vs-LangGraph approval trial
+│   └── workflow_benchmark.py # Reproducible latency comparison
 ├── rag/
 │   ├── chunker.py       # RecursiveCharacterTextSplitter
 │   ├── embedder.py      # OpenAIEmbedder (LRU cache + batch)

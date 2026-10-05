@@ -288,7 +288,9 @@ class TestPromptSSE:
                 yield StreamEvent(type="text", content="Hello")
 
         app = create_app()
-        prompt = next(route.endpoint for route in app.routes if route.path == "/sessions/{session_id}/prompt")
+        prompt = next(
+            route.endpoint for route in app.routes if route.path == "/sessions/{session_id}/prompt"
+        )
         provider = FakeProvider()
         with patch("ah.api.app.session_manager.get", new_callable=AsyncMock, return_value=session):
             with patch("ah.core.provider.get_provider", return_value=provider):

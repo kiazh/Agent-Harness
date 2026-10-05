@@ -234,11 +234,16 @@ CREATE TABLE IF NOT EXISTS agent_messages (
     to_agent TEXT NOT NULL,
     task TEXT NOT NULL,
     response TEXT,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'complete', 'error')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'complete', 'error', 'cancelled')),
     tokens_used INT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT now(),
     completed_at TIMESTAMPTZ
 );
+
+-- Migration for existing databases: CREATE TABLE IF NOT EXISTS does not update
+-- the CHECK constraint, so re-create it to allow 'cancelled'.
+ALTER TABLE agent_messages DROP CONSTRAINT IF EXISTS agent_messages_status_check;
+ALTER TABLE agent_messages ADD CONSTRAINT agent_messages_status_check CHECK (status IN ('pending', 'complete', 'error', 'cancelled'));
 
 CREATE INDEX IF NOT EXISTS idx_agent_messages_session ON agent_messages(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_messages_to ON agent_messages(to_agent, status);
