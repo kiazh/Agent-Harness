@@ -1,4 +1,4 @@
-// The interactive app: transcript, editor and footer on a pi-tui main screen,
+// The interactive app: transcript, editor and footer on a pi-tui alt screen,
 // driven by the Python gateway. Slash commands live in features.ts.
 
 import { mkdir, writeFile } from "node:fs/promises";
@@ -6,7 +6,8 @@ import { dirname, resolve } from "node:path";
 import {
 	CombinedAutocompleteProvider,
 	Container,
-	Editor,
+	type Editor,
+	isViewportTUI,
 	Key,
 	Loader,
 	matchesKey,
@@ -15,7 +16,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { parseCommand } from "./commands.ts";
-import { Footer, header, Picker } from "./components.ts";
+import { ComposerBox, createLayout, Footer, header, type LayoutRoot, logo, Picker } from "./components.ts";
 import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features/index.ts";
 import type { GatewayClient } from "./gateway.ts";
 import type {
@@ -45,8 +46,19 @@ export class App implements FeatureHost {
 	private readonly options: AppOptions;
 	private readonly transcriptView = new Container();
 	private readonly transcript: Transcript;
+	private readonly composer: ComposerBox;
 	private readonly editor: Editor;
 	private readonly footer = new Footer();
+	/**
+	/**
+	 * Codex-style bottom-docked layout: the transcript scrolls in the
+	 * flexible area while the composer and footer stay pinned to the
+	 * bottom rows. Built in the constructor once the children exist.
+	 */
+	private readonly layoutRoot: LayoutRoot;
+	private lastPrompt = "";
+	private lastEscAt = 0;
+	private historyEmpty = true;
 	private version = "";
 	private current: SessionInfo | undefined;
 	private running = false;
@@ -73,18 +85,31 @@ export class App implements FeatureHost {
 		});
 
 		const spinner = new Loader(tui, theme.accent, theme.muted, "Thinking…");
+		spinner.setIndicator({ frames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], intervalMs: 80 });
 		spinner.stop();
 		this.transcript = new Transcript(this.transcriptView, spinner);
 
-		this.editor = new Editor(tui, editorTheme, { paddingX: 1 });
+		this.composer = new ComposerBox(tui, editorTheme, { paddingX: 1 });
+		this.editor = this.composer.editor;
+		this.layoutRoot = createLayout(this.transcriptView, this.composer, this.footer);
 		this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider(SLASH_COMMANDS, process.cwd()));
+		this.editor.setAutocompleteMaxVisible(8);
 		this.editor.onSubmit = (text) => void this.submit(text);
 	}
 
 	async start(): Promise<void> {
-		this.tui.addChild(this.transcriptView);
-		this.tui.addChild(this.editor);
-		this.tui.addChild(this.footer);
+		// Clear vacated rows when content shrinks (closed menus, finished
+		// turns). Without this, filled rows linger as ghost bands behind
+		// newer output.
+		this.tui.setClearOnShrink(true);
+		if (isViewportTUI(this.tui)) {
+			this.tui.setLayoutRoot(this.layoutRoot);
+		} else {
+			// Fallback for non-viewport TUIs (and test doubles): classic stacking.
+			this.tui.addChild(this.transcriptView);
+			this.tui.addChild(this.composer);
+			this.tui.addChild(this.footer);
+		}
 		this.tui.setFocus(this.editor);
 		this.inputListenerDisposer = this.tui.addInputListener((data) => this.onKey(data));
 
@@ -150,11 +175,23 @@ export class App implements FeatureHost {
 		return this.current;
 	}
 
+	private headerInfo(session: SessionInfo | undefined): Parameters<typeof header>[1] {
+		if (!session) return undefined;
+		return {
+			model: session.model || this.footer.model,
+			provider: session.provider || "",
+			cwd: this.footer.cwd,
+			branch: this.footer.branch,
+		};
+	}
+
 	switchTo(session: SessionInfo, history: HistoryEntry[]): void {
 		this.updateSession(session);
 		this.transcript.clear();
-		this.transcriptView.addChild(header(this.version));
-		this.transcript.replay(history);
+		this.transcriptView.addChild(header(this.version, this.headerInfo(session)));
+		this.historyEmpty = history.length === 0;
+		if (this.historyEmpty) this.transcriptView.addChild(logo());
+		else this.transcript.replay(history);
 		this.sessionTokens = 0;
 		this.footer.tokens = 0;
 		this.setRunning(this.inFlight.has(session.id));
@@ -163,7 +200,6 @@ export class App implements FeatureHost {
 
 	updateSession(session: SessionInfo): void {
 		this.current = session;
-		this.footer.session = session.title || shortTitle(session.id);
 		this.tui.requestRender();
 	}
 
@@ -177,7 +213,13 @@ export class App implements FeatureHost {
 				done(item);
 			};
 			const picker = new Picker(title, items, (item) => close(item), () => close());
-			this.overlay = this.tui.showOverlay(picker, { width: "80%", minWidth: 40, maxHeight: "70%", anchor: "center" });
+			// Codex menu style: full-bleed sheet docked above the composer.
+			this.overlay = this.tui.showOverlay(picker, {
+				width: "100%",
+				maxHeight: "70%",
+				anchor: "bottom-center",
+				margin: { bottom: 5 },
+			});
 			this.tui.requestRender();
 		});
 	}
@@ -201,7 +243,8 @@ export class App implements FeatureHost {
 
 	banner(): void {
 		this.transcript.clear();
-		this.transcriptView.addChild(header(this.version));
+		this.transcriptView.addChild(header(this.version, this.headerInfo(this.current)));
+		if (this.historyEmpty) this.transcriptView.addChild(logo());
 		this.tui.requestRender();
 	}
 
@@ -233,6 +276,26 @@ export class App implements FeatureHost {
 			this.cancel();
 			return { consume: true };
 		}
+		if (matchesKey(data, Key.ctrl("l")) && !this.running) {
+			this.clear();
+			return { consume: true };
+		}
+		if (
+			matchesKey(data, Key.escape) &&
+			!this.running &&
+			!this.editor.getText() &&
+			!this.editor.isShowingAutocomplete()
+		) {
+			// Codex double-Esc: refill the previous prompt for editing.
+			const now = Date.now();
+			if (now - this.lastEscAt < 800 && this.lastPrompt) {
+				this.editor.setText(this.lastPrompt);
+				this.lastEscAt = 0;
+			} else {
+				this.lastEscAt = now;
+			}
+			return { consume: true };
+		}
 		return undefined;
 	}
 
@@ -257,8 +320,9 @@ export class App implements FeatureHost {
 		if (command) {
 			await runCommand(command, this);
 		} else {
+			this.lastPrompt = text;
 			try {
-				await this.prompt(text);
+				await this.submitTurn(text);
 			} catch (error) {
 				this.setRunning(this.current ? this.inFlight.has(this.current.id) : false);
 				this.transcript.addNotice(message(error), "error");
@@ -267,7 +331,7 @@ export class App implements FeatureHost {
 		this.tui.requestRender();
 	}
 
-	private async prompt(text: string): Promise<void> {
+	async submitTurn(text: string): Promise<void> {
 		if (!this.current) {
 			this.transcript.addNotice("Not connected to a session. Try /new.", "warning");
 			return;
@@ -381,10 +445,6 @@ export class App implements FeatureHost {
 		this.transcript.addNotice("Press Ctrl+C to exit, then run `ah doctor`.");
 		this.tui.requestRender();
 	}
-}
-
-function shortTitle(id: string): string {
-	return id.slice(0, 8);
 }
 
 function message(error: unknown): string {

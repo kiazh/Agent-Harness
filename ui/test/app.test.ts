@@ -67,6 +67,7 @@ class FakeTUI implements TUI {
 	hasOverlay(): boolean {
 		return this.overlay !== undefined;
 	}
+	clearOnShrink = false;
 	start(): void {
 		this.started = true;
 	}
@@ -100,9 +101,11 @@ class FakeTUI implements TUI {
 	}
 	setShowHardwareCursor(): void {}
 	getClearOnShrink(): boolean {
-		return false;
+		return this.clearOnShrink;
 	}
-	setClearOnShrink(): void {}
+	setClearOnShrink(enabled: boolean): void {
+		this.clearOnShrink = enabled;
+	}
 	renderNow(): void {}
 }
 
@@ -150,17 +153,33 @@ function makeApp(session: SessionInfo) {
 const ev = (e: Record<string, unknown>) => ({ sessionId: SESSION_A.id, turnId: "t", ...e }) as GatewayEvent;
 
 function widgetWith<K extends string>(tui: FakeTUI, property: K): Component & Record<K, unknown> {
-	const widget = tui.children.find((child) => property in child);
-	assert.ok(widget, `widget with ${property} exists`);
-	return widget as Component & Record<K, unknown>;
+	const direct = tui.children.find((child) => property in child);
+	if (direct) return direct as Component & Record<K, unknown>;
+	// The editor lives nested inside the composer box.
+	for (const child of tui.children) {
+		if (child && typeof child === "object" && "editor" in child) {
+			const inner = (child as { editor: unknown }).editor;
+			if (inner && typeof inner === "object" && property in inner) {
+				return inner as Component & Record<K, unknown>;
+			}
+		}
+	}
+	assert.fail(`widget with ${property} exists`);
 }
+
+test("start() enables shrink-clearing so closed menus leave no ghost rows", async () => {
+	const { app, tui } = makeApp(SESSION_A);
+	await app.start();
+	assert.equal(tui.clearOnShrink, true);
+	await app.exit();
+});
 
 test("cancel() does not set running=false while the turn is still in-flight", async () => {
 	const { app, tui, client } = makeApp(SESSION_A);
 	await app.start();
 
 	// Submit a prompt — this sets running=true and sends prompt.submit
-	const submitPromise = (app as unknown as { prompt: (text: string) => Promise<void> }).prompt("hello");
+	const submitPromise = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("hello");
 	// Let the prompt.submit request go through
 	await new Promise((r) => setTimeout(r, 10));
 
@@ -185,7 +204,7 @@ test("cancelled turn stays tracked until completion before another prompt is sub
 	const { app, client } = makeApp(SESSION_A);
 	client.responses.set("prompt.cancel", {});
 	await app.start();
-	const prompt = (app as unknown as { prompt: (text: string) => Promise<void> }).prompt.bind(app);
+	const prompt = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn.bind(app);
 	await prompt("first");
 	(app as unknown as { cancel: () => void }).cancel();
 	await prompt("too soon");
@@ -201,7 +220,7 @@ test("message.complete for a non-current session is still processed (in-flight t
 	await app.start();
 
 	// Submit a prompt on session A
-	const submitPromise = (app as unknown as { prompt: (text: string) => Promise<void> }).prompt("hello");
+	const submitPromise = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("hello");
 	await new Promise((r) => setTimeout(r, 10));
 
 	// Switch to session B while the turn is still in flight
@@ -243,7 +262,7 @@ test("events for sessions with no in-flight turn are ignored", async () => {
 test("late events from a previous session do not enter the current transcript", async () => {
 	const { app, client } = makeApp(SESSION_A);
 	await app.start();
-	await (app as unknown as { prompt: (text: string) => Promise<void> }).prompt("hello");
+	await (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("hello");
 	app.switchTo(SESSION_B, []);
 
 	const internal = app as unknown as { transcript: { apply: (event: GatewayEvent) => unknown } };
@@ -265,7 +284,7 @@ test("onGatewayExit clears in-flight tracking so session is not permanently lock
 	await app.start();
 
 	// Submit a prompt — this adds to inFlight
-	const submitPromise = (app as unknown as { prompt: (text: string) => Promise<void> }).prompt("hello");
+	const submitPromise = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("hello");
 	await new Promise((r) => setTimeout(r, 10));
 
 	// Simulate gateway exit
@@ -275,7 +294,7 @@ test("onGatewayExit clears in-flight tracking so session is not permanently lock
 	client.responses.set("prompt.submit", {});
 	await submitPromise;
 
-	const submitPromise2 = (app as unknown as { prompt: (text: string) => Promise<void> }).prompt("second");
+	const submitPromise2 = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("second");
 	await new Promise((r) => setTimeout(r, 10));
 	client.responses.set("prompt.submit", {});
 	await submitPromise2;
@@ -290,7 +309,7 @@ test("cancel() targets the in-flight session, not the current session", async ()
 	await app.start();
 
 	// Submit a prompt on session A
-	const submitPromise = (app as unknown as { prompt: (text: string) => Promise<void> }).prompt("hello");
+	const submitPromise = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("hello");
 	await new Promise((r) => setTimeout(r, 10));
 
 	// Switch to session B while A's turn is still in flight
@@ -313,7 +332,7 @@ test("submit() does not clear editor when a turn is in-flight (lost input fix)",
 	await app.start();
 
 	// Submit a prompt — this sets running=true and adds to inFlight
-	const submitPromise = (app as unknown as { prompt: (text: string) => Promise<void> }).prompt("first");
+	const submitPromise = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("first");
 	await new Promise((r) => setTimeout(r, 10));
 
 	// Try to submit again — should be rejected, editor text preserved
@@ -342,7 +361,7 @@ test("error event clears in-flight tracking", async () => {
 	await app.start();
 
 	// Submit a prompt
-	const submitPromise = (app as unknown as { prompt: (text: string) => Promise<void> }).prompt("hello");
+	const submitPromise = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("hello");
 	await new Promise((r) => setTimeout(r, 10));
 
 	// Emit an error event for the current session
@@ -356,7 +375,7 @@ test("error event clears in-flight tracking", async () => {
 	client.responses.set("prompt.submit", {});
 	await submitPromise;
 
-	const submitPromise2 = (app as unknown as { prompt: (text: string) => Promise<void> }).prompt("second");
+	const submitPromise2 = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("second");
 	await new Promise((r) => setTimeout(r, 10));
 	client.responses.set("prompt.submit", {});
 	await submitPromise2;
@@ -389,7 +408,7 @@ test("in-flight timer auto-clears stale entries", async () => {
 	await app.start();
 
 	// Submit a prompt
-	const submitPromise = (app as unknown as { prompt: (text: string) => Promise<void> }).prompt("hello");
+	const submitPromise = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("hello");
 	await new Promise((r) => setTimeout(r, 10));
 
 	// Manually trigger the stale timer by calling the private method with a short timeout

@@ -1,24 +1,40 @@
 // Transcript and chrome widgets built from pi-tui primitives.
 
+import { homedir } from "node:os";
 import {
 	Box,
 	type Component,
+	Editor,
+	type EditorOptions,
+	type EditorTheme,
 	Markdown,
+	ScrollView,
 	SelectList,
 	type SelectItem,
 	Text,
 	truncateToWidth,
+	type TuiMouseEvent,
 	visibleWidth,
+	VStack,
 	wrapTextWithAnsi,
+	type TUI,
 } from "@earendil-works/pi-tui";
 import type { NoticeKind } from "./features/index.ts";
-import { markdownTheme, selectListTheme, skinArt, theme } from "./theme.ts";
+import { isSelectionRow, markdownTheme, selectionBar, selectListTheme, theme } from "./theme.ts";
 
-/** A user turn: highlighted block with a marker. */
-export class UserMessage extends Box {
+/** Shorten a path with `~`, Codex session-header style. */
+function shortCwd(cwd: string): string {
+	const home = homedir();
+	return home && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
+}
+
+/**
+ * A user turn, Codex-style: a plain transcript echo, accent marker plus
+ * default-foreground text — no box, the words speak for themselves.
+ */
+export class UserMessage extends Text {
 	constructor(text: string) {
-		super(1, 0, theme.userBg);
-		this.addChild(new Text(`${theme.accentBold("›")} ${theme.text(text)}`, 0, 0));
+		super(`${theme.accentBold("›")} ${theme.text(text)}`, 1, 0);
 	}
 }
 
@@ -57,7 +73,7 @@ export class AssistantMessage implements Component {
 export class Notice extends Text {
 	constructor(text: string, kind: NoticeKind = "info") {
 		const style = {
-			info: theme.muted,
+			info: theme.info,
 			plain: theme.text,
 			success: theme.success,
 			warning: theme.warning,
@@ -70,6 +86,19 @@ export class Notice extends Text {
 export type ToolState = "running" | "success" | "error";
 
 const TOOL_PREVIEW_LINES = 6;
+
+/**
+ * Codex-style diff coloring for tool output: additions green, deletions red,
+ * hunk headers info — everything else stays dim.
+ */
+export function diffStyle(line: string): string {
+	if (/^diff --git /.test(line)) return theme.bold(line);
+	if (/^(\+\+\+|---) /.test(line)) return theme.bold(theme.dim(line));
+	if (/^@@/.test(line)) return theme.info(line);
+	if (/^\+[^+]/.test(line) || line === "+") return theme.success(line);
+	if (/^-[^-]/.test(line) || line === "-") return theme.error(line);
+	return theme.dim(line);
+}
 
 /** Summarize tool arguments on one line, e.g. `path=a.py, limit=20`. */
 export function formatArgs(args: Record<string, unknown>): string {
@@ -105,7 +134,9 @@ export class ToolCard implements Component {
 			this.state === "error" ? theme.error("✗") : this.state === "success" ? theme.success("✓") : theme.accent("●");
 		const inner = Math.max(1, width - 2);
 
-		const header = `${icon} ${theme.bold(this.name)}${this.args ? ` ${theme.muted(this.args)}` : ""}`;
+		// Codex exec-cell titles: Running while live, Ran/Failed once settled.
+		const stateWord = this.state === "error" ? "Failed" : this.state === "success" ? "Ran" : "Running";
+		const header = `${icon} ${theme.bold(stateWord)} ${theme.bold(this.name)}${this.args ? ` ${theme.muted(this.args)}` : ""}`;
 		const lines = [truncateToWidth(header, inner)];
 
 		if (this.result) {
@@ -113,7 +144,7 @@ export class ToolCard implements Component {
 				.split("\n")
 				.flatMap((line) => wrapTextWithAnsi(line, inner))
 				.filter((line, i, all) => line !== "" || i < all.length - 1);
-			for (const line of wrapped.slice(0, TOOL_PREVIEW_LINES)) lines.push(theme.dim(line));
+			for (const line of wrapped.slice(0, TOOL_PREVIEW_LINES)) lines.push(diffStyle(line));
 			if (wrapped.length > TOOL_PREVIEW_LINES) {
 				lines.push(theme.dim(`… ${wrapped.length - TOOL_PREVIEW_LINES} more lines`));
 			}
@@ -125,54 +156,180 @@ export class ToolCard implements Component {
 	invalidate(): void {}
 }
 
-/** One-line status bar: location on the left, model and token usage on the right. */
+/**
+ * Bottom status, Codex style: two dim lines, no rules. First the
+ * `model · dir · branch` status line (plus tokens and a busy/offline
+ * marker), then the key hints.
+ */
 export class Footer implements Component {
 	cwd = "";
 	branch = "";
 	model = "";
-	session = "";
 	tokens = 0;
 	status: "ready" | "working" | "offline" = "ready";
 
 	render(width: number): string[] {
-		const place = this.branch ? `${this.cwd} (${this.branch})` : this.cwd;
-		const where = this.session ? `${this.session} · ${place}` : place;
-		const statusText =
-			this.status === "working"
-				? theme.accent("● working")
-				: this.status === "offline"
-					? theme.error("● offline")
-					: theme.success("● ready");
-		const right = `${theme.muted(this.model)}  ${theme.dim(`${this.tokens.toLocaleString("en-US")} tokens`)}  ${statusText}`;
-		const rightWidth = visibleWidth(right);
-		const leftMax = Math.max(0, width - rightWidth - 3);
-		const left = leftMax > 0 ? truncateToWidth(theme.dim(where), leftMax) : "";
-		const gap = Math.max(1, width - visibleWidth(left) - rightWidth - 2);
-		const line = ` ${left}${" ".repeat(gap)}${right} `;
-		return [visibleWidth(line) > width ? truncateToWidth(line, width) : line];
+		const sep = theme.dim(" · ");
+		const segments: string[] = [];
+		if (this.model) segments.push(theme.accent(this.model));
+		if (this.cwd) segments.push(theme.dim(shortCwd(this.cwd)));
+		if (this.branch) segments.push(theme.secondary(this.branch));
+		segments.push(theme.dim(`${this.tokens.toLocaleString("en-US")} tokens`));
+		if (this.status === "working") segments.push(theme.accent("● working"));
+		else if (this.status === "offline") segments.push(theme.error("● offline"));
+		const statusLine = truncateToWidth(segments.join(sep), width);
+		const hints = truncateToWidth(theme.dim("? for shortcuts · / for commands"), width);
+		return [statusLine, hints];
 	}
 
 	invalidate(): void {}
 }
 
-/** Startup banner: skin ASCII art beside the title (opencode-style masthead). */
-export function header(version: string): Text {
-	const art = skinArt();
-	const right = [
-		`${theme.accentBold("AgentHarness")} ${theme.dim(`v${version}`)}`,
-		theme.muted("Enter to send · Shift+Enter newline · Esc to stop a reply · /help for commands · Ctrl+C to exit"),
-	];
-	const rows = Math.max(art.length, right.length);
-	const lines: string[] = [];
-	for (let i = 0; i < rows; i++) {
-		const left = art[i] ? theme.accent(art[i]) : "";
-		const pad = " ".repeat(Math.max(0, 16 - visibleWidth(art[i] ?? "")));
-		lines.push(`${left}${pad}${right[i] ?? ""}`);
-	}
-	return new Text(lines.join("\n"), 1, 1);
+/**
+ * Startup banner: skin ASCII art beside the title with a divider rule below,
+ * opencode-masthead style. Rendered at the exact width so the rule spans it.
+ */
+export interface SessionHeaderInfo {
+	model: string;
+	provider: string;
+	cwd: string;
+	branch: string;
 }
 
-/** A titled, filterable list shown as an overlay (e.g. the session picker). */
+/**
+ * Minimal session header, Codex style: one `>_` brand line plus a dim
+ * directory line. No art, no hints, no rules — those live in the logo
+ * and the footer.
+ */
+export function header(version: string, info?: SessionHeaderInfo): Component {
+	return {
+		render(width: number): string[] {
+			const lines = [`${theme.accent(">_")} ${theme.bold("AgentHarness")} ${theme.dim(`(v${version})`)}`];
+			const where = info?.cwd ? shortCwd(info.cwd) + (info.branch ? ` (${info.branch})` : "") : "";
+			if (where) lines.push(`   ${theme.dim(where)}`);
+			return lines.map((line) => truncateToWidth(line, width));
+		},
+		invalidate(): void {},
+	};
+}
+
+const LOGO_ART = [
+	"· · ·",
+	"· · · · ·",
+	"· · · · · · ·",
+	"· · · · · · · · ·",
+	"· · · · · · · · · · ·",
+	"· · · · · · ◆ · · · · · ·",
+	"· · · · · · · · · · ·",
+	"· · · · · · · · ·",
+	"· · · · · · ·",
+	"· · · · ·",
+	"· · ·",
+];
+
+/** Blank rows above the mark so it sits mid-screen, Codex style. */
+const LOGO_TOP_GAP = 5;
+
+/**
+ * Centered launch mark shown on an empty transcript, Codex style: a large
+ * dotted diamond-knot pushed down into the viewport. No caption — the
+ * composer below carries the placeholder.
+ */
+export function logo(): Component {
+	return {
+		render(width: number): string[] {
+			const paint = (line: string): string =>
+				line.split("◆").map((part) => theme.dim(part)).join(theme.accentBold("◆"));
+			const centered = LOGO_ART.map(paint).map((line) => {
+				const pad = Math.max(0, Math.floor((width - visibleWidth(line)) / 2));
+				return truncateToWidth(`${" ".repeat(pad)}${line}`, width);
+			});
+			return [...Array<string>(LOGO_TOP_GAP).fill(""), ...centered];
+		},
+		invalidate(): void {},
+	};
+}
+
+/**
+ * Codex-style composer input: the pi-tui Editor with its rules replaced by
+ * filled rows, so the input reads as one solid block instead of ruled lines.
+ * Scroll position survives via a dim `↑ N more` marker.
+ */
+export class ComposerInput extends Editor {
+	override renderTopBorder(_width: number, hiddenLineCount: number): string {
+		if (hiddenLineCount > 0) return theme.dim(`↑ ${hiddenLineCount} more`);
+		return "";
+	}
+
+	override renderBottomBorder(_width: number, hiddenLineCount: number): string {
+		if (hiddenLineCount > 0) return theme.dim(`↓ ${hiddenLineCount} more`);
+		return "";
+	}
+}
+
+/** Dim composer placeholder, Codex style (the Editor cannot render its own). */
+export const COMPOSER_PLACEHOLDER = "Ask AgentHarness to do anything";
+
+/**
+ * The app's fullscreen layout, Codex style: the transcript scrolls in the
+ * flexible area while the composer and footer stay pinned to the bottom.
+ * The fixed chrome must never shrink — all overflow belongs to the scroll
+ * area (opencode's composer is flexShrink=0 too).
+ */
+export type LayoutRoot = VStack;
+
+export function createLayout(transcript: Component, composer: Component, footer: Component): LayoutRoot {
+	return new VStack([
+		{ component: new ScrollView(transcript, { follow: "end" }), grow: 1 },
+		{ component: composer, shrink: 0 },
+		{ component: footer, shrink: 0 },
+	]);
+}
+
+/**
+ * Codex-style composer: a filled input block with a left accent bar. Wraps
+ * the Editor in a background box — focus and input stay on the inner
+ * editor. While the editor is empty, a dim placeholder fills the same rows
+ * so the block never jumps in height.
+ */
+export class ComposerBox extends Box {
+	readonly editor: ComposerInput;
+
+	constructor(tui: TUI, editorTheme: EditorTheme, options?: EditorOptions) {
+		super(0, 0, theme.userBg);
+		this.editor = new ComposerInput(tui, editorTheme, options);
+		this.addChild(this.editor);
+	}
+
+	override render(width: number): string[] {
+		const inner = Math.max(1, width - 2);
+		const fill = (line: string): string => {
+			const padded = `${line}${" ".repeat(Math.max(0, inner - visibleWidth(line)))}`;
+			return theme.userBg(padded);
+		};
+		const bar = theme.accent("┃");
+		const body =
+			this.editor.getText() !== ""
+				? super.render(inner)
+				: [
+						fill(theme.dim(truncateToWidth(` ${COMPOSER_PLACEHOLDER}`, inner))),
+						fill(""),
+						fill(""),
+					];
+		return body.map((line) => `${bar} ${line}`);
+	}
+
+	override handleMouse(event: TuiMouseEvent): ReturnType<Box["handleMouse"]> {
+		if (event.x < 2) return undefined;
+		return super.handleMouse({ ...event, x: event.x - 2, width: Math.max(1, event.width - 2) });
+	}
+}
+
+/**
+ * A titled, filterable list shown as an overlay (e.g. the session picker).
+ * Codex menu style: borderless, docked above the composer, selected row as
+ * a full-width accent bar, lowercase hints.
+ */
 export class Picker implements Component {
 	private readonly title: string;
 	private readonly list: SelectList;
@@ -189,9 +346,15 @@ export class Picker implements Component {
 	}
 
 	render(width: number): string[] {
-		const inner = Math.max(1, width - 2);
-		const body = [theme.accentBold(this.title), ...this.list.render(inner), theme.dim("↑↓ move · Enter select · Esc close")];
-		return body.map((line) => theme.toolBg(` ${line}${" ".repeat(Math.max(0, inner - visibleWidth(line)))} `));
+		const content = Math.max(1, width);
+		const pad = (line: string): string =>
+			`${line}${" ".repeat(Math.max(0, content - visibleWidth(line)))}`;
+		const title = truncateToWidth(theme.dim(this.title), content);
+		const hint = truncateToWidth(theme.dim("enter select · esc back"), content);
+		const rows = this.list.render(content).map((line) =>
+			isSelectionRow(line) ? selectionBar(line, content) : pad(line),
+		);
+		return [title, ...rows, hint];
 	}
 
 	invalidate(): void {

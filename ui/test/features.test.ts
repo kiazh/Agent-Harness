@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { SelectItem } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, type SelectItem } from "@earendil-works/pi-tui";
 import { parseCommand } from "../src/commands.ts";
 import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "../src/features/index.ts";
 import { resolvePrefix, table } from "../src/format.ts";
@@ -40,6 +40,10 @@ class FakeHost implements FeatureHost {
 	}
 	session() {
 		return this.current;
+	}
+	submitted: string[] = [];
+	async submitTurn(text: string) {
+		this.submitted.push(text);
 	}
 	switchTo(session: SessionInfo, history: HistoryEntry[]) {
 		this.current = session;
@@ -496,16 +500,52 @@ test("/models filters by query and warns when nothing matches", async () => {
 	assert.equal(host.calls.length, 0);
 });
 
+test("/compact is an alias for /compress", () => {
+	assert.deepEqual(parseCommand("/compact"), { name: "compress", args: "" });
+});
+
+test("/help groups commands by domain", async () => {
+	const { helpText } = await import("../src/commands.ts");
+	const { SLASH_COMMANDS } = await import("../src/features/index.ts");
+	const help = stripTerminalSequences(helpText(SLASH_COMMANDS));
+	for (const group of ["Session", "Memory", "Setup"]) assert.match(help, new RegExp(`^${group}$`, "m"));
+	for (const command of SLASH_COMMANDS) assert.match(help, new RegExp(`/${command.name}\\b`));
+});
+
+test("/init scaffolds AGENTS.md", async () => {
+	const host = new FakeHost();
+	await run("/init", host);
+	const content = host.files.get("AGENTS.md");
+	assert.ok(content?.includes("# AGENTS.md"));
+	assert.match(host.last().text, /AGENTS\.md/);
+});
+
+test("/review submits a review turn", async () => {
+	const host = new FakeHost();
+	await run("/review", host);
+	assert.match(host.submitted.at(-1)!, /Review my current changes/);
+	await run("/review focus on auth", host);
+	assert.match(host.submitted.at(-1)!, /auth/);
+});
+
+test("/clear clears and starts a new chat", async () => {
+	const host = new FakeHost();
+	host.responses["session.create"] = { session: { ...SESSION, id: "99999999-0000-0000-0000-000000000000" } };
+	await run("/clear", host);
+	assert.equal(host.calls.at(-1)!.method, "session.create");
+	assert.equal(host.current?.id, "99999999-0000-0000-0000-000000000000");
+});
+
 test("/theme switches skin and persists it", async () => {
 	const { getSkin, setSkin } = await import("../src/theme.ts");
 	const host = new FakeHost();
-	host.responses["config.set"] = { model: "m", provider: "p", key: "theme", value: "forest" };
+	host.responses["config.set"] = { model: "m", provider: "p", key: "theme", value: "tokyonight" };
 	const before = getSkin();
 	try {
-		await run("/theme forest", host);
-		assert.equal(getSkin(), "forest");
-		assert.deepEqual(host.calls.at(-1)!.params, { key: "theme", value: "forest", persist: true });
-		assert.match(host.last().text, /Skin: forest/);
+		await run("/theme tokyonight", host);
+		assert.equal(getSkin(), "tokyonight");
+		assert.deepEqual(host.calls.at(-1)!.params, { key: "theme", value: "tokyonight", persist: true });
+		assert.match(host.last().text, /Skin: tokyonight/);
 		await run("/theme nope", host);
 		assert.match(host.last().text, /Unknown skin/);
 	} finally {

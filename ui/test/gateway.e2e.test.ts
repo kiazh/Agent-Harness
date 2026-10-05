@@ -68,6 +68,7 @@ test("slash commands work against the real gateway and database", { skip, timeou
 		print: (text, kind = "info") => void printed.push({ text, kind }),
 		printMarkdown: (text) => void printed.push({ text, kind: "plain" }),
 		session: () => current,
+		submitTurn: async () => {},
 		switchTo: (session: SessionInfo, _history: HistoryEntry[]) => {
 			current = session;
 		},

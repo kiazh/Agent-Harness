@@ -1,6 +1,7 @@
 // Slash-command parsing and help text. Command definitions live in features.ts.
 
 import type { SlashCommand } from "@earendil-works/pi-tui";
+import { theme } from "./theme.ts";
 
 const ALIASES: Record<string, string> = {
 	quit: "exit",
@@ -12,6 +13,7 @@ const ALIASES: Record<string, string> = {
 	skill: "skills",
 	settings: "config",
 	set: "config",
+	compact: "compress",
 };
 
 export interface ParsedCommand {
@@ -38,8 +40,36 @@ export function splitSub(args: string): [string, string] {
 	return [trimmed.slice(0, space).toLowerCase(), trimmed.slice(space).trim()];
 }
 
+/**
+ * Codex-style command groups for /help. Commands not listed fall into Other.
+ * Order here is the presentation order.
+ */
+const HELP_GROUPS: Array<[group: string, names: string[]]> = [
+	["Session", ["new", "resume", "sessions", "search", "recall", "rename", "fork", "delete", "export", "clear"]],
+	["Task", ["goal", "review", "init", "delegate", "agents"]],
+	["Memory", ["memory", "skills"]],
+	["Context", ["context", "compress"]],
+	["Automation", ["jobs"]],
+	["Setup", ["keys", "models", "model", "provider", "config", "theme", "profile", "profiles"]],
+	["Info", ["status", "usage", "help", "exit"]],
+];
+
 export function helpText(commands: SlashCommand[]): string {
 	const usage = (c: SlashCommand) => (c.argumentHint ? `${c.name} ${c.argumentHint}` : c.name);
 	const width = Math.max(...commands.map((c) => usage(c).length));
-	return commands.map((c) => `/${usage(c).padEnd(width)}  ${c.description ?? ""}`).join("\n");
+	// Pad before styling so columns stay aligned; bold names act as headers.
+	const line = (c: SlashCommand) => `${theme.bold(`/${usage(c).padEnd(width)}`)}  ${c.description ?? ""}`;
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const [group, names] of HELP_GROUPS) {
+		const members = commands.filter((c) => names.includes(c.name));
+		if (!members.length) continue;
+		out.push(theme.bold(group));
+		for (const c of members) {
+			seen.add(c.name);
+			out.push(`  ${line(c)}`);
+		}
+	}
+	for (const c of commands.filter((c) => !seen.has(c.name))) out.push(line(c));
+	return out.join("\n");
 }

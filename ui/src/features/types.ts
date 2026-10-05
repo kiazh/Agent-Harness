@@ -11,6 +11,8 @@ export interface FeatureHost {
 	print(text: string, kind?: NoticeKind): void;
 	printMarkdown(text: string): void;
 	session(): SessionInfo | undefined;
+	/** Submit a full agent turn (transcript echo + in-flight tracking). */
+	submitTurn(text: string): Promise<void>;
 	/** Make *session* current and show *history*. */
 	switchTo(session: SessionInfo, history: HistoryEntry[]): void;
 	/** Update details (e.g. title) of the current session. */

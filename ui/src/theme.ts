@@ -1,6 +1,9 @@
-// AgentHarness skins: named palettes plus header ASCII art.
-// Colors are defined in OKHSL so equal saturation reads as equally vivid
-// across hues; escape codes are computed once at startup.
+// AgentHarness skins: dark theme palettes ported from Codex's theme set,
+// plus house skins. Foreground tokens (text through info) follow Codex's
+// values; card backgrounds and borders are derived from each theme's
+// background + ink with mixColors, the way Codex derives subtle surface
+// elevations. The composer fill stays a neutral lift (Codex
+// backgroundElement); selection rows paint accent bg with background fg.
 //
 // Style functions resolve the *current* skin lazily, so `setSkin()` recolors
 // the whole UI without a restart. The choice persists via `config.theme`.
@@ -13,9 +16,11 @@ import {
 	backgroundAnsi,
 	foregroundAnsi,
 	getTerminalColorMode,
-	okhslColor,
+	mixColors,
+	parseColor,
 	styleTextWithAnsi,
 	type TextAttributes,
+	visibleWidth,
 } from "@earendil-works/pi-tui";
 
 export type PaletteName =
@@ -27,6 +32,7 @@ export type PaletteName =
 	| "success"
 	| "warning"
 	| "error"
+	| "info"
 	| "border"
 	| "userBg"
 	| "assistantBg"
@@ -34,133 +40,199 @@ export type PaletteName =
 	| "toolOkBg"
 	| "toolErrBg";
 
-type Hsl = [hue: number, saturation: number, lightness: number];
+type BaseSlot =
+	| "text"
+	| "muted"
+	| "dim"
+	| "accent"
+	| "secondary"
+	| "success"
+	| "warning"
+	| "error"
+	| "info"
+	| "neutral";
 
 interface SkinDef {
 	description: string;
 	art: string[];
-	colors: Record<PaletteName, Hsl>;
+	base: Record<BaseSlot, string>;
 }
 
 const SKINS: Record<string, SkinDef> = {
 	default: {
-		description: "Balanced blue-grey (ships with AgentHarness)",
+		description: "opencode theme (dark) — the house default",
 		art: ["  ◆──────◆", " │ AGENT  │", " │ HARNESS│", "  ◆──────◆"],
-		colors: {
-			text: [250, 0.04, 0.88],
-			muted: [250, 0.07, 0.64],
-			dim: [250, 0.07, 0.48],
-			accent: [205, 0.8, 0.72],
-			secondary: [285, 0.62, 0.7],
-			success: [150, 0.65, 0.7],
-			warning: [80, 0.85, 0.76],
-			error: [25, 0.8, 0.67],
-			border: [215, 0.35, 0.5],
-			userBg: [225, 0.32, 0.22],
-			assistantBg: [222, 0.25, 0.16],
-			toolBg: [250, 0.08, 0.2],
-			toolOkBg: [155, 0.32, 0.19],
-			toolErrBg: [25, 0.42, 0.2],
+		base: {
+			text: "#eeeeee",
+			muted: "#808080",
+			dim: "#5f5f5f",
+			accent: "#fab283",
+			secondary: "#9d7cd8",
+			success: "#7fd88f",
+			warning: "#f5a742",
+			error: "#e06c75",
+			info: "#56b6c2",
+			neutral: "#0a0a0a",
 		},
 	},
-	midnight: {
-		description: "Deep navy blues for late-night sessions",
+	tokyonight: {
+		description: "Tokyonight (dark)",
 		art: ["   .--.  ", "  ( moon)", "   `--'  ", "  *  . * "],
-		colors: {
-			text: [230, 0.05, 0.9],
-			muted: [230, 0.1, 0.62],
-			dim: [230, 0.1, 0.45],
-			accent: [215, 0.9, 0.7],
-			secondary: [265, 0.7, 0.72],
-			success: [160, 0.6, 0.65],
-			warning: [60, 0.8, 0.7],
-			error: [10, 0.8, 0.65],
-			border: [220, 0.5, 0.45],
-			userBg: [222, 0.45, 0.2],
-			assistantBg: [225, 0.35, 0.13],
-			toolBg: [230, 0.15, 0.16],
-			toolOkBg: [160, 0.35, 0.16],
-			toolErrBg: [10, 0.45, 0.17],
+		base: {
+			text: "#c0caf5",
+			muted: "#7a80a6",
+			dim: "#565f89",
+			accent: "#7aa2f7",
+			secondary: "#bb9af7",
+			success: "#9ece6a",
+			warning: "#e0af68",
+			error: "#f7768e",
+			info: "#7dcfff",
+			neutral: "#1a1b26",
 		},
 	},
-	forest: {
-		description: "Greens and moss, low glare",
+	catppuccin: {
+		description: "Catppuccin Mocha (dark)",
+		art: ["  (=^.^=)", "  │mocha│", "  │latte│", "  └─────┘"],
+		base: {
+			text: "#cdd6f4",
+			muted: "#7f849c",
+			dim: "#585b70",
+			accent: "#b4befe",
+			secondary: "#f38ba8",
+			success: "#a6d189",
+			warning: "#f9e2af",
+			error: "#e78284",
+			info: "#89dceb",
+			neutral: "#1e1e2e",
+		},
+	},
+	dracula: {
+		description: "Dracula (dark)",
+		art: ["  ◇────◇", "  │DRAC │", "  │ ULA │", "  ◇────◇"],
+		base: {
+			text: "#f8f8f2",
+			muted: "#a8abbf",
+			dim: "#6272a4",
+			accent: "#bd93f9",
+			secondary: "#ff79c6",
+			success: "#50fa7b",
+			warning: "#ffb86c",
+			error: "#ff5555",
+			info: "#8be9fd",
+			neutral: "#282a36",
+		},
+	},
+	gruvbox: {
+		description: "Gruvbox (dark)",
+		art: ["  ┌─────┐", "  │GRUV │", "  │ BOX │", "  └─────┘"],
+		base: {
+			text: "#ebdbb2",
+			muted: "#a89a85",
+			dim: "#928374",
+			accent: "#83a598",
+			secondary: "#d3869b",
+			success: "#b8bb26",
+			warning: "#fabd2f",
+			error: "#fb4934",
+			info: "#8ec07c",
+			neutral: "#282828",
+		},
+	},
+	rosepine: {
+		description: "Rosé Pine (dark)",
+		art: ["  ♡────♡", "  │ROSE │", "  │ PINE│", "  ♡────♡"],
+		base: {
+			text: "#e0def4",
+			muted: "#908caa",
+			dim: "#6e6a86",
+			accent: "#c4a7e7",
+			secondary: "#ebbcba",
+			success: "#9ccfd8",
+			warning: "#f6c177",
+			error: "#eb6f92",
+			info: "#56949f",
+			neutral: "#191724",
+		},
+	},
+	nord: {
+		description: "Nord (dark)",
+		art: ["  ▲────▲", "  │NORD │", "  │FROST│", "  ▲────▲"],
+		base: {
+			text: "#e5e9f0",
+			muted: "#7e8aa3",
+			dim: "#616e88",
+			accent: "#88c0d0",
+			secondary: "#d57780",
+			success: "#a3be8c",
+			warning: "#ebcb8b",
+			error: "#bf616a",
+			info: "#81a1c1",
+			neutral: "#2e3440",
+		},
+	},
+	everforest: {
+		description: "Everforest (dark)",
 		art: ["    ▲    ", "   ▲▲▲   ", "  ▲▲▲▲▲  ", "    │    "],
-		colors: {
-			text: [120, 0.04, 0.88],
-			muted: [120, 0.08, 0.62],
-			dim: [120, 0.08, 0.46],
-			accent: [145, 0.7, 0.65],
-			secondary: [85, 0.7, 0.65],
-			success: [145, 0.7, 0.7],
-			warning: [60, 0.8, 0.7],
-			error: [15, 0.8, 0.65],
-			border: [150, 0.4, 0.42],
-			userBg: [150, 0.35, 0.18],
-			assistantBg: [150, 0.3, 0.12],
-			toolBg: [140, 0.12, 0.15],
-			toolOkBg: [145, 0.4, 0.16],
-			toolErrBg: [15, 0.45, 0.17],
+		base: {
+			text: "#d3c6aa",
+			muted: "#7a8478",
+			dim: "#585f57",
+			accent: "#7fbbb3",
+			secondary: "#d699b6",
+			success: "#a7c080",
+			warning: "#dbbc7f",
+			error: "#e67e80",
+			info: "#83c092",
+			neutral: "#2d353b",
 		},
 	},
-	sunset: {
-		description: "Warm ambers and dusk magenta",
-		art: ["  \\ | / ", "  --●-- ", "  / | \\ ", "   dusk  "],
-		colors: {
-			text: [40, 0.05, 0.89],
-			muted: [35, 0.1, 0.63],
-			dim: [35, 0.1, 0.47],
-			accent: [35, 0.9, 0.68],
-			secondary: [320, 0.7, 0.7],
-			success: [150, 0.6, 0.68],
-			warning: [55, 0.9, 0.72],
-			error: [5, 0.85, 0.66],
-			border: [30, 0.5, 0.48],
-			userBg: [30, 0.4, 0.2],
-			assistantBg: [25, 0.35, 0.14],
-			toolBg: [30, 0.12, 0.16],
-			toolOkBg: [150, 0.35, 0.16],
-			toolErrBg: [5, 0.45, 0.18],
+	matrix: {
+		description: "Matrix (dark)",
+		art: ["  0101010", "  MATRIX ", "  1010101", "  HACKER "],
+		base: {
+			text: "#62ff94",
+			muted: "#8ca391",
+			dim: "#3d4a40",
+			accent: "#2eff6a",
+			secondary: "#c770ff",
+			success: "#62ff94",
+			warning: "#e6ff57",
+			error: "#ff5555",
+			info: "#30b3ff",
+			neutral: "#0a0e0a",
 		},
 	},
-	grape: {
-		description: "Purples and neon pink",
-		art: ["  ● ● ● ", "   ● ●  ", "  ● ● ● ", "   vine  "],
-		colors: {
-			text: [290, 0.05, 0.89],
-			muted: [290, 0.1, 0.64],
-			dim: [290, 0.1, 0.47],
-			accent: [290, 0.75, 0.72],
-			secondary: [330, 0.7, 0.7],
-			success: [160, 0.6, 0.68],
-			warning: [60, 0.85, 0.72],
-			error: [10, 0.8, 0.66],
-			border: [285, 0.45, 0.5],
-			userBg: [285, 0.4, 0.2],
-			assistantBg: [285, 0.35, 0.14],
-			toolBg: [290, 0.14, 0.16],
-			toolOkBg: [160, 0.35, 0.16],
-			toolErrBg: [10, 0.45, 0.17],
+	codex: {
+		description: "Codex-style restrained chrome — default fg, magenta brand accents",
+		art: ["  ┌─────┐", "  │ >_  │", "  │ AH  │", "  └─────┘"],
+		base: {
+			text: "#e8e8e8",
+			muted: "#8a8a8a",
+			dim: "#5c5c5c",
+			accent: "#56b6c2",
+			secondary: "#c678dd",
+			success: "#98c379",
+			warning: "#e5c07b",
+			error: "#e06c75",
+			info: "#56b6c2",
+			neutral: "#0d0d0d",
 		},
 	},
 	mono: {
-		description: "High-contrast greys, no hue (accessible)",
+		description: "High-contrast greys, no hue (accessible) — house skin",
 		art: ["  ┌───┐  ", "  │ A │  ", "  │ H │  ", "  └───┘  "],
-		colors: {
-			text: [250, 0.02, 0.9],
-			muted: [250, 0.02, 0.66],
-			dim: [250, 0.02, 0.5],
-			accent: [250, 0.02, 0.96],
-			secondary: [250, 0.02, 0.78],
-			success: [250, 0.02, 0.86],
-			warning: [250, 0.02, 0.82],
-			error: [250, 0.06, 0.72],
-			border: [250, 0.02, 0.45],
-			userBg: [250, 0.03, 0.22],
-			assistantBg: [250, 0.03, 0.15],
-			toolBg: [250, 0.02, 0.18],
-			toolOkBg: [250, 0.03, 0.2],
-			toolErrBg: [250, 0.05, 0.2],
+		base: {
+			text: "#e8e8e8",
+			muted: "#a0a0a0",
+			dim: "#6e6e6e",
+			accent: "#ffffff",
+			secondary: "#c0c0c0",
+			success: "#d0d0d0",
+			warning: "#b8b8b8",
+			error: "#909090",
+			info: "#c8c8c8",
+			neutral: "#101010",
 		},
 	},
 };
@@ -168,18 +240,82 @@ const SKINS: Record<string, SkinDef> = {
 export const SKIN_NAMES: string[] = Object.keys(SKINS);
 
 const skinColors: Record<string, Record<PaletteName, Color>> = Object.fromEntries(
-	Object.entries(SKINS).map(([name, def]) => [
-		name,
-		Object.fromEntries(
-			Object.entries(def.colors).map(([slot, [h, s, l]]) => [slot, okhslColor(h, s, l)]),
-		) as Record<PaletteName, Color>,
-	]),
+	Object.entries(SKINS).map(([name, def]) => {
+		const neutral = parseColor(def.base.neutral);
+		const text = parseColor(def.base.text);
+		const full: Record<PaletteName, Color> = {
+			text,
+			muted: parseColor(def.base.muted),
+			dim: parseColor(def.base.dim),
+			accent: parseColor(def.base.accent),
+			secondary: parseColor(def.base.secondary),
+			success: parseColor(def.base.success),
+			warning: parseColor(def.base.warning),
+			error: parseColor(def.base.error),
+			info: parseColor(def.base.info),
+			border: mixColors(neutral, text, 0.28),
+			userBg: mixColors(neutral, text, 0.1),
+			assistantBg: mixColors(neutral, text, 0.06),
+			toolBg: mixColors(neutral, text, 0.09),
+			toolOkBg: mixColors(neutral, parseColor(def.base.success), 0.13),
+			toolErrBg: mixColors(neutral, parseColor(def.base.error), 0.13),
+		};
+		return [name, full];
+	}),
+);
+
+const skinNeutral: Record<string, Color> = Object.fromEntries(
+	Object.entries(SKINS).map(([name, def]) => [name, parseColor(def.base.neutral)]),
 );
 
 let currentSkin = "default";
 
 function colors(): Record<PaletteName, Color> {
 	return skinColors[currentSkin] ?? skinColors["default"]!;
+}
+
+function background(): Color {
+	return skinNeutral[currentSkin] ?? skinNeutral["default"]!;
+}
+
+/** Selected-row fill, Codex style: accent bg with background fg. */
+function selectedRow(text: string): string {
+	return styleTextWithAnsi(text, foregroundAnsi(background(), mode), backgroundAnsi(colors().accent, mode), {
+		bold: true,
+	});
+}
+
+const BG_OPEN = "\x1b[48;2;";
+const BG_CLOSE = "\x1b[49m";
+
+/** Remove background color sequences while keeping foreground styling. */
+function stripBackground(line: string): string {
+	let out = line;
+	for (;;) {
+		const start = out.indexOf(BG_OPEN);
+		if (start === -1) break;
+		const end = out.indexOf("m", start);
+		if (end === -1) break;
+		out = out.slice(0, start) + out.slice(end + 1);
+	}
+	return out.split(BG_CLOSE).join("");
+}
+
+/** True when a rendered line carries the selection background. */
+export function isSelectionRow(line: string): boolean {
+	return line.includes(BG_OPEN);
+}
+
+/**
+ * Extend a selected row to a full-width bar: strip the partial background,
+ * pad out, and repaint the whole row. Unselected rows stay unfilled.
+ */
+export function selectionBar(line: string, width: number): string {
+	const stripped = stripBackground(line);
+	const padded = `${stripped}${" ".repeat(Math.max(0, width - visibleWidth(line)))}`;
+	return styleTextWithAnsi(padded, foregroundAnsi(background(), mode), backgroundAnsi(colors().accent, mode), {
+		bold: true,
+	});
 }
 
 /** Switch the active skin. Throws for unknown names. */
@@ -226,6 +362,7 @@ export const theme = {
 	success: fg("success"),
 	warning: fg("warning"),
 	error: fg("error"),
+	info: fg("info"),
 	border: fg("border"),
 	userBg: bg("userBg"),
 	assistantBg: bg("assistantBg"),
@@ -252,8 +389,8 @@ export const markdownTheme: MarkdownTheme = {
 };
 
 export const selectListTheme: SelectListTheme = {
-	selectedPrefix: fg("accent"),
-	selectedText: fg("accent", { bold: true }),
+	selectedPrefix: selectedRow,
+	selectedText: selectedRow,
 	description: fg("muted"),
 	scrollInfo: fg("dim"),
 	noMatch: fg("dim"),

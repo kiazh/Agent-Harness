@@ -2,6 +2,8 @@
 
 import type { SlashCommand } from "@earendil-works/pi-tui";
 import { helpText, type ParsedCommand } from "../commands.ts";
+import type { SessionResult } from "../protocol.ts";
+import { codexCommands } from "./codex.ts";
 import { sessionCommands } from "./sessions.ts";
 import { memoryCommand } from "./memory.ts";
 import { skillsCommand } from "./skills.ts";
@@ -19,9 +21,11 @@ export type { Command, FeatureHost, NoticeKind };
 const appCommands: Command[] = [
 	{
 		name: "clear",
-		description: "Clear the screen",
+		description: "Clear the terminal and start a new chat",
 		async run(_args, host) {
 			host.clear();
+			const { session } = await host.request<SessionResult>("session.create", {});
+			host.switchTo(session, []);
 		},
 	},
 	{
@@ -47,6 +51,7 @@ const helpCommand: Command = {
 const COMMANDS: Command[] = [
 	helpCommand,
 	...sessionCommands,
+	...codexCommands,
 	...contextCommands,
 	memoryCommand,
 	skillsCommand,

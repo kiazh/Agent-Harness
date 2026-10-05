@@ -16,7 +16,8 @@ export interface TurnSummary {
 export class Transcript {
 	private readonly container: Container;
 	/** Shown while waiting for the model; removed as soon as output arrives. */
-	private readonly spinner: Component & { start(): void; stop(): void };
+	private readonly spinner: Component & { start(): void; stop(): void; setMessage?(message: string): void };
+	private spinnerTimer: ReturnType<typeof setInterval> | undefined;
 	private current: AssistantMessage | undefined;
 	private wroteText = false;
 	private readonly tools = new Map<string, ToolCard>();
@@ -112,13 +113,24 @@ export class Transcript {
 	}
 
 	private showSpinner(): void {
-		if (!this.container.children.includes(this.spinner)) {
-			this.container.addChild(this.spinner);
-			this.spinner.start();
-		}
+		if (this.container.children.includes(this.spinner)) return;
+		this.container.addChild(this.spinner);
+		this.spinner.start();
+		// Codex-style elapsed thinking indicator; FakeSpinner-safe via ?..
+		this.spinner.setMessage?.("Thinking…");
+		const startedAt = Date.now();
+		if (this.spinnerTimer) clearInterval(this.spinnerTimer);
+		this.spinnerTimer = setInterval(() => {
+			this.spinner.setMessage?.(`Thinking… ${Math.floor((Date.now() - startedAt) / 1000)}s`);
+		}, 1000);
+		this.spinnerTimer.unref?.();
 	}
 
 	private hideSpinner(): void {
+		if (this.spinnerTimer) {
+			clearInterval(this.spinnerTimer);
+			this.spinnerTimer = undefined;
+		}
 		if (this.container.children.includes(this.spinner)) {
 			this.spinner.stop();
 			this.container.removeChild(this.spinner);

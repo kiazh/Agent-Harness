@@ -1,5 +1,16 @@
 // Plain-text formatting helpers for command output.
 
+import { theme } from "./theme.ts";
+
+/**
+ * Codex-style keyboard hints: bold key labels with dim descriptions,
+ * joined by ` · ` — e.g. `Enter send · Esc stop`.
+ */
+export function hintLine(pairs: Array<[label: string, action: string]>): string {
+	const sep = theme.dim(" · ");
+	return pairs.map(([label, action]) => `${theme.bold(label)} ${theme.dim(action)}`).join(sep);
+}
+
 /** First 8 characters of an id, as shown everywhere in the UI. */
 export function shortId(id: string): string {
 	return id.slice(0, 8);
