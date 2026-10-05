@@ -193,6 +193,18 @@ test("key hints join bold labels with dot separators", async () => {
 	assert.equal(stripTerminalSequences(out), "Enter send · Esc stop");
 });
 
+test("fill repair keeps background after nested resets", async () => {
+	const { repairFill } = await import("../src/theme.ts");
+	// Simulate a Box-filled line containing a nested pill (bg open … reset).
+	const nested = `ab\x1b[48;2;250;178;131mCD\x1b[49m  `;
+	const filled = `\x1b[48;2;10;10;10m${nested}\x1b[49m`;
+	const out = repairFill("userBg", filled);
+	assert.equal(stripTerminalSequences(out), stripTerminalSequences(filled));
+	const opens = out.split("\x1b[48;2;").length - 1;
+	assert.ok(opens >= 2, "fill background is re-asserted after the nested reset");
+	assert.ok(out.endsWith("\x1b[49m"));
+});
+
 test("selected rows paint an accent background pill", async () => {
 	const { selectListTheme } = await import("../src/theme.ts");
 	const row = selectListTheme.selectedText("model");
@@ -248,20 +260,11 @@ test("composer is a filled codex-style block with no rules", async () => {
 });
 
 test("session header is a minimal codex-style brand line", async () => {
-	const { header, logo } = await import("../src/components.ts");
+	const { header } = await import("../src/components.ts");
 	const out = plain(header("0.1.0", { model: "gpt-x", provider: "acme", cwd: "/repo", branch: "main" }), 80);
 	assert.match(out, />_ AgentHarness \(v0\.1\.0\)/);
 	assert.match(out, /\/repo \(main\)/);
 	assert.doesNotMatch(out, /─/);
-	const art = plain(logo(), 80);
-	assert.match(art, /◆/);
-	assert.doesNotMatch(art, /Ask AgentHarness/, "caption lives in the composer placeholder");
-	assert.equal(logo().render(80)[0], "", "blank gap pushes the mark down");
-	for (const width of [20, 40, 80, 120]) {
-		for (const line of logo().render(width)) {
-			assert.ok(visibleWidth(line) <= width, `line wider than ${width}`);
-		}
-	}
 });
 
 test("tool cards use codex running/ran/failed titles", async () => {

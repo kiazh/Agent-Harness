@@ -16,7 +16,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { parseCommand } from "./commands.ts";
-import { ComposerBox, createLayout, Footer, header, type LayoutRoot, logo, Picker } from "./components.ts";
+import { ComposerBox, createLayout, Footer, header, type LayoutRoot, Picker } from "./components.ts";
 import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features/index.ts";
 import type { GatewayClient } from "./gateway.ts";
 import type {
@@ -58,7 +58,6 @@ export class App implements FeatureHost {
 	private readonly layoutRoot: LayoutRoot;
 	private lastPrompt = "";
 	private lastEscAt = 0;
-	private historyEmpty = true;
 	private version = "";
 	private current: SessionInfo | undefined;
 	private running = false;
@@ -189,9 +188,7 @@ export class App implements FeatureHost {
 		this.updateSession(session);
 		this.transcript.clear();
 		this.transcriptView.addChild(header(this.version, this.headerInfo(session)));
-		this.historyEmpty = history.length === 0;
-		if (this.historyEmpty) this.transcriptView.addChild(logo());
-		else this.transcript.replay(history);
+		this.transcript.replay(history);
 		this.sessionTokens = 0;
 		this.footer.tokens = 0;
 		this.setRunning(this.inFlight.has(session.id));
@@ -244,7 +241,6 @@ export class App implements FeatureHost {
 	banner(): void {
 		this.transcript.clear();
 		this.transcriptView.addChild(header(this.version, this.headerInfo(this.current)));
-		if (this.historyEmpty) this.transcriptView.addChild(logo());
 		this.tui.requestRender();
 	}
 

@@ -20,7 +20,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import type { NoticeKind } from "./features/index.ts";
-import { isSelectionRow, markdownTheme, selectionBar, selectListTheme, theme } from "./theme.ts";
+import { isSelectionRow, markdownTheme, repairFill, selectionBar, selectListTheme, theme } from "./theme.ts";
 
 /** Shorten a path with `~`, Codex session-header style. */
 function shortCwd(cwd: string): string {
@@ -61,7 +61,9 @@ export class AssistantMessage implements Component {
 	}
 
 	render(width: number): string[] {
-		return this.box.render(width);
+		// Repair the fill: model output can carry nested background resets
+		// (e.g. pasted ANSI), which would otherwise leak terminal black.
+		return this.box.render(width).map((line) => repairFill("assistantBg", line));
 	}
 
 	invalidate(): void {
@@ -129,6 +131,7 @@ export class ToolCard implements Component {
 	}
 
 	render(width: number): string[] {
+		const bgSlot = this.state === "error" ? "toolErrBg" : this.state === "success" ? "toolOkBg" : "toolBg";
 		const bgFn = this.state === "error" ? theme.toolErrBg : this.state === "success" ? theme.toolOkBg : theme.toolBg;
 		const icon =
 			this.state === "error" ? theme.error("✗") : this.state === "success" ? theme.success("✓") : theme.accent("●");
@@ -150,7 +153,11 @@ export class ToolCard implements Component {
 			}
 		}
 
-		return lines.map((line) => bgFn(` ${line}${" ".repeat(Math.max(0, inner - visibleWidth(line)))} `));
+		// Repair the fill: tool output can carry nested background resets
+		// (e.g. colored command output), which would leak terminal black.
+		return lines.map((line) =>
+			repairFill(bgSlot, bgFn(` ${line}${" ".repeat(Math.max(0, inner - visibleWidth(line)))} `)),
+		);
 	}
 
 	invalidate(): void {}
@@ -213,43 +220,6 @@ export function header(version: string, info?: SessionHeaderInfo): Component {
 	};
 }
 
-const LOGO_ART = [
-	"· · ·",
-	"· · · · ·",
-	"· · · · · · ·",
-	"· · · · · · · · ·",
-	"· · · · · · · · · · ·",
-	"· · · · · · ◆ · · · · · ·",
-	"· · · · · · · · · · ·",
-	"· · · · · · · · ·",
-	"· · · · · · ·",
-	"· · · · ·",
-	"· · ·",
-];
-
-/** Blank rows above the mark so it sits mid-screen, Codex style. */
-const LOGO_TOP_GAP = 5;
-
-/**
- * Centered launch mark shown on an empty transcript, Codex style: a large
- * dotted diamond-knot pushed down into the viewport. No caption — the
- * composer below carries the placeholder.
- */
-export function logo(): Component {
-	return {
-		render(width: number): string[] {
-			const paint = (line: string): string =>
-				line.split("◆").map((part) => theme.dim(part)).join(theme.accentBold("◆"));
-			const centered = LOGO_ART.map(paint).map((line) => {
-				const pad = Math.max(0, Math.floor((width - visibleWidth(line)) / 2));
-				return truncateToWidth(`${" ".repeat(pad)}${line}`, width);
-			});
-			return [...Array<string>(LOGO_TOP_GAP).fill(""), ...centered];
-		},
-		invalidate(): void {},
-	};
-}
-
 /**
  * Codex-style composer input: the pi-tui Editor with its rules replaced by
  * filled rows, so the input reads as one solid block instead of ruled lines.
@@ -303,14 +273,20 @@ export class ComposerBox extends Box {
 
 	override render(width: number): string[] {
 		const inner = Math.max(1, width - 2);
+		// Fill via repairFill, not the naive Box fill: editor rows can carry
+		// nested background resets (selection pill), which would otherwise
+		// leak terminal black into the padding. Render the editor directly
+		// so the fill width stays exact.
 		const fill = (line: string): string => {
 			const padded = `${line}${" ".repeat(Math.max(0, inner - visibleWidth(line)))}`;
-			return theme.userBg(padded);
+			return repairFill("userBg", theme.userBg(padded));
 		};
 		const bar = theme.accent("┃");
+		// NOTE: the editor renders raw (unfilled) lines here on purpose —
+		// going through super.render would double-fill via the Box.
 		const body =
 			this.editor.getText() !== ""
-				? super.render(inner)
+				? this.editor.render(inner).map((line) => fill(line))
 				: [
 						fill(theme.dim(truncateToWidth(` ${COMPOSER_PLACEHOLDER}`, inner))),
 						fill(""),

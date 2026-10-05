@@ -287,6 +287,25 @@ function selectedRow(text: string): string {
 
 const BG_OPEN = "\x1b[48;2;";
 const BG_CLOSE = "\x1b[49m";
+const FULL_RESET = "\x1b[0m";
+
+/**
+ * Repair a filled line whose content carries nested background resets
+ * (e.g. a selection pill inside a filled box): without this, everything
+ * after the nested reset falls back to terminal black. Re-asserts the
+ * fill background after each reset so padding never leaks.
+ */
+export function repairFill(bg: PaletteName, filledLine: string): string {
+	const open = backgroundAnsi(colors()[bg], mode);
+	let body = filledLine;
+	if (body.endsWith(BG_CLOSE)) body = body.slice(0, -BG_CLOSE.length);
+	const repaired = body
+		.split(BG_CLOSE)
+		.join(`${BG_CLOSE}${open}`)
+		.split(FULL_RESET)
+		.join(`${FULL_RESET}${open}`);
+	return `${open}${repaired}${BG_CLOSE}`;
+}
 
 /** Remove background color sequences while keeping foreground styling. */
 function stripBackground(line: string): string {

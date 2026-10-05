@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
 	Container,
+	isViewportTUI,
 	stripTerminalSequences,
 	Text,
 	TuiAltScreen,
@@ -88,6 +89,38 @@ test("long transcript follows the end above the docked composer", () => {
 		assert.match(screen[23] ?? "", /\? for shortcuts/);
 	} finally {
 		tui.stop();
+	}
+});
+
+test("a real alt screen reports itself as a viewport TUI", () => {
+	const tui = new TuiAltScreen(mockTerminal(80, 24));
+	try {
+		assert.equal(isViewportTUI(tui), true, "App takes the setLayoutRoot path in production");
+	} finally {
+		tui.stop();
+	}
+});
+
+test("docking holds at multiple viewport heights", () => {
+	for (const rows of [16, 40, 60]) {
+		const term = mockTerminal(80, rows);
+		const tui = new TuiAltScreen(term);
+		try {
+			const transcript = new Container();
+			transcript.addChild(new Text("hello", 0, 0));
+			const composer = new ComposerBox(tui, editorTheme, { paddingX: 1 });
+			const footer = new Footer();
+			footer.tokens = 1;
+			tui.setLayoutRoot(createLayout(transcript, composer, footer));
+			tui.start();
+			tui.renderNow(true);
+			const screen = plain(tui.getScreenLines());
+			assert.equal(screen.length, rows, `frame fills ${rows} rows`);
+			assert.match(screen[rows - 1] ?? "", /\? for shortcuts/, `hints on last row at height ${rows}`);
+			assert.match(screen[rows - 2] ?? "", /1 token/, `usage above hints at height ${rows}`);
+		} finally {
+			tui.stop();
+		}
 	}
 });
 
