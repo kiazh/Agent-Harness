@@ -1,1 +1,0 @@
-{"state": {"task": "store fact", "conversation": [], "budget_remaining": 4000}, "outcomes": {"store": {"task_success": true, "persona_consistency": 1.0, "relevance": "high"}, "retrieve": {"task_success": true, "persona_consistency": 1.0}, "noop": {"task_success": true, "persona_consistency": 1.0}}}

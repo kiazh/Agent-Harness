@@ -49,3 +49,6 @@ Thumbs.db
 
 # Project specific
 *.log
+
+# Test-run scratch directories (subagent/TDD harnesses)
+.*-tmp/

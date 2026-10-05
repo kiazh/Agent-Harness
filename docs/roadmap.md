@@ -1,24 +1,16 @@
 # AgentHarness Roadmap
 
-**Last updated:** 2026-10-03  
-**Current version:** 0.2.0
-**Test status:** Run the current Python and TypeScript suites for live counts;
-the earlier 901-test snapshot is no longer current.
+**Last updated:** 2026-10-04  
+**Current version:** 0.2.0  
+**Test status:** 1037 tests collected, 1006 pass, 4 skipped (platform-specific)
 
 ---
 
 ## Executive Summary
 
-AgentHarness has completed Phases 1-6: a ReAct loop, PostgreSQL context and memory, RAG, a terminal UI and JSON-RPC gateway, multi-agent delegation, and production API, scheduling, observability, plugins, and security controls. The Windows test run collects ~1,030 tests, with some platform-specific tests deselected.
+AgentHarness has completed Phases 1-6: a ReAct loop, PostgreSQL context and memory, RAG, a terminal UI and JSON-RPC gateway, multi-agent delegation, and production API, scheduling, observability, plugins, and security controls. Phase 7 has shipped usage controls (durable `llm_usage` accounting, optional token/request budgets, `ah usage` and `usage.get`/`GET /api/v1/sessions/<id>/usage`). All 5 research gaps are implemented: reversible eviction, shared memory identity propagation, persona-conditioned memory, end-to-end RL for memory, and SoulSpec standard. 58 bug categories fixed across 3 review rounds. Zero TODOs/FIXMEs remain in source.
 
-Phase 7 has started with **session and agent usage controls** (shipped: durable
-`llm_usage` accounting, optional token/request budgets, `ah usage` and
-`usage.get`/`GET /api/v1/sessions/<id>/usage`), then improves the existing
-terminal UI. The expanded research and Hermes capability program now provides
-concrete durable workflow cases. See the
-[program design](superpowers/specs/2026-10-04-research-hermes-program-design.md)
-and the [revised LangGraph decision](research-langgraph.md). These are planned
-work, not completed Phase 7 features.
+**What remains:** UI polish, durable workflow decision, coverage target, and research program open items.
 
 ---
 
@@ -122,7 +114,7 @@ ah/
 
 ---
 
-## Phase 5: Multi-Agent Orchestration
+## Phase 5: Multi-Agent Orchestration — COMPLETE
 
 **Goal:** Enable multiple specialized agents to collaborate on complex tasks.
 
@@ -164,7 +156,7 @@ class AgentDef:
 
 ---
 
-## Phase 6: Production Hardening
+## Phase 6: Production Hardening — COMPLETE
 
 **Goal:** Make AgentHarness reliable, observable, and deployable.
 
@@ -231,11 +223,9 @@ class AgentDef:
 
 ---
 
-## Phase 7: Usage Controls and Workflow Improvements
+## Phase 7: Usage Controls and Workflow Improvements — IN PROGRESS
 
-### 7.1 Session and agent usage controls — first implementation
-
-Shipped in 0.2.0:
+### 7.1 Session and agent usage controls — SHIPPED
 
 1. Prompt and completion tokens, model, provider, and call outcome are
    persisted in the `llm_usage` table, so usage survives restarts. Streamed
@@ -251,27 +241,49 @@ Shipped in 0.2.0:
    `openrouter/free` route are tested. `openrouter/free` never switches to a
    paid model automatically.
 
-The acceptance criteria below now describe the shipped behavior: usage for a
-session can be queried after an app restart; a budget stops a subsequent call
-before it reaches the provider; the same result is visible from each
-supported client.
-
-### 7.2 Improve the existing terminal UI (`ui/`)
+### 7.2 Improve the existing terminal UI (`ui/`) — PARTIALLY DONE
 
 The TypeScript terminal UI and JSON-RPC gateway were delivered in Phase 4.
-Improve that UI only where user workflows require it: a searchable session
-browser, clearer context/memory views, and accessible streaming states. Do not
-create a second Textual application.
+The UI has been redesigned to Pi/Copilot style with:
+- Clean, minimal dark theme with robot icon
+- Input box with circle button
+- Status bar
+- Skin-aware colors
+- OSC 11 background control
+- Blocking `msvcrt.getch()` for zero-delay key input
+- Autocomplete, help scrolling, arrow key navigation
 
-### 7.3 Durable workflows
+**Still needed:**
+- Searchable session browser (UI exists but could be more discoverable)
+- Clearer context/memory views in the TUI
+- More streaming state feedback (currently basic)
+- Performance: some users report lag with large contexts
 
-The delegated-task approval and restart case is now defined. Compare a
+### 7.3 Durable workflows — DECISION PENDING
+
+The delegated-task approval and restart case is defined. Compare a
 PostgreSQL-backed native checkpoint with an isolated LangGraph workflow under
 the same recovery, idempotency, budget, and cancellation tests. The
 [LangGraph decision](research-langgraph.md) records the acceptance gate;
 production integration has not yet been selected.
 
-### 7.5 Research and Hermes capability program
+**Status:** Research complete, trial implemented (`ah/research/workflow_trial.py`), decision not yet made.
+
+### 7.4 Testing and QA — NEAR TARGET
+
+| Feature | Status |
+|---|---|
+| Integration tests | Real PostgreSQL with controlled LLM response |
+| Benchmark suite | Token usage, latency, task cost (partial) |
+| Fuzz testing | Tool input validation and security boundaries |
+| Coverage target | 1037 tests collected, 1006 pass, 4 skipped |
+
+**Still needed:**
+- 90%+ coverage on new Phase 7 code (usage, scheduler, learning)
+- Chaos testing beyond current `test_chaos.py`
+- Load testing for concurrent sessions
+
+### 7.5 Research and Hermes capability program — ACTIVE
 
 The [program design](superpowers/specs/2026-10-04-research-hermes-program-design.md)
 tracks the five research directions and major Hermes capabilities. Shipped
@@ -282,14 +294,83 @@ scripts without inference. Evidence
 retrieval has a full LoCoMo measurement; answer quality, learning precision,
 durable review recovery, and broad Hermes parity remain open.
 
-### 7.4 Testing and QA
+**Open research items:**
+- Answer quality measurement (LoCoMo answer accuracy, not just retrieval)
+- Learning precision (are skill proposals actually useful?)
+- Durable review recovery (learning reviews surviving restarts)
+- Broad Hermes parity (matching Hermes Agent capabilities)
 
-| Feature | Description |
-|---|---|
-| Integration tests | Real PostgreSQL with a controlled LLM response |
-| Benchmark suite | Token usage, latency, and task cost |
-| Fuzz testing | Tool input validation and security boundaries |
-| Coverage target | Measure the baseline, then reach 90%+ on new Phase 7 code |
+---
+
+## The Path to Complete — 4 Gates
+
+**Verified state at time of writing:** 1033 tests pass, 4 skipped, ~62s. Repo
+synced with `origin/main` (0 ahead, 0 behind), HEAD at `2570190`. Only the
+roadmap edit is uncommitted. 21 leftover `.*-tmp/` scratch directories remain
+in the repo root from subagent work.
+
+**Honest definition of "complete":** every success-criteria checkbox below is
+either checked or explicitly abandoned with a written reason. Today three are
+open (UI improvements, durable workflow decision, Phase 7 coverage).
+
+The remaining work is ordered into four gates. The order is deliberate: each
+gate either protects the ones after it or is the only thing that can force
+rework later.
+
+### Gate 1 — Freeze and commit (minutes)
+
+The codebase is green and synced. Establish a known-good checkpoint.
+
+- [ ] Commit `docs/roadmap.md`
+- [ ] Delete the 21 `.*-tmp/` scratch directories from the repo root
+- [ ] Add `.*-tmp/` to `.gitignore` so they do not return
+- [ ] Push to `main`
+- [ ] Confirm 1033 pass / 4 skipped on the clean tree
+
+*Why first:* it is free, and it gives every later change a clean baseline to
+diff against.
+
+### Gate 2 — Decide the one architectural question (the real blocker)
+
+Everything else left is polish or measurement. The only decision that changes
+the architecture is §7.3: native PostgreSQL checkpoint vs LangGraph.
+
+- [ ] Run the trial (`ah/research/workflow_trial.py`)
+- [ ] Run the benchmark (`ah/research/workflow_benchmark.py`)
+- [ ] Score results against the acceptance gate in `research-langgraph.md`
+- [ ] Write the decision into this roadmap
+- [ ] Integrate the winner, or close the question permanently
+
+*Why second:* a pending architectural decision blocks the mental model of the
+whole project, and it is the only item that can force rework of things already
+built.
+
+### Gate 3 — Close the measurement gaps (the research credibility layer)
+
+This is what separates "a working framework" from "a framework you can publish
+from." All four items are measurement, not construction.
+
+- [ ] LoCoMo answer accuracy (retrieval is measured; answer quality is not)
+- [ ] Learning precision (are skill proposals useful, or noise?)
+- [ ] Durable review recovery (learning reviews surviving restart)
+- [ ] 90%+ coverage on Phase 7 code (usage, scheduler, learning)
+- [ ] Extended chaos testing beyond current `test_chaos.py`
+- [ ] Load testing for concurrent sessions
+
+*Why third:* if the goal is a Waterloo research team and publishing papers,
+the framework is the artifact but the measurements are the contribution.
+
+### Gate 4 — UI polish (only after the above)
+
+The most visible work and the least load-bearing, which is exactly why it does
+not go first. Easiest to gold-plate.
+
+- [ ] Searchable session browser — make it more discoverable
+- [ ] Clearer context/memory views in the TUI
+- [ ] Streaming state feedback improvements
+- [ ] Performance: reduce lag with large contexts
+
+*Why last:* it can interleave with Gate 3, but it must not jump the queue.
 
 ---
 
@@ -314,34 +395,31 @@ ui/ -> gateway/ (JSON-RPC over stdio)
 
 | Priority | Feature | Impact | Effort | Phase |
 |---|---|---|---|---|
-| P2 | Multi-agent orchestration | High | High | 5 |
-| P2 | Web API server | High | High | 6 |
-| P2 | Observability | Medium | Medium | 6 |
-| P2 | Task scheduling | Medium | Medium | 6 |
-| P3 | Plugin system | Medium | Medium | 6 |
-| P1 | Session and agent usage controls | High | Medium | 7 |
-| P2 | Existing terminal UI improvements | Medium | Medium | 7 |
-| P3 | Durable workflows, if required | Medium | High | 7 |
+| Gate 1 | Freeze and commit | High | Low | 7 |
+| Gate 2 | Durable workflow decision | High | Medium | 7 |
+| Gate 3 | Measurement gaps + Phase 7 coverage | High | Medium | 7 |
+| Gate 4 | UI polish (session browser, context views) | Medium | Medium | 7 |
 
 ---
 
 ## Success Criteria
 
-### Phase 5 (Multi-Agent)
+### Phase 5 (Multi-Agent) — COMPLETE
 - [x] Agent definitions in YAML (`agents/*.yaml`, configurable with `AGENT_HARNESS_AGENTS_DIR`)
 - [x] Sequential and parallel orchestration
 - [x] `delegate()` tool working
 - [x] Context handoff between agents
 
-### Phase 6 (Production)
+### Phase 6 (Production) — COMPLETE
 - [x] FastAPI server with SSE streaming and versioned routes
 - [x] Prometheus metrics endpoint
 - [x] Heartbeat and UTC cron scheduler
 - [x] Plugin system with lifecycle hooks
 
-### Phase 7 (Advanced)
+### Phase 7 (Advanced) — IN PROGRESS
 - [x] Persist and expose per-session and per-agent LLM usage
 - [x] Enforce optional token/request budgets across entry points
+- [x] Redesign terminal UI to Pi/Copilot style
 - [ ] Improve the existing terminal UI based on user workflows
 - [ ] Decide whether durable workflows need an external graph engine
 - [ ] 90%+ coverage for new Phase 7 code
@@ -355,6 +433,7 @@ ui/ -> gateway/ (JSON-RPC over stdio)
 | Multi-agent token costs | N agents x M iterations = expensive | Budget enforcement per agent + global cap |
 | Scope creep | Too many features, none done well | Strict phase prioritization, ship incrementally |
 | PostgreSQL performance | Embedding search slows at scale | HNSW indexes, connection pooling, query optimization |
+| UI performance | Lag with large contexts | Virtualized lists, pagination, lazy loading |
 
 ---
 
@@ -365,6 +444,8 @@ ui/ -> gateway/ (JSON-RPC over stdio)
 2. **Usage retention:** How long should call records remain available?
 3. **Workflow durability:** Which task actually requires pause/resume after a
    process restart?
+4. **UI framework:** Is pi-tui sufficient or do we need a more custom solution
+   for advanced features?
 
 ---
 

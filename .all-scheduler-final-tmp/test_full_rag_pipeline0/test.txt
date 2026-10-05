@@ -1,1 +1,0 @@
-RAG is a technique that combines retrieval with generation. It uses embeddings to find relevant documents. The retrieved documents are then used to ground the LLM response.

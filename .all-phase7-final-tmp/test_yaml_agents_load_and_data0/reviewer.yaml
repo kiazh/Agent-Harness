@@ -1,4 +1,0 @@
-name: reviewer
-description: Review code
-tools: [read_file]
-max_iterations: 4

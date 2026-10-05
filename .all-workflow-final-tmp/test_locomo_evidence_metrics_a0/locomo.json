@@ -1,1 +1,0 @@
-[{"conversation": {"speaker_a": "Ada", "session_1": [{"dia_id": "D1:1", "speaker": "Ada", "text": "I moved to Toronto."}, {"dia_id": "D1:2", "speaker": "Ben", "text": "That is great."}]}, "qa": [{"question": "What happened in Toronto?", "answer": "Toronto", "evidence": ["D1:1"], "category": 1}, {"question": "adversarial", "evidence": [], "category": 5}]}]
