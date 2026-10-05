@@ -71,6 +71,16 @@ def test_token_f1_handles_punctuation():
     assert token_f1("Hello, world!", "hello world") == 1.0
 
 
+def test_token_f1_handles_non_string_ground_truth():
+    """LoCoMo ground-truth answers can be integers (e.g. a count or year)."""
+    assert token_f1("3", 3) == 1.0
+    assert token_f1("three", 3) == 0.0
+
+
+def test_token_f1_handles_none_ground_truth():
+    assert token_f1("anything", None) == 0.0
+
+
 # ---------------------------------------------------------------------------
 # StubProvider — deterministic offline LLM
 # ---------------------------------------------------------------------------
@@ -141,6 +151,62 @@ async def test_generate_answer_with_empty_question():
     provider = StubProvider(answer="answer")
     result = await generate_answer(provider, "", ["some evidence"])
     assert result == "answer"
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_handles_none_content():
+    """A provider can return None content (e.g. an empty/filtered completion);
+    that must yield an empty answer, not crash the corpus run."""
+    from ah.core.models import LLMResponse
+
+    class NoneProvider:
+        async def complete(self, *a, **k):
+            return LLMResponse(content=None, model="stub", usage={})
+
+    result = await generate_answer(NoneProvider(), "Where?", ["evidence"])
+    assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_retries_transient_failure():
+    """A corpus run must survive transient provider errors (429s) by retrying
+    with backoff instead of aborting the whole measurement."""
+    from ah.core.models import LLMResponse
+
+    class FlakyProvider:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, *a, **k):
+            self.calls += 1
+            if self.calls < 3:
+                raise RuntimeError("429 Too Many Requests")
+            return LLMResponse(content="Toronto", model="stub", usage={})
+
+    provider = FlakyProvider()
+    result = await generate_answer(provider, "Where?", ["evidence"], retries=4, backoff=0.0)
+    assert result == "Toronto"
+    assert provider.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_gives_up_after_retries():
+    """After exhausting retries the error propagates so a run is not silently
+    scored against empty answers."""
+    from ah.core.models import LLMResponse
+
+    class DeadProvider:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, *a, **k):
+            self.calls += 1
+            raise RuntimeError("429 Too Many Requests")
+
+    provider = DeadProvider()
+    with pytest.raises(RuntimeError, match="429"):
+        await generate_answer(provider, "Where?", ["evidence"], retries=3, backoff=0.0)
+    assert provider.calls == 3
 
 
 # ---------------------------------------------------------------------------

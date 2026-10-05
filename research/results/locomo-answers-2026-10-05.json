@@ -1,0 +1,16 @@
+{
+  "measuredAt": "2026-10-05T01:24:00Z",
+  "python": "3.11.16",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "dataset": ".locomo10.json (official LoCoMo layout)",
+  "metric": "token F1 (SQuAD-style) + exact match",
+  "mode": "answer-accuracy",
+  "provider": "StubProvider (deterministic offline; answer=\"I don't know\")",
+  "questions": 1982,
+  "skippedQuestions": 4,
+  "meanF1": 0.0001874008937581087,
+  "exactMatchRate": 0.0,
+  "scope": "Offline floor baseline. Establishes the harness runs end-to-end on the full corpus and that a no-information answer scores ~0 F1. A live-LLM run was attempted but the OpenRouter free tier returned HTTP 429 for sustained calls; retry-with-backoff is implemented (ah/research/locomo.py::generate_answer) so a run with budget completes.",
+  "liveRunBlocked": "OpenRouter free tier 429 (rate limit) at time of measurement",
+  "howToRunLive": "python -m ah.research.locomo .locomo10.json --answers [--max-conversations N]"
+}

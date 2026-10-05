@@ -7,6 +7,7 @@ the ground-truth answer using token F1 (the metric used by the LoCoMo paper).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import re
@@ -31,7 +32,7 @@ class Question:
     text: str
     evidence: tuple[str, ...]
     category: int | None = None
-    answer: str = ""
+    answer: str = ""  # may arrive as a JSON number; coerced by _normalize_answer
 
 
 @dataclass(frozen=True)
@@ -334,9 +335,15 @@ class StubProvider:
         return LLMResponse(content=self.answer, model="stub", usage={})
 
 
-def _normalize_answer(text: str) -> str:
-    """Lowercase, remove punctuation, and collapse whitespace."""
-    text = text.lower()
+def _normalize_answer(text: Any) -> str:
+    """Lowercase, remove punctuation, and collapse whitespace.
+
+    LoCoMo ground-truth answers are not always strings — a count or a year is
+    a JSON number — so coerce to text first and treat ``None`` as empty.
+    """
+    if text is None:
+        return ""
+    text = str(text).lower()
     text = re.sub(r"[^\w\s]", "", text)
     return " ".join(text.split())
 
@@ -365,11 +372,19 @@ async def generate_answer(
     provider: Any,
     question: str,
     evidence_texts: Sequence[str],
+    *,
+    retries: int = 4,
+    backoff: float = 1.0,
 ) -> str:
     """Generate an answer using the LLM provider.
 
     Builds a prompt with the question and retrieved evidence, then calls
     the provider's ``complete`` method. Returns the generated text.
+
+    Retries transient provider failures (e.g. HTTP 429 on a free tier) with
+    exponential backoff so a long corpus run is not aborted by one rate limit.
+    After the final attempt the error propagates, so a run is never silently
+    scored against empty answers.
     """
     evidence_block = "\n".join(
         f"[Evidence {i + 1}] {text}" for i, text in enumerate(evidence_texts)
@@ -381,12 +396,24 @@ async def generate_answer(
         f"Question: {question}\n\n"
         f"Answer:"
     )
-    response = await provider.complete(
-        [{"role": "user", "content": prompt}],
-        temperature=0.0,
-        max_tokens=256,
-    )
-    return response.content.strip()
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            response = await provider.complete(
+                [{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=256,
+            )
+        except Exception:
+            if attempt >= max(1, retries):
+                raise
+            if backoff:
+                await asyncio.sleep(backoff * (2 ** (attempt - 1)))
+            continue
+        # A provider may return None content (empty or filtered completion);
+        # treat it as an empty answer so one bad response does not abort the run.
+        return (response.content or "").strip()
 
 
 async def evaluate_answers(
@@ -470,6 +497,16 @@ def main() -> None:
     parser.add_argument(
         "--test-db", action="store_true", help="Use AGENT_HARNESS_TEST_DATABASE_URL"
     )
+    parser.add_argument(
+        "--answers",
+        action="store_true",
+        help="Score answer accuracy (token F1) using an LLM instead of retrieval",
+    )
+    parser.add_argument(
+        "--stub-answer",
+        help="Use a deterministic offline stub provider returning this answer "
+        "(no network; for smoke runs)",
+    )
     parser.add_argument("--max-conversations", type=int, help="Limit samples for a smoke run")
     args = parser.parse_args()
     conversations = load_locomo(args.dataset)
@@ -477,6 +514,27 @@ def main() -> None:
         if args.max_conversations < 1:
             parser.error("--max-conversations must be positive")
         conversations = conversations[: args.max_conversations]
+
+    if args.answers:
+        # Answer-accuracy mode: generate an answer per question and score it
+        # against the ground truth with token F1.
+        async def run_answers() -> AnswerMetrics:
+            if args.stub_answer is not None:
+                provider: Any = StubProvider(args.stub_answer)
+            else:
+                from ah.core.provider import get_provider
+
+                provider = get_provider()
+            return await evaluate_answers(conversations, provider)
+
+        answer_metrics = asyncio.run(run_answers())
+        result = answer_metrics.to_dict()
+        # Keep the per-question scores only in verbose/smoke runs; the summary
+        # is what a corpus run reports.
+        result.pop("scores", None)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+
     if args.backend in ("archive", "session-recall", "title-only"):
         if args.db_url and args.test_db:
             parser.error("use either --db-url or --test-db")
