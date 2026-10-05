@@ -13,8 +13,6 @@
 
 AgentHarness is a complete AI agent framework that runs on your machine. You chat with agents in a streaming terminal UI. The agents remember things across sessions, search the web, run tools in a sandbox, follow schedules, and delegate work to each other. Everything is stored in PostgreSQL with pgvector for semantic search.
 
-The core thesis: most agent frameworks are black boxes. This one is built to be understood — every component is visible, documented, and reimplemented from first principles.
-
 ```
   ◆──────◆   AgentHarness
  │ AGENT  │   Enter to send · /keys for API keys · /models to switch models
