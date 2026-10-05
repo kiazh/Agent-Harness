@@ -246,7 +246,7 @@ test("composer is a filled codex-style block with no rules", async () => {
 			"no border rules in the filled composer",
 		);
 	}
-	assert.match(stripTerminalSequences(composer.render(80)[0] ?? ""), /Ask AgentHarness to do anything/);
+	assert.match(stripTerminalSequences(composer.render(80)[1] ?? ""), /Ask AgentHarness to do anything/);
 	for (const line of composer.render(80)) {
 		assert.match(stripTerminalSequences(line), /^┃ /);
 	}

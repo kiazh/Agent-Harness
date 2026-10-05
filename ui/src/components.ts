@@ -288,8 +288,8 @@ export class ComposerBox extends Box {
 			this.editor.getText() !== ""
 				? this.editor.render(inner).map((line) => fill(line))
 				: [
-						fill(theme.dim(truncateToWidth(` ${COMPOSER_PLACEHOLDER}`, inner))),
 						fill(""),
+						fill(theme.dim(truncateToWidth(` ${COMPOSER_PLACEHOLDER}`, inner))),
 						fill(""),
 					];
 		return body.map((line) => `${bar} ${line}`);

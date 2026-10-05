@@ -70,7 +70,7 @@ test("short transcript docks composer and footer to the bottom rows", () => {
 		assert.match(screen[0] ?? "", /hello world/);
 		assert.match(screen[22] ?? "", /test-model/);
 		assert.match(screen[23] ?? "", /\? for shortcuts/);
-		assert.match(screen[19] ?? "", /Ask AgentHarness to do anything/);
+		assert.match(screen[20] ?? "", /Ask AgentHarness to do anything/);
 	} finally {
 		tui.stop();
 	}

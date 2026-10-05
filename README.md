@@ -14,10 +14,8 @@
 AgentHarness is a complete AI agent framework that runs on your machine. You chat with agents in a streaming terminal UI. The agents remember things across sessions, search the web, run tools in a sandbox, follow schedules, and delegate work to each other. Everything is stored in PostgreSQL with pgvector for semantic search.
 
 ```
-  ◆──────◆   AgentHarness
- │ AGENT  │   Enter to send · /keys for API keys · /models to switch models
- │ HARNESS│   /theme to reskin · /help for everything else
-  ◆──────◆
+>_ AgentHarness (v0.2.0)
+   ~/agent-harness (main)
 ```
 
 ---
@@ -34,8 +32,8 @@ AgentHarness is a complete AI agent framework that runs on your machine. You cha
 
 ```bash
 # Clone and enter
-git clone https://github.com/kiazh/agent-harness.git
-cd agent-harness
+git clone https://github.com/kiazh/Agent-Harness.git
+cd Agent-Harness
 
 # Python environment
 python -m venv .venv
@@ -81,12 +79,12 @@ ah serve --host 0.0.0.0 --port 8000
 
 ### Streaming, Cards, and Skins
 
-The CLI look is a full port of [OpenAI Codex](https://github.com/openai/codex): a one-line `>_` brand header with a dim directory line, a large centered dotted launch mark on empty sessions, a filled borderless composer block with a left accent bar and a dim `Ask AgentHarness to do anything` placeholder, accent-filled selection rows, braille spinner, and two dim footer lines (`model · dir · branch · tokens`, then `? for shortcuts · / for commands`). Restrained default-foreground text, bold headers, green/red/magenta semantics, `·`-separated segments, exec-style tool titles (`Running`/`Ran`/`Failed`), elapsed `Thinking… Ns` indicator, grouped `/help`, double-Esc to edit the previous message, `Ctrl+L` to clear, and Codex command parity (`/init`, `/review`, `/compact`, `/clear` starts a new chat). Skins recolor the Codex chrome: eleven themes ported from Codex's palette set plus house skins. The fullscreen alternate buffer keeps the composer and footer docked to the bottom rows while the transcript scrolls in the flexible area above (Codex layout, follow-end scrolling).
+The CLI look is a full port of [OpenAI Codex](https://github.com/openai/codex): a one-line `>_` brand header with a dim directory line, a filled borderless composer block with a left accent bar and a dim `Ask AgentHarness to do anything` placeholder on its second row, accent-filled selection rows, braille spinner, and two dim footer lines (`model · dir · branch · tokens`, then `? for shortcuts · / for commands`). Restrained default-foreground text, bold headers, green/red/magenta semantics, `·`-separated segments, exec-style tool titles (`Running`/`Ran`/`Failed`), elapsed `Thinking… Ns` indicator, grouped `/help`, double-Esc to edit the previous message, `Ctrl+L` to clear, and Codex command parity (`/init`, `/review`, `/compact`, `/clear` starts a new chat). Skins recolor the Codex chrome: eleven tuned dark palettes plus house skins. The fullscreen alternate buffer keeps the composer and footer docked to the bottom rows while the transcript scrolls in the flexible area above (Codex layout, follow-end scrolling).
 
 - **Streaming Markdown** — token-by-token assistant output rendered in a contrasting card, with tool-call cards showing progress. Tool output gets Codex-style diff coloring: `+` lines green, `-` lines red, `@@` hunks info.
-- **Codex status line** — the footer reads `model · dir · branch · tokens · status` with per-item accent colors (model cyan-ish, paths green, branch magenta), under a divider rule.
+- **Codex status line** — the footer reads `model · dir · branch · tokens · status` with per-item accent colors (model cyan-ish, paths green, branch magenta), no rules anywhere.
 - **Key hints** — `Enter send · Shift+Enter newline · Esc stop · /help commands`, with bold key labels everywhere hints appear.
-- **Eleven skins** — `/theme` switches the full palette plus header ASCII art, live, no restart. opencode's own theme is the default, plus `tokyonight`, `catppuccin`, `dracula`, `gruvbox`, `rosepine`, `nord`, `everforest`, and `matrix` (dark variants) — a `codex` skin done in Codex's restrained chrome with magenta brand accents — and an accessible `mono` house skin. Every palette is tuned so accents stay distinct (no two roles sharing one color). Saved via `config.theme`, so your skin survives restarts.
+- **Eleven skins** — `/theme` switches the full palette live, no restart. opencode's own theme is the default, plus `tokyonight`, `catppuccin`, `dracula`, `gruvbox`, `rosepine`, `nord`, `everforest`, and `matrix` (dark variants) — a `codex` skin done in Codex's restrained chrome with magenta brand accents — and an accessible `mono` house skin. Every palette is tuned so accents stay distinct (no two roles sharing one color). Saved via `config.theme`, so your skin survives restarts.
 - **Menus** — borderless bottom-docked sheets (Codex style) with full-width accent selection bars and `enter select · esc back` hints: sessions, models, themes, keys, recall, confirmations.
 - **Keyboard** — Enter sends, Shift+Enter newline, Esc stops a reply, Tab completes, Ctrl+C exits.
 
@@ -245,7 +243,7 @@ Non-secret settings live in `~/.agent-harness/config.yaml` (or `AGENT_HARNESS_<K
 
 ## Performance
 
-- **Test suite** — 1284+ Python tests pass (~83s); 63 UI tests pass; 99.81% coverage on Phase 7 modules (scheduler, session_recall, text_search, usage at 100%).
+- **Test suite** — 1284+ Python tests pass (~83s); 83 UI tests pass (3 e2e skipped without a live DB); 99.81% coverage on Phase 7 modules (scheduler, session_recall, text_search, usage at 100%).
 - **Concurrency** — two real eviction bugs found via load testing; usage accounting uses advisory locks with fixed agent→session ordering to prevent deadlocks.
 - **Workflow trial** — native PostgreSQL start-plus-approval **3.618 ms** vs LangGraph **18.608 ms** (5.1x overhead); native path retained, LangGraph optional.
 - **Provider resilience** — OpenRouter free tier hard-429s under sustained calls; verified 429-then-200 recovers, all-429 raises after 5 attempts.
@@ -302,7 +300,7 @@ agent-harness/
 │   ├── research/          # LoCoMo, workflow trial, memory-policy training
 │   └── cli/               # Typer CLI (chat, setup, doctor, init, serve) + UI launcher
 ├── ui/                    # TypeScript terminal UI
-│   ├── src/               # pi-tui app (30 slash commands, 10 skins)
+│   ├── src/               # pi-tui app (32 slash commands, 11 skins)
 │   └── test/              # node:test suites
 ├── tests/                 # Python test suite
 ├── skills/                # SKILL.md skill definitions
