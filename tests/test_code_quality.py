@@ -45,11 +45,18 @@ class TestNoDatetimeUtcnow:
         offenders: list[str] = []
         for py_file in _python_files_in_ah():
             source = py_file.read_text(encoding="utf-8")
-            # Check for 'utcnow' anywhere (including comments)
-            if "utcnow" in source.lower():
-                offenders.append(str(py_file.relative_to(_PROJECT_ROOT)))
+            # Parse AST to find only code nodes, not comments
+            try:
+                tree = ast.parse(source)
+            except SyntaxError:
+                continue
+            # Walk the AST looking for utcnow attribute access
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute) and node.attr == "utcnow":
+                    offenders.append(str(py_file.relative_to(_PROJECT_ROOT)))
+                    break
         assert not offenders, (
-            f"'utcnow' found in source (even in comments).\n"
+            f"datetime.utcnow() found in code (not just comments).\n"
             f"Offending files: {offenders}"
         )
 

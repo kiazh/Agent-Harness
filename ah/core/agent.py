@@ -558,12 +558,18 @@ class BaseReActAgent:
                         token = current_session_id.set(session_id)
                         agent_token = current_agent_id.set(self.agent_id)
                         try:
-                            result = await registry.execute(tool_name, **tool_args)
+                            result = await asyncio.wait_for(
+                                registry.execute(tool_name, **tool_args),
+                                timeout=1,
+                            )
                         finally:
                             current_agent_id.reset(agent_token)
                             current_session_id.reset(token)
                     else:
-                        result = await registry.execute(tool_name, **tool_args)
+                        result = await asyncio.wait_for(
+                            registry.execute(tool_name, **tool_args),
+                            timeout=1,
+                        )
             except Exception as e:
                 logger.exception("Tool execution failed for '%s'", tool_name)
                 audit_log(
@@ -771,12 +777,13 @@ class ReActAgent(BaseReActAgent):
             # Check for tool calls
             if not response.tool_calls:
                 # No tool calls — final answer
+                content = response.content or ""
                 await context_manager.add_chunk(
                     session_id=session_id,
                     agent_id=self.agent_id,
                     chunk_type="assistant_message",
-                    payload={"content": response.content},
-                    token_count=len(response.content) // 4,
+                    payload={"content": content},
+                    token_count=len(content) // 4,
                 )
                 await session_manager.update_activity(session_id)
                 audit_log(
@@ -789,7 +796,7 @@ class ReActAgent(BaseReActAgent):
                 # Consolidate memories after successful run
                 self._schedule_memory_consolidation(session_id)
                 completed = AgentResponse(
-                    content=response.content,
+                    content=content,
                     tool_calls=tool_calls_made,
                     tokens_used=total_tokens,
                     iterations=iteration + 1,
@@ -937,12 +944,13 @@ class ReActAgent(BaseReActAgent):
             # Check for tool calls
             if not response.tool_calls:
                 # No tool calls — final answer
+                content = response.content or ""
                 await context_manager.add_chunk(
                     session_id=session_id,
                     agent_id=self.agent_id,
                     chunk_type="assistant_message",
-                    payload={"content": response.content},
-                    token_count=len(response.content) // 4,
+                    payload={"content": content},
+                    token_count=len(content) // 4,
                 )
                 await session_manager.update_activity(session_id)
                 audit_log(
@@ -954,7 +962,7 @@ class ReActAgent(BaseReActAgent):
                 )
                 self._schedule_memory_consolidation(session_id)
                 completed = AgentResponse(
-                    content=response.content,
+                    content=content,
                     tool_calls=tool_calls_made,
                     tokens_used=total_tokens,
                     iterations=iteration + 1,

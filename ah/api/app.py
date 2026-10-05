@@ -147,6 +147,18 @@ class _RpcGateway:
             self._response_timestamps.pop(rid, None)
 
     async def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Call a gateway method via JSON-RPC and return the result.
+
+        Args:
+            method: The JSON-RPC method name to call.
+            params: The parameters to pass to the method.
+
+        Returns:
+            The result dict from the gateway response.
+
+        Raises:
+            RpcError: If no response is received or the response contains an error.
+        """
         async with self._lock:
             self._next_id += 1
             rid = self._next_id
@@ -163,6 +175,7 @@ class _RpcGateway:
         return response.get("result", {})
 
     async def close(self) -> None:
+        """Close the underlying gateway connection."""
         await self._gateway.close()
 
 
@@ -215,10 +228,12 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, str]:
+        """Return service health status and version."""
         return {"status": "ok", "version": __version__}
 
     @app.get("/ready")
     async def ready() -> dict[str, str]:
+        """Check if the database is connected and schema is initialized."""
         if not db.connected:
             raise HTTPException(503, "database unavailable")
         try:
@@ -236,6 +251,7 @@ def create_app() -> FastAPI:
 
     @app.get("/metrics", dependencies=[Depends(require_api_key)])
     async def prometheus_metrics() -> PlainTextResponse:
+        """Return Prometheus-formatted metrics including LLM usage totals."""
         from ah.core.usage import usage_store
         from ah.observability.metrics import prometheus_text
 
@@ -255,9 +271,9 @@ def create_app() -> FastAPI:
             )
         return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
 
-
     @app.get("/api/v1/sessions/{session_id}/usage", dependencies=[Depends(require_api_key)])
     async def get_session_usage(session_id: uuid.UUID, agent: str | None = None) -> dict[str, Any]:
+        """Get token usage summary for a session, optionally filtered by agent."""
         from ah.core.usage import usage_store
 
         session = await session_manager.get(session_id)
@@ -265,9 +281,9 @@ def create_app() -> FastAPI:
             raise HTTPException(404, "session not found")
         return await usage_store.summary(session_id, agent or session.agent_id)
 
-
     @app.patch("/api/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])
     async def update_session(session_id: uuid.UUID, req: UpdateSessionRequest) -> dict[str, Any]:
+        """Update session title, goal, or emotion state."""
         if req.title is None and req.goal is None and req.emotion is None:
             raise HTTPException(400, "title, goal, or emotion is required")
         session = await session_manager.get(session_id)
@@ -291,16 +307,16 @@ def create_app() -> FastAPI:
             await session_manager.set_goal(session_id, req.goal)
         return {"session": session_to_dict(await session_manager.get(session_id))}
 
-
     @app.delete("/api/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])
     async def delete_session(session_id: uuid.UUID) -> dict[str, bool]:
+        """Delete a session by ID."""
         if not await session_manager.delete(session_id):
             raise HTTPException(404, "session not found")
         return {"deleted": True}
 
-
     @app.post("/api/v1/memory", dependencies=[Depends(require_api_key)])
     async def create_memory(req: CreateMemoryRequest) -> dict[str, Any]:
+        """Create a new memory entry in the store."""
         from ah.memory.store import memory_store
 
         if req.category not in {"preference", "decision", "fact", "event", "transient"}:
@@ -319,9 +335,9 @@ def create_app() -> FastAPI:
             "memory": {"id": str(entry.id), "content": entry.content, "category": entry.category}
         }
 
-
     @app.post("/api/v1/persona-memory", dependencies=[Depends(require_api_key)])
     async def create_persona_memory(req: CreatePersonaMemoryRequest) -> dict[str, Any]:
+        """Create a persona-specific interpretation of an existing fact."""
         from ah.memory.persona import persona_memory_store
         from ah.memory.store import memory_store
 
@@ -338,7 +354,6 @@ def create_app() -> FastAPI:
         )
         return {"personaMemory": {"id": str(entry.id), "factId": str(entry.fact_id)}}
 
-
     @app.get("/api/v1/memory/search", dependencies=[Depends(require_api_key)])
     async def search_memory(
         query: str = Query(..., min_length=1, max_length=2000),
@@ -347,6 +362,7 @@ def create_app() -> FastAPI:
         category: str | None = None,
         emotion: str | None = None,
     ) -> dict[str, Any]:
+        """Search memories by semantic similarity with optional filters."""
         from ah.memory.persona import EmotionTopology
         from ah.memory.retriever import MemoryRetriever
 
@@ -369,7 +385,6 @@ def create_app() -> FastAPI:
             ]
         }
 
-
     @app.delete("/api/v1/jobs/{job_id}", dependencies=[Depends(require_api_key)])
     async def delete_job(job_id: uuid.UUID) -> dict[str, bool]:
         from ah.core.scheduler import job_store
@@ -377,8 +392,6 @@ def create_app() -> FastAPI:
         if not await job_store.delete(job_id):
             raise HTTPException(404, "job not found")
         return {"deleted": True}
-
-
 
     # ── sessions ────────────────────────────────────────────────────────────
 
@@ -423,9 +436,6 @@ def create_app() -> FastAPI:
             "session": session_to_dict(session),
             "history": history_from_chunks(chunks),
         }
-
-
-
 
     @app.post("/api/v1/sessions/{session_id}/chat", dependencies=[Depends(require_api_key)])
     @app.post("/sessions/{session_id}/prompt", dependencies=[Depends(require_api_key)])
@@ -473,7 +483,9 @@ def create_app() -> FastAPI:
                         try:
                             await llm.close()
                         except Exception:
-                            logger.exception("Could not close prompt provider for session %s", session_id)
+                            logger.exception(
+                                "Could not close prompt provider for session %s", session_id
+                            )
                 yield "data: [DONE]\n\n"
 
         return StreamingResponse(
@@ -540,9 +552,6 @@ def create_app() -> FastAPI:
             ],
             "total": await memory_store.count(session_id=sid),
         }
-
-
-
 
     @app.post("/api/v1/documents", dependencies=[Depends(require_api_key)])
     async def index_document(req: CreateDocumentRequest) -> dict[str, Any]:
@@ -652,7 +661,6 @@ def create_app() -> FastAPI:
 
         jobs = await job_store.list(session_id=sid, limit=limit)
         return {"jobs": [j.to_dict() for j in jobs]}
-
 
     # ── agents ──────────────────────────────────────────────────────────────
 

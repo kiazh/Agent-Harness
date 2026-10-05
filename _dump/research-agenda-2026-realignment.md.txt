@@ -1,0 +1,609 @@
+1|# AgentHarness Research Agenda — Realigning to 5 Novel Gaps
+2|
+3|> This document re-aligns the project with the original 5 research gaps, integrating findings from the 2026 deep research reports (memory, production, technical) and mapping each gap to concrete implementation requirements in the current codebase.
+4|
+5|---
+6|
+7|## Executive Summary
+8|
+9|AgentHarness has built a production system (TUI, gateway, API, multi-agent, scheduler, usage tracking). This agenda was written before the five research prototypes were added. The assessments and plans below describe that earlier baseline; the current implementation status is recorded here so the plans are not mistaken for a description of today's code.
+10|
+11|| Gap | Implemented in the codebase | Research still needed |
+12||-----|-----------------------------|-----------------------|
+13|| Reversible eviction | Byte-preserving archive, transactional eviction, text and vector recall, session cleanup; LoCoMo evidence-retrieval baseline | Adaptive compression, answer-quality and token-efficiency measurements |
+14|| Identity propagation | Belief storage, keyed provenance, quarantine, recorded drift transitions, labeled sequence evaluator, gated shared-memory delivery | Gate delegation text handoffs and run large adversarial evaluation |
+15|| Persona memory | Separate factual and persona records, emotion-conditioned retrieval and prompt assembly | Learned persona model, human evaluation, longitudinal consistency |
+16|| RL memory control | Six actions, reward functions, finite-action group-relative training and held-out evaluation | Joint LLM training and benchmark comparison |
+17|| Soul Spec | Internal YAML model, merge rules, v0.5 package validation, declared-file round trip and registry loading | Live cross-framework validation and official conformance certification |
+18|
+19|Measured results and reproduction commands are in [research-evaluation.md](research-evaluation.md).
+20|
+21|**Core Insight**: The existing `llm_usage` + `context_chunks` + `memories` infrastructure provides the foundation for all 5 gaps. What's missing is the *novel* contribution that makes each gap publishable.
+22|
+23|---
+24|
+25|## Gap 1: Token-Efficient Context Representation with Reversible Eviction
+26|
+27|### Original Problem
+28|Fixed-length memory buffers destroy information permanently when overwritten. Existing reversible approaches are lossy or untested at scale. No system stores structured context with zero-loss eviction.
+29|
+30|### Current State Assessment
+31|
+32|| Component | Status | Gap |
+33||-----------|--------|-----|
+34|| `ContextManager` (ah/core/context.py) | LRU cache + token-based eviction | Eviction archives to `context_archive` before deletion (shipped) |
+35|| `PromptAssembler` (ah/core/assembler.py) | Budgeted prompt assembly | Archived-context recall via `search_archive_text` (shipped); embedding resurrection available |
+36|| `ContextChunk` (ah/core/models.py) | MessagePack payloads + pgvector | `context_archive` tier with resurrection path (shipped) |
+37|| `RollingCompaction` | Shipped in `ah/core/compression.py` | Optional LLM summarization in compress path |
+38|
+39|### Research Findings (from 2026 reports)
+40|
+41|- **A-MEM** (NeurIPS 2025): Dynamic linking + memory evolution achieves 35% improvement over static memory
+42|- **Focus** (arXiv:2601.07190): Agent self-regulates context, consolidates into persistent "Knowledge" block — 22.7% token reduction
+43|- **Blast Radius**: Reversible eviction via archive — dead context stored byte-exact, resummable on demand
+44|- **ByteRover**: LLM-curated knowledge operations with 5-tier progressive retrieval
+45|- **TOON format**: Reduces LLM token consumption by 40-60% vs raw text
+46|
+47|### Concrete Implementation Plan
+48|
+49|#### Phase 1A: Two-Tier Eviction with Archive
+50|
+51|```
+52|Current: context_chunks (hot) → DELETE on eviction (lossy)
+53|Proposed: context_chunks (hot) → context_archive (cold, byte-exact) → resurrection via embedding similarity
+54|```
+55|
+56|**Schema changes:**
+57|```sql
+58|CREATE TABLE context_archive (
+59|    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+60|    session_id UUID NOT NULL,
+61|    chunk_id UUID NOT NULL,  -- original chunk reference
+62|    payload_msgpack BYTEA NOT NULL,  -- byte-exact MessagePack
+63|    embedding vector(1536),
+64|    archived_at TIMESTAMPTZ NOT DEFAULT NOW(),
+65|    archive_reason TEXT,  -- 'evicted', 'consolidated', 'compressed'
+66|    resurrection_count INT DEFAULT 0,
+67|    last_resurrected TIMESTAMPTZ
+68|);
+69|```
+70|
+71|**Implementation:**
+72|1. `ContextManager.evict_old_chunks()` → archive before delete
+73|2. `ContextManager.resurrect_context()` → query archive by embedding similarity
+74|3. `PromptAssembler` → include resurrection path when context is full
+75|4. Evaluate on LoCoMo benchmark
+76|
+77|#### Phase 1B: TOON Serialization for Context Chunks
+78|
+79|Replace MessagePack with TOON (Token-Optimized Object Notation) for context storage:
+80|- 40-60% token reduction vs raw text
+81|- Preserves structure (typed payloads)
+82|- Compatible with existing pgvector embeddings
+83|
+84|#### Phase 1C: Adaptive Compression via Focus Pattern
+85|
+86|When context is full:
+87|1. **Observation masking**: Remove intermediate tool outputs, keep final results
+88|2. **Knowledge consolidation**: LLM summarizes key facts into persistent "Knowledge" block
+89|3. **Trigger-based**: Consolidate on context bloat detection, not just timer
+90|
+91|### Novel Contribution
+92|**Reversible Eviction with Resurrection Probability**: A context management system that (a) stores structured typed payloads as MessagePack/TOON in PostgreSQL, (b) uses 2-tier eviction (hot → archive, byte-exact), (c) retrieves archived context via embedding similarity to current task, and (d) measures resurrection probability as a function of time since eviction and semantic similarity to current context.
+93|
+94|**Evaluation**: LoCoMo + SWE-bench Verified, measuring token efficiency, task success rate, and resurrection hit rate.
+95|
+96|---
+97|
+98|## Gap 2: Multi-Agent Shared Memory with Identity Propagation Defense
+99|
+100|### Original Problem
+101|When agents share context, identity drift propagates via shared context. No system contains identity drift or validates shared memories.
+102|
+103|### Current State Assessment
+104|
+105|| Component | Status | Gap |
+106||-----------|--------|-----|
+107|| `agent_messages` table | Cross-agent messaging | Identity gating shipped via `IdentityGate` on memory writes; no per-message validation |
+108|| `AgentDef` (ah/core/agent_def.py) | Static persona definitions | Belief model shipped (`AgentBelief`, `IdentityGate`) |
+109|| `Orchestrator` (ah/core/orchestrator.py) | Sequential/parallel delegation | No shared memory bus (still open) |
+110|| `memory_store` | Per-agent memories | `IdentityGate.validate_incoming` validates writes (shipped) |
+111|
+112|### Research Findings
+113|
+114|- **ID-RAG**: Identity drift causes self-perpetuating hallucinations in shared-context multi-agent systems
+115|- **CogniPair**: Pairwise agent collaboration with explicit belief alignment
+116|- **A2A protocol** (Linux Foundation): Agent-to-agent communication standard with capability discovery
+117|- **MCP** (Anthropic): Tool access standard
+118|
+119|### Concrete Implementation Plan
+120|
+121|#### Phase 2A: Agent Identity Model (Belief Graph)
+122|
+123|```python
+124|@dataclass
+125|class AgentBelief:
+126|    """An agent's current belief state for identity consistency checking."""
+127|    agent_id: str
+128|    known_facts: dict[str, float]  # fact -> confidence
+129|    traits: dict[str, float]  # trait -> strength
+130|    values: dict[str, float]  # value -> importance
+131|    updated_at: datetime
+132|
+133|class IdentityGate:
+134|    """Validates shared memories against agent's belief model."""
+135|    
+136|    async def validate_incoming(
+137|        self, 
+138|        agent_id: str, 
+139|        memory: MemoryEntry
+140|    ) -> ValidationResult:
+141|        """
+142|        Check:
+143|        1. Consistency with existing beliefs
+144|        2. Provenance via signed memory entries
+145|        3. Semantic relevance via embedding threshold
+146|        """
+147|```
+148|
+149|#### Phase 2B: Shared Memory Bus with Per-Agent Gating
+150|
+151|```
+152|Current: agents write to shared context_chunks (no gating)
+153|Proposed: agents write to shared bus → IdentityGate validates → agent accepts/rejects
+154|```
+155|
+156|**Schema:**
+157|```sql
+158|CREATE TABLE agent_beliefs (
+159|    agent_id TEXT PRIMARY KEY,
+160|    belief JSONB NOT NULL,  -- {known_facts, traits, values}
+161|    version INT DEFAULT 1,
+162|    updated_at TIMESTAMPTZ DEFAULT NOW()
+163|);
+164|
+165|CREATE TABLE memory_provenance (
+166|    memory_id UUID PRIMARY KEY,
+167|    source_agent TEXT NOT NULL,
+168|    signature TEXT NOT NULL,  -- HMAC of memory content
+169|    parent_memory_id UUID,  -- for lineage
+170|    created_at TIMESTAMPTZ DEFAULT NOW()
+171|);
+172|```
+173|
+174|#### Phase 2C: Drift Detection and Containment
+175|
+176|1. **Drift detection**: Compare agent beliefs before/after shared memory access
+177|2. **Containment**: If drift detected, quarantine affected memories and alert
+178|3. **Repair**: Agent can request belief realignment via explicit validation
+179|
+180|### Novel Contribution
+181|**Identity-Propagation-Resistant Shared Memory**: A shared PostgreSQL context bus where each agent maintains an explicit identity model (knowledge graph of beliefs/traits/values). Before incorporating a shared memory, the agent validates: (a) consistency with existing beliefs, (b) provenance via signed memory entries, (c) semantic relevance via embedding threshold. Evaluate drift propagation vs. baseline shared memory.
+182|
+183|**Evaluation**: Multi-agent LoCoMo with identity drift injection, measuring drift rate, containment success, and task performance.
+184|
+185|---
+186|
+187|## Gap 3: Persona-Conditioned Memory with Emotion Topology
+188|
+189|### Original Problem
+190|Current memory systems store facts neutrally. Agents retrieve surface facts but cannot reconstruct persona-conditioned interpretations.
+191|
+192|### Current State Assessment
+193|
+194|| Component | Status | Gap |
+195||-----------|--------|-----|
+196|| `memories` table | Facts + `persona_memories` interpretation layer | Persona conditioning shipped (`PersonaMemory`, `EmotionTopology`) |
+197|| `ImportanceScorer` | Multi-factor scoring (category, recency, frequency) | Emotion topology shipped (`EmotionTopology`); no emotion-modulated scoring |
+198|| `ForgettingModel` | Ebbinghaus decay | No emotion-modulated decay (still open) |
+199|| `user_profile.py` | User preferences | Not agent persona (covered by AgentDef + AgentBelief) |
+200|
+201|### Research Findings
+202|
+203|- **RoleMemo/DualMem**: Dual-stream memory (factual + persona-conditioned insight) achieves 40% improvement on role-playing tasks
+204|- **P-GEM**: Personality-emotion warping mechanism for memory retrieval
+205|- **Deep Persona**: 685B+ parameter models fail when persona cues are diluted over long context
+206|- **Mem0**: Four-layer hierarchy (interaction → session → user → global) with 26% improvement
+207|
+208|### Concrete Implementation Plan
+209|
+210|#### Phase 3A: Dual-Stream Memory Architecture
+211|
+212|```python
+213|@dataclass
+214|class PersonaMemory:
+215|    """Persona-conditioned interpretation of a factual memory."""
+216|    fact_id: UUID  # reference to factual memory
+217|    persona_id: str  # which persona this interpretation belongs to
+218|    interpretation: str  # what this fact means FOR this persona's goals
+219|    emotional_valence: float  # -1.0 to 1.0
+220|    emotional_arousal: float  # 0.0 to 1.0
+221|    confidence: float  # 0.0 to 1.0
+222|    created_at: datetime
+223|```
+224|
+225|**Schema:**
+226|```sql
+227|CREATE TABLE persona_memories (
+228|    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+229|    fact_id UUID REFERENCES memories(id) ON DELETE CASCADE,
+230|    persona_id TEXT NOT NULL,
+231|    interpretation TEXT NOT NULL,
+232|    emotional_valence FLOAT DEFAULT 0.0,
+233|    emotional_arousal FLOAT DEFAULT 0.0,
+234|    confidence FLOAT DEFAULT 0.5,
+235|    created_at TIMESTAMPTZ DEFAULT NOW(),
+236|    updated_at TIMESTAMPTZ DEFAULT NOW()
+237|);
+238|```
+239|
+240|#### Phase 3B: Emotion Topology for Memory Retrieval
+241|
+242|```python
+243|class EmotionTopology:
+244|    """Maps emotional states to memory retrieval strategies."""
+245|    
+246|    # Plutchik's wheel of emotions → retrieval weights
+247|    EMOTION_PROFILES = {
+248|        'joy': {'recency_weight': 0.8, 'importance_weight': 0.4, 'valence_bias': 0.6},
+249|        'sadness': {'recency_weight': 0.3, 'importance_weight': 0.7, 'valence_bias': -0.4},
+250|        'anger': {'recency_weight': 0.6, 'importance_weight': 0.8, 'valence_bias': -0.6},
+251|        'fear': {'recency_weight': 0.7, 'importance_weight': 0.6, 'valence_bias': -0.3},
+252|        # ... 8 basic emotions
+253|    }
+254|    
+255|    def retrieve_for_emotion(
+256|        self, 
+257|        query: str, 
+258|        current_emotion: str,
+259|        persona_id: str
+260|    ) -> list[RetrievedMemory]:
+261|        """Retrieve memories weighted by emotional state."""
+262|```
+263|
+264|#### Phase 3C: Fine-Tuned Persona Model
+265|
+266|Use a small (4B) model to generate persona-conditioned interpretations:
+267|- Input: factual memory + persona system prompt
+268|- Output: interpretation, emotional_valence, emotional_arousal, confidence
+269|- Train on LoCoMo + synthetic persona benchmarks
+270|
+271|### Novel Contribution
+272|**Persona-Conditioned Dual-Stream Memory with Emotion Topology**: A memory architecture with (a) factual store (raw events/observations as structured MessagePack), (b) insight store (persona-conditioned interpretations generated by a fine-tuned 4B model), and (c) emotion-modulated retrieval that weights memories by current emotional state using Plutchik's wheel. Evaluate role-playing quality on LoCoMo + synthetic persona benchmarks.
+273|
+274|**Evaluation**: LoCoMo with persona-specific questions, measuring persona consistency, factual accuracy, and interpretation quality.
+275|
+276|---
+277|
+278|## Gap 4: End-to-End RL for Joint Memory Management and Task Performance
+279|
+280|### Original Problem
+281|Memory-R1 trains Memory Manager and Answer Agent separately because sparse rewards destabilize joint training. No paper has achieved stable end-to-end RL where memory operations and task answering are jointly optimized.
+282|
+283|### Current State Assessment
+284|
+285|| Component | Status | Gap |
+286||-----------|--------|-----|
+287|| `MemoryConsolidator` | LLM-based extraction -> scoring -> dedup -> write | Not learned policy (research baseline exists) |
+288|| `ImportanceScorer` | Fixed weights (category, recency, frequency) | Not RL-trained (open) |
+289|| `ForgettingModel` | Ebbinghaus decay with fixed lambda | Not RL-trained (open) |
+290|| `PromptAssembler` | Budgeted prompt assembly | Not RL-trained (open) |
+291|
+292|### Research Findings
+293|
+294|- **Memory-R1** (arXiv:2508.19828): PPO/GRPO for memory ops (ADD/UPDATE/DELETE/NOOP), 152 training examples achieve SOTA
+295|- **Agentic Memory** (Yu et al., 2026): Three-stage RL pipeline with step-wise GRPO, outperforms all baselines on 5 benchmarks
+296|- **Nous** (arXiv:2606.22030): Bayesian belief update as training signal
+297|- **ReMemR1**: RL with Multi-Level Rewards (RLMLR) — trajectory + step-level rewards
+298|
+299|### Concrete Implementation Plan
+300|
+301|#### Phase 4A: Define Memory Operations as RL Actions
+302|
+303|```python
+304|class MemoryAction(Enum):
+305|    STORE = "store"      # Add to memory
+306|    UPDATE = "update"    # Update existing memory
+307|    DELETE = "delete"    # Delete memory
+308|    SUMMARIZE = "summarize"  # Consolidate into summary
+309|    RETRIEVE = "retrieve"  # Search and inject
+310|    NOOP = "noop"        # No memory operation
+311|
+312|@dataclass
+313|class MemoryState:
+314|    """State representation for RL."""
+315|    conversation: list[dict]  # recent messages
+316|    current_memory: list[MemoryEntry]  # current memory state
+317|    task: str  # current task/goal
+318|    budget_remaining: int  # token budget
+319|
+320|@dataclass
+321|class MemoryDecision:
+322|    action: MemoryAction
+323|    target_id: UUID | None  # memory to update/delete
+324|    content: str | None  # content to store
+325|    importance: float  # importance score if storing
+326|```
+327|
+328|#### Phase 4B: Multi-Level Reward Design
+329|
+330|```python
+331|class MemoryReward:
+332|    """Multi-level reward for memory operations."""
+333|    
+334|    def compute_step_reward(
+335|        self, 
+336|        action: MemoryAction, 
+337|        state: MemoryState, 
+338|        outcome: Any
+339|    ) -> float:
+340|        """Dense step-level reward for memory operation correctness."""
+341|        if action == MemoryAction.STORE:
+342|            # Reward for storing relevant, non-redundant facts
+343|            return self._relevance_score(outcome) - self._redundancy_penalty(outcome)
+344|        elif action == MemoryAction.DELETE:
+345|            # Reward for deleting irrelevant/stale memories
+346|            return self._staleness_score(outcome)
+347|        # ...
+348|    
+349|    def compute_trajectory_reward(
+350|        self, 
+351|        task_success: bool, 
+352|        memory_operations: list[MemoryDecision]
+353|    ) -> float:
+354|        """Sparse trajectory-level reward for task completion."""
+355|        return 1.0 if task_success else -0.1
+356|    
+357|    def compute_consistency_reward(
+358|        self, 
+359|        persona_consistency: float
+360|    ) -> float:
+361|        """Intermediate persona-consistency reward."""
+362|        return persona_consistency * 0.1
+363|```
+364|
+365|#### Phase 4C: GRPO Training Pipeline
+366|
+367|1. **Data collection**: Run agent on LoCoMo with random memory policies
+368|2. **Reward labeling**: Score each memory operation with multi-level rewards
+369|3. **GRPO training**: Train 7B model with step-wise GRPO
+370|4. **Evaluation**: LoCoMo + LongMemEval + MSC
+371|
+372|### Novel Contribution
+373|**End-to-End Joint RL for Memory and Task**: A training pipeline that jointly optimizes memory operations and task answering using GRPO with multi-level rewards: (a) dense step-level rewards for memory operation correctness, (b) sparse trajectory rewards for task completion, (c) intermediate persona-consistency rewards. Leverage Nous's Bayesian belief update as a training signal. The key novelty is demonstrating stable end-to-end training where memory operations and task answering are jointly optimized, overcoming the reward sparsity that forced Memory-R1 to train separately.
+374|
+375|**Evaluation**: LoCoMo + LongMemEval + MSC, measuring task success rate, memory F1, and training stability vs. separate training baseline.
+376|
+377|---
+378|
+379|## Gap 5: Open Standard for Agent Configuration (SoulSpec)
+380|
+381|### Original Problem
+382|No standardized structure for agent configuration. AGENTS.md files, identity definitions, voice, and behavioral guidelines are scattered across ad-hoc system prompts.
+383|
+384|### Current State Assessment
+385|
+386|| Component | Status | Gap |
+387||-----------|--------|-----|
+388|| `AgentDef` (ah/core/agent_def.py) | Persona + YAML/DB/Soul Spec sources | Soul Spec merge/conformance/adapters shipped |
+389|| `Skill` (ah/skills/registry.py) | SKILL.md with YAML frontmatter | Cross-framework compat still needs target-framework runs |
+390|| `BUILTIN_AGENTS` | Hardcoded harness/researcher/coder | Importable from YAML/Soul Spec packages; not all portable |
+391|
+392|### Research Findings
+393|
+394|- **Soul Spec** ([official v0.5 specification](https://github.com/clawsouls/soulspec/blob/main/soul-spec-v0.5.md)): Defines `soul.json` and `SOUL.md` package structure. The previously cited arXiv:2510.21413 is an unrelated context engineering paper.
+395|- **AGENTS.md** standard: De facto standard, 75.5% cross-org propagation
+396|- **SoulSpec v0.5**: Persona + workflow + skill manifests with 3-level progressive disclosure
+397|- **Supply chain risk**: Agent configs are undeclared shared components (<1% permission declarations)
+398|
+399|### Concrete Implementation Plan
+400|
+401|#### Phase 5A: SoulSpec Schema
+402|
+403|```yaml
+404|# soulspec.yaml
+405|name: "Harness Agent"
+406|version: "1.0.0"
+407|persona:
+408|  name: "Harness"
+409|  description: "General-purpose AI agent"
+410|  values:
+411|    - name: "accuracy"
+412|      weight: 0.9
+413|    - name: "helpfulness"
+414|      weight: 0.8
+415|  traits:
+416|    - name: "analytical"
+417|      strength: 0.8
+418|  voice:
+419|    tone: "professional"
+420|    style: "concise"
+421|  system_prompt: |
+422|    You are {name}. {description}
+423|    Core values: {values}
+424|    Communication style: {voice.style}
+425|
+426|workflow:
+427|  - name: "code-review"
+428|    description: "Review code for issues"
+429|    steps:
+430|      - "read_file"
+431|      - "analyze"
+432|      - "suggest_fixes"
+433|    tools: ["read_file", "search_files"]
+434|  
+435|skills:
+436|  - name: "python-expert"
+437|    triggers: ["python", "pytest", "django"]
+438|    path: "skills/python-expert.md"
+439|    progressive_disclosure:
+440|      level: 2  # load on demand
+441|
+442|config:
+443|  model: "anthropic/claude-3.5-sonnet"
+444|  max_iterations: 10
+445|  context_budget: 8000
+446|```
+447|
+448|#### Phase 5B: Merge Semantics
+449|
+450|```python
+451|class SoulSpecMerger:
+452|    """Merge multiple SoulSpec configurations."""
+453|    
+454|    def merge(self, base: SoulSpec, override: SoulSpec) -> SoulSpec:
+455|        """
+456|        Merge rules:
+457|        1. Scalar fields: override wins
+458|        2. Lists: union with deduplication
+459|        3. Dicts: recursive merge
+460|        4. System prompts: concatenate with separator
+461|        5. Permissions: intersection (most restrictive wins)
+462|        """
+463|```
+464|
+465|#### Phase 5C: Conformance Test Suite
+466|
+467|```python
+468|class SoulSpecConformance:
+469|    """Test that a SoulSpec conforms to the standard."""
+470|    
+471|    def validate_schema(self, spec: SoulSpec) -> ValidationResult:
+472|        """Validate against JSON Schema."""
+473|    
+474|    def test_merge_semantics(self) -> None:
+475|        """Test that merge works correctly."""
+476|    
+477|    def test_progressive_disclosure(self) -> None:
+478|        """Test that skills load at correct disclosure level."""
+479|    
+480|    def test_cross_framework_portability(self) -> None:
+481|        """Test that config can be exported to other frameworks."""
+482|```
+483|
+484|#### Phase 5D: Adapters
+485|
+486|```python
+487|class AgentHarnessAdapter:
+488|    """Export AgentHarness config to SoulSpec."""
+489|    
+490|    def to_soulspec(self, agent_def: AgentDef) -> SoulSpec:
+491|        """Convert AgentDef to SoulSpec YAML."""
+492|    
+493|    def from_soulspec(self, spec: SoulSpec) -> AgentDef:
+494|        """Import SoulSpec YAML to AgentDef."""
+495|
+496|class ClaudeCodeAdapter:
+497|    """Export SoulSpec to Claude Code CLAUDE.md format."""
+498|
+499|class CodexAdapter:
+500|    """Export SoulSpec to Codex AGENTS.md format."""
+501|```
+502|
+503|### Novel Contribution
+504|**SoulSpec: Open Standard for Agent Configuration**: Formalize SoulSpec as an open standard with: (a) YAML/JSON schema for agent configuration (name, voice, values, behavioral guidelines, AGENTS.md consolidation), (b) merge semantics for configuration inheritance/mixins, (c) conformance test suite (rule-based + LLM-judge), (d) adapters for Hermes, Claude Code, Codex, AgentHarness. Empirically measure configuration portability across frameworks.
+505|
+506|**Evaluation**: Configuration portability test across 5 frameworks, measuring migration cost, feature coverage, and conformance test pass rate.
+507|
+508|---
+509|
+510|## Integration with Existing Infrastructure
+511|
+512|### What We Have (Leverage)
+513|
+514|| Infrastructure | Research Gap | How It Helps |
+515||----------------|-------------|--------------|
+516|| `context_chunks` + pgvector | Gap 1 | Foundation for reversible eviction |
+517|| `llm_usage` + advisory locks | Gap 1, 4 | Token tracking for RL rewards |
+518|| `memories` + importance scoring | Gap 3 | Factual store for dual-stream memory |
+519|| `AgentDef` + registry | Gap 5 | Foundation for SoulSpec |
+520|| `Skill` + triggers | Gap 5 | Progressive disclosure model |
+521|| `Orchestrator` | Gap 2 | Multi-agent coordination base |
+522|| `agent_messages` | Gap 2 | Cross-agent messaging |
+523|| `audit_events` | Gap 2 | Provenance tracking |
+524|| `usage_store` budgets | Gap 4 | Reward signal for RL |
+525|
+526|### What We Build (Novel)
+527|
+528|| Component | Research Gap | Novelty |
+529||-----------|-------------|---------|
+530|| `context_archive` + resurrection | Gap 1 | Reversible eviction with resurrection probability |
+531|| TOON serialization | Gap 1 | Token-optimized context storage |
+532|| `AgentBelief` + `IdentityGate` | Gap 2 | Identity propagation defense |
+533|| `persona_memories` + `EmotionTopology` | Gap 3 | Persona-conditioned dual-stream memory |
+534|| `MemoryAction` + GRPO training | Gap 4 | End-to-end joint RL for memory + task |
+535|| `SoulSpec` schema + merge + adapters | Gap 5 | Open standard for agent configuration |
+536|
+537|---
+538|
+539|## Implementation Roadmap
+540|
+541|### Phase 1: Foundation (Weeks 1-4)
+542|- [ ] Gap 1A: Two-tier eviction with archive
+543|- [ ] Gap 5A: SoulSpec schema definition
+544|- [ ] Gap 2A: Agent identity model data structures
+545|
+546|### Phase 2: Core Systems (Weeks 5-8)
+547|- [ ] Gap 1B: TOON serialization
+548|- [ ] Gap 2B: Shared memory bus with per-agent gating
+549|- [ ] Gap 3A: Dual-stream memory architecture
+550|- [ ] Gap 5B: Merge semantics
+551|
+552|### Phase 3: Advanced Features (Weeks 9-12)
+553|- [ ] Gap 1C: Adaptive compression
+554|- [ ] Gap 2C: Drift detection and containment
+555|- [ ] Gap 3B: Emotion topology
+556|- [ ] Gap 4A: RL action space definition
+557|- [ ] Gap 5C: Conformance test suite
+558|
+559|### Phase 4: Training & Evaluation (Weeks 13-16)
+560|- [ ] Gap 3C: Fine-tuned persona model
+561|- [ ] Gap 4B: Multi-level reward design
+562|- [ ] Gap 4C: GRPO training pipeline
+563|- [ ] Gap 5D: Cross-framework adapters
+564|
+565|### Phase 5: Publication (Weeks 17-20)
+566|- [ ] LoCoMo + SWE-bench evaluation (Gap 1)
+567|- [ ] Multi-agent drift evaluation (Gap 2)
+568|- [ ] Persona benchmark evaluation (Gap 3)
+569|- [ ] RL training stability evaluation (Gap 4)
+570|- [ ] Configuration portability evaluation (Gap 5)
+571|
+572|---
+573|
+574|## Connection to Original Research Papers
+575|
+576|| Gap | Key Papers | What We Take | What's New |
+577||-----|-----------|--------------|------------|
+578|| 1 | Blast Radius, Focus, MemAgent | 2-tier eviction, LLM summarization | Resurrection probability, TOON format |
+579|| 2 | ID-RAG, SAMEP, CogniPair | Belief models, provenance | Identity gate, drift containment |
+580|| 3 | RoleMemo/DualMem, P-GEM | Dual-stream, emotion warping | Emotion topology, Plutchik's wheel |
+581|| 4 | Memory-R1, Nous, ReMemR1 | RL for memory, multi-level rewards | End-to-end joint optimization |
+582|| 5 | SoulSpec, AGENTS.md | Configuration format | Merge semantics, conformance testing |
+583|
+584|---
+585|
+586|## Risk Assessment
+587|
+588|| Gap | Risk | Mitigation |
+589||-----|------|------------|
+590|| 1 | Resurrection may not improve task success | Evaluate on LoCoMo first; fall back to simpler eviction |
+591|| 2 | Identity gate may block legitimate memories | Start with permissive threshold, tighten based on evaluation |
+592|| 3 | Persona model may not generalize | Use multiple personas; evaluate on diverse benchmarks |
+593|| 4 | RL training may be unstable | Start with supervised warm-start; use conservative GRPO settings |
+594|| 5 | Standard may not be adopted | Focus on adapters; demonstrate portability value |
+595|
+596|---
+597|
+598|## Success Criteria
+599|
+600|Each gap must demonstrate:
+601|1. **Novelty**: A clear contribution beyond existing work
+602|2. **Evaluation**: Quantitative improvement on standard benchmarks
+603|3. **Reproducibility**: Open-source implementation with tests
+604|4. **Impact**: Measurable improvement over baseline systems
+605|
+606|---
+607|
+608|*This document is a living blueprint. Update as research progresses and implementation reveals new insights.*
+609|

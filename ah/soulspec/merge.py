@@ -21,7 +21,7 @@ class SoulSpecMerger:
         """Merge override into base, returning a new SoulSpec."""
         # Scalar fields: override wins
         name = override.name if override.name else base.name
-        version = override.version if override.version != "1.0.0" else base.version
+        version = override.version if override.version is not None else base.version
 
         # Persona: recursive merge
         persona = SoulSpecMerger._merge_persona(base.persona, override.persona)
@@ -166,10 +166,10 @@ class SoulSpecMerger:
         return SoulSpec.Config(
             model=override.model if override.model else base.model,
             max_iterations=override.max_iterations
-            if override.max_iterations != 10
+            if override.max_iterations is not None
             else base.max_iterations,
             context_budget=override.context_budget
-            if override.context_budget != 8000
+            if override.context_budget is not None
             else base.context_budget,
             permissions=permissions,
         )

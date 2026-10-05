@@ -87,7 +87,9 @@ def load_locomo(path: str | Path) -> tuple[Conversation, ...]:
                 if not isinstance(entry, str):
                     raise ValueError("evidence ID must be a string")
                 # A few official records join multiple IDs with spaces or semicolons.
-                identifiers = re.findall(r"D\d+:\d+", entry)
+                # Match evidence IDs like D1:1 first so they are not split
+                # into partial matches ("1:1", "D1").
+                identifiers = re.findall(r"\bD?\d+:\d+\b", entry)
                 normalized.extend(identifiers or [entry])
             questions.append(Question(qa["question"], tuple(normalized), qa.get("category")))
         conversations.append(Conversation(tuple(turns), tuple(questions)))
@@ -227,12 +229,16 @@ async def evaluate_session_recall(
     *,
     k: int = 5,
     turns_per_session: int = 50,
+    title_only: bool = False,
 ) -> tuple[RetrievalMetrics, float]:
     """Score production cross-session recall over temporary archived transcripts.
 
     Each conversation gets a unique agent; its turns are partitioned into
     separate sessions. Cleanup removes both sessions and their archive rows.
     Returns evidence metrics and mean query latency in milliseconds.
+
+    With ``title_only=True`` only session-title hits are scored — the
+    title-only baseline used to show what transcript search adds.
     """
     if not 1 <= k <= 100:
         raise ValueError("k must be between 1 and 100")
@@ -253,9 +259,7 @@ async def evaluate_session_recall(
         identifiers: dict[uuid.UUID, str] = {}
         try:
             for offset in range(0, len(conversation.turns), turns_per_session):
-                session = await session_manager.create(
-                    title="LoCoMo transcript", agent_id=agent_id
-                )
+                session = await session_manager.create(title="LoCoMo transcript", agent_id=agent_id)
                 session_ids.append(session.id)
                 for turn in conversation.turns[offset : offset + turns_per_session]:
                     chunk_id = uuid.uuid4()
@@ -273,6 +277,8 @@ async def evaluate_session_recall(
                 started = time.perf_counter()
                 hits = await recall.discover(agent_id, question.text, limit=k)
                 query_seconds.append(time.perf_counter() - started)
+                if title_only:
+                    hits = [hit for hit in hits if hit.source == "title"]
                 rankings.append(
                     [identifiers[hit.chunk_id] for hit in hits if hit.chunk_id in identifiers]
                 )
@@ -292,7 +298,9 @@ def main() -> None:
     parser.add_argument("dataset", help="Path to official locomo10.json")
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument(
-        "--backend", choices=("lexical", "archive", "session-recall"), default="lexical"
+        "--backend",
+        choices=("lexical", "archive", "session-recall", "title-only"),
+        default="lexical",
     )
     parser.add_argument("--db-url", help="Initialized PostgreSQL DSN for archive backend")
     parser.add_argument(
@@ -305,7 +313,7 @@ def main() -> None:
         if args.max_conversations < 1:
             parser.error("--max-conversations must be positive")
         conversations = conversations[: args.max_conversations]
-    if args.backend in ("archive", "session-recall"):
+    if args.backend in ("archive", "session-recall", "title-only"):
         if args.db_url and args.test_db:
             parser.error("use either --db-url or --test-db")
         database_url = args.db_url
@@ -326,6 +334,8 @@ def main() -> None:
             try:
                 if args.backend == "session-recall":
                     return await evaluate_session_recall(conversations, k=args.k)
+                if args.backend == "title-only":
+                    return await evaluate_session_recall(conversations, k=args.k, title_only=True)
                 return await evaluate_archive_retrieval(conversations, k=args.k), None
             finally:
                 await db.close()

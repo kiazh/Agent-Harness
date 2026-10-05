@@ -257,12 +257,14 @@ class TestMemoryApprovalGate:
         with patch("ah.memory.approval.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value={"status": "pending"})
             mock_db.execute = AsyncMock(return_value="UPDATE 1")
+            _transactional_connection(mock_db)
             result = await gate.reject(uuid.uuid4())
             assert result is True
 
     async def test_reject_already_reviewed(self, gate, mock_db):
         with patch("ah.memory.approval.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value={"status": "approved"})
+            _transactional_connection(mock_db)
             result = await gate.reject(uuid.uuid4())
             assert result is False
 

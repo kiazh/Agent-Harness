@@ -23,7 +23,6 @@ __all__ = [
     "CompressionResult",
     "ContextCompressor",
     "RollingCompaction",
-    "compress_context_chunks",
 ]
 
 logger = logging.getLogger(__name__)

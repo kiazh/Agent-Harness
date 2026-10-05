@@ -1,4 +1,5 @@
 """Tests for memory system bug fixes."""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,6 +15,7 @@ from ah.memory import (
     MemoryEntry,
     MemoryRetriever,
     MemoryStore,
+    RetrievedMemory,
 )
 from ah.memory.approval import MemoryApprovalGate
 from ah.memory.identity import ValidationResult
@@ -91,7 +93,7 @@ class TestRejectRaceCondition:
         with patch("ah.memory.approval.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value={"status": "approved"})
             mock_db.execute = AsyncMock(return_value="UPDATE 0")
-            conn = _transactional_connection(mock_db)
+            _transactional_connection(mock_db)
             result = await gate.reject(uuid.uuid4())
             assert result is False
 
@@ -118,15 +120,22 @@ class TestStoreAddSourceAgent:
         return mock
 
     async def test_add_validates_against_source_agent(self, store, mock_db):
-        """Verify that when source_agent is provided, validation uses source_agent."""
+        """Verify that a shared write is validated as the owning agent.
+
+        The memory stays attributed to the source (agent_b), so the gate's
+        cross-agent check sees agent_b != agent_a and demands provenance.
+        Unsigned deliveries are then quarantined instead of accepted.
+        """
         with patch("ah.memory.store.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=_make_row())
 
             captured_agent_id = None
+            captured_memory_agent = None
 
-            async def mock_validate(agent_id, *args, **kwargs):
-                nonlocal captured_agent_id
+            async def mock_validate(agent_id, memory, *args, **kwargs):
+                nonlocal captured_agent_id, captured_memory_agent
                 captured_agent_id = agent_id
+                captured_memory_agent = memory.agent_id
                 return ValidationResult(is_valid=True, confidence=0.9, reason="OK")
 
             with patch("ah.memory.store.identity_gate") as mock_gate:
@@ -139,8 +148,10 @@ class TestStoreAddSourceAgent:
                     source_agent="agent_b",
                 )
                 assert entry is not None
-                # The validation should use source_agent, not agent_id
-                assert captured_agent_id == "agent_b"
+                # The gate decides for the owner (agent_a) while the memory
+                # stays attributed to the source (agent_b).
+                assert captured_agent_id == "agent_a"
+                assert captured_memory_agent == "agent_b"
 
 
 # ===========================================================================
@@ -168,7 +179,7 @@ class TestGetWeakMemoriesQuarantined:
         """Verify get_weak_memories() filters out quarantined memories."""
         with patch("ah.memory.store.db", mock_db):
             mock_db.fetch = AsyncMock(return_value=[_make_row(importance=0.02)])
-            entries = await store.get_weak_memories(threshold=0.05)
+            await store.get_weak_memories(threshold=0.05)
             # Verify the query includes quarantined = FALSE
             call_args = mock_db.fetch.call_args
             assert call_args is not None
@@ -179,7 +190,7 @@ class TestGetWeakMemoriesQuarantined:
         """Verify get_weak_memories() with agent filter also filters quarantined."""
         with patch("ah.memory.store.db", mock_db):
             mock_db.fetch = AsyncMock(return_value=[_make_row(importance=0.02)])
-            entries = await store.get_weak_memories(threshold=0.05, agent_id="harness")
+            await store.get_weak_memories(threshold=0.05, agent_id="harness")
             call_args = mock_db.fetch.call_args
             assert call_args is not None
             query = call_args[0][0]
@@ -269,7 +280,7 @@ class TestRerankTimeout:
         ]
 
         # Patch asyncio.wait_for to verify it's called
-        with patch("ah.memory.retriever.asyncio.wait_for", side_effect=asyncio.TimeoutError()) as mock_wait:
+        with patch("ah.memory.retriever.asyncio.wait_for", side_effect=TimeoutError()) as mock_wait:
             result = await retriever._rerank("test", candidates)
             # Should fall back to original candidates on timeout
             assert result == candidates
@@ -296,7 +307,7 @@ class TestKeywordSearchFTS:
         return store
 
     async def test_keyword_search_uses_fts(self, retriever, mock_store):
-        """Verify keyword search uses FTS instead of ILIKE."""
+        """Verify keyword search uses FTS with an ILIKE fallback for partial tokens."""
         retriever.store = mock_store
 
         mock_db = AsyncMock()
@@ -309,9 +320,9 @@ class TestKeywordSearchFTS:
             call_args = mock_db.fetch.call_args
             assert call_args is not None
             query = call_args[0][0]
-            # Should use FTS (to_tsvector, tsquery, etc.) instead of ILIKE
-            assert "ILIKE" not in query
-            assert "to_tsvector" in query or "tsquery" in query or "plainto_tsquery" in query
+            assert "to_tsvector" in query
+            # ILIKE stays as the fallback for partial-length lexemes.
+            assert "ILIKE" in query
 
 
 # ===========================================================================

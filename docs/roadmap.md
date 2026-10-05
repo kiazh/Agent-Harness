@@ -37,7 +37,15 @@ ah/
 │   ├── metrics.py       # MetricsCollector (latency, counters, errors, tokens)
 │   ├── exceptions.py    # Custom exception hierarchy
 │   ├── serialization.py # Shared serialization utilities
-│   └── session.py       # SessionManager with TTLCache
+│   ├── session.py       # SessionManager with TTLCache
+│   ├── agent_def.py     # AgentDef personas (DB/YAML/Soul Spec/builtin)
+│   ├── orchestrator.py  # Sequential/parallel delegation
+│   ├── scheduler.py     # JobStore + JobRunner
+│   ├── usage.py         # Durable llm_usage accounting and budgets
+│   ├── cron.py          # Five-field UTC cron parser
+│   ├── job_scripts.py   # User-managed scripts for script-only jobs
+│   ├── session_recall.py # Agent-scoped transcript evidence discovery
+│   └── text_search.py   # Shared bounded OR-tsquery builder
 ├── db/
 │   ├── connection.py    # asyncpg pool
 │   └── schema.sql       # sessions, context_chunks, context_archive, memories,
@@ -51,9 +59,12 @@ ah/
 │   ├── terminal.py      # terminal (allowlist + SSRF protection)
 │   ├── memory.py        # remember, recall
 │   ├── rag.py           # index_document, search_documents
+│   ├── agents.py        # delegate, list_agents
+│   ├── session_recall.py # session_recall, session_recall_window
 │   └── registry.py      # Re-export for backward compat
 ├── skills/
-│   └── registry.py      # SkillParser + SkillRegistry (SKILL.md + YAML frontmatter)
+│   ├── registry.py      # SkillParser + SkillRegistry (SKILL.md + YAML frontmatter)
+│   └── learning.py      # Opt-in post-turn skill proposals and reviews
 ├── memory/
 │   ├── models.py        # MemoryEntry, RetrievedMemory
 │   ├── store.py         # MemoryStore (CRUD)
@@ -63,6 +74,7 @@ ah/
 │   ├── forgetting.py    # ForgettingModel (Ebbinghaus decay)
 │   ├── approval.py      # MemoryApprovalGate (human-in-the-loop approval)
 │   ├── redaction.py     # SecretRedactor (PII/secret redaction)
+│   ├── shared_bus.py    # Gated cross-agent memory delivery with quarantine
 │   ├── user_profile.py  # UserProfileStore (per-user preferences)
 │   ├── identity.py      # IdentityGate + belief provenance/drift containment
 │   ├── persona.py       # PersonaMemoryStore + EmotionTopology

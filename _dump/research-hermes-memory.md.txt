@@ -1,0 +1,574 @@
+1|# Hermes Agent Memory & Procedural Memory System — Research
+2|
+3|> **Status:** Research document for AgentHarness improvement.
+4|> **Source:** Hermes Agent v2026.x (Nous Research), official docs, GitHub source, and community analysis.
+5|> **Date:** 2026-10-01
+6|
+7|---
+8|
+9|## 1. Architecture Overview
+10|
+11|Hermes Agent implements a **four-layer memory architecture** that separates concerns by persistence scope and retrieval mechanism:
+12|
+13|```
+14|┌─────────────────────────────────────────────────────────┐
+15|│ Layer 4: Procedural Memory                              │
+16|│   Skills — reusable task knowledge, auto-created        │
+17|│   Location: $HERMES_HOME/skills/                    │
+18|│   Trigger: Background review after complex tasks        │
+19|├─────────────────────────────────────────────────────────┤
+20|│ Layer 3: Long-Term Semantic Memory                      │
+21|│   Session Search — FTS5 full-text search + LLM summary  │
+22|│   Location: ~/.hermes/state.db (SQLite WAL)             │
+23|│   Trigger: On-demand via session_search tool            │
+24|├─────────────────────────────────────────────────────────┤
+25|│ Layer 2: Persistent Declarative Memory                  │
+26|│   MEMORY.md + USER.md — structured facts & profiles     │
+27|│   Location: ~/.hermes/memories/                          │
+28|│   Trigger: Background review every N turns              │
+29|├─────────────────────────────────────────────────────────┤
+30|│ Layer 1: External Memory Plugins                        │
+31|│   Honcho, mem0, Supermemory, Hindsight, etc.            │
+32|│   Location: Cloud or self-hosted                        │
+33|│   Trigger: Provider-specific (auto or tool-called)      │
+34|└─────────────────────────────────────────────────────────┘
+35|```
+36|
+37|The key design insight: **each layer has a different cost/latency/fidelity tradeoff**, and the agent uses them in combination. Layer 2 is always-on and free; Layer 3 is free and on-demand; Layer 1 is optional and adds depth; Layer 4 captures reusable procedures.
+38|
+39|---
+40|
+41|## 2. Agent-Curated Memory with Periodic Nudges
+42|
+43|### 2.1 The Two-File System
+44|
+45|Hermes uses two bounded markdown files at `~/.hermes/memories/`:
+46|
+47|| File | Purpose | Char Limit | ~Tokens | Typical Entries |
+48||---|---|---|---|---|
+49|| **MEMORY.md** | Agent's personal notes — environment facts, project conventions, tool quirks, things learned | 2,200 chars | ~800 | 8–15 entries |
+50|| **USER.md** | User profile — preferences, communication style, expectations, workflow habits | 1,375 chars | ~500 | 5–10 entries |
+51|
+52|**Key design decisions:**
+53|
+54|- **Bounded, not auto-compacting.** When a write would exceed the limit, the `memory` tool returns an error with current entries and usage. The agent must consolidate or remove entries itself in the same turn. This forces prioritization.
+55|- **Character limits, not token limits.** Char counts are model-independent and deterministic.
+56|- **Entry delimiter: `§` (section sign).** Entries can be multiline.
+57|- **Frozen snapshot pattern.** Both files are loaded into the system prompt once at session start. Mid-session writes update disk immediately but do NOT change the active system prompt — this preserves the LLM's prefix cache for the entire session. The snapshot refreshes on next session start.
+58|
+59|### 2.2 The Memory Tool
+60|
+61|A single `memory` tool with three actions:
+62|
+63|| Action | Behavior |
+64||---|---|
+65|| `add` | Append a new entry. Rejects exact duplicates. Returns error if over limit. |
+66|| `replace` | Overwrite the **whole matched entry** with new content. `old_text` only locates the entry via substring match — it is not cut out and replaced. New content must be the complete new entry. |
+67|| `remove` | Remove an entry by substring match. |
+68|
+69|**No read action** — memory content is automatically injected into the system prompt at session start. The agent sees its memories as part of its conversation context.
+70|
+71|**Substring matching:** `replace` and `remove` use short unique substring matching. If the substring matches multiple entries, an error is returned asking for a more specific match.
+72|
+73|**Security:** Memory content is scanned at write time with the "strict" (broadest) threat-pattern set. This is write-time filtering, not read-time — a deliberate tradeoff that is cheaper per turn and cache-friendly.
+74|
+75|**External drift detection:** The system detects if files were modified outside the tool (round-trip mismatch or single entry exceeding the whole-file limit). On detection, it writes a timestamped `.bak` snapshot and refuses the mutation.
+76|
+77|### 2.3 The Nudge Mechanism — Evolution
+78|
+79|The nudge mechanism has evolved through three phases:
+80|
+81|#### Phase 1: Inline Nudges (Original)
+82|
+83|Nudges were appended directly to user messages:
+84|
+85|```python
+86|# In run_conversation(), every 10 user turns:
+87|user_message += "\n\n[System: You've had several exchanges. Consider: has the user shared preferences, corrected you, or revealed something about their workflow worth remembering for future sessions?]"
+88|```
+89|
+90|**Problem:** In long sessions, 33–75% of user messages contained system instructions that weren't part of what the user actually said. These backward-looking directives competed with the user's forward-looking task at every transition point.
+91|
+92|#### Phase 2: API-Call-Time Injection
+93|
+94|Nudges were injected at API-call time only, never persisted to history. This fixed the pollution but still competed for the model's attention within the same inference call.
+95|
+96|#### Phase 3: Background Review Fork (Current)
+97|
+98|The nudge was replaced entirely by a **background review agent** that runs AFTER the main agent finishes responding:
+99|
+100|1. After the agent finishes responding, check if nudge trigger conditions are met (every N user turns for memory, after N+ tool iterations for skills).
+101|2. If triggered, snapshot the current conversation history (read-only copy).
+102|3. Spawn a background thread with a focused prompt: "Review this conversation. Save any user preferences or corrections to memory. If a reusable workflow was completed, save or update a skill."
+103|4. The background call uses the **same main model** (not auxiliary — skills/memory are high-value, high-precision tasks) with only `memory` and `skill_manage` tools enabled.
+104|5. Writes directly to the memory/skill stores. No output to the user. No messages added to the main conversation.
+105|6. Main agent never sees a nudge. User's next message is processed with full attention on their request.
+106|
+107|**Key properties:**
+108|- **Zero attention conflict.** The main agent focuses entirely on the user's task.
+109|- **Zero latency impact.** Runs in a background thread after the response is delivered.
+110|- **Same token cost.** Processes the same context, just on a separate track.
+111|- **Cleaner history.** No system instructions polluting user messages.
+112|- **Better quality.** A dedicated prompt for "review and save" produces better memory/skill decisions than a hint appended to an unrelated user message.
+113|
+114|### 2.4 Trigger Conditions
+115|
+116|| Trigger | Default | Unit | What It Counts |
+117||---|---|---|---|
+118|| Memory review | Every 10 user turns | `run_conversation()` calls | Top-level user prompts |
+119|| Skill review | After 10+ tool iterations | Tool-calling iterations | Agent loop iterations |
+120|
+121|**Important nuance:** The memory nudge counts user turns, not tool iterations. This was identified as a potential issue (#94226) — in modern agentic usage, a single user prompt can drive tens of model/tool iterations, so an entire working session of durable corrections can sit inside what the counter sees as 1–2 turns. The skill side already uses tool iterations.
+122|
+123|**Suppression behavior:** When the model calls the `memory` tool itself (proactive write), the turn counter resets to 0. Proactive memory writes *suppress* the scheduled review rather than complement it.
+124|
+125|### 2.5 Background Review Implementation Details
+126|
+127|The background review fork:
+128|- Shares the parent's `session_id` for prompt-cache warmth
+129|- Has `_persist_disabled = True` — never writes to the session DB (prevents the review from injecting messages into the user's real session)
+130|- Has `_memory_nudge_interval = 0` and `_skill_nudge_interval = 0` — no recursive reviews
+131|- Uses a thread-scoped tool whitelist: only `memory` and `skills` tools are allowed
+132|- Runs with `max_iterations=16` (bounded)
+133|- Captures successful tool actions and surfaces a compact summary: `"💾 Self-improvement review: ..."`
+134|- If routed to a different model, replays a digest instead of the full snapshot (cache is cold anyway)
+135|
+136|### 2.6 Configuration
+137|
+138|```yaml
+139|# In ~/.hermes/config.yaml
+140|memory:
+141|  memory_enabled: true
+142|  user_profile_enabled: true
+143|  memory_char_limit: 2200    # ~800 tokens
+144|  user_char_limit: 1375      # ~500 tokens
+145|  write_approval: false      # false = write freely | true = require approval
+146|  nudge_interval: 10         # turns between consolidation nudges
+147|  flush_min_turns: 6         # minimum turns before a flush is allowed (legacy, now removed)
+148|  provider: builtin          # builtin | honcho | mem0 | supermemory | retaindb | hindsight | byterover | holographic | openviking
+149|```
+150|
+151|Setting both `memory_enabled` and `user_profile_enabled` to `false` turns off the built-in stores completely — the memory tool is dropped from the schema and its guidance block is dropped from the system prompt.
+152|
+153|---
+154|
+155|## 3. FTS5 Session Search with LLM Summarization
+156|
+157|### 3.1 Storage Layer
+158|
+159|All sessions are stored in a SQLite database at `~/.hermes/state.db` using WAL mode:
+160|
+161|```sql
+162|-- Core tables
+163|CREATE TABLE sessions (
+164|  id TEXT PRIMARY KEY,
+165|  source TEXT,           -- 'cli', 'telegram', 'discord', etc.
+166|  user_id TEXT,
+167|  model TEXT,
+168|  title TEXT UNIQUE,
+169|  system_prompt TEXT,
+170|  started_at REAL,
+171|  ended_at REAL,
+172|  input_tokens INTEGER,
+173|  output_tokens INTEGER,
+174|  parent_session_id TEXT  -- for compression-triggered splits
+175|);
+176|
+177|CREATE TABLE messages (
+178|  id INTEGER PRIMARY KEY AUTOINCREMENT,
+179|  session_id TEXT,
+180|  role TEXT,             -- 'user', 'assistant', 'tool'
+181|  content TEXT,
+182|  tool_calls TEXT,       -- JSON
+183|  tool_name TEXT,
+184|  token_count INTEGER,
+185|  timestamp REAL
+186|);
+187|
+188|-- FTS5 virtual tables (auto-synced via triggers)
+189|CREATE VIRTUAL TABLE messages_fts USING fts5(
+190|  content, tool_calls, tool_name,
+191|  content=messages, content_rowid=id
+192|);
+193|
+194|CREATE VIRTUAL TABLE messages_fts_trigram USING fts5(
+195|  content, tool_calls, tool_name,
+196|  content=messages, content_rowid=id,
+197|  tokenize='trigram'
+198|);
+199|```
+200|
+201|**Key design decisions:**
+202|- **WAL mode** for concurrent readers + one writer (critical for multi-platform gateway scenarios)
+203|- **Three FTS5 tables:** base (unicode61 tokenizer), trigram (CJK/substring search), and cjk (bigram tokenizer for CJK)
+204|- **Triggers** keep FTS tables in sync on INSERT/UPDATE/DELETE
+205|- **Session lineage** via `parent_session_id` chains (compression-triggered splits)
+206|- **Source tagging** for platform filtering
+207|
+208|### 3.2 The session_search Tool
+209|
+210|The `session_search` tool provides three calling shapes inferred from arguments:
+211|
+212|#### Shape 1: Discovery (pass `query`)
+213|
+214|```
+215|session_search(query="auth refactor", limit=3)
+216|```
+217|
+218|1. Runs FTS5 full-text search with BM25 ranking
+219|2. Dedupes hits by session lineage
+220|3. Returns top N sessions, each with:
+221|   - `session_id`, `title`, `when`, `source`
+222|   - `snippet`: FTS5-highlighted match excerpt
+223|   - `bookend_start`: first 3 user+assistant messages (the goal/kickoff)
+224|   - `messages`: ±5 messages around the FTS5 match, with anchor flagged
+225|   - `bookend_end`: last 3 user+assistant messages (the resolution/decisions)
+226|   - `match_message_id`, `messages_before`, `messages_after`
+227|
+228|Bookends + window together let the agent reconstruct **goal → match → resolution** without paying for the whole transcript.
+229|
+230|#### Shape 2: Scroll (pass `session_id` + `around_message_id`)
+231|
+232|```
+233|session_search(session_id="...", around_message_id=12345, window=10)
+234|```
+235|
+236|Returns a window of ±`window` messages centered on the anchor. No FTS5, no bookends. To scroll forward/backward, re-anchor on the last/first message id of the returned window.
+237|
+238|#### Shape 3: Browse (no args)
+239|
+240|```
+241|session_search()
+242|```
+243|
+244|Returns recent sessions chronologically: titles, previews, timestamps.
+245|
+246|### 3.3 LLM Summarization (Historical — Now Removed)
+247|
+248|**Important:** The LLM summarization path was **removed** in PR #27590. The old implementation:
+249|
+250|1. FTS5 finds matching messages, groups by session
+251|2. Loads each session's full conversation
+252|3. `_truncate_around_matches()` extracts ~100K chars centered on match positions
+253|4. Formats as readable transcript (including tool call names)
+254|5. Sends to auxiliary LLM (Gemini Flash) for focused summary
+255|6. Returns per-session summaries with metadata
+256|
+257|**Why it was removed:**
+258|- Cost: ~$0.30/call
+259|- Latency: ~30s for three sessions
+260|- Quality: LLM could confabulate when the right session wasn't in the hit list
+261|- The new approach returns byte-for-byte content from SQLite — 2-5x more bytes, but they're real DB content
+262|
+263|**New approach:** Zero LLM cost, ~20ms discovery time, byte-for-byte content fidelity. The agent reads actual messages from the DB, not LLM-laundered prose.
+264|
+265|### 3.4 FTS5 Query Syntax
+266|
+267|| Syntax | Example | Meaning |
+268||---|---|---|
+269|| Keywords | `docker deployment` | Both terms (implicit AND) |
+270|| Quoted phrase | `"exact phrase"` | Exact phrase match |
+271|| Boolean OR | `docker OR kubernetes` | Either term |
+272|| Boolean NOT | `python NOT java` | Exclude term |
+273|| Prefix | `deploy*` | Prefix match |
+274|
+275|The `_sanitize_fts5_query()` method handles edge cases:
+276|- Strips unmatched quotes and special characters
+277|- Wraps hyphenated terms in quotes (`chat-send` → `"chat-send"`)
+278|- Removes dangling boolean operators (`hello AND` → `hello`)
+279|
+280|### 3.5 Search Quality and Routing
+281|
+282|The search system uses multiple strategies with automatic fallback:
+283|
+284|1. **FTS5 with unicode61 tokenizer** — default for Latin scripts
+285|2. **Trigram tokenizer** — for CJK and substring search
+286|3. **CJK bigram tokenizer** — for CJK phrases
+287|4. **LIKE fallback** — for short CJK queries (< 3 chars) when FTS is unavailable
+288|
+289|**Cron demotion:** Cron/automation sessions are stable-sorted below interactive sessions in discover ranking, so they can't drown the user's own conversations out of top-N results. Scan limit raised from 50 to 300.
+290|
+291|**Slow search logging:** Searches exceeding 1000ms are logged with the routing path taken.
+292|
+293|### 3.6 Session Management CLI
+294|
+295|```bash
+296|hermes sessions list           # Browse past sessions
+297|hermes sessions export --format md --session-id <id>
+298|hermes sessions delete <id>
+299|hermes sessions prune
+300|hermes sessions stats
+301|hermes sessions rename
+302|hermes sessions browse
+303|```
+304|
+305|---
+306|
+307|## 4. Honcho Dialectic User Modeling
+308|
+309|### 4.1 What Honcho Is
+310|
+311|Honcho is an AI-native memory backend by Plastic Labs that adds **dialectic reasoning** and deep user modeling on top of Hermes's built-in memory. Instead of simple key-value storage, Honcho maintains a running model of who the user is — their preferences, communication style, goals, and patterns — by reasoning about conversations after they happen.
+312|
+313|### 4.2 Dialectic Reasoning Process
+314|
+315|After each conversation turn (gated by `dialecticCadence`), Honcho analyzes the exchange and derives insights about the user's preferences, habits, and goals. The dialectic supports **multi-pass depth (1–3 passes)** with automatic cold/warm prompt selection:
+316|
+317|**Cold start (no base context yet):**
+318|> "Who is this person? What are their preferences, goals, and working style?"
+319|
+320|**Warm session (base context exists):**
+321|> "Given what's been discussed in this session so far, what context about this user is most relevant?"
+322|
+323|### 4.3 Multi-Pass Depth
+324|
+325|When `dialecticDepth > 1`, each dialectic invocation runs multiple `.chat()` passes:
+326|
+327|| Pass | Purpose |
+328||---|---|
+329|| Pass 0 | Cold or warm prompt (initial assessment) |
+330|| Pass 1 | Self-audit — identifies gaps in initial assessment, synthesizes evidence from recent sessions |
+331|| Pass 2 | Reconciliation — checks for contradictions between prior passes, produces final synthesis |
+332|
+333|Each pass uses a proportional reasoning level (lighter early passes, base level for the main pass). Passes bail out early if the prior pass returned strong signal (long, structured output), so depth 3 doesn't always mean 3 LLM calls.
+334|
+335|### 4.4 Two-Layer Context Injection
+336|
+337|Every turn (in hybrid or context mode), Honcho assembles two layers of context injected into the system prompt:
+338|
+339|| Layer | Content | Refresh Cadence | Purpose |
+340||---|---|---|---|
+341|| **Base context** | Session summary, user representation, user peer card, AI self-representation, AI identity card | `contextCadence` (default: 1) | "Who is this user" |
+342|| **Dialectic supplement** | LLM-synthesized reasoning about the user's current state and needs | `dialecticCadence` (default: 2) | "What matters right now" |
+343|
+344|Both layers are concatenated and truncated to the `contextTokens` budget.
+345|
+346|### 4.5 Three Orthogonal Config Knobs
+347|
+348|| Knob | Controls | Default |
+349||---|---|---|
+350|| `contextCadence` | Turns between `context()` API calls (base layer refresh) | 1 |
+351|| `dialecticCadence` | Turns between `peer.chat()` LLM calls (dialectic layer refresh) | 2 (recommended 1–5) |
+352|| `dialecticDepth` | Number of `.chat()` passes per dialectic invocation | 1 |
+353|
+354|These are orthogonal — you can have frequent context refreshes with infrequent dialectic, or deep multi-pass dialectic at low frequency.
+355|
+356|Example: `contextCadence: 1, dialecticCadence: 5, dialecticDepth: 2` refreshes base context every turn, runs dialectic every 5 turns, and each dialectic run makes 2 passes.
+357|
+358|### 4.6 Session-Start Prewarm
+359|
+360|On session init, Honcho fires a dialectic call in the background at the full configured `dialecticDepth` and hands the result directly to turn 1's context assembly. A single-pass prewarm on a cold peer often returns thin output — multi-pass depth runs the audit/reconcile cycle before the user ever speaks. If prewarm hasn't landed by turn 1, turn 1 falls back to a synchronous call with a bounded timeout.
+361|
+362|### 4.7 Query-Adaptive Reasoning Level
+363|
+364|The auto-injected dialectic scales `dialecticReasoningLevel` by query length:
+365|- +1 level at ≥120 chars
+366|- +2 at ≥400 chars
+367|- Clamped at `reasoningLevelCap` (default: "high")
+368|
+369|Available levels: `minimal`, `low`, `medium`, `high`, `max`.
+370|
+371|### 4.8 Multi-Agent Profiles (Peer Isolation)
+372|
+373|When multiple Hermes instances talk to the same user (e.g., a coding assistant and a personal assistant), Honcho maintains separate "peer" profiles. Each peer sees only its own observations and conclusions, preventing cross-contamination of context.
+374|
+375|### 4.9 Observation Modes
+376|
+377|Honcho models a conversation as peers exchanging messages. Each peer has two observation toggles:
+378|
+379|| Toggle | Effect |
+380||---|---|
+381|| `observeMe` | Honcho builds a representation of this peer from its own messages |
+382|| `observeOthers` | This peer observes the other peer's messages (feeds cross-peer reasoning) |
+383|
+384|Two peers × two toggles = four flags. `observationMode` is a shorthand preset:
+385|
+386|| Preset | User flags | AI flags | Semantics |
+387||---|---|---|---|
+388|| `directional` (default) | me: on, others: on | me: on, others: on | Full mutual observation. Enables cross-peer dialectic. |
+389|| `unified` | me: on, others: off | me: off, others: on | Shared-pool semantics. AI observes user's messages only. |
+390|
+391|### 4.10 Session Strategy
+392|
+393|Controls how Honcho sessions map to your work:
+394|
+395|| Strategy | Behavior |
+396||---|---|
+397|| `per-session` | Each hermes run gets a fresh session. Clean starts, memory via tools. Recommended for new users. |
+398|| `per-directory` | One Honcho session per working directory. Context accumulates across runs. |
+399|| `per-repo` | One session per git repository. |
+400|| `global` | Single session across all directories. |
+401|
+402|### 4.11 Recall Mode
+403|
+404|Controls how memory flows into conversations:
+405|
+406|| Mode | Behavior |
+407||---|---|
+408|| `hybrid` | Context auto-injected into system prompt AND tools available (model decides when to query) |
+409|| `context` | Auto-injection only, tools hidden |
+410|| `tools` | Tools only, no auto-injection. Agent must explicitly call `honcho_reasoning`, `honcho_search`, etc. |
+411|
+412|### 4.12 Honcho Tools
+413|
+414|When Honcho is active as the memory provider, five tools become available:
+415|
+416|| Tool | Purpose |
+417||---|---|
+418|| `honcho_profile` | Read or update peer card — pass `card` (list of facts) to update, omit to read |
+419|| `honcho_search` | Semantic search over context — raw excerpts, no LLM synthesis |
+420|| `honcho_context` | Full session context — summary, representation, card, recent messages |
+421|| `honcho_reasoning` | Synthesized answer from Honcho's LLM — pass `reasoning_level` (minimal/low/medium/high/max) to control depth |
+422|| `honcho_conclude` | Create or delete conclusions — pass `conclusion` to create, `delete_id` to remove (PII only) |
+423|
+424|### 4.13 Configuration
+425|
+426|```yaml
+427|# In ~/.hermes/config.yaml
+428|memory:
+429|  provider: honcho
+430|
+431|# In ~/.hermes/.env
+432|HONCHO_API_KEY=***
+433|```
+434|
+435|Setup: `hermes memory setup` → select "honcho" from the provider list.
+436|
+437|---
+438|
+439|## 5. Procedural Memory: The Skills System
+440|
+441|### 5.1 Overview
+442|
+443|Skills are Hermes's **procedural memory** — reusable task knowledge that the agent creates, improves, and loads on demand. They are the fourth layer of the memory architecture.
+444|
+445|### 5.2 Skill Structure
+446|
+447|Each skill is a directory containing a `SKILL.md` file with YAML frontmatter:
+448|
+449|```yaml
+450|---
+451|name: my-skill
+452|description: "Use when <trigger>. <one-line behavior>."
+453|version: 1.0.0
+454|author: Hermes Agent
+455|license: MIT
+456|---
+457|
+458|# Skill Content
+459|
+460|Procedural knowledge, scripts, references...
+461|```
+462|
+463|### 5.3 Skill Creation and Improvement
+464|
+465|- **Auto-creation:** After complex tasks, the background review agent can create new skills.
+466|- **Self-improvement:** Skills are patched during use — if a skill was wrong or incomplete, the agent updates it.
+467|- **Security scan:** New skills are scanned for security issues before being saved.
+468|- **Write approval:** `skills.write_approval` can gate skill writes.
+469|
+470|### 5.4 Skill Loading
+471|
+472|Skills are loaded **on demand** — the system prompt includes skill descriptions (triggers), and the full content is loaded only when relevant. This avoids consuming context window tokens for skills that aren't needed.
+473|
+474|### 5.5 Learning Journey (`/journey`)
+475|
+476|The `/journey` command provides visibility into the agent's learning:
+477|
+478|| Command | What it does |
+479||---|---|
+480|| `hermes journey list` | List all learned skills and memory chunks |
+481|| `hermes journey delete <node> [-y]` | Delete a node. Skills are **archived** (restorable), memory chunks are removed. |
+482|| `hermes journey edit <node>` | Open the node's content in `$EDITOR` |
+483|
+484|---
+485|
+486|## 6. Comparison with AgentHarness
+487|
+488|| Dimension | Hermes Agent | AgentHarness (Current) |
+489||---|---|---|
+490|| **Persistent Memory** | MEMORY.md + USER.md (bounded, curated) | PostgreSQL memories, importance scoring, forgetting, approval gate |
+491|| **Cross-Session Search** | FTS5 over SQLite — full-text search of past sessions | Postgres FTS (`search_text`) + pgvector + RRF, `context_archive` FTS |
+492|| **External Plugins** | 8+ backends (Honcho, mem0, etc.) — one active at a time | Plugin hooks (`agent_harness.plugins`); no memory backends |
+493|| **User Modeling** | Honcho dialectic reasoning | `UserProfileStore` preferences/topics; no dialectic layer |
+494|| **Auto-Persistence** | Nudges + background review | Background memory consolidation after each run |
+495|| **Skill Auto-Generation** | Auto-create + security scan | `ah learn` (file/URL/skill) with prompt-injection screening |
+496|| **Skill Self-Improvement** | Agent-driven patching | Manual edit/update/delete + curator (stale/unused maintenance) |
+497|| **Cache Optimization** | Frozen snapshot pattern | LRU session/context caches; prompt rebuild per turn |
+498|| **Session Storage** | SQLite WAL + FTS5 | `ah/db/schema.sql` — 15+ tables, pgvector, FTS |
+499|
+500|---
+501|
+502|## 7. Key Takeaways for AgentHarness
+503|
+504|### 7.1 Memory System
+505|
+506|1. **Bounded files with forced consolidation** — the char limit + error-on-overflow pattern forces the agent to prioritize. This is better than auto-compaction because the agent makes consolidation decisions with full context.
+507|2. **Frozen snapshot pattern** — loading memory once at session start and never changing it mid-session preserves prompt caching. This is a critical performance optimization.
+508|3. **Background review fork** — the evolution from inline nudges → API-call-time injection → background fork is a masterclass in avoiding attention conflict. The key insight: never mix backward-looking system work with forward-looking user tasks in the same inference call.
+509|4. **Write-time security scanning** — filtering memory content at write time (not read time) is cheaper and cache-friendly.
+510|5. **External drift detection** — detecting when files were modified outside the tool prevents silent corruption.
+511|
+512|### 7.2 Session Search
+513|
+514|1. **FTS5 with multiple tokenizers** — base (unicode61), trigram (CJK/substring), and cjk (bigram) tables with automatic fallback.
+515|2. **Bookend + window pattern** — returning first/last messages + ±5 around the match lets the agent reconstruct goal → match → resolution without loading full transcripts.
+516|3. **Zero-LLM-cost approach** — the removal of LLM summarization in favor of byte-for-byte DB content is a significant improvement. The old approach cost ~$0.30/call and could confabulate.
+517|4. **Cron demotion** — stable-sorting interactive sessions above cron sessions prevents automation from drowning user conversations.
+518|5. **Source filtering** — the ability to filter by source platform (cli, telegram, discord) and role (user, assistant, tool) is essential for multi-platform agents.
+519|
+520|### 7.3 Honcho Dialectic
+521|
+522|1. **Multi-pass dialectic** — the cold/warm prompt selection + self-audit + reconciliation passes produce deeper user models than single-pass analysis.
+523|2. **Orthogonal config knobs** — `contextCadence`, `dialecticCadence`, and `dialecticDepth` are independent, allowing fine-grained cost/quality tradeoffs.
+524|3. **Peer isolation** — separate profiles per agent prevent cross-contamination in multi-agent setups.
+525|4. **Query-adaptive reasoning** — scaling reasoning level by query length is a clever heuristic for balancing cost and depth.
+526|5. **Session-start prewarm** — firing the dialectic in the background at session init means the user gets a more informed first response.
+527|
+528|### 7.4 Procedural Memory
+529|
+530|1. **Skills as procedural memory** — the separation of declarative (MEMORY.md/USER.md) from procedural (skills) memory is clean and well-motivated.
+531|2. **On-demand loading** — skill descriptions in the system prompt, full content loaded only when relevant, is the right approach for context efficiency.
+532|3. **Self-improvement loop** — the background review agent can create AND improve skills, closing the learning loop.
+533|4. **Learning journey** — providing visibility into what the agent has learned (`/journey`) is essential for trust and debugging.
+534|
+535|---
+536|
+537|## 8. Implementation Priorities for AgentHarness
+538|
+539|This is a research comparison, not the current implementation checklist.
+540|Hermes uses SQLite/FTS5; AgentHarness uses PostgreSQL and already has GIN
+541|full-text indexes for live and archived context. The original recommendation to
+542|"add FTS5 to the existing SQLite schema" was wrong for this repository.
+543|The current delivery plan is
+544|[the research and Hermes capability program](superpowers/specs/2026-10-04-research-hermes-program-design.md).
+545|
+546|1. Complete PostgreSQL cross-session transcript recall, with an anchored
+547|   window and an agent-facing entry point. The core search and gateway methods
+548|   are in development; benchmark and UI work are still pending.
+549|2. Add bounded post-turn review for proposed memory and skill changes, with
+550|   read-before-write checks, approval, and an observable history.
+551|3. Evaluate bounded memory snapshots against the current PostgreSQL memory
+552|   store before adding a second source of truth.
+553|4. Treat Honcho-like user modeling as an optional integration and measure its
+554|   value against the local profile and persona-memory baseline.
+555|
+556|---
+557|
+558|## 9. References
+559|
+560|- Hermes Agent official docs: https://hermes-agent.nousresearch.com/docs/
+561|- Hermes Agent GitHub: https://github.com/NousResearch/hermes-agent
+562|- Memory system deep dive: https://agentwikis.com/wiki/hermes/wiki/concepts/memory-system.md
+563|- Session storage internals: https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/session-storage.md
+564|- Honcho memory docs: https://hermes-agent.nousresearch.com/docs/user-guide/features/honcho
+565|- Memory tool source: https://github.com/NousResearch/hermes-agent/blob/main/tools/memory_tool.py
+566|- Session search tool source: https://github.com/NousResearch/hermes-agent/blob/main/tools/session_search_tool.py
+567|- Background review source: https://github.com/NousResearch/hermes-agent/blob/main/agent/background_review.py
+568|- FTS5 search source: https://github.com/NousResearch/hermes-agent/blob/main/hermes_state_search.py
+569|- PR #27590 (session_search rewrite): https://github.com/NousResearch/hermes-agent/pull/27590
+570|- PR #2235 (background review): https://github.com/NousResearch/hermes-agent/commit/45058b4
+571|- PR #15696 (flush removal): https://github.com/NousResearch/hermes-agent/pull/15696
+572|- Issue #94226 (memory cadence): https://github.com/NousResearch/hermes-agent/issues/94226
+573|- Issue #2227 (nudge pollution): https://github.com/NousResearch/hermes-agent/issues/2227
+574|

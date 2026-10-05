@@ -31,13 +31,6 @@ async def get_rag_pipeline() -> RAGPipeline:
     return _rag_pipeline
 
 
-
-def set_rag_pipeline(pipeline: RAGPipeline) -> None:
-    """Set the global RAG pipeline instance (for testing or custom config)."""
-    global _rag_pipeline
-    _rag_pipeline = pipeline
-
-
 @registry.register(
     name="index_document",
     description="Index a document into the RAG pipeline for semantic search. Supports .txt, .md, .py, .js, .ts, .json, .yaml, .csv, .html, and more.",

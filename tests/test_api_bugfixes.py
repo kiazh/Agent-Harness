@@ -1,4 +1,5 @@
 """Tests for API bug fixes: thread safety, session ownership, auth bypass, and TTL."""
+
 from __future__ import annotations
 
 import asyncio
@@ -16,7 +17,7 @@ from httpx import ASGITransport, AsyncClient
 # Set a test API key before importing the app
 os.environ["AGENT_HARNESS_API_KEY"] = "test-key-123"
 
-from ah.api.app import CreateDocumentRequest, _RpcGateway, create_app
+from ah.api.app import _RpcGateway, create_app
 from ah.core.models import Session
 
 TEST_API_KEY = "test-key-123"
@@ -77,18 +78,18 @@ class TestRpcGatewayThreadSafety:
                 rid = frame.get("id")
                 # Small delay to increase chance of interleaving
                 await asyncio.sleep(0.001)
-                gw._capture({
-                    "jsonrpc": "2.0",
-                    "id": rid,
-                    "result": {"ok": True},
-                })
+                gw._capture(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": rid,
+                        "result": {"ok": True},
+                    }
+                )
 
             mock_gw_instance.handle_line = mock_handle
 
             # Fire 10 concurrent calls
-            results = await asyncio.gather(*[
-                gw.call("test.method", {"i": i}) for i in range(10)
-            ])
+            results = await asyncio.gather(*[gw.call("test.method", {"i": i}) for i in range(10)])
 
             # All calls should succeed
             assert all(r == {"ok": True} for r in results)
@@ -119,18 +120,18 @@ class TestRpcGatewayThreadSafety:
                     seen_ids.append(rid)
                 # Variable delay to increase interleaving
                 await asyncio.sleep(0.001 * (rid % 3))
-                gw._capture({
-                    "jsonrpc": "2.0",
-                    "id": rid,
-                    "result": {"id": rid},
-                })
+                gw._capture(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": rid,
+                        "result": {"id": rid},
+                    }
+                )
 
             mock_gw_instance.handle_line = mock_handle
 
             # Fire 20 concurrent calls
-            results = await asyncio.gather(*[
-                gw.call("test.method", {}) for _ in range(20)
-            ])
+            results = await asyncio.gather(*[gw.call("test.method", {}) for _ in range(20)])
 
             # Each result should have a unique ID matching its request
             result_ids = [r["id"] for r in results]
@@ -159,18 +160,18 @@ class TestRpcGatewayThreadSafety:
                 async with id_lock:
                     assigned_ids.append(rid)
                 await asyncio.sleep(0.001)
-                gw._capture({
-                    "jsonrpc": "2.0",
-                    "id": rid,
-                    "result": {"ok": True},
-                })
+                gw._capture(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": rid,
+                        "result": {"ok": True},
+                    }
+                )
 
             mock_gw_instance.handle_line = mock_handle
 
             # Fire 50 concurrent calls
-            await asyncio.gather(*[
-                gw.call("test.method", {}) for _ in range(50)
-            ])
+            await asyncio.gather(*[gw.call("test.method", {}) for _ in range(50)])
 
             # All 50 IDs must be unique
             assert len(assigned_ids) == 50
@@ -352,7 +353,7 @@ class TestRpcGatewayTTL:
 
             # Manually set the timestamp to be old (simulate TTL expiration)
             # The TTL cleanup should remove this entry
-            if hasattr(gw, '_response_timestamps'):
+            if hasattr(gw, "_response_timestamps"):
                 gw._response_timestamps[old_id] = time.monotonic() - 120  # 2 minutes ago
 
             # Trigger cleanup (if implemented) or verify the entry exists
@@ -376,7 +377,7 @@ class TestRpcGatewayTTL:
             # by adding entries directly to _responses
             for i in range(100):
                 gw._responses[1000 + i] = {"jsonrpc": "2.0", "id": 1000 + i, "result": {}}
-                if hasattr(gw, '_response_timestamps'):
+                if hasattr(gw, "_response_timestamps"):
                     gw._response_timestamps[1000 + i] = time.monotonic() - 120
 
             # After the fix, the dict should be cleaned up
@@ -402,7 +403,7 @@ class TestRpcGatewayTTL:
             # If the fix is implemented, there should be a cleanup mechanism
             # that removes old entries. Let's check if the cleanup method exists
             # and if it removes old entries.
-            if hasattr(gw, '_cleanup_old_responses'):
+            if hasattr(gw, "_cleanup_old_responses"):
                 # Set the timestamp to be old
                 gw._response_timestamps[old_id] = time.monotonic() - 120
                 gw._cleanup_old_responses()
@@ -427,7 +428,7 @@ class TestRpcGatewayTTL:
             recent_id = 999
             gw._responses[recent_id] = {"jsonrpc": "2.0", "id": recent_id, "result": {}}
 
-            if hasattr(gw, '_cleanup_old_responses'):
+            if hasattr(gw, "_cleanup_old_responses"):
                 # Set the timestamp to be recent
                 gw._response_timestamps[recent_id] = time.monotonic()
                 gw._cleanup_old_responses()

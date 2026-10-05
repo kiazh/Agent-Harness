@@ -1,0 +1,671 @@
+1|# Deep Research Report: LLM Agent Memory, Context Management, and Multi-Agent Patterns (2024–2026)
+2|
+3|**Date:** 2026-10-04  
+4|**Author:** AgentHarness Research Initiative  
+5|**Scope:** Production patterns and academic advances applicable to the AgentHarness codebase
+6|
+7|---
+8|
+9|## Executive Summary
+10|
+11|This report synthesizes research across five critical areas for production LLM agent systems: token usage tracking and budget enforcement, multi-agent orchestration patterns, memory management for LLM agents, context window management and compression, and RAG pipeline optimization. Each section includes key papers, production patterns, best practices, and specific recommendations for the AgentHarness codebase.
+12|
+13|**Key Takeaway:** The AgentHarness codebase already implements several best practices (hybrid memory retrieval, Ebbinghaus decay, importance scoring, usage budgeting with advisory locks, hybrid RAG with RRF fusion). The highest-impact improvements are: (1) upgrading from advisory to enforced budget guards with circuit breakers, (2) implementing A-MEM-style dynamic memory linking and evolution, (3) adding observation masking + LLM summarization hybrid context management, (4) integrating GraphRAG for entity-relationship-aware retrieval, and (5) adopting the orchestrator-worker multi-agent pattern with per-agent model tiering.
+14|
+15|---
+16|
+17|## 1. LLM Token Usage Tracking and Budget Enforcement
+18|
+19|### 1.1 The Cost Problem in Production Agents
+20|
+21|Multi-agent systems amplify token costs in ways single-chatbot budgeting cannot anticipate. Key findings from 2025–2026 production incident reports:
+22|
+23|- **The $47K Loop Incident (Nov 2025):** Four LangChain agents entered an infinite loop between Analyzer and Verifier agents, running for 264 hours and costing $47,000. Root cause: no per-agent budget ceiling and no pre-execution enforcement mechanism. [Source: noburn.dev, waxell.ai]
+24|- **15x Token Multiplier:** Anthropic reported that their multi-agent research system consumed roughly 15x the tokens of a standard chat interaction, because orchestrator agents spawn subagents whose exploratory research each carries its own context windows and tool calls. [Source: tryinterlock.com]
+25|- **Context Accumulation Compounds Cost:** A 20-turn conversation does not cost 20× a 1-turn conversation — it costs significantly more, because every turn includes the entire history. By step five, the input token count can be several times the original prompt. [Source: conceptualise.de]
+26|- **2-to-1 Input-to-Output Tax:** A 2026 Concordia University study found a 2-to-1 input-to-output token ratio as a communication tax between agents, meaning every message an agent sends triggers roughly twice as many tokens in context overhead. [Source: getreadyforagents.com]
+27|
+28|### 1.2 Core Architecture: Monitoring vs. Enforcement
+29|
+30|The most important conceptual distinction in agent cost governance is between **monitoring** (recording what was spent and alerting when thresholds are crossed) and **enforcement** (preventing spend by intercepting execution before the next API call). [Source: letsbuildsolutions.com]
+31|
+32|**Monitoring-only approaches fail because:**
+33|- Alerts fire after the spend has already occurred
+34|- Agents can reason around soft warnings
+35|- No mechanism terminates a session before it burns past the ceiling
+36|- Provider-side dashboards are designed for accounting, not engineering — they tell you what you spent after the billing period closes, not before a single call goes over budget [Source: noburn.dev]
+37|
+38|**Enforcement requires:**
+39|1. **Per-agent token budget** — a numeric ceiling assigned to a named agent identity before any run begins
+40|2. **Cost circuit breaker** — measures tokens consumed per unit time against a threshold; trips when rate exceeds legitimate bounds
+41|3. **Enforcement gate** — code that sits between the orchestrator and the model API client, checking budget before every call
+42|
+43|### 1.3 The Three-Layer Governance Stack
+44|
+45|Based on production deployments in 2026, the consensus architecture has three layers: [Source: cordum.io, conceptualise.de]
+46|
+47|| Layer | Mechanism | What It Prevents | Typical Impact |
+48||-------|-----------|------------------|----------------|
+49|| Per-task token budget | Unbounded single requests | Eliminates worst spikes | Agent runtime/orchestrator |
+50|| Max steps & max tool calls | Infinite re-planning loops | High | Agent loop config |
+51|| Per-tenant daily/monthly cap | One team draining the budget | Predictable ceiling | Gateway/policy layer |
+52|| Rate limiting & concurrency caps | Cost from traffic surges | Medium-high | API gateway |
+53|| Model routing | Overuse of frontier models | 40-65% cost reduction | Routing layer |
+54|| Semantic/response caching | Repeated identical work | 15-40% cost reduction | Caching layer |
+55|| Prompt & context trimming | Context bloat per step | 10-25% cost reduction | Prompt assembly |
+56|
+57|### 1.4 Budget Setting Methodology
+58|
+59|Production deployments follow a consistent methodology for setting budget ceilings: [Source: getreadyforagents.com, tryinterlock.com]
+60|
+61|1. **Run baseline measurements** — Run each agent against representative workloads and record the distribution of cost per completed task (the 95th percentile matters more than the mean because that tail is what blows up monthly budgets)
+62|2. **Set initial caps** — At roughly 1.5× the observed p95 cost per task, multiplied by expected daily volume, then divide by 1.3 as a safety margin
+63|3. **Calibrate after 30 days** — Adjust based on actual production data
+64|4. **Graduated thresholds** — Warn at 70% consumption, throttle at 85%, hard stop at 100%
+65|
+66|### 1.5 Circuit Breaker Design
+67|
+68|The circuit breaker has three states: [Source: getreadyforagents.com]
+69|
+70|- **Closed:** Calls proceed normally
+71|- **Open:** Calls are blocked; agent writes current task state to persistent storage before any blocking occurs (preserves ability to resume after human review)
+72|- **Half-open:** One test call is allowed through to check whether the rate has returned to normal
+73|
+74|**Rate threshold calibration:** Run your agent against real workloads and observe the 99th-percentile token rate during normal operation. Multiply that by three to four to get a threshold that distinguishes a loop from a legitimately large task. [Source: getreadyforagents.com]
+75|
+76|### 1.6 Common Failure Modes (63-Incident Catalogue)
+77|
+78|A June 2026 catalogue documented 63 confirmed token budget overrun incidents across 21 orchestration frameworks: [Source: agoradigest.com]
+79|
+80|1. **Retry amplification** — A single malformed tool response triggers a costly retry storm
+81|2. **Delegation leaks** — Subagent spawns inherit parent budgets without deduction, allowing each subagent to independently exhaust the full allowance
+82|3. **Shadow consumption** — 30 out of 30 concurrent agent runs overshot their allocated budget using standard counter-based tracking, because mutable shared state is fundamentally unsuited to budget enforcement in concurrent delegating systems
+83|4. **Cache invalidation storms** — Cost from repeated cache misses on shared context
+84|5. **Concurrent aliasing** — Multiple agents sharing the same budget counter without transactional deduction
+85|
+86|### 1.7 Recommendations for AgentHarness
+87|
+88|The AgentHarness `UsageStore` in `ah/core/usage.py` already implements session/agent token budgets with advisory locks — a strong foundation. Specific improvements:
+89|
+90|| Recommendation | Priority | Effort | Impact |
+91||----------------|----------|--------|--------|
+92|| **Add circuit breaker** — Track token consumption rate per agent over a sliding window (e.g., 1-minute average); trip when cost exceeds threshold | High | Medium | Catches runaway loops within 60 seconds |
+93|| **Upgrade from advisory to enforced budgets** — Currently the reservation check raises `UsageBudgetExceededError`; add a hard kill switch that terminates the agent loop entirely, not just the current call | High | Medium | Prevents budget drift across long runs |
+94|| **Add per-call token cap** — Reject individual calls estimated to consume too many tokens before the API call goes out | High | Low | Prevents single-call budget busts |
+95|| **Implement subagent budget deduction** — When delegating, atomically deduct from the parent agent's remaining budget before spawning the subagent | High | Medium | Prevents delegation leaks |
+96|| **Add cost anomaly detection** — Flag when an agent's cost per action spikes 3× from its baseline | Medium | Medium | Early warning for prompt regressions |
+97|| **Add fleet-level budget** — Total spend across all agents with graceful degradation (throttle non-critical agents at 80%, pause all at 95%) | Medium | Medium | Prevents system-wide cost overruns |
+98|| **Budget in dollars, not tokens** — Token prices change quarterly; models differ by 10-100× in per-token cost. Track dollars as the primary budget unit, tokens as diagnostic | Low | Low | Future-proof against pricing changes |
+99|
+100|**Implementation sketch for circuit breaker:**
+101|
+102|```python
+103|class TokenCircuitBreaker:
+104|    """Cost-aware circuit breaker for per-agent token consumption."""
+105|    
+106|    def __init__(self, rate_threshold: int = 10000, window_seconds: int = 60):
+107|        self.rate_threshold = rate_threshold  # tokens per minute
+108|        self.window_seconds = window_seconds
+109|        self.consumption_log: list[tuple[datetime, int]] = []
+110|        self.state = "closed"  # closed, open, half-open
+111|    
+112|    def record_consumption(self, tokens: int) -> None:
+113|        now = datetime.utcnow()
+114|        self.consumption_log.append((now, tokens))
+115|        cutoff = now - timedelta(seconds=self.window_seconds)
+116|        self.consumption_log = [(t, tok) for t, tok in self.consumption_log if t > cutoff]
+117|        
+118|        if self.state == "open":
+119|            self.state = "half-open"
+120|        
+121|    def check_rate(self) -> bool:
+122|        """Returns True if calls are allowed."""
+123|        total = sum(tok for _, tok in self.consumption_log)
+124|        if total > self.rate_threshold:
+125|            self.state = "open"
+126|            return False
+127|        if self.state == "half-open":
+128|            self.state = "closed"
+129|        return True
+130|```
+131|
+132|---
+133|
+134|## 2. Multi-Agent Orchestration Patterns
+135|
+136|### 2.1 The Five Production Patterns
+137|
+138|Nearly every production multi-agent system maps to one of five orchestration patterns: [Source: yashbogam.me, seodatapulse.com]
+139|
+140|| Pattern | Shape | Best For | Trade-off |
+141||---------|-------|----------|-----------|
+142|| **Orchestrator-Worker** | One planner delegates to specialist workers | Open-ended tasks where sub-tasks aren't known upfront | Orchestrator is a single point of failure |
+143|| **Hierarchical (Manager-Crew)** | A manager coordinates a fixed team of roles | Structured workflows with clear roles | Less flexible; roles are designed in advance |
+144|| **Sequential Pipeline** | Agents in a fixed chain, output → input | Deterministic, auditable, step-by-step processes | No adaptivity; a bad early step poisons the rest |
+145|| **Swarm / Handoff** | Peers hand control to whichever agent fits next | Routing and triage (e.g., support: billing vs. tech) | Handoff logic can loop; needs guardrails |
+146|| **Network / Decentralized** | Agents discover and negotiate peer-to-peer | Cross-vendor or open agent ecosystems | Hardest to debug; emerging, least mature |
+147|
+148|### 2.2 Framework Landscape (2026)
+149|
+150|| Framework | Paradigm | Token Overhead | State Management | Best For |
+151||-----------|----------|---------------|-----------------|----------|
+152|| **LangGraph** | Graph state machines | ~9% (lowest) | Explicit checkpointing + time travel | Complex conditional workflows, human-in-the-loop |
+153|| **CrewAI** | Role-based teams | ~18% | Task outputs passed sequentially | Fast prototyping, team-of-specialists workflows |
+154|| **AutoGen / AG2** | Conversational actors | Highest (20+ calls/task) | Message history (in-memory) | Research, code-writing agents |
+155|| **OpenAI Agents SDK** | Handoff-via-tool-call | Low | HandoffContext (ephemeral) | OpenAI-centric estates, MCP-first integrations |
+156|| **Google ADK** | Hierarchical agent tree | Low | Session state with pluggable backends | Vertex AI estates, enterprise observability |
+157|| **Pydantic AI** | Type-safe validated agents | Low | Pydantic-typed schemas | Type safety and validation |
+158|
+159|### 2.3 The Hybrid Pattern: Production Default for Complex Systems
+160|
+161|The emerging consensus for complex production systems is a **hybrid architecture**: LangGraph as the outer orchestrator with CrewAI crews as inner workers. [Source: yashbogam.me]
+162|
+163|```
+164|LangGraph Outer Orchestrator
+165|├── Route Decision
+166|├── Research Needed → CrewAI Research Crew (researcher → writer → editor)
+167|├── Code Changes → CrewAI Coding Crew (analyzer → writer → reviewer)
+168|└── Human Approval Gate → LangGraph interrupt node
+169|```
+170|
+171|**Why this works:** LangGraph provides control, state management, routing decisions, retry logic, and human approval gates at the macro level. CrewAI provides ergonomic role-based abstractions for the specialist subtasks within each node. Each layer does what it's best at.
+172|
+173|### 2.4 Model Tiering: Per-Agent Model Selection
+174|
+175|A common production pattern is **model tiering**: use a fast, cheap model for triage and routing agents, and a frontier model for reasoning and synthesis. [Source: developersdigest.tech]
+176|
+177|| Agent Role | Model Tier | Example | Cost Savings |
+178||-----------|-----------|---------|--------------|
+179|| Triage/Routing | Cheap/fast | GPT-5.4-mini, Claude Haiku 4.5 | 80-95% |
+180|| Extraction/Mechanical | Mid-tier | GPT-5.4-mini | 60-80% |
+181|| Reasoning/Synthesis | Frontier | Claude Sonnet 5, GPT-5.4 | — (necessary) |
+182|| Code generation | Specialized | Claude Sonnet 5, Qwen3-Coder | Varies |
+183|
+184|### 2.5 Multi-Agent Cost Multipliers
+185|
+186|Production measurements show significant cost differences between patterns: [Source: peppereffect.com]
+187|
+188|| Framework | P95 Tokens | P95 Latency | Cost per Query | Accuracy |
+189||-----------|-----------|-------------|---------------|----------|
+190|| LangGraph | ~13,500 | 2-4 sec | $0.30-0.80 | High (consistent) |
+191|| CrewAI | ~1,350,000 | 8-15 sec | $2.00-8.00 | High (sequential) |
+192|| OpenAI Agents SDK | ~15,000 | 2-3 sec | $0.20-0.60 | High (bounded context) |
+193|| AutoGen/AG2 | ~56,700 | 10-18 sec | $4.00-12.00 | Highest (debate refines) |
+194|
+195|### 2.6 Common Failure Modes and Mitigations
+196|
+197|| Failure | Symptom | Fix |
+198||---------|---------|-----|
+199|| Premature multi-agent | Huge token bill, no quality gain | Start with one agent; add roles only when justified |
+200|| Vague roles | Agents overlap and contradict each other | Sharpen each role; add explicit "do not" boundaries |
+201|| Context bleed | Workers see the whole transcript, costs explode | Pass each worker only its brief; isolate state |
+202|| Tool overload | Agent picks the wrong tool | Scope tools per-role; give the minimum needed |
+203|| Handoff loops | Two agents ping-pong forever | Cap handoffs; add a terminal escalate-to-human branch |
+204|| No observability | "It broke and I don't know where" | Instrument tracing from day one |
+205|| Ungated actions | An agent emails a customer by mistake | Human-in-the-loop gate on all irreversible actions |
+206|| Unbounded loops | Runaway cost from self-correction | Hard caps on planning, retries, and iterations |
+207|
+208|### 2.7 When to Use Multiple Agents
+209|
+210|The decision to use multiple agents should be driven by measured need, not preference: [Source: seodatapulse.com]
+211|
+212|| Signal | Why It Justifies Multiple Agents |
+213||--------|--------------------------------|
+214|| Context overflow | The task needs more context than one agent can hold cleanly |
+215|| Tool specialization | Different sub-tasks need different, non-overlapping tools |
+216|| Parallelism | Sub-tasks are independent and can run concurrently |
+217|| Separation of concerns | You want an adversarial check — a separate "critic" agent with fresh context |
+218|| Distinct personas | Sub-tasks reward genuinely different system prompts, models, or temperatures |
+219|
+220|### 2.8 Recommendations for AgentHarness
+221|
+222|The AgentHarness `delegate` tool in `ah/tools/agents.py` already implements a basic handoff pattern. Specific improvements:
+223|
+224|| Recommendation | Priority | Effort | Impact |
+225||----------------|----------|--------|--------|
+226|| **Adopt orchestrator-worker pattern** — Implement a lead orchestrator agent that decomposes goals into sub-tasks, dispatches to workers, and synthesizes results | High | High | Enables complex multi-step workflows |
+227|| **Add per-agent model tiering** — Allow each agent definition to specify its model tier (cheap/mid/frontier) | High | Medium | 40-65% cost reduction on routine steps |
+228|| **Implement handoff caps** — Add a hard limit on delegation depth and total handoffs per request | High | Low | Prevents infinite delegation loops |
+229|| **Add parallel fan-out** — Allow the orchestrator to dispatch multiple independent workers concurrently and merge results | Medium | Medium | Cuts wall-clock latency for parallelizable tasks |
+230|| **Implement maker-checker pattern** — Add a critic/verifier agent that reviews the orchestrator's output with fresh context | Medium | Medium | Cuts hallucinations in high-stakes domains |
+231|| **Add structured handoff metadata** — Include typed metadata (reason, expected output type) in handoffs | Medium | Low | Improves auditability and debugging |
+232|| **Scope tools per agent** — Give each agent only the tools it needs for its role | High | Medium | Reduces tool selection errors and token costs |
+233|
+234|---
+235|
+236|## 3. Memory Management for LLM Agents
+237|
+238|### 3.1 MemGPT / Letta: The LLM Operating System
+239|
+240|The foundational paper **"MemGPT: Towards LLMs as Operating Systems"** (arXiv:2310.08560, 2023) introduced the concept of an OS-inspired memory hierarchy for LLM agents: [Source: letta.com, arxiv.org]
+241|
+242|**Core concepts:**
+243|- **Self-editing memory** — LLMs use tools to edit their own context window and external storage
+244|- **Memory hierarchy** — Distinguishing between in-context memory (core, like RAM) and out-of-context memory (archival, like disk)
+245|- **Context window management** — Intelligent paging and memory consolidation techniques
+246|
+247|**Architecture:**
+248|- **In-context memory (core):** A reserved section of the LLM context window that is editable by the agent. The agent can append, replace, or delete sections of this memory.
+249|- **Archival memory:** Long-term storage in a vector DB for memories that don't fit in context. The agent has read/write tools to this store.
+250|- **Recall memory:** A log of all conversational history with date search and text search tools.
+251|
+252|**Benchmark results:** Letta's filesystem-based memory agent achieves **74.0% on LoCoMo** with GPT-4o mini and minimal prompt tuning, significantly above Mem0's reported 68.5% for their top-performing graph variant. [Source: letta.com]
+253|
+254|### 3.2 A-MEM: Agentic Memory (NeurIPS 2025)
+255|
+256|**A-MEM: Agentic Memory for LLM Agents** (arXiv:2502.12110, NeurIPS 2025) introduces a novel memory system inspired by the **Zettelkasten method**: [Source: arxiv.org, neurips.cc]
+257|
+258|**Key innovations:**
+259|
+260|1. **Dynamic memory structuring** — Instead of predefined memory operations, the system autonomously generates contextual descriptions, forms meaningful connections with related memories, and evolves both content and relationships as new experiences emerge.
+261|
+262|2. **Link generation (LG module)** — When a new memory is added, the system analyzes historical memories to identify relevant connections based on semantic similarities and shared attributes, establishing links where meaningful similarities exist.
+263|
+264|3. **Memory evolution (ME module)** — As new memories are integrated, they trigger updates to the contextual representations and attributes of existing historical memories, allowing the memory network to continuously refine its understanding.
+265|
+266|**Results:**
+267|- Consistently outperforms all baselines across six foundation models
+268|- **35% improvement over LoCoMo** (F1 score 3.45 vs 2.55)
+269|- **192% higher than MemGPT** on multi-hop reasoning tasks
+270|- **85-93% token reduction** per memory operation (1,200 tokens vs 16,900 for baselines)
+271|- Processing time: 5.4 seconds with GPT-4o-mini, 1.1 seconds with Llama 3.2 1B
+272|
+273|### 3.3 Mem0: The Memory Layer
+274|
+275|**Mem0** (mem0.ai, Y Combinator-backed, 62.5K+ GitHub stars) provides a production-ready memory layer with: [Source: mem0.ai]
+276|
+277|- **Four memory layers:** Conversation, session, user, and organizational
+278|- **Single-pass ADD-only extraction:** New facts are added, not overwritten, so history is preserved rather than silently lost
+279|- **Automatic condensation:** Condenses chat history into compact memories that cut token costs
+280|- **Entity linking:** Links entities across memories for relationship-aware retrieval
+281|
+282|**Key insight:** "Effective memory management for agents is not a single store. It is a hierarchy of stores with different retention windows, retrieval patterns, and purposes." [Source: mem0.ai]
+283|
+284|### 3.4 Memory System Comparison
+285|
+286|| System | Approach | Strengths | Weaknesses | LoCoMo Score |
+287||--------|----------|-----------|------------|--------------|
+288|| **MemGPT/Letta** | OS-inspired hierarchy (core + archival + recall) | Self-editing, production framework, flexible | Requires careful prompt engineering | 74.0% |
+289|| **A-MEM** | Zettelkasten-inspired dynamic linking | Autonomous organization, multi-hop reasoning | Higher compute cost (multiple LLM calls) | F1 3.45 |
+290|| **Mem0** | Four-layer hierarchy with ADD-only extraction | Simple API, production-ready, entity linking | Single-pass extraction may miss context | 68.5% (graph) |
+291|| **MemoryBank** | Ebbinghaus forgetting curve | Well-understood, simple | Limited organization | Lower than MemGPT |
+292|
+293|### 3.5 Recommendations for AgentHarness
+294|
+295|The AgentHarness memory system (`ah/memory/`) already implements Ebbinghaus decay, importance scoring, hybrid retrieval (dense + sparse), and a consolidator pipeline. Specific improvements:
+296|
+297|| Recommendation | Priority | Effort | Impact |
+298||----------------|----------|--------|--------|
+299|| **Add dynamic memory linking (A-MEM LG module)** — When a new memory is added, analyze existing memories to establish semantic links | High | Medium | Enables multi-hop reasoning over memories |
+300|| **Add memory evolution (A-MEM ME module)** — When new memories are integrated, update contextual representations of related existing memories | High | Medium | Memory network continuously refines understanding |
+301|| **Add four-layer memory hierarchy (Mem0 pattern)** — Separate conversation, session, user, and organizational memory stores | High | Medium | Better retention and retrieval granularity |
+302|| **Add parent-context chunking for memory retrieval** — Store small memory chunks but include parent context during generation | Medium | Medium | Better precision with rich context |
+303|| **Implement sleep-time compute** — Run memory consolidation during idle time, not at inference | Medium | Low | Reduces inference latency |
+304|| **Add memory deduplication via embeddings** — Cosine similarity above 0.85 means "duplicate" (already partially implemented in consolidator) | Medium | Low | Prevents redundant memory storage |
+305|| **Add memory strength decay visualization** — Expose current strength scores for debugging | Low | Low | Improves observability |
+306|
+307|**Implementation sketch for dynamic memory linking:**
+308|
+309|```python
+310|class MemoryLinker:
+311|    """A-MEM inspired dynamic memory linking."""
+312|    
+313|    def __init__(self, store: MemoryStore, similarity_threshold: float = 0.7):
+314|        self.store = store
+315|        self.threshold = similarity_threshold
+316|    
+317|    async def link_new_memory(self, new_memory: MemoryEntry) -> list[uuid.UUID]:
+318|        """Analyze existing memories and establish links to the new memory."""
+319|        if new_memory.embedding is None:
+320|            return []
+321|        
+322|        # Search for semantically similar memories
+323|        similar = await self.store.search_by_embedding(
+324|            embedding=new_memory.embedding,
+325|            limit=10,
+326|        )
+327|        
+328|        linked_ids = []
+329|        for existing, score in similar:
+330|            if score >= self.threshold and existing.id != new_memory.id:
+331|                # Create bidirectional link
+332|                await self._create_link(new_memory.id, existing.id, score)
+333|                linked_ids.append(existing.id)
+334|        
+335|        return linked_ids
+336|    
+337|    async def _create_link(self, from_id: uuid.UUID, to_id: uuid.UUID, strength: float) -> None:
+338|        """Create a memory link with strength score."""
+339|        await db.execute(
+340|            """
+341|            INSERT INTO memory_links (from_memory_id, to_memory_id, strength, created_at)
+342|            VALUES ($1, $2, $3, NOW())
+343|            ON CONFLICT (from_memory_id, to_memory_id) DO UPDATE SET strength = $3
+344|            """,
+345|            from_id, to_id, strength,
+346|        )
+347|```
+348|
+349|---
+350|
+351|## 4. Context Window Management and Compression
+352|
+353|### 4.1 The Context Challenge
+354|
+355|As LLM agents tackle longer-horizon tasks, managing unbounded interaction trajectories under fixed context budgets becomes a core systems challenge. Agent trajectories are heterogeneous — they interleave observations, reasoning traces, and tool executions — so compression must preserve temporal dependencies, actionable state, and structural fidelity. [Source: exa.ai]
+356|
+357|### 4.2 Compression Method Categories
+358|
+359|| Category | Methods | Pros | Cons |
+360||----------|---------|------|------|
+361|| **Document/retrieval-based** | Selective Context (Li et al., 2023), LLMLingua-2 (Pan et al., 2024) | Preserves original phrasing | Limited to explicit tokens |
+362|| **Dialogue memory summarization** | LLM-generated summaries | Natural language compression | Hallucination risk, extra API cost |
+363|| **Low-level KV cache compression** | LaCache, SnapKV, Quest | Model-agnostic | Requires model access |
+364|| **Learned compression** | MemAgent (Yu et al., 2025) — RL-based memory slot overwrite | Scales to 3.5M tokens | Requires training |
+365|
+366|### 4.3 Selective Context and LLMLingua
+367|
+368|**Selective Context** (arXiv:2310.06201) identifies and prunes redundancy in the input context to make it more compact. It works by: [Source: arxiv.org]
+369|
+370|1. Computing self-information scores for each token/phrase
+371|2. Removing low-information tokens while preserving high-value content
+372|3. Achieving significant reductions in memory cost and generation latency while maintaining comparable performance
+373|
+374|**LLMLingua-2** (Pan et al., 2024) extends this with a more efficient token-level compression approach that maintains semantic fidelity better than heuristic methods.
+375|
+376|### 4.4 Acon: Agent Context Optimization
+377|
+378|**Acon** (arXiv:2510.00615) introduces a unified framework for compressing both environment observations and interaction histories in long-horizon agent tasks: [Source: arxiv.org]
+379|
+380|**Key innovations:**
+381|
+382|1. **Guideline optimization** — Instead of handcrafting compression prompts, Acon uses a gradient-free optimization pipeline that refines compressor prompts via failure analysis in natural language space. Given paired trajectories where full context succeeds but compressed context fails, capable LLMs analyze the causes of failure and update the compression guideline.
+383|
+384|2. **Two-step optimization:**
+385|   - **Compression minimization:** Minimize task failure rate with compressed context
+386|   - **Compression maximization:** Given successful compressed trajectories, minimize context cost (encourage shorter yet sufficient contexts)
+387|
+388|3. **Compressor distillation** — Distill the optimized LLM compressor into smaller models (Qwen3-14B, Qwen3-8B, Phi-4) using LoRA. Distilled compressors retain over 95% of the performance of gpt-4.1 compressor while reducing overhead.
+389|
+390|**Results:**
+391|- Reduces memory usage by 26-54% (peak tokens) while largely preserving task performance
+392|- Preserves over 95% of accuracy when distilled into smaller compressors
+393|- Enhances smaller LMs as long-horizon agents with up to 46% performance improvement
+394|
+395|### 4.5 DTOC: Dynamic Tool Output Compression
+396|
+397|**DTOC** (2025) models context updates as explicit and reversible operations within the agent reasoning loop: [Source: exa.ai]
+398|
+399|- Retains full tool outputs in external memory
+400|- Inserts compact placeholders into the active context
+401|- Enables selective reconstruction when needed
+402|- Reversibility is critical: disable-only compression variants degraded performance, while full DTOC recovered baseline accuracy at substantially lower context cost
+403|
+404|**Results:** For responsive models (Sonnet 4.6, GPT-5.4), DTOC reduces input tokens (10.3% and 12.7%) and agent steps (2.4% and 32.3%), while increasing solve rates (2.5× and 1.5× higher) and lowering cost per solved task (3× and 3.5× lower).
+405|
+406|### 4.6 Observation Masking vs. LLM Summarization
+407|
+408|A JetBrains Research study (2025) compared two primary context management strategies: [Source: blog.jetbrains.com]
+409|
+410|| Approach | Mechanism | Cost Reduction | Performance Impact |
+411||----------|-----------|---------------|-------------------|
+412|| **Observation masking** | Replace older observations with placeholders once outside a fixed window | >50% | Neutral to slightly positive |
+413|| **LLM summarization** | Use a separate LLM to compress older interactions into summaries | >50% | Can increase turns by 15% (agent runs longer) |
+414|| **Hybrid (masking + occasional summarization)** | Masking as first line; LLM summarization as last resort for very long contexts | 57-61% | +2.6% success rate, saves $35 per benchmark run |
+415|
+416|**Key finding:** "Even though summarization sounds smart, in practice, it's extra costly and doesn't reliably outperform the simpler masking approach." The hybrid approach — observation masking as the primary defense with occasional LLM summarization for very long contexts — provides the best balance of cost efficiency and reliability.
+417|
+418|**Recommended parameters:**
+419|- Masking window: Keep the latest 10 turns in full
+420|- Summarization trigger: After collecting a large batch of turns (21+)
+421|- Always retain the most recent 10 turns uncompressed
+422|
+423|### 4.7 Recommendations for AgentHarness
+424|
+425|The AgentHarness `ContextManager` in `ah/core/context.py` implements LRU caching and batch insert but lacks active context compression. Specific improvements:
+426|
+427|| Recommendation | Priority | Effort | Impact |
+428||----------------|----------|--------|--------|
+429|| **Implement observation masking** — Replace older tool outputs with placeholders when they fall outside a fixed window | High | Medium | >50% cost reduction on long sessions |
+430|| **Add LLM summarization as fallback** — When context grows beyond a threshold, use a separate summarizer LLM to compress older interactions | High | Medium | Enables infinite conversation scaling |
+431|| **Implement hybrid approach** — Observation masking as primary defense; occasional LLM summarization for very long contexts | High | Medium | Best balance of cost and quality |
+432|| **Add DTOC for tool outputs** — Retain full tool outputs in external memory, insert compact placeholders in active context, enable on-demand restoration | Medium | Medium | Reversible compression, maintains accuracy |
+433|| **Implement Acon-style guideline optimization** — Use failure analysis to refine compression prompts | Medium | Low | Gradient-free, works with any LLM |
+434|| **Add context compression metrics** — Track compression ratio, token savings, and quality preservation | Low | Low | Enables data-driven tuning |
+435|
+436|**Implementation sketch for observation masking:**
+437|
+438|```python
+439|class ObservationMasker:
+440|    """Masks older observations to reduce context size while preserving recent context."""
+441|    
+442|    def __init__(self, window_size: int = 10):
+443|        self.window_size = window_size
+444|    
+445|    def mask_older_turns(self, turns: list[dict]) -> list[dict]:
+446|        """Replace older observations with placeholders."""
+447|        if len(turns) <= self.window_size:
+448|            return turns
+449|        
+450|        masked = []
+451|        for i, turn in enumerate(turns):
+452|            if i < len(turns) - self.window_size:
+453|                # Replace with placeholder
+454|                masked.append({
+455|                    "role": turn["role"],
+456|                    "content": "[Earlier observation omitted for brevity — use search to retrieve if needed]",
+457|                    "masked": True,
+458|                    "original_index": i,
+459|                })
+460|            else:
+461|                masked.append(turn)
+462|        return masked
+463|```
+464|
+465|---
+466|
+467|## 5. RAG Pipeline Optimization
+468|
+469|### 5.1 The RAG Quality Gap
+470|
+471|The default "chunk + embed + query" RAG pipeline gets approximately 70% accuracy. Upgrading to hybrid search + re-ranking achieves ~85%. Adding query transformation and multi-hop retrieval reaches 90%+. The biggest ROI improvement for most teams is **adding re-ranking** — it costs ~$0.01 per query and meaningfully improves answer quality. [Source: aidev.fit]
+472|
+473|### 5.2 Hybrid Search: Dense + Sparse
+474|
+475|Pure vector search misses exact keyword matches. Pure keyword search misses semantic queries. **Hybrid search** — combining dense vector retrieval with sparse BM25 scoring — consistently outperforms either approach alone. [Source: towardsdatascience.com]
+476|
+477|**Reciprocal Rank Fusion (RRF)** is the standard way to merge ranked lists from both retrievers. It merges ranked lists by summing the reciprocal ranks — a robust merging strategy that doesn't require tuning the relative weight between the two signals. [Source: brixnex.netlify.app]
+478|
+479|```python
+480|def reciprocal_rank_fusion(
+481|    dense_results: list[tuple[str, float]],
+482|    sparse_results: list[tuple[str, float]],
+483|    k: int = 60,
+484|) -> list[tuple[str, float]]:
+485|    """Merge two ranked lists using Reciprocal Rank Fusion."""
+486|    scores: dict[str, float] = {}
+487|    
+488|    for rank, (doc_id, _) in enumerate(dense_results):
+489|        scores[doc_id] = scores.get(doc_id, 0) + 1.0 / (rank + k)
+490|    
+491|    for rank, (doc_id, _) in enumerate(sparse_results):
+492|        scores[doc_id] = scores.get(doc_id, 0) + 1.0 / (rank + k)
+493|    
+494|    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+495|```
+496|
+497|### 5.3 Chunking Strategies
+498|
+499|Chunking strategy is the most consequential and least attended decision in RAG pipeline design. [Source: aidev.fit, arxiv.org]
+500|
+501|| Strategy | Best For | Pros | Cons | Precision | Recall | F1 |
+502||----------|----------|------|------|-----------|--------|-----|
+503|| **Fixed-size (512 tokens)** | General documents | Simple, predictable | Splits sentences mid-thought | 0.65 | 0.58 | 0.61 |
+504|| **Sentence-aware** | Articles, docs | Semantically meaningful | Uneven chunk sizes | — | — | — |
+505|| **Semantic chunking** | Thematic content | Groups by meaning | Requires embedding pass | 0.78 | 0.72 | 0.75 |
+506|| **Hierarchical** | Multi-level docs | Multiple granularities | More complex | 0.82 | 0.79 | 0.80 |
+507|| **Parent-context** | High-precision needs | Rich context for LLM | Higher storage cost | 0.88 | 0.85 | 0.86 |
+508|
+509|**Optimal chunk size in 2026:** 256-512 tokens with 10-20% overlap. Larger chunks (1,024+) improve context but dilute retrieval precision. [Source: aidev.fit]
+510|
+511|**Adaptive Chunking** (arXiv:2603.25333) proposes selecting the most suitable chunking method per document rather than using a single strategy: [Source: arxiv.org]
+512|
+513|1. LLM-guided regex splitter
+514|2. Split-then-merge recursive splitter
+515|3. Post-processing to enforce size constraints
+516|4. Evaluation pipeline measuring both retriever quality and downstream RAG performance
+517|
+518|### 5.4 Re-ranking
+519|
+520|Re-ranking involves reordering the most relevant items at the top using a more sophisticated (but slower) model than the initial retrieval. [Source: medium.com]
+521|
+522|**Why it matters:** Vector search compresses information into a single vector, losing information in the process. The top few vector search results may miss relevant information that falls below the top-k cutoff. A cross-encoder reranker (like Cohere Rerank, BGE-Reranker, or snowflake-arcticembed-l-v2.0) computes relevance scores between the query and each candidate, dramatically improving recall. [Source: arxiv.org, Dify]
+523|
+524|**Production pattern:** Retrieve 20-50 chunks via hybrid search, then use a cross-encoder to score relevance and keep the top 3-5. Adds ~100ms latency but dramatically improves precision. [Source: aidev.fit]
+525|
+526|### 5.5 GraphRAG: Knowledge Graph-Enhanced RAG
+527|
+528|**GraphRAG** (Microsoft Research, arXiv:2404.16130) combines text extraction, network analysis, and LLM prompting into a single end-to-end system: [Source: microsoft.github.io]
+529|
+530|**Process:**
+531|1. Extract entities and relationships from raw text
+532|2. Build a knowledge graph
+533|3. Detect communities using the Leiden algorithm
+534|4. Generate summaries for each community
+535|5. Use graph structure to retrieve context
+536|
+537|**Results:** Substantial improvement over naive RAG for complex, multi-hop questions that require understanding relationships between entities. On the internal manufacturing dataset, GraphRAG achieved: [Source: mdpi.com]
+538|
+539|| Metric | Naive RAG | GraphRAG | Improvement |
+540||--------|-----------|----------|-------------|
+541|| Recall@10 | 0.055 | 0.075 | +36% |
+542|| Context Precision | 0.485 | 0.498 | +3% |
+543|| Context Recall | 0.729 | 0.794 | +9% |
+544|
+545|**When to use GraphRAG vs. naive RAG:**
+546|- **Use GraphRAG** when questions require understanding relationships, multi-hop reasoning, or thematic analysis across a corpus
+547|- **Use naive RAG** when questions are factoid and can be answered by retrieving similar passages
+548|
+549|### 5.6 Query Transformation
+550|
+551|Rewrite user queries before retrieval: [Source: aidev.fit]
+552|
+553|- **Decompose** complex questions into sub-questions
+554|- **Expand** queries with related terms and synonyms
+555|- **Generate hypothetical answers** to use as search queries (HyDE pattern)
+556|
+557|### 5.7 Embedding Model Selection
+558|
+559|| Model | Dimensions | MTEB Score | Cost (per 1M tokens) | Best For |
+560||-------|-----------|------------|---------------------|----------|
+561|| OpenAI text-embedding-3-large | 256-3,072 (Matryoshka) | 64.6 | $0.13 | General purpose, best quality |
+562|| Cohere Embed v4 | 1,024 | 65.2 | $0.10 | Multilingual, long documents |
+563|| BGE-M3 (BAAI) | 1,024 | 63.8 | Free (OSS) | Self-hosted, multilingual, dense+sparse hybrid |
+564|
+565|### 5.8 Multi-Hop Retrieval
+566|
+567|For complex questions like "What was the revenue impact of the pricing change announced in Q3?", first retrieval finds context about the pricing change, then second retrieval uses that context to find revenue impact information. [Source: aidev.fit]
+568|
+569|### 5.9 Recommendations for AgentHarness
+570|
+571|The AgentHarness RAG pipeline (`ah/rag/pipeline.py`, `ah/tools/rag.py`) already implements hybrid search (BM25 + dense + RRF fusion) and multi-document indexing. Specific improvements:
+572|
+573|| Recommendation | Priority | Effort | Impact |
+574||----------------|----------|--------|--------|
+575|| **Add cross-encoder re-ranking** — After hybrid retrieval, re-rank candidates with a cross-encoder (Cohere Rerank, BGE-Reranker) | High | Medium | ~15% accuracy improvement |
+576|| **Implement adaptive chunking** — Select chunking strategy per document type rather than fixed-size for all | High | Medium | Better retrieval quality for mixed document types |
+577|| **Add parent-context chunking** — Store small chunks for retrieval but include parent context during generation | Medium | Medium | Better precision with rich context |
+578|| **Implement query transformation** — Decompose complex questions, expand with related terms, generate hypothetical answers | Medium | Medium | Handles complex multi-hop queries |
+579|| **Add GraphRAG for entity-aware retrieval** — Extract entities and relationships, build community hierarchy, use graph structure for retrieval | High | High | Enables multi-hop reasoning |
+580|| **Add multi-hop retrieval** — First retrieval finds context, second retrieval uses that context to find more specific information | Medium | Medium | Handles complex questions |
+581|| **Add RAG evaluation pipeline** — Measure context precision, context recall, and answer quality with RAGAS or custom metrics | Medium | Medium | Enables data-driven RAG tuning |
+582|| **Optimize embedding model selection** — Benchmark OpenAI, Cohere, and BGE-M3 on your specific query distribution | Low | Low | Cost and quality optimization |
+583|
+584|---
+585|
+586|## 6. Cross-Cutting Recommendations
+587|
+588|### 6.1 Priority-Ordered Roadmap
+589|
+590|| Phase | Timeline | Focus Items | Expected Impact |
+591||-------|----------|-------------|-----------------|
+592|| **Phase 1: Foundation** | 1-2 weeks | Circuit breaker, per-call caps, handoff caps, observation masking | 30-50% cost reduction, prevents runaway loops |
+593|| **Phase 2: Quality** | 2-4 weeks | Cross-encoder re-ranking, adaptive chunking, query transformation | 10-15% accuracy improvement |
+594|| **Phase 3: Intelligence** | 4-8 weeks | Dynamic memory linking, memory evolution, orchestrator-worker pattern | Multi-hop reasoning, complex workflow support |
+595|| **Phase 4: Scale** | 8-12 weeks | GraphRAG, multi-hop retrieval, fleet-level budgets, model tiering | Enterprise-scale deployment readiness |
+596|
+597|### 6.2 Key Metrics to Track
+598|
+599|| Metric | Target | Current State |
+600||--------|--------|---------------|
+601|| Token cost per task | < $0.50 for routine tasks | Not measured |
+602|| Context compression ratio | > 50% for long sessions | `RollingCompaction` + `ContextCompressor` shipped (truncate/LLM summarize) |
+603|| Memory retrieval accuracy (LoCoMo F1) | > 3.0 | Not measured |
+604|| RAG answer accuracy | > 85% | ~70% (baseline hybrid) |
+605|| Multi-hop reasoning accuracy | > 60% | Not measured |
+606|| Agent loop termination rate | > 99% clean stops | Not measured |
+607|| Per-agent budget adherence | > 95% within budget | Enforced via `llm_usage` reservations and `UsageBudgetExceededError` |
+608|
+609|### 6.3 Anti-Patterns to Avoid
+610|
+611|1. **Over-orchestrating simple agents** — Start with one agent; add roles only when measurements show the single-agent design is the bottleneck
+612|2. **Full conversation replay** — Never send all previous messages with each LLM call; use memory extraction and retrieval instead
+613|3. **Single chunking strategy** — Different document types need different chunking approaches
+614|4. **Advisory-only budgets** — Budgets without enforcement are suggestions; agents can and will exceed them
+615|5. **No re-ranking** — The biggest ROI improvement in RAG is adding re-ranking; skipping it leaves 15% accuracy on the table
+616|6. **Ignoring the "lost in the middle" effect** — Even with huge context windows, LLMs pay less attention to middle content; feed focused, relevant chunks rather than large blocks
+617|
+618|---
+619|
+620|## 7. References
+621|
+622|### Academic Papers
+623|1. **MemGPT: Towards LLMs as Operating Systems** — arXiv:2310.08560 (2023)
+624|2. **A-MEM: Agentic Memory for LLM Agents** — arXiv:2502.12110, NeurIPS 2025
+625|3. **Selective Context** — arXiv:2310.06201 (2023)
+626|4. **Acon: Optimizing Context Compression for Long-horizon Agents** — arXiv:2510.00615 (2025)
+627|5. **GraphRAG: From Local to Global** — arXiv:2404.16130, Microsoft Research (2024)
+628|6. **Retrieval-Augmented Generation with Graphs (GraphRAG Survey)** — arXiv:2501.00309 (2025)
+629|7. **Pretraining Context Compressor for LLMs** — ACL 2025
+630|8. **LaCache: Ladder-shaped KV Caching** — ICML 2025
+631|9. **Adaptive Chunking for RAG** — arXiv:2603.25333 (2026)
+632|10. **Knowledge Graph-Guided RAG (KG2RAG)** — NAACL 2025
+633|
+634|### Production Systems and Frameworks
+635|- **Letta (formerly MemGPT)** — letta.com, github.com/letta-ai/letta
+636|- **Mem0** — mem0.ai, github.com/mem0ai/mem0
+637|- **LangGraph** — github.com/langchain-ai/langgraph
+638|- **CrewAI** — github.com/crewAIInc/crewAI
+639|- **AutoGen / AG2** — github.com/microsoft/autogen
+640|- **OpenAI Agents SDK** — platform.openai.com/docs/agents
+641|- **Microsoft GraphRAG** — github.com/microsoft/graphrag
+642|- **Google ADK** — Agent Development Kit
+643|
+644|### Industry Reports and Production Incident Analyses
+645|- "Agent Cost Runaway Detection" — getreadyforagents.com (2026)
+646|- "63 Production Incidents, 21 Frameworks" — agoradigest.com (2026)
+647|- "AI Agent Cost Governance" — conceptualise.de (2026)
+648|- "Designing an AI Agent Cost Governance System" — letsbuildsolutions.com (2026)
+649|- "Multi-Agent Orchestration Playbook" — seodatapulse.com (2026)
+650|- "LangGraph vs CrewAI & AutoGen — 2026 Comparison" — humaineeti.ai (2026)
+651|
+652|---
+653|
+654|## Appendix: AgentHarness Codebase Mapping
+655|
+656|| Research Area | Current Implementation | File Location | Gap |
+657||---------------|----------------------|---------------|-----|
+658|| Token budgeting | UsageStore with advisory locks | `ah/core/usage.py` | Optional; enforced via `usage_*` budgets (no circuit breaker) |
+659|| Multi-agent | Basic delegate tool | `ah/tools/agents.py` | No orchestrator-worker, no model tiering |
+660|| Memory decay | Ebbinghaus model | `ah/memory/forgetting.py` | No dynamic linking, no memory evolution |
+661|| Memory retrieval | Hybrid dense+sparse | `ah/memory/retriever.py` | No parent-context, no dedup |
+662|| Memory importance | Multi-factor scoring | `ah/memory/scorer.py` | Solid, research-backed |
+663|| Memory consolidation | LLM extraction pipeline | `ah/memory/consolidator.py` | No sleep-time compute |
+664|| Context management | LRU cache, batch insert, archive | `ah/core/context.py` | Compression exists; no observation masking |
+665|| RAG pipeline | Hybrid BM25+dense+RRF, reranker interface | `ah/rag/pipeline.py` | No adaptive chunking |
+666|| RAG tools | index/search documents | `ah/tools/rag.py` | No query transformation, no GraphRAG |
+667|
+668|---
+669|
+670|*Report compiled: 2026-10-04. Next review: 2027-01-04.*
+671|

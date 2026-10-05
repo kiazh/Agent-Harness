@@ -228,11 +228,3 @@ def timed(operation: str) -> Generator[None, None, None]:
         duration_ms = (time.monotonic() - start) * 1000
         metrics.record_latency(operation, duration_ms)
         metrics.increment_counter(f"{operation}.calls")
-
-def setup_structured_logging(level: int = logging.INFO) -> None:
-    """Set up structured JSON logging for the ah.metrics logger."""
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(JsonFormatter())
-        logger.addHandler(handler)
-    logger.setLevel(level)

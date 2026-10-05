@@ -129,7 +129,8 @@ class CohereReranker(Reranker):
         except Exception as e:
             audit_log("rag_rerank_error", model=self._model, error=str(e))
             logger.error("Rerank API call failed: %s", e)
-            # Fallback: return un-reranked results
+            # Fallback: return results with synthetic scores (not original order)
+            logger.warning("Reranker fallback: returning results with synthetic scores")
             return [
                 RerankResult(index=i, score=1.0 / (i + 1), text=doc)
                 for i, doc in enumerate(documents[:top_k])

@@ -1,0 +1,890 @@
+1|# Hermes Agent Self-Improvement & Learning Loop Architecture
+2|
+3|> Research document analyzing Hermes Agent's self-improvement mechanisms for AgentHarness adoption.
+4|> Sources: official docs, source code (GitHub main), third-party audits, community analysis.
+5|
+6|---
+7|
+8|## Table of Contents
+9|
+10|1. [Executive Summary](#executive-summary)
+11|2. [The Closed Learning Loop](#the-closed-learning-loop)
+12|3. [Skill Creation from Experience](#skill-creation-from-experience)
+13|4. [Skill Improvement During Use](#skill-improvement-during-use)
+14|5. [Self-Nudging: Persisting Knowledge](#self-nudging-persisting-knowledge)
+15|6. [Skill Curation Process](#skill-curation-process)
+16|7. [Four-Layer Memory System](#four-layer-memory-system)
+17|8. [Progressive Disclosure](#progressive-disclosure)
+18|9. [Context Compression & Caching](#context-compression--caching)
+19|10. [Cron Scheduling](#cron-scheduling)
+20|11. [User Modeling (Honcho)](#user-modeling-honcho)
+21|12. [Session Search (FTS5)](#session-search-fts5)
+22|13. [Skill Authoring Standards](#skill-authoring-standards)
+23|14. [Safety Mechanisms & Guardrails](#safety-mechanisms--guardrails)
+24|15. [What Hermes Explicitly Does NOT Do](#what-hermes-explicitly-does-not-do)
+25|16. [Adoption Roadmap for AgentHarness](#adoption-roadmap-for-agentharness)
+26|17. [Key Files & References](#key-files--references)
+27|
+28|---
+29|
+30|## Executive Summary
+31|
+32|Hermes Agent (Nous Research) implements the most complete production-grade self-improvement loop available in any open-source agent framework. The core insight: **the agent writes its own context** — it distills completed workflows into reusable Markdown files (skills), stores durable facts in bounded memory files, and reviews every session in the background to extract lessons.
+33|
+34|The system is NOT a recursive self-modifier (it never edits its own source code). Instead, it builds **durable behavioral artifacts** — skills, memory entries, session history — that influence future sessions. This makes improvement safe, inspectable, and reversible.
+35|
+36|**Key mechanisms:**
+37|- Background review agent inspects every finished turn and writes/patches skills
+38|- Skills are plain Markdown files in `~/.hermes/skills/` (agentskills.io standard)
+39|- Four-layer memory: prompt memory, session search, skills, user model
+40|- Progressive disclosure keeps token costs flat regardless of skill count
+41|- Curator consolidates and archives stale skills on a 7-day cycle
+42|- Cron system for scheduled autonomous work
+43|- Honcho integration for dialectic user modeling
+44|
+45|---
+46|
+47|## The Closed Learning Loop
+48|
+49|Hermes describes its self-improvement as a four-phase cycle:
+50|
+51|```
+52|┌─────────────────────────────────────────────────────────┐
+53|│                   CLOSED LEARNING LOOP                   │
+54|│                                                          │
+55|│  1. EXECUTE                                              │
+56|│     Agent performs task (5+ tool calls, error recovery,  │
+57|│     user correction, novel workflow)                     │
+58|│         ↓                                                │
+59|│  2. EVALUATE                                             │
+60|│     Background review agent inspects the turn:           │
+61|│     "What worked? What failed? What's reusable?"         │
+62|│         ↓                                                │
+63|│  3. EXTRACT                                              │
+64|│     If signal threshold met → write/patch skill          │
+65|│     via skill_manage tool                               │
+66|│         ↓                                                │
+67|│  4. RETRIEVE                                             │
+68|│     Next session: progressive disclosure loads skill     │
+69|│     index; agent loads full SKILL.md on demand           │
+70|│         ↓                                                │
+71|│     Back to 1. EXECUTE (with skill loaded)               │
+72|└─────────────────────────────────────────────────────────┘
+73|```
+74|
+75|**Trigger thresholds for skill creation:**
+76|- Task required 5+ tool calls
+77|- Error occurred and was successfully recovered
+78|- User corrected the agent's approach, style, or workflow
+79|- Non-trivial technique/workaround emerged
+80|- A loaded skill was found to be wrong or outdated
+81|
+82|**What does NOT trigger skill creation:**
+83|- Environment-dependent failures (missing binaries, fresh-install errors)
+84|- Negative claims about tools ("browser tools don't work")
+85|- Session-specific transient errors that resolved
+86|- One-off task narratives ("summarize today's market")
+87|
+88|---
+89|
+90|## Skill Creation from Experience
+91|
+92|### 1. Background Review Agent (Primary Mechanism)
+93|
+94|**Source:** `agent/background_review.py`
+95|
+96|After every turn, `AIAgent.run_conversation` calls `spawn_background_review` which:
+97|1. Launches a **daemon thread** (non-blocking)
+98|2. Copies the current session's message snapshot
+99|3. Starts a **forked AIAgent** (separate agent instance)
+100|4. Sends the review prompt to the fork
+101|5. The fork writes skills/memory directly to disk
+102|
+103|**Review prompt (skill review):**
+104|```
+105|Review the conversation above and update the skill library. Be ACTIVE —
+106|most sessions produce at least one skill update, even if small. A pass
+107|that does nothing is a missed learning opportunity, not a neutral outcome.
+108|
+109|Target shape of the library: CLASS-LEVEL skills, each with a rich
+110|SKILL.md and a `references/` directory for session-specific detail.
+111|Not a long flat list of narrow one-session-only-skill entries.
+112|
+113|Signals to look for (any one of these warrants action):
+114|• User corrected your style, tone, format, legality, or verbosity.
+115|  Frustration signals like 'stop doing X', 'this is too verbose',
+116|  'don't format like this' are FIRST-CLASS skill signals.
+117|• User corrected your workflow, approach, or sequence of steps.
+118|• Non-trivial technique, fix, workaround, debugging path, or
+119|  tool-usage pattern emerged that a future session would benefit from.
+120|• A skill that got loaded or consulted this session turned out
+121|  to be wrong, missing a step, or outdated. Patch it NOW.
+122|
+123|Preference order — prefer the earliest action that fits:
+124|1. UPDATE A CURRENTly-LOADED SKILL (patch it first)
+125|2. UPDATE AN EXISTING UMBRELLA (via skills_list + skill_view)
+126|3. ADD A SUPPORT FILE under an existing umbrella
+127|4. CREATE A NEW CLASS-LEVEL UMBRELLA SKILL when nothing exists
+128|```
+129|
+130|**Memory review prompt:**
+131|```
+132|Review the conversation above and consider saving to memory if appropriate.
+133|Focus on:
+134|1. Has the user revealed things about themselves — their persona, desires,
+135|   preferences, or personal details worth remembering?
+136|2. Has the user expressed expectations about how you should behave?
+137|If something stands out, save it using the memory tool.
+138|If nothing is worth saving, just say 'Nothing to save.' and stop.
+139|```
+140|
+141|### 2. The `/learn` Command
+142|
+143|**Source:** `tools/skill_manager_tool.py`, docs
+144|
+145|`/learn` is the explicit skill creation path — it turns any source material into a reusable skill:
+146|
+147|```bash
+148|# From a local code directory
+149|/learn the REST client in ~/projects/acme-sdk, focus on auth + pagination
+150|
+151|# From an online doc page
+152|/learn https://docs.example.com/api/quickstart
+153|
+154|# From the workflow just executed in conversation
+155|/learn how I just deployed the staging server
+156|
+157|# From pasted notes / described procedure
+158|/learn filing an expense: open the portal, New > Expense, attach receipt, submit
+159|
+160|# From a book or large docs corpus → knowledge-base skill
+161|/learn ~/books/designing-data-intensive-applications.pdf
+162|```
+163|
+164|For large sources, `/learn` creates an **expansive knowledge-base skill**: a lean `SKILL.md` with core mental models + an index, with one distilled file per chapter/topic under `references/`. Reference files cost nothing until needed.
+165|
+166|Re-running `/learn` with new material on the same topic **folds it into the existing skill** rather than creating a duplicate.
+167|
+168|### 3. The `skill_manage` Tool
+169|
+170|**Source:** `tools/skill_manager_tool.py`
+171|
+172|The agent's primary tool for skill CRUD:
+173|
+174|| Action | Description |
+175||--------|-------------|
+176|| `create` | Create new skill with SKILL.md and directory structure |
+177|| `edit` | Rewrite entire SKILL.md content |
+178|| `patch` | Targeted find-and-replace inside SKILL.md or support file |
+179|| `write_file` | Add/overwrite support file (references/, templates/, scripts/) |
+180|| `remove_file` | Delete a support file |
+181|| `delete` | Delete an entire skill |
+182|
+183|**Advisory linter** runs on `create`, `patch`, and `write_file`:
+184|- `incident-log-shape`: body dense in PR/issue numbers (warns)
+185|- `references-sprawl`: more than 60 reference files (warns)
+186|- `oversized-body`: SKILL.md body past ~24k chars (warns)
+187|
+188|Linter findings are returned in the tool result but **never block a write**.
+189|
+190|### 4. Skill File Structure
+191|
+192|```
+193|~/.hermes/skills/
+194|└── my-skill/
+195|    ├── SKILL.md                    # Main skill document (YAML frontmatter + markdown)
+196|    ├── references/
+197|    │   ├── api-docs.md             # Session-specific detail, knowledge banks
+198|    │   └── examples.md
+199|    ├── templates/
+200|    │   └── config.yaml             # Starter files to copy and modify
+201|    └── scripts/
+202|        └── setup.sh                # Re-runnable actions
+203|```
+204|
+205|**SKILL.md format:**
+206|```yaml
+207|---
+208|name: my-skill
+209|description: One-line trigger description (≤60 chars)
+210|triggers:
+211|  - keyword1
+212|  - keyword2
+213|version: 1.0.0
+214|---
+215|
+216|# Skill Title
+217|
+218|## Instructions
+219|Step-by-step procedure...
+220|
+221|## Pitfalls
+222|- What goes wrong and how to avoid it
+223|
+224|## Verification
+225|How to confirm the task was done correctly
+226|```
+227|
+228|---
+229|
+230|## Skill Improvement During Use
+231|
+232|### Mid-Session Skill Patching
+233|
+234|When the agent loads a skill and discovers a better approach, or hits an error the skill didn't predict, it can **update the skill mid-task**:
+235|
+236|1. Agent loads skill via `skill_view(name)`
+237|2. Discovers the skill is outdated or wrong
+238|3. Calls `skill_manage(action="patch", ...)` with targeted fix
+239|4. Prefers `patch` over `edit` — smaller, safer, less likely to break working skill
+240|
+241|**Priority order for updates:**
+242|1. Patch the currently-loaded skill first
+243|2. Then an existing umbrella skill in the right category
+244|3. Then add a support file under an existing umbrella
+245|4. Only then create a new skill
+246|
+247|### Read-Before-Write Guard
+248|
+249|**Source:** `tools/skill_manager_tool.py` (v2026.7.1+)
+250|
+251|A safety guard prevents accidental overwrites: the review fork must call `skill_view(name)` before `skill_manage(action="patch")` on an existing skill. This ensures the fork has actually seen the current content before modifying it.
+252|
+253|The guard tracks reads **per-path** (not per-skill): `skill_view(name, file_path="references/api-docs.md")` is required before overwriting that specific support file.
+254|
+255|### User-Preference Embedding
+256|
+257|When the user corrects style/format/workflow, the update belongs in the **SKILL.md body**, not just in memory:
+258|- **Memory** captures "who the user is and what the current situation is"
+259|- **Skills** capture "how to do this class of task for this user"
+260|
+261|---
+262|
+263|## Self-Nudging: Persisting Knowledge
+264|
+265|### SKILLS_GUIDANCE in System Prompt
+266|
+267|**Source:** `agent/prompt_builder.py`
+268|
+269|The system prompt is assembled in three layers: **stable**, **context**, and **volatile**. The stable layer carries a hard rule:
+270|
+271|```
+272|After completing a complex task (5+ tool calls), fixing a tricky error,
+273|or discovering a non-trivial workflow, save the approach as a skill with
+274|skill_manage so you can reuse it next time.
+275|```
+276|
+277|This is the primary "nudge" — the agent is instructed to persist knowledge as part of its core operating instructions.
+278|
+279|### Activity Bias in Review Prompts
+280|
+281|The background review prompt is deliberately **biased toward action**:
+282|
+283|> "Be ACTIVE — most sessions produce at least one skill update, even if small. A pass that does nothing is a missed learning opportunity, not a neutral outcome."
+284|
+285|This counteracts the natural tendency to do nothing. The review agent is told that inaction is a failure mode, not a neutral outcome.
+286|
+287|### Memory Nudges
+288|
+289|The memory review prompt asks two specific questions:
+290|1. Did the user reveal things about themselves?
+291|2. Did the user express expectations about how the agent should behave?
+292|
+293|If yes → save to memory. If no → "Nothing to save." (explicit no-op signal).
+294|
+295|### Write Approval Gate (Optional)
+296|
+297|```yaml
+298|skills:
+299|  write_approval: false     # false = write freely (default) | true = require approval
+300|```
+301|
+302|When `true`, every `skill_manage` write is **staged** under `~/.hermes/pending/skills/` and reviewed via:
+303|- `/skills pending` — list staged writes
+304|- `/skills diff` — full unified diff
+305|- `/skills apply` — approve
+306|- `/skills reject` — deny
+307|
+308|This is the human-in-the-loop safety rail for the self-improvement loop.
+309|
+310|---
+311|
+312|## Skill Curation Process
+313|
+314|### The Curator
+315|
+316|**Source:** `agent/curator.py`, docs
+317|
+318|The curator is a **background maintenance pass** for agent-created skills. It runs on an inactivity check (not cron) — triggered when:
+319|1. Enough time has passed since last run (`interval_hours`, default **7 days**)
+320|2. The agent has been idle long enough (2+ hours)
+321|
+322|**What it does:**
+323|- Tracks each skill's **view count**, **use count**, and **patch count**
+324|- Moves unused skills through lifecycle states: `active → stale → archived`
+325|- Periodically spawns a short auxiliary-model review proposing consolidations
+326|- **Never auto-deletes** — worst case is archival to `~/.hermes/skills/.archive/`
+327|
+328|**Lifecycle states:**
+329|
+330|| State | Condition | Behavior |
+331||-------|-----------|----------|
+332|| `active` | Normal use | Available in skills_list |
+333|| `stale` | 30 days without use | Still available, flagged |
+334|| `archived` | 90 days without use | Moved to `.archive/`, recoverable |
+335|
+336|**Scope:**
+337|- By default, manages only **agent-created** skills
+338|- `curator.prune_builtins: true` can also archive unused bundled skills (opt-in)
+339|- Hub-installed skills are always off-limits
+340|- Pinned skills (`hermes curator pin`) can be improved but not archived
+341|
+342|**Adoption:**
+343|```bash
+344|hermes curator list-unmanaged          # Find unmanaged skills
+345|hermes curator adopt <name>            # Hand over to curator
+346|hermes curator adopt --all-unmanaged   # Hand over all
+347|```
+348|
+349|### Consolidation
+350|
+351|When the review agent notices two existing skills that overlap, it notes it in its reply. The curator handles consolidation at scale — merging overlapping skills into umbrella skills.
+352|
+353|### Protected Skills
+354|
+355|The background review fork **cannot edit**:
+356|- Bundled skills (shipped with Hermes)
+357|- Hub-installed skills (via `hermes skills install`)
+358|- Skills in external directories
+359|- Pinned skills (blocks deletion/archive, not content updates)
+360|- User-owned skills (hand-written, installed by URL, or asked to create)
+361|
+362|---
+363|
+364|## Four-Layer Memory System
+365|
+366|Hermes splits memory into four distinct layers, each with its own trigger and job:
+367|
+368|| Layer | Storage | What it holds | When loaded |
+369||-------|---------|---------------|-------------|
+370|| **1. Prompt Memory** | `MEMORY.md` (2,200 chars) + `USER.md` (1,375 chars) | Stable facts, preferences, environment | Every session (frozen snapshot) |
+371|| **2. Session Search** | SQLite + FTS5 | Full conversation history, searchable | On demand via `session_search` |
+372|| **3. Skills** | `~/.hermes/skills/` (Markdown) | Procedures, workflows, pitfalls | On demand via `skill_view` |
+373|| **4. User Model** | Honcho (external) | Dialectic user representation | Auto-injected context |
+374|
+375|### Layer 1: Prompt Memory
+376|
+377|**Files:** `~/.hermes/memories/MEMORY.md` and `USER.md`
+378|
+379|**Production hardening:**
+380|- **File locking** via `fcntl`/`msvcrt` — prevents race conditions between concurrent agent processes
+381|- **Frozen-snapshot pattern** — memory block captured once at session start; mid-session writes hit disk but don't mutate current prompt (preserves prefix cache)
+382|- **Injection scanner** — scans all writes for prompt-injection patterns, exfiltration indicators, SSH-backdoor signatures
+383|- **Character limits** — MEMORY.md capped at 2,200 chars (~800 tokens), USER.md at 1,375 chars (~500 tokens)
+384|- **No auto-compact** — when full, the tool returns an error; the agent must consolidate/remove entries itself
+385|
+386|**External providers (one at a time):**
+387|- Honcho, Mem0, Hindsight, Supermemory, Holographic, RetainDB, ByteRover, OpenViking
+388|- Built-in memory is always first, always active
+389|- Exactly one external provider can run alongside it
+390|- Provider context wrapped in `<memory-context>` fence tags + system note clarifying it's background context, not user input
+391|
+392|### Layer 2: Session Search
+393|
+394|**Storage:** `~/.hermes/state.db` (SQLite with FTS5 full-text search)
+395|
+396|**Schema:**
+397|- Session ID, source platform, user ID
+398|- Session title (unique, human-readable)
+399|- Model name and configuration
+400|- System prompt snapshot
+401|- Full message history (role, content, tool calls, tool results)
+402|- Token counts (input/output)
+403|- Timestamps (started_at, ended_at)
+404|- Parent session ID (for compression-triggered session splitting)
+405|
+406|**Capabilities:**
+407|- Resume conversations by session name or ID
+408|- Cross-session full-text search
+409|- LLM-summarized recall of past sessions
+410|- Session splitting on compression (new continuation session with numbered title)
+411|
+412|### Layer 3: Skills
+413|
+414|See [Skill Creation](#skill-creation-from-experience) and [Skill Curation](#skill-curation-process) above.
+415|
+416|### Layer 4: User Model (Honcho)
+417|
+418|See [User Modeling](#user-modeling-honcho) below.
+419|
+420|---
+421|
+422|## Progressive Disclosure
+423|
+424|The key engineering decision that makes large skill libraries viable:
+425|
+426|**Level 0 — Index (always loaded):**
+427|- Skill names + one-line descriptions only
+428|- ~3k tokens total for entire library
+429|- Compact lookup table in system prompt
+430|
+431|**Level 1 — Full Skill (loaded on demand):**
+432|- Agent calls `skill_view(name)` when it judges a skill relevant
+433|- Full SKILL.md content loaded into context
+434|- Stays in context for rest of session
+435|
+436|**Level 2 — Deep References (rare):**
+437|- `references/` subdirectory loaded only when needed
+438|- Example scripts, config templates, API docs
+439|- Loaded via `skill_view(name, file_path="references/api-docs.md")`
+440|
+441|**Result:** Token cost scales with **relevance**, not library size. An agent with 500 skills pays roughly the same base cost as one with 50.
+442|
+443|---
+444|
+445|## Context Compression & Caching
+446|
+447|### Dual Compression System
+448|
+449|**Source:** `agent/context_compressor.py`, `gateway/run_turn.py`
+450|
+451|Hermes has two independent compression layers:
+452|
+453|```
+454|Incoming message
+455|      ↓
+456|┌──────────────────────────┐
+457|│ Gateway Session Hygiene  │  Fires at 85% of context
+458|│ (pre-agent, rough est.)  │  Safety net for large sessions
+459|└─────────────┬────────────┘
+460|              ↓
+461|┌──────────────────────────┐
+462|│ Agent ContextCompressor  │  Fires at 50% of context (default)
+463|│ (in-loop, real tokens)   │  Normal context management
+464|└──────────────────────────┘
+465|```
+466|
+467|**Gateway Session Hygiene (85% threshold):**
+468|- Located in `gateway/run_turn.py`
+469|- Safety net for sessions that grew between turns (e.g., overnight Telegram accumulation)
+470|- Uses rough character-based token estimate
+471|- Fires only when `len(history) >= 4`
+472|
+473|**Agent ContextCompressor (50% threshold, configurable):**
+474|- Located in `agent/context_compressor.py`
+475|- Primary compression with accurate API-reported token counts
+476|- Configurable via `compression.threshold` (default 0.50)
+477|- Per-model threshold overrides via `compression.model_thresholds`
+478|
+479|**Configuration:**
+480|```yaml
+481|compression:
+482|  enabled: true
+483|  threshold: 0.50            # Fraction of context window
+484|  target_ratio: 0.20         # How much of threshold to keep as tail
+485|  in_place: true             # Compact on same session id, no rotation
+486|  model_thresholds:
+487|    "glm-5.2": 0.40          # Per-model overrides (substring match)
+488|```
+489|
+490|**Compression process:**
+491|1. **Pre-pass:** Old tool results (>200 chars) outside protected tail replaced with `[Old tool output cleared to save context space]`
+492|2. **Determine boundaries:** Identify what to keep (recent messages, system prompt, goal)
+493|3. **Summarize:** Use auxiliary model (cheap/fast) to compress older context
+494|4. **Reassemble:** Combine summary + protected tail + recent messages
+495|
+496|### Prompt Caching
+497|
+498|**Source:** `agent/prompt_caching.py`
+499|
+500|- Anthropic prompt caching for prefix-cache hits
+501|- Frozen-snapshot memory pattern preserves cache (memory writes don't invalidate prefix)
+502|- Auxiliary models for compression, vision, web extract, approval scoring, skill search
+503|
+504|### Auxiliary Models
+505|
+506|Hermes uses a two-tier model system:
+507|- **Main model** — what the agent thinks with
+508|- **Auxiliary models** — smaller side-jobs (compression, vision, web extract, approval, skill search, title generation, curator)
+509|
+510|This allows expensive reasoning models to be used for main tasks while cheap flash models handle summarization at 1/50th the cost.
+511|
+512|---
+513|
+514|## Cron Scheduling
+515|
+516|**Source:** `tools/cronjob.py`, `~/.hermes/cron/jobs.json`
+517|
+518|### Architecture
+519|
+520|- Gateway daemon ticks scheduler every **60 seconds**
+521|- Jobs stored in `~/.hermes/cron/jobs.json` (plain JSON, survives updates)
+522|- Each due job runs in a **fresh AIAgent session**
+523|- File lock at `~/.hermes/cron/.tick.lock` prevents overlapping ticks
+524|
+525|### Job Capabilities
+526|
+527|- One-shot or recurring schedules (natural language or cron expressions)
+528|- Attach zero, one, or multiple skills to a job
+529|- Deliver results to origin chat, local files, or platform targets
+530|- **No-agent mode**: script runs on schedule, stdout delivered verbatim (zero LLM)
+531|- Per-job model pin, reasoning effort pin
+532|- `context_from`: consume output of other jobs as input
+533|- Workdir support (loads AGENTS.md, CLAUDE.md from that directory)
+534|
+535|### Lifecycle
+536|
+537|```
+538|create → pause/resume → edit → run (trigger) → remove
+539|```
+540|
+541|### Safety
+542|
+543|- Cron-run sessions **cannot recursively create cron jobs** (configurable via `cron.allow_agent_scheduling`)
+544|- Model/provider drift guard: unpinned jobs fail closed if global model changes
+545|- Pre-flight validation: checks API key, skills, delivery targets before spending tokens
+546|- Failure streak tracking with review nudges
+547|- Prompt-injection scanning on job prompts
+548|
+549|### Execution Ledger
+550|
+551|- `~/.hermes/cron/executions.db` tracks every attempt
+552|- States: `claimed → running → completed/failed/unknown`
+553|- Unknown attempts (process died) are audit records, never auto-rerun
+554|
+555|---
+556|
+557|## User Modeling (Honcho)
+558|
+559|**Source:** `plugins/memory/honcho/`, docs
+560|
+561|Honcho provides **AI-native cross-session user modeling** with dialectic reasoning.
+562|
+563|### Architecture
+564|
+565|```
+566|┌─────────────────────────────────────────┐
+567|│              Honcho Cloud               │
+568|│                                         │
+569|│  ┌─────────────┐    ┌─────────────┐    │
+570|│  │  User Peer  │◄──►│  AI Peer    │    │
+571|│  │  (peerName) │    │  (aiPeer)   │    │
+572|│  └─────────────┘    └─────────────┘    │
+573|│         │                  │            │
+574|│         └──────┬───────────┘            │
+575|│                │                        │
+576|│         ┌──────┴──────┐                 │
+577|│         │  Workspace  │                 │
+578|│         │  (shared)   │                 │
+579|│         └─────────────┘                 │
+580|└─────────────────────────────────────────┘
+581|```
+582|
+583|### Two-Layer Context Injection
+584|
+585|1. **Base context** (refreshed on `contextCadence`):
+586|   - Session summary
+587|   - User representation (preferences, facts, patterns)
+588|   - User peer card
+589|   - AI self-representation and identity card
+590|
+591|2. **Dialectic supplement** (refreshed on `dialecticCadence`):
+592|   - LLM-synthesized reasoning about user's current state and needs
+593|   - Multi-pass depth (1–3 passes)
+594|   - Cold/warm prompt selection (cold = general facts, warm = session-scoped)
+595|
+596|### Three Orthogonal Knobs
+597|
+598|| Knob | Config Key | Default | Range | Description |
+599||------|-----------|---------|-------|-------------|
+600|| Cadence | `contextCadence` / `dialecticCadence` | 1 / 2 | 1–5 | How often to refresh |
+601|| Depth | `dialecticDepth` | 1 | 1–3 | Reasoning rounds per query |
+602|| Level | `dialecticReasoningLevel` | `low` | minimal–max | Intensity of each round |
+603|
+604|### Tools
+605|
+606|| Tool | Description |
+607||------|-------------|
+608|| `honcho_profile` | Fast peer card retrieval (no LLM) |
+609|| `honcho_search` | Semantic search over memory |
+610|| `honcho_context` | Dialectic Q&A powered by LLM |
+611|| `honcho_reasoning` | LLM-synthesized reasoning |
+612|| `honcho_conclude` | Create/delete durable conclusions |
+613|
+614|### Multi-Profile Support
+615|
+616|Each Hermes profile gets its own AI peer while sharing the same workspace (user context). A `coder` profile stays code-oriented while a `writer` profile stays editorial — both against the same user.
+617|
+618|---
+619|
+620|## Session Search (FTS5)
+621|
+622|**Storage:** `~/.hermes/state.db` (SQLite with FTS5)
+623|
+624|Every conversation is automatically saved and indexed. The agent can search past sessions via the `session_search` tool with three modes:
+625|
+626|| Mode | Description |
+627||------|-------------|
+628|| `DISCOVERY` | Broad search across all sessions |
+629|| `SCROLL` | Paginated browsing |
+630|| `BROWSE` | Navigate within a specific session |
+631|
+632|**Capabilities:**
+633|- Full-text search across all past conversations
+634|- LLM-summarized recall of search results
+635|- Session resume by name or ID
+636|- Cross-session pattern recognition
+637|
+638|---
+639|
+640|## Skill Authoring Standards
+641|
+642|### SKILL.md Format
+643|
+644|```yaml
+645|---
+646|name: skill-name
+647|description: ≤60-char trigger description
+648|triggers:
+649|  - keyword1
+650|  - keyword2
+651|version: 1.0.0
+652|---
+653|
+654|# Skill Title
+655|
+656|## Instructions
+657|Numbered steps with exact commands and tool calls.
+658|
+659|## Pitfalls
+660|- Generalizable rule + one clause of why (the mechanism)
+661|- Attached to the step it affects
+662|- Stated once, not as incident narration
+663|
+664|## Verification
+665|How to confirm the task was done correctly.
+666|```
+667|
+668|### Authoring Rules
+669|
+670|1. **Lessons, not logs**: A pitfall is a generalizable rule + why, not a story
+671|2. **No incident narration**: No PR numbers, dates, quoted chat
+672|3. **Class-level names**: Skill name must be a class of task, not a specific session artifact
+673|4. **Always-on rules in SKILL.md**: `references/` holds topic-specific detail
+674|5. **Support file types:**
+675|   - `references/*.md` — session-specific detail, knowledge banks
+676|   - `templates/*` — starter files to copy and modify
+677|   - `scripts/*` — re-runnable actions (verification, probes)
+678|6. **One-line pointer**: SKILL.md should reference each support file
+679|7. **Don't restate loaded context**: Skills don't duplicate AGENTS.md or tool schemas
+680|
+681|### Linter Rules
+682|
+683|| Rule | Trigger | Action |
+684||------|---------|--------|
+685|| `incident-log-shape` | Body dense in PR/issue numbers | Warn |
+686|| `references-sprawl` | >60 reference files | Warn |
+687|| `oversized-body` | SKILL.md body >~24k chars | Warn |
+688|
+689|---
+690|
+691|## Safety Mechanisms & Guardrails
+692|
+693|### 1. Write Approval Gate
+694|```yaml
+695|skills:
+696|  write_approval: true   # Stage all skill writes for human review
+697|```
+698|
+699|### 2. Read-Before-Write Guard
+700|Review fork must `skill_view(name)` before `skill_manage(action="patch")` on existing skills.
+701|
+702|### 3. Protected Skills
+703|Bundled, hub-installed, pinned, and user-owned skills cannot be edited by the background review.
+704|
+705|### 4. Injection Scanner
+706|All memory writes and context files scanned for:
+707|- Prompt-injection patterns
+708|- Exfiltration indicators
+709|- SSH-backdoor signatures
+710|- Hidden Unicode tricks
+711|
+712|### 5. Memory Character Limits
+713|- MEMORY.md: 2,200 chars (~800 tokens)
+714|- USER.md: 1,375 chars (~500 tokens)
+715|- No auto-compact — agent must consolidate when full
+716|
+717|### 6. One External Memory Provider
+718|Built-in memory always active; exactly one external provider at a time.
+719|
+720|### 7. Curator Never Auto-Delete
+721|Worst case is archival to `.archive/`, always recoverable.
+722|
+723|### 8. Cron Safety
+724|- No recursive cron creation
+725|- Model/provider drift guard
+726|- Pre-flight validation before spending tokens
+727|- Prompt-injection scanning on job prompts
+728|
+729|---
+730|
+731|## What Hermes Explicitly Does NOT Do
+732|
+733|An honest audit of the codebase reveals:
+734|
+735|- **No autonomous source-code modification** — no tool writes to the agent's own Python files
+736|- **No automatic prompt rewriting** — system prompts assembled deterministically
+737|- **No self-grading loop** — trajectories persisted for external analysis, not consumed by the running agent
+738|- **No agent-authored git commits** — all commits are human-authored
+739|- **No recursive self-improvement** — the agent doesn't edit its own substrate in a tight feedback loop
+740|
+741|The "self-improving" label means: **the agent writes durable behavioral artifacts (skills, memory) that influence future sessions** — not that it modifies its own code or weights.
+742|
+743|---
+744|
+745|## Adoption Roadmap for AgentHarness
+746|
+747|### Current AgentHarness State
+748|
+749|| System | AgentHarness | Gap |
+750||--------|-------------|-----|
+751|| Skills | `ah/skills/registry.py` - file-based, trigger matching, curator, `ah learn` | No background review, no agent-driven patching |
+752|| Memory | `ah/memory/` - PostgreSQL + pgvector, consolidation, approval gate, redaction, identity gate | No frozen snapshot, no char limits |
+753|| Context | `ah/core/context.py` - msgpack chunks, token budget, reversible archive | No dual compression, no auxiliary models |
+754|| Sessions | `ah/core/session.py` - PostgreSQL, TTLCache | No FTS5 search, no session splitting |
+755|| User Model | `UserProfileStore` preferences/topics | No Honcho or dialectic reasoning |
+756|| Cron | Provided: `ah/core/scheduler.py` + `cron.py` (heartbeat/interval/cron) | No per-job model pin, no script-only jobs |
+757|| Self-Improvement | Skill curator maintenance pass | No background review fork, no skill nudge |
+758|
+759|### Phase 1: Background Review Agent (High Impact, Medium Effort)
+760|
+761|**What to build:**
+762|- `ah/core/background_review.py` — daemon thread that forks the agent after each turn
+763|- Review prompt constants (skill review + memory review)
+764|- Trigger detection (5+ tool calls, error recovery, user correction)
+765|- Write to existing `ah/skills/` and `ah/memory/` stores
+766|
+767|**Key design decisions:**
+768|- Use asyncio tasks instead of threads (AgentHarness is async)
+769|- Review agent should use a cheaper auxiliary model
+770|- Respect write approval gate if configured
+771|
+772|### Phase 2: Skill Self-Improvement (High Impact, Low Effort)
+773|
+774|**What to build:**
+775|- `skill_manage` equivalent tool (create, patch, edit, write_file, remove_file)
+776|- Read-before-write guard (must `skill_view` before `patch`)
+777|- Mid-session skill patching
+778|- Skill linter (incident-log-shape, references-sprawl, oversized-body)
+779|
+780|### Phase 3: SKILLS_GUIDANCE Nudge (High Impact, Low Effort)
+781|
+782|**What to build:**
+783|- Add to system prompt assembly in `ah/core/assembler.py`:
+784|  ```
+785|  After completing a complex task (5+ tool calls), fixing a tricky error,
+786|  or discovering a non-trivial workflow, save the approach as a skill.
+787|  ```
+788|- Activity bias: "A pass that does nothing is a missed learning opportunity"
+789|
+790|### Phase 4: Skill Curation (Medium Impact, Medium Effort)
+791|
+792|**What to build:**
+793|- `ah/skills/curator.py` — background maintenance pass
+794|- Track view/use/patch counts per skill
+795|- Lifecycle: active → stale (30 days) → archived (90 days)
+796|- Consolidation pass for overlapping skills
+797|- Never auto-delete
+798|
+799|### Phase 5: Progressive Disclosure (Medium Impact, Low Effort)
+800|
+801|**What to build:**
+802|- Level 0: Skill index (name + description) in system prompt
+803|- Level 1: Full SKILL.md loaded on demand
+804|- Level 2: Support files loaded on demand
+805|- Already partially implemented in `ah/skills/registry.py`
+806|
+807|### Phase 6: Memory Production Hardening (Medium Impact, Medium Effort)
+808|
+809|**What to build:**
+810|- Frozen-snapshot pattern (capture at session start, don't mutate)
+811|- Injection scanner on memory writes
+812|- Character limits (MEMORY.md: 2,200, USER.md: 1,375)
+813|- File locking for concurrent writes
+814|
+815|### Phase 7: Context Compression (Medium Impact, High Effort)
+816|
+817|**What to build:**
+818|- Dual compression system (gateway hygiene + in-loop)
+819|- Auxiliary model for summarization
+820|- Configurable thresholds
+821|- Per-model threshold overrides
+822|
+823|### Phase 8: Cron Scheduling (Medium Impact, High Effort)
+824|
+825|**What to build:**
+826|- `ah/tools/cron.py` — cronjob tool
+827|- Job storage in JSON
+828|- Scheduler tick in gateway
+829|- No-agent mode for script-only jobs
+830|- Per-job model pin
+831|
+832|### Phase 9: User Model (Low Impact, High Effort)
+833|
+834|**What to build:**
+835|- Honcho integration or equivalent
+836|- Dialectic reasoning layer
+837|- Two-layer context injection
+838|- Multi-profile support
+839|
+840|### Phase 10: Session Search (Low Impact, Medium Effort)
+841|
+842|**What to build:**
+843|- FTS5 full-text search over session history
+844|- Session resume by name
+845|- LLM-summarized recall
+846|
+847|---
+848|
+849|## Key Files & References
+850|
+851|### Hermes Agent Source Files
+852|
+853|| File | Purpose |
+854||------|---------|
+855|| `agent/background_review.py` | Background review agent, spawn logic, review prompts |
+856|| `agent/prompt_builder.py` | System prompt assembly, SKILLS_GUIDANCE injection |
+857|| `agent/context_compressor.py` | Dual compression system |
+858|| `agent/memory_manager.py` | "Built-in + at most one external" policy |
+859|| `tools/skill_manager_tool.py` | skill_manage tool, read-before-write guard, linter |
+860|| `tools/memory_tool.py` | MEMORY.md/USER.md read/write with file locking |
+861|| `tools/cronjob.py` | Cron job management |
+862|| `tools/delegate_tool.py` | Sub-agent spawning with depth limits |
+863|| `tools/registry.py` | Self-registering tool registry with AST discovery |
+864|| `plugins/memory/honcho/` | Honcho user modeling integration |
+865|| `gateway/run.py` | Gateway runner, session hygiene |
+866|| `hermes_cli/main.py` | CLI entry, update protocol |
+867|
+868|### Documentation
+869|
+870|- [Skills System](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills)
+871|- [Curator](https://hermes-agent.nousresearch.com/docs/user-guide/features/curator)
+872|- [Persistent Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory)
+873|- [Memory Providers](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers)
+874|- [Context Compression](https://hermes-agent.nousresearch.com/docs/developer-guide/context-compression-and-caching)
+875|- [Cron](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron)
+876|- [Honcho](https://hermes-agent.nousresearch.com/docs/user-guide/features/honcho)
+877|- [Sessions](https://hermes-agent.nousresearch.com/docs/user-guide/sessions)
+878|
+879|### Third-Party Analysis
+880|
+881|- [Inside Hermes Agent: How Self-Improving Skills Work](https://fp8.co/articles/Inside-Hermes-Agent-Self-Improving-Skill-Memory) — fp8.co
+882|- [What 'Self-Improving AI Agent' Actually Means in Production](https://saulius.io/blog/hermes-agent-self-improving-ai-architecture) — saulius.io
+883|- [The Anatomy of a Self-Improving AI Agent](https://dev.to/nilambuilds/the-anatomy-of-a-self-improving-ai-agent-how-hermes-agents-closed-learning-loop-actually-works-4jk7) — DEV Community
+884|- [Self-Improving AI Agents: What Works, What Doesn't](https://pickaxe.co/post/self-improving-ai-agents) — pickaxe.co
+885|- [8 Self-Evolving Skills Hermes Agent Writes on Its Own](https://ssojet.com/blog/hermes-agent-self-evolving-skills) — SSOJet
+886|
+887|---
+888|
+889|*Research completed: 2026-10-01*
+890|*Sources: Hermes Agent official docs, GitHub source (main branch), third-party audits*

@@ -14,7 +14,17 @@ to a local path. The file used for the October 2026 run had SHA-256
 python -m ah.research.locomo path/to/locomo10.json --k 5
 python -m ah.research.locomo path/to/locomo10.json --backend archive --test-db --k 5
 python -m ah.research.locomo path/to/locomo10.json --backend session-recall --test-db --k 5
+python -m ah.research.locomo path/to/locomo10.json --backend title-only --test-db --k 5
 ```
+
+The archive backend uses `AGENT_HARNESS_TEST_DATABASE_URL`, replays every
+dialogue turn into temporary archive rows, searches using the production
+`ContextManager.search_archive_text()` path, and deletes benchmark sessions.
+The `title-only` backend runs the same replay but scores only session-title
+matches (`SessionRecall` source `title`): chunk-level evidence is unreachable
+from titles alone, so expected recall on the standard replay is ~0 because
+every session carries the same generic title. It documents what transcript
+search adds, not a competing design.
 
 The archive backend uses `AGENT_HARNESS_TEST_DATABASE_URL`, replays every
 dialogue turn into temporary archive rows, searches using the production
@@ -28,6 +38,7 @@ short smoke run.
 | Lexical baseline | 0.4395 | 0.4770 | 0.3540 | 1,078.6 |
 | Archive full text search | 0.4259 | 0.4618 | 0.3457 | 922.3 |
 | Cross-session recall (archive, 50 turns/session) | 0.4259 | 0.4618 | 0.3457 | 922.3 |
+| Title-only (`title-only`) | — (run pending) | — | — | — |
 
 Both runs scored 1,977 questions. Five questions had unresolvable annotated
 evidence references and were excluded with an explicit `skipped_questions`
@@ -126,7 +137,7 @@ injection labels.
 ## Soul Spec v0.5
 
 `SoulSpec.from_package()`, `write_package()`, and
-`SoulSpecConformance.validate_package()` now validate required manifest
+`TestSoulSpecConformance().validate_package()` now validate required manifest
 fields, optional v0.5 fields, declared file paths, license allowlist, and
 package file presence. Imported packages preserve unknown manifest fields and
 the bytes of all declared auxiliary files on export. `allowedTools` remains

@@ -22,7 +22,7 @@ from ah.research.locomo import (
     load_locomo,
 )
 from ah.research.train_memory_policy import load_scored_states, train_from_file
-from ah.soulspec.conformance import SoulSpecConformance
+from ah.soulspec.conformance import TestSoulSpecConformance
 from ah.soulspec.schema import SoulSpec
 
 
@@ -205,6 +205,26 @@ async def test_session_recall_backend_scores_across_sessions_and_cleans_up(db_po
     assert await db_pool.fetchval("SELECT COUNT(*) FROM context_archive") == before
 
 
+async def test_session_recall_title_only_backend_returns_no_evidence(db_pool, monkeypatch):
+    monkeypatch.setattr("ah.core.context.db", db_pool)
+    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    dataset = [
+        Conversation(
+            turns=(
+                DialogueTurn("D1:1", "Ada", "The telescope observed a nebula"),
+                DialogueTurn("D1:2", "Ben", "The orchid blooms at sunrise"),
+            ),
+            questions=(Question("Which telescope observed a nebula?", ("D1:1",)),),
+        )
+    ]
+    metrics, latency_ms = await evaluate_session_recall(
+        dataset, k=1, turns_per_session=1, title_only=True
+    )
+    assert metrics.hit_rate == 0
+    assert latency_ms >= 0
+
+
 async def test_longitudinal_identity_transition_quarantines_causal_memory(db_pool, monkeypatch):
     monkeypatch.setattr("ah.memory.identity.db", db_pool)
     gate = IdentityGate()
@@ -299,7 +319,7 @@ def test_soulspec_v05_package_preserves_manifest_and_declared_files(tmp_path):
     (source / "IDENTITY.md").write_bytes(b"Identity\r\n")
     (source / "examples").mkdir()
     (source / "examples/good.md").write_bytes(b"Example\r\n")
-    assert SoulSpecConformance().validate_package(source).valid
+    assert TestSoulSpecConformance().validate_package(source).valid
     spec = SoulSpec.from_package(source)
     destination = tmp_path / "destination"
     spec.write_package(destination)
@@ -329,7 +349,7 @@ def test_soulspec_rejects_invalid_manifest_fields(tmp_path, field, value):
     manifest = json.loads(path.read_text(encoding="utf-8"))
     manifest[field] = value
     path.write_text(json.dumps(manifest), encoding="utf-8")
-    assert not SoulSpecConformance().validate_package(tmp_path).valid
+    assert not TestSoulSpecConformance().validate_package(tmp_path).valid
 
 
 def test_soulspec_rejects_optional_file_escape(tmp_path):
@@ -342,4 +362,4 @@ def test_soulspec_rejects_optional_file_escape(tmp_path):
     manifest = json.loads(path.read_text(encoding="utf-8"))
     manifest["files"]["identity"] = "../private.txt"
     path.write_text(json.dumps(manifest), encoding="utf-8")
-    assert not SoulSpecConformance().validate_package(tmp_path).valid
+    assert not TestSoulSpecConformance().validate_package(tmp_path).valid

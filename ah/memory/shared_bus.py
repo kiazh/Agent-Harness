@@ -81,9 +81,7 @@ class SharedMemoryBus:
                     """,
                     source_memory_id,
                 )
-                provenance = (
-                    MemoryProvenance(**dict(provenance_row)) if provenance_row else None
-                )
+                provenance = MemoryProvenance(**dict(provenance_row)) if provenance_row else None
                 target_id: uuid.UUID | None = None
                 if source.quarantined:
                     status: DeliveryStatus = "rejected"
@@ -114,7 +112,11 @@ class SharedMemoryBus:
                             parent_memory_id=source.id,
                         )
                         status = "quarantined" if copy.quarantined else "accepted"
-                        reason = "recipient validation changed during delivery" if copy.quarantined else ""
+                        reason = (
+                            "recipient validation changed during delivery"
+                            if copy.quarantined
+                            else ""
+                        )
                         target_id = copy.id
 
                 await conn.execute(

@@ -357,8 +357,11 @@ class SkillRegistry:
         skill_file = skill_dir / "SKILL.md"
         # Exclusive creation is the final read-before-write guard when two
         # reviews (or a manual learn) target the same skill concurrently.
-        with skill_file.open("x", encoding="utf-8") as output:
-            output.write(skill_content)
+        try:
+            with skill_file.open("x", encoding="utf-8") as output:
+                output.write(skill_content)
+        except FileExistsError:
+            raise ValueError(f"skill '{name}' already exists") from None
 
         skill = Skill(
             name=name,

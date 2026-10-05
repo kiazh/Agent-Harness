@@ -197,19 +197,6 @@ class Config:
         if persist:
             self.save()
 
-
-    def set_session_override(self, key: str, value: Any) -> None:
-        """Set a per-session override (not persisted to file)."""
-        self._session_overrides[key] = value
-
-    def clear_session_override(self, key: str) -> None:
-        """Clear a per-session override."""
-        self._session_overrides.pop(key, None)
-
-    def clear_all_session_overrides(self) -> None:
-        """Clear all per-session overrides."""
-        self._session_overrides.clear()
-
     def to_dict(self) -> dict[str, Any]:
         """Export config as a dict (excluding private fields)."""
         result = {}

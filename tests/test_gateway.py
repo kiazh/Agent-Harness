@@ -435,7 +435,7 @@ def test_gateway_process_speaks_clean_json_over_stdio():
         text=True,
         encoding="utf-8",
         env=env,
-        timeout=90,
+        timeout=30,
         cwd=Path(__file__).resolve().parents[1],
     )
     assert proc.returncode == 0, proc.stderr[-2000:]

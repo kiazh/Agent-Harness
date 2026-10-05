@@ -6,7 +6,6 @@ user-facing message); callers decide how to present it.
 
 from __future__ import annotations
 
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -194,9 +193,3 @@ async def status_summary() -> dict[str, Any]:
         "model": config.get("model"),
         "provider": config.get("provider"),
     }
-
-def parse_session_id(value: Any) -> uuid.UUID:
-    try:
-        return uuid.UUID(str(value))
-    except (ValueError, TypeError):
-        raise ServiceError(f"Invalid session ID: {value}") from None

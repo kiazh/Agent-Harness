@@ -197,27 +197,6 @@ class MemoryApprovalGate:
 
         return pending
 
-    async def get_pending(self, pending_id: uuid.UUID) -> PendingMemory | None:
-        """Get a pending memory by ID."""
-        row = await db.fetchrow(
-            "SELECT * FROM pending_memories WHERE id = $1",
-            pending_id,
-        )
-        if row is None:
-            return None
-        return PendingMemory(
-            id=row["id"],
-            memory_id=row["memory_id"],
-            content=row["content"],
-            category=row["category"],
-            importance=row["importance"],
-            agent_id=row["agent_id"],
-            session_id=row["session_id"],
-            redactions=row["redactions"],
-            status=row["status"],
-            created_at=row["created_at"],
-        )
-
     async def approve(
         self,
         pending_id: uuid.UUID,
@@ -357,7 +336,6 @@ class MemoryApprovalGate:
             limit,
         )
         return [self._row_to_pending(row) for row in rows]
-
 
     async def approve_all(self, agent_id: str | None = None) -> int:
         """Approve all pending memories, optionally filtered by agent.

@@ -1,0 +1,1519 @@
+1|# Production Deployment Research — AgentHarness
+2|
+3|> Research into production deployment patterns for a self-hosted AI agent framework.
+4|> Covers Docker, Kubernetes, CI/CD, monitoring, observability, logging, secrets, and backup.
+5|
+6|---
+7|
+8|## 1. Current State Assessment
+9|
+10|AgentHarness is a Python 3.11+ async framework with:
+11|
+12|| Component | Technology | Notes |
+13||-----------|-----------|-------|
+14|| CLI | Typer + Rich | `ah` command, `asyncio.run()` per invocation |
+15|| Database | PostgreSQL + pgvector | asyncpg pool (2-10 connections), 15+ tables |
+16|| LLM Provider | OpenRouter / Ollama | httpx async clients, token-bucket rate limiting |
+17|| Context Store | MessagePack in BYTEA | `context_chunks` with HNSW embedding index |
+18|| Skills | File-based registry | YAML frontmatter, loaded from `skills/` |
+19|| Tools | In-process registry | `ah/tools/builtins.py` |
+20|| CI | GitHub Actions | ruff + pytest, no CD pipeline |
+21|| Config | Environment variables | `DATABASE_URL`, `OPENROUTER_API_KEY` |
+22|
+23|**Key deployment characteristics:**
+24|- **Stateless compute** — agent runs are ephemeral; all state lives in PostgreSQL
+25|- **Single-process compute with two entry points** — the one-shot CLI (`ah chat`), a long-running gateway (`python -m ah.gateway`) driven by the UI, and the HTTP API server (`ah serve`) are available today
+26|- **External LLM dependency** — OpenRouter API or local Ollama
+27|- **pgvector required** — `CREATE EXTENSION vector` in schema.sql
+28|
+29|---
+30|
+31|## 2. Docker
+32|
+33|### 2.1 Container Strategy
+34|
+35|AgentHarness has two natural container boundaries:
+36|
+37|1. **AgentHarness CLI image** — the `ah` binary + Python runtime
+38|2. **PostgreSQL + pgvector image** — the stateful data layer
+39|
+40|A `docker-compose.yml` for local development and single-node production:
+41|
+42|```yaml
+43|# docker-compose.yml
+44|services:
+45|  postgres:
+46|    image: pgvector/pgvector:pg16
+47|    environment:
+48|      POSTGRES_DB: agentharness
+49|      POSTGRES_USER: ${POSTGRES_USER:-ah}
+50|      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+51|    volumes:
+52|      - pgdata:/var/lib/postgresql/data
+53|      - ./backups:/backups
+54|    ports:
+55|      - "5432:5432"
+56|    healthcheck:
+57|      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ah} -d agentharness"]
+58|      interval: 5s
+59|      timeout: 3s
+60|      retries: 10
+61|    restart: unless-stopped
+62|
+63|  agentharness:
+64|    build:
+65|      context: .
+66|      dockerfile: Dockerfile
+67|    environment:
+68|      DATABASE_URL: postgresql://${POSTGRES_USER:***@postgres:5432/agentharness
+69|      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+70|      LLM_RATE_LIMIT_CALLS_PER_MINUTE: ${LLM_RATE_LIMIT:-10}
+71|    depends_on:
+72|      postgres:
+73|        condition: service_healthy
+74|    # For interactive CLI use:
+75|    #   docker compose run --rm agentharness ah chat "hello"
+76|    # For a long-running API server (future):
+77|    #   command: ["ah", "serve", "--host", "0.0.0.0", "--port", "8000"]
+78|    restart: unless-stopped
+79|
+80|volumes:
+81|  pgdata:
+82|```
+83|
+84|### 2.2 Dockerfile
+85|
+86|```dockerfile
+87|# Dockerfile
+88|FROM python:3.11-slim AS base
+89|
+90|# Security: run as non-root
+91|RUN groupadd -r ah && useradd -r -g ah ah
+92|
+93|WORKDIR /app
+94|
+95|# Install dependencies first (layer caching)
+96|COPY pyproject.toml README.md ./
+97|RUN pip install --no-cache-dir .
+98|
+99|# Copy application code
+100|COPY ah/ ./ah/
+101|COPY skills/ ./skills/
+102|
+103|# Initialize schema on first run (entrypoint handles this)
+104|COPY docker-entrypoint.sh /usr/local/bin/
+105|RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+106|
+107|USER ah
+108|ENTRYPOINT ["docker-entrypoint.sh"]
+109|CMD ["ah", "--help"]
+110|```
+111|
+112|### 2.3 Entrypoint Pattern
+113|
+114|```bash
+115|#!/usr/bin/env bash
+116|# docker-entrypoint.sh
+117|set -euo pipefail
+118|
+119|# Wait for PostgreSQL
+120|until pg_isready -h "${DATABASE_URL#*@}" -p 5432; do
+121|  echo "Waiting for PostgreSQL..."
+122|  sleep 1
+123|done
+124|
+125|# Initialize schema (idempotent)
+126|ah init
+127|
+128|# Run the actual command
+129|exec "$@"
+130|```
+131|
+132|### 2.4 Multi-Stage Build (Production)
+133|
+134|```dockerfile
+135|# Dockerfile.prod — smaller attack surface
+136|FROM python:3.11-slim AS builder
+137|WORKDIR /build
+138|COPY pyproject.toml .
+139|RUN pip install --no-cache-dir --prefix=/install .
+140|
+141|FROM python:3.11-slim
+142|COPY --from=builder /install /usr/local
+143|COPY ah/ /app/ah/
+144|COPY skills/ /app/skills/
+145|WORKDIR /app
+146|RUN groupadd -r ah && useradd -r -g ah ah && chown -R ah:ah /app
+147|USER ah
+148|ENTRYPOINT ["ah"]
+149|```
+150|
+151|### 2.5 Key Docker Decisions
+152|
+153|| Decision | Rationale |
+154||----------|-----------|
+155|| `pgvector/pgvector:pg16` base image | Official pgvector builds; avoids manual compilation |
+156|| Non-root user | Security best practice; container escape mitigation |
+157|| `depends_on: service_healthy` | Prevents race condition on first boot |
+158|| Named volume for PGDATA | Survives container recreation |
+159|| Multi-stage build | ~50% smaller final image, no build tools in prod |
+160|| `pip install .` not `pip install -e .` | Production needs installed package, not editable |
+161|
+162|---
+163|
+164|## 3. Kubernetes
+165|
+166|### 3.1 When K8s Makes Sense
+167|
+168|| Scenario | Recommendation |
+169||----------|---------------|
+170|| Single user / local dev | Docker Compose |
+171|| Small team, single server | Docker Compose + systemd |
+172|| Multi-user, HA, auto-scaling | Kubernetes |
+173|| Enterprise, multi-team, GitOps | Kubernetes + Helm + ArgoCD |
+174|
+175|### 3.2 Deployment Manifest
+176|
+177|```yaml
+178|# k8s/deployment.yaml
+179|apiVersion: apps/v1
+180|kind: Deployment
+181|metadata:
+182|  name: agentharness
+183|  labels:
+184|    app: agentharness
+185|spec:
+186|  replicas: 2
+187|  selector:
+188|    matchLabels:
+189|      app: agentharness
+190|  strategy:
+191|    rollingUpdate:
+192|      maxSurge: 1
+193|      maxUnavailable: 0
+194|  template:
+195|    metadata:
+196|      labels:
+197|        app: agentharness
+198|    spec:
+199|      securityContext:
+200|        runAsNonRoot: true
+201|        runAsUser: 999
+202|        fsGroup: 999
+203|      containers:
+204|        - name: agentharness
+205|          image: agentharness:latest
+206|          imagePullPolicy: Always
+207|          ports:
+208|            - containerPort: 8000  # future HTTP API
+209|          env:
+210|            - name: DATABASE_URL
+211|              valueFrom:
+212|                secretKeyRef:
+213|                  name: agentharness-secrets
+214|                  key: database-url
+215|            - name: OPENROUTER_API_KEY
+216|              valueFrom:
+217|                secretKeyRef:
+218|                  name: agentharness-secrets
+219|                  key: openrouter-api-key
+220|          resources:
+221|            requests:
+222|              cpu: 100m
+223|              memory: 256Mi
+224|            limits:
+225|              cpu: "1"
+226|              memory: 1Gi
+227|          livenessProbe:
+228|            exec:
+229|              command: ["ah", "doctor"]
+230|            initialDelaySeconds: 10
+231|            periodSeconds: 30
+232|          readinessProbe:
+233|            exec:
+234|              command: ["ah", "status"]
+235|            initialDelaySeconds: 5
+236|            periodSeconds: 10
+237|          lifecycle:
+238|            preStop:
+239|              exec:
+240|                command: ["/bin/sh", "-c", "sleep 5"]  # graceful shutdown
+241|---
+242|apiVersion: v1
+243|kind: Service
+244|metadata:
+245|  name: agentharness
+246|spec:
+247|  selector:
+248|    app: agentharness
+249|  ports:
+250|    - port: 80
+251|      targetPort: 8000
+252|  type: ClusterIP
+253|---
+254|apiVersion: autoscaling/v2
+255|kind: HorizontalPodAutoscaler
+256|metadata:
+257|  name: agentharness-hpa
+258|spec:
+259|  scaleTargetRef:
+260|    apiVersion: apps/v1
+261|    kind: Deployment
+262|    name: agentharness
+263|  minReplicas: 2
+264|  maxReplicas: 10
+265|  metrics:
+266|    - type: Resource
+267|      resource:
+268|        name: cpu
+269|        target:
+270|          type: Utilization
+271|          averageUtilization: 70
+272|```
+273|
+274|### 3.3 PostgreSQL in K8s
+275|
+276|For production, **use an external managed PostgreSQL** (RDS, Cloud SQL, Crunchy Data operator) rather than running it in-cluster. If you must run it in K8s:
+277|
+278|```yaml
+279|# Use the Crunchy Data PGO operator or Bitnami PostgreSQL HA
+280|# Simplified — use a StatefulSet with persistent volumes
+281|apiVersion: apps/v1
+282|kind: StatefulSet
+283|metadata:
+284|  name: postgres
+285|spec:
+286|  serviceName: postgres
+287|  replicas: 1  # or 3 with Patroni for HA
+288|  selector:
+289|    matchLabels:
+290|      app: postgres
+291|  template:
+292|    metadata:
+293|      labels:
+294|        app: postgres
+295|    spec:
+296|      containers:
+297|        - name: postgres
+298|          image: pgvector/pgvector:pg16
+299|          env:
+300|            - name: POSTGRES_DB
+301|              value: agentharness
+302|            - name: POSTGRES_USER
+303|              valueFrom:
+304|                secretKeyRef:
+305|                  name: agentharness-secrets
+306|                  key: postgres-user
+307|            - name: POSTGRES_PASSWORD
+308|              valueFrom:
+309|                secretKeyRef:
+310|                  name: agentharness-secrets
+311|                  key: postgres-password
+312|          volumeMounts:
+313|            - name: pgdata
+314|              mountPath: /var/lib/postgresql/data
+315|          resources:
+316|            requests:
+317|              cpu: 250m
+318|              memory: 512Mi
+319|            limits:
+320|              cpu: "2"
+321|              memory: 2Gi
+322|  volumeClaimTemplates:
+323|    - metadata:
+324|        name: pgdata
+325|      spec:
+326|        accessModes: ["ReadWriteOnce"]
+327|        storageClassName: fast-ssd
+328|        resources:
+329|          requests:
+330|            storage: 50Gi
+331|```
+332|
+333|### 3.4 Helm Chart Structure
+334|
+335|```
+336|agentharness-chart/
+337|├── Chart.yaml
+338|├── values.yaml
+339|├── values-production.yaml
+340|├── templates/
+341|│   ├── _helpers.tpl
+342|│   ├── deployment.yaml
+343|│   ├── service.yaml
+344|│   ├── ingress.yaml
+345|│   ├── hpa.yaml
+346|│   ├── serviceaccount.yaml
+347|│   ├── secret.yaml          # references external secret store
+348|│   ├── networkpolicy.yaml
+349|│   └── poddisruptionbudget.yaml
+350|└── charts/
+351|    └── postgresql-subchart/  # or use external
+352|```
+353|
+354|### 3.5 K8s Security Hardening
+355|
+356|```yaml
+357|# NetworkPolicy — restrict pod-to-pod traffic
+358|apiVersion: networking.k8s.io/v1
+359|kind: NetworkPolicy
+360|metadata:
+361|  name: agentharness-netpol
+362|spec:
+363|  podSelector:
+364|    matchLabels:
+365|      app: agentharness
+366|  policyTypes:
+367|    - Ingress
+368|    - Egress
+369|  ingress:
+370|    - from:
+371|        - namespaceSelector:
+372|            matchLabels:
+373|              name: ingress-nginx
+374|      ports:
+375|        - protocol: TCP
+376|          port: 8000
+377|  egress:
+378|    - to:
+379|        - podSelector:
+380|            matchLabels:
+381|              app: postgres
+382|      ports:
+383|        - protocol: TCP
+384|          port: 5432
+385|    - to: []  # OpenRouter API
+386|      ports:
+387|        - protocol: TCP
+388|          port: 443
+389|---
+390|# PodDisruptionBudget — ensure availability during node drains
+391|apiVersion: policy/v1
+392|kind: PodDisruptionBudget
+393|metadata:
+394|  name: agentharness-pdb
+395|spec:
+396|  minAvailable: 1
+397|  selector:
+398|    matchLabels:
+399|      app: agentharness
+400|```
+401|
+402|---
+403|
+404|## 4. CI/CD
+405|
+406|### 4.1 Current State
+407|
+408|The project has two GitHub Actions workflows:
+409|- `ci.yml` — runs on push to main + PRs: ruff check, ruff format, pytest
+410|- `pr.yml` — same checks on PRs
+411|
+412|**Missing:** release automation and CD pipeline (Docker images are provided: `Dockerfile`, `Dockerfile.sandbox`, `docker-compose.yml`; audit events persist to the `audit_events` table).
+413|
+414|### 4.2 Recommended CI Pipeline
+415|
+416|```yaml
+417|# .github/workflows/ci.yml
+418|name: CI
+419|
+420|on:
+421|  push:
+422|    branches: [main]
+423|  pull_request:
+424|    branches: [main]
+425|
+426|jobs:
+427|  lint-and-test:
+428|    runs-on: ubuntu-latest
+429|    strategy:
+430|      matrix:
+431|        python-version: ["3.11", "3.12"]
+432|    steps:
+433|      - uses: actions/checkout@v4
+434|
+435|      - uses: actions/setup-python@v5
+436|        with:
+437|          python-version: ${{ matrix.python-version }}
+438|
+439|      - name: Cache pip
+440|        uses: actions/cache@v4
+441|        with:
+442|          path: ~/.cache/pip
+443|          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
+444|
+445|      - name: Install
+446|        run: pip install -e ".[dev]"
+447|
+448|      - name: Ruff check
+449|        run: ruff check ah/
+450|
+451|      - name: Ruff format
+452|        run: ruff format --check ah/
+453|
+454|      - name: Type check
+455|        run: |
+456|          if grep -q '\[tool.mypy\]' pyproject.toml; then
+457|            pip install mypy
+458|            mypy ah/
+459|          fi
+460|
+461|      - name: Pytest
+462|        run: pytest tests/ -v --cov=ah --cov-report=xml
+463|
+464|      - name: Upload coverage
+465|        uses: codecov/codecov-action@v4
+466|        with:
+467|          file: coverage.xml
+468|
+469|  security:
+470|    runs-on: ubuntu-latest
+471|    steps:
+472|      - uses: actions/checkout@v4
+473|
+474|      - name: pip-audit
+475|        run: |
+476|          pip install pip-audit
+477|          pip-audit --desc
+478|
+479|      - name: Bandit (Python SAST)
+480|        run: |
+481|          pip install bandit
+482|          bandit -r ah/ -f json -o bandit-report.json || true
+483|
+484|      - name: Upload security report
+485|        uses: actions/upload-artifact@v4
+486|        with:
+487|          name: security-report
+488|          path: bandit-report.json
+489|
+490|  build:
+491|    runs-on: ubuntu-latest
+492|    needs: [lint-and-test, security]
+493|    steps:
+494|      - uses: actions/checkout@v4
+495|
+496|      - name: Set up Docker Buildx
+497|        uses: docker/setup-buildx-action@v3
+498|
+499|      - name: Build image
+500|        uses: docker/build-push-action@v5
+501|        with:
+502|          context: .
+503|          push: false
+504|          tags: agentharness:ci
+505|          cache-from: type=gha
+506|          cache-to: type=gha,mode=max
+507|
+508|      - name: Trivy vulnerability scan
+509|        uses: aquasecurity/trivy-action@master
+510|        with:
+511|          image-ref: agentharness:ci
+512|          format: sarif
+513|          output: trivy-results.sarif
+514|```
+515|
+516|### 4.3 CD Pipeline (GitHub Actions → Docker Hub)
+517|
+518|```yaml
+519|# .github/workflows/cd.yml
+520|name: CD
+521|
+522|on:
+523|  push:
+524|    tags: ["v*"]
+525|
+526|jobs:
+527|  release:
+528|    runs-on: ubuntu-latest
+529|    permissions:
+530|      contents: write
+531|      packages: write
+532|    steps:
+533|      - uses: actions/checkout@v4
+534|
+535|      - name: Set up Docker Buildx
+536|        uses: docker/setup-buildx-action@v3
+537|
+538|      - name: Login to GHCR
+539|        uses: docker/login-action@v3
+540|        with:
+541|          registry: ghcr.io
+542|          username: ${{ github.actor }}
+543|          password: ${{ secrets.GITHUB_TOKEN }}
+544|
+545|      - name: Extract version
+546|        id: version
+547|        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+548|
+549|      - name: Build and push
+550|        uses: docker/build-push-action@v5
+551|        with:
+552|          context: .
+553|          push: true
+554|          tags: |
+555|            ghcr.io/${{ github.repository }}:latest
+556|            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.VERSION }}
+557|          cache-from: type=gha
+558|          cache-to: type=gha,mode=max
+559|
+560|      - name: Create GitHub Release
+561|        uses: softprops/action-gh-release@v1
+562|        with:
+563|          generate_release_notes: true
+564|```
+565|
+566|### 4.4 GitOps with ArgoCD (K8s)
+567|
+568|```yaml
+569|# Application manifest for ArgoCD
+570|apiVersion: argoproj.io/v1alpha1
+571|kind: Application
+572|metadata:
+573|  name: agentharness
+574|  namespace: argocd
+575|spec:
+576|  project: default
+577|  source:
+578|    repoURL: https://github.com/kiazh/agent-harness
+579|    targetRevision: HEAD
+580|    path: k8s/
+581|  destination:
+582|    server: https://kubernetes.default.svc
+583|    namespace: agentharness
+584|  syncPolicy:
+585|    automated:
+586|      prune: true
+587|      selfHeal: true
+588|    syncOptions:
+589|      - CreateNamespace=true
+590|```
+591|
+592|### 4.5 CI/CD Best Practices for AgentHarness
+593|
+594|| Practice | Implementation |
+595||----------|---------------|
+596|| **Test matrix** | Python 3.11 + 3.12 |
+597|| **Security scanning** | pip-audit, Bandit, Trivy |
+598|| **Image signing** | Cosign + GitHub OIDC keyless signing |
+599|| **Reproducible builds** | Lock dependencies (`pip-compile` or `uv lock`) |
+600|| **Semantic versioning** | Tag-based releases (`v1.2.3`) |
+601|| **Changelog** | Auto-generated from conventional commits |
+602|| **Staging environment** | Auto-deploy PRs to staging namespace |
+603|| **Smoke tests** | Post-deploy: `ah doctor` + `ah chat "ping"` |
+604|
+605|---
+606|
+607|## 5. Monitoring
+608|
+609|### 5.1 Metrics to Expose
+610|
+611|AgentHarness should expose Prometheus metrics. Key metrics for an AI agent framework:
+612|
+613|| Category | Metric | Type | Description |
+614||----------|--------|------|-------------|
+615|| **LLM** | `ah_llm_requests_total` | Counter | Total LLM API calls by provider/model |
+616|| **LLM** | `ah_llm_tokens_total` | Counter | Total tokens consumed (prompt + completion) |
+617|| **LLM** | `ah_llm_latency_seconds` | Histogram | LLM call latency |
+618|| **LLM** | `ah_llm_errors_total` | Counter | LLM call failures by error type |
+619|| **Agent** | `ah_agent_runs_total` | Counter | Total agent runs |
+620|| **Agent** | `ah_agent_iterations` | Histogram | Iterations per run |
+621|| **Agent** | `ah_agent_duration_seconds` | Histogram | End-to-end run duration |
+622|| **Agent** | `ah_agent_token_budget_exceeded` | Counter | Runs that hit token budget |
+623|| **Tools** | `ah_tool_calls_total` | Counter | Tool invocations by tool name |
+624|| **Tools** | `ah_tool_duration_seconds` | Histogram | Tool execution time |
+625|| **Tools** | `ah_tool_errors_total` | Counter | Tool execution failures |
+626|| **DB** | `ah_db_pool_connections` | Gauge | Current pool size / available |
+627|| **DB** | `ah_db_query_duration_seconds` | Histogram | Query latency |
+628|| **Sessions** | `ah_active_sessions` | Gauge | Currently active sessions |
+629|| **Context** | `ah_context_chunks_total` | Counter | Context chunks stored |
+630|| **Context** | `ah_context_token_usage` | Gauge | Tokens per session |
+631|
+632|### 5.2 Prometheus Instrumentation
+633|
+634|```python
+635|# ah/observability/metrics.py
+636|from prometheus_client import Counter, Histogram, Gauge, Info, generate_latest
+637|from functools import wraps
+638|import time
+639|
+640|# LLM metrics
+641|LLM_REQUESTS = Counter(
+642|    "ah_llm_requests_total",
+643|    "Total LLM API calls",
+644|    ["provider", "model"],
+645|)
+646|LLM_TOKENS = Counter(
+647|    "ah_llm_tokens_total",
+648|    "Total tokens consumed",
+649|    ["provider", "model", "type"],  # type: prompt | completion
+650|)
+651|LLM_LATENCY = Histogram(
+652|    "ah_llm_latency_seconds",
+653|    "LLM call latency",
+654|    ["provider", "model"],
+655|    buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0],
+656|)
+657|LLM_ERRORS = Counter(
+658|    "ah_llm_errors_total",
+659|    "LLM call failures",
+660|    ["provider", "model", "error_type"],
+661|)
+662|
+663|# Agent metrics
+664|AGENT_RUNS = Counter("ah_agent_runs_total", "Total agent runs", ["agent_id"])
+665|AGENT_ITERATIONS = Histogram("ah_agent_iterations", "Iterations per run", ["agent_id"])
+666|AGENT_DURATION = Histogram("ah_agent_duration_seconds", "Agent run duration", ["agent_id"])
+667|AGENT_BUDGET_EXCEEDED = Counter("ah_agent_token_budget_exceeded", "Token budget exceeded")
+668|
+669|# Tool metrics
+670|TOOL_CALLS = Counter("ah_tool_calls_total", "Tool invocations", ["tool_name"])
+671|TOOL_DURATION = Histogram("ah_tool_duration_seconds", "Tool execution time", ["tool_name"])
+672|TOOL_ERRORS = Counter("ah_tool_errors_total", "Tool failures", ["tool_name"])
+673|
+674|# DB metrics
+675|DB_POOL_SIZE = Gauge("ah_db_pool_connections", "DB pool connections", ["state"])
+676|DB_QUERY_DURATION = Histogram("ah_db_query_duration_seconds", "DB query latency")
+677|
+678|# Session metrics
+679|ACTIVE_SESSIONS = Gauge("ah_active_sessions", "Currently active sessions")
+680|CONTEXT_CHUNKS = Counter("ah_context_chunks_total", "Context chunks stored", ["chunk_type"])
+681|
+682|# App info
+683|APP_INFO = Info("agentharness", "AgentHarness application info")
+684|
+685|
+686|def track_llm_call(provider: str, model: str):
+687|    """Context manager to track an LLM call."""
+688|    LLM_REQUESTS.labels(provider=provider, model=model).inc()
+689|    start = time.monotonic()
+690|    try:
+691|        yield
+692|    except Exception as e:
+693|        LLM_ERRORS.labels(provider=provider, model=model, error_type=type(e).__name__).inc()
+694|        raise
+695|    finally:
+696|        LLM_LATENCY.labels(provider=provider, model=model).observe(time.monotonic() - start)
+697|
+698|
+699|def track_tool_call(tool_name: str):
+700|    """Context manager to track a tool execution."""
+701|    TOOL_CALLS.labels(tool_name=tool_name).inc()
+702|    start = time.monotonic()
+703|    try:
+704|        yield
+705|    except Exception:
+706|        TOOL_ERRORS.labels(tool_name=tool_name).inc()
+707|        raise
+708|    finally:
+709|        TOOL_DURATION.labels(tool_name=tool_name).observe(time.monotonic() - start)
+710|```
+711|
+712|### 5.3 Metrics Endpoint
+713|
+714|```python
+715|# ah/observability/server.py
+716|from aiohttp import web
+717|from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+718|
+719|async def metrics_handler(request):
+720|    return web.Response(
+721|        body=generate_latest(),
+722|        content_type=CONTENT_TYPE_LATEST,
+723|    )
+724|
+725|async def health_handler(request):
+726|    # Check DB connectivity
+727|    try:
+728|        from ah.db.connection import db
+729|        await db.fetchval("SELECT 1")
+730|        return web.json_response({"status": "healthy"})
+731|    except Exception as e:
+732|        return web.json_response({"status": "unhealthy", "error": str(e)}, status=503)
+733|
+734|def create_metrics_app():
+735|    app = web.Application()
+736|    app.router.add_get("/metrics", metrics_handler)
+737|    app.router.add_get("/health", health_handler)
+738|    return app
+739|```
+740|
+741|### 5.4 Grafana Dashboard
+742|
+743|```json
+744|{
+745|  "dashboard": {
+746|    "title": "AgentHarness Overview",
+747|    "panels": [
+748|      {
+749|        "title": "LLM Requests/sec",
+750|        "type": "timeseries",
+751|        "targets": [{"expr": "rate(ah_llm_requests_total[5m])"}]
+752|      },
+753|      {
+754|        "title": "Token Usage",
+755|        "type": "timeseries",
+756|        "targets": [{"expr": "rate(ah_llm_tokens_total[5m])"}]
+757|      },
+758|      {
+759|        "title": "LLM Latency (p95)",
+760|        "type": "timeseries",
+761|        "targets": [{"expr": "histogram_quantile(0.95, rate(ah_llm_latency_seconds_bucket[5m]))"}]
+762|      },
+763|      {
+764|        "title": "Agent Runs",
+765|        "type": "stat",
+766|        "targets": [{"expr": "sum(ah_agent_runs_total)"}]
+767|      },
+768|      {
+769|        "title": "Tool Call Distribution",
+770|        "type": "piechart",
+771|        "targets": [{"expr": "sum by (tool_name) (ah_tool_calls_total)"}]
+772|      },
+773|      {
+774|        "title": "Error Rate",
+775|        "type": "timeseries",
+776|        "targets": [{"expr": "rate(ah_llm_errors_total[5m])"}]
+777|      },
+778|      {
+779|        "title": "DB Pool Saturation",
+780|        "type": "gauge",
+781|        "targets": [{"expr": "ah_db_pool_connections{state='used'} / ah_db_pool_connections{state='total'}"}]
+782|      }
+783|    ]
+784|  }
+785|}
+786|```
+787|
+788|### 5.5 Alerting Rules
+789|
+790|```yaml
+791|# prometheus-rules.yaml
+792|groups:
+793|  - name: agentharness
+794|    rules:
+795|      - alert: AgentHarnessHighErrorRate
+796|        expr: rate(ah_llm_errors_total[5m]) / rate(ah_llm_requests_total[5m]) > 0.1
+797|        for: 5m
+798|        labels:
+799|          severity: warning
+800|        annotations:
+801|          summary: "High LLM error rate (>10%)"
+802|
+803|      - alert: AgentHarnessHighLatency
+804|        expr: histogram_quantile(0.95, rate(ah_llm_latency_seconds_bucket[5m])) > 30
+805|        for: 10m
+806|        labels:
+807|          severity: warning
+808|        annotations:
+809|          summary: "LLM p95 latency > 30s"
+810|
+811|      - alert: AgentHarnessDBDown
+812|        expr: up{job="agentharness-postgres"} == 0
+813|        for: 1m
+814|        labels:
+815|          severity: critical
+816|        annotations:
+817|          summary: "PostgreSQL is down"
+818|
+819|      - alert: AgentHarnessTokenBudgetExhaustion
+820|        expr: rate(ah_agent_token_budget_exceeded[1h]) > 5
+821|        for: 15m
+822|        labels:
+823|          severity: info
+824|        annotations:
+825|          summary: "Frequent token budget exhaustion — consider raising limits"
+826|
+827|      - alert: AgentHarnessDBPoolExhausted
+828|        expr: ah_db_pool_connections{state="used"} / ah_db_pool_connections{state="total"} > 0.9
+829|        for: 5m
+830|        labels:
+831|          severity: warning
+832|        annotations:
+833|          summary: "DB connection pool >90% utilized"
+834|```
+835|
+836|---
+837|
+838|## 6. Observability
+839|
+840|### 6.1 OpenTelemetry Integration
+841|
+842|The OpenTelemetry GenAI semantic conventions provide standard attributes for LLM operations:
+843|
+844|| Attribute | Description |
+845||-----------|-------------|
+846|| `gen_ai.request.model` | Model used (e.g., `anthropic/claude-3.5-sonnet`) |
+847|| `gen_ai.usage.input_tokens` | Prompt tokens |
+848|| `gen_ai.usage.output_tokens` | Completion tokens |
+849|| `gen_ai.response.finish_reasons` | Why generation stopped |
+850|| `gen_ai.system_instructions` | System prompt (opt-in) |
+851|| `gen_ai.input.messages` | Full input messages (opt-in) |
+852|| `gen_ai.output.messages` | Full output messages (opt-in) |
+853|
+854|```python
+855|# ah/observability/tracing.py
+856|from opentelemetry import trace
+857|from opentelemetry.sdk.trace import TracerProvider
+858|from opentelemetry.sdk.trace.export import BatchSpanProcessor
+859|from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+860|from opentelemetry.semconv_ai import (
+861|    SpanAttributes,
+862|    GenAIAttributes,
+863|)
+864|import os
+865|
+866|def setup_tracing(service_name: str = "agentharness"):
+867|    """Initialize OpenTelemetry tracing."""
+868|    if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+869|        return  # Tracing disabled
+870|
+871|    provider = TracerProvider()
+872|    exporter = OTLPSpanExporter(
+873|        endpoint=os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"],
+874|    )
+875|    provider.add_span_processor(BatchSpanProcessor(exporter))
+876|    trace.set_tracer_provider(provider)
+877|    return trace.get_tracer(service_name)
+878|
+879|
+880|class AgentSpan:
+881|    """Context manager for agent run spans."""
+882|
+883|    def __init__(self, tracer, session_id: str, agent_id: str):
+884|        self._tracer = tracer
+885|        self._session_id = session_id
+886|        self._agent_id = agent_id
+887|        self._span = None
+888|
+889|    def __enter__(self):
+890|        self._span = self._tracer.start_span(
+891|            "agent.run",
+892|            attributes={
+893|                SpanAttributes.GEN_AI_AGENT_ID: self._agent_id,
+894|                "session.id": self._session_id,
+895|            },
+896|        )
+897|        return self._span
+898|
+899|    def __exit__(self, exc_type, exc_val, exc_tb):
+900|        if exc_type:
+901|            self._span.set_attribute("error", True)
+902|            self._span.set_attribute("error.message", str(exc_val))
+903|        self._span.end()
+904|        return False
+905|
+906|
+907|class LLMCallSpan:
+908|    """Context manager for LLM call spans."""
+909|
+910|    def __init__(self, tracer, provider: str, model: str):
+911|        self._tracer = tracer
+912|        self._provider = provider
+913|        self._model = model
+914|        self._span = None
+915|
+916|    def __enter__(self):
+917|        self._span = self._tracer.start_span(
+918|            "llm.call",
+919|            attributes={
+920|                SpanAttributes.GEN_AI_REQUEST_MODEL: self._model,
+921|                SpanAttributes.GEN_AI_PROVIDER_NAME: self._provider,
+922|            },
+923|        )
+924|        return self._span
+925|
+926|    def __exit__(self, exc_type, exc_val, exc_tb):
+927|        if exc_type:
+928|            self._span.set_attribute("error", True)
+929|        self._span.end()
+930|        return False
+931|
+932|    def set_token_usage(self, prompt_tokens: int, completion_tokens: int):
+933|        self._span.set_attribute(SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens)
+934|        self._span.set_attribute(SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens)
+935|```
+936|
+937|### 6.2 Structured Logging with Correlation IDs
+938|
+939|```python
+940|# ah/observability/logging.py
+941|import logging
+942|import json
+943|import sys
+944|import uuid
+945|from datetime import datetime, timezone
+946|from contextvars import ContextVar
+947|
+948|# Context variable for request/session correlation
+949|request_id_var: ContextVar[str] = ContextVar("request_id", default="")
+950|session_id_var: ContextVar[str] = ContextVar("session_id", default="")
+951|
+952|
+953|class StructuredLogFormatter(logging.Formatter):
+954|    """JSON formatter with correlation IDs."""
+955|
+956|    def format(self, record: logging.LogRecord) -> str:
+957|        log_entry = {
+958|            "timestamp": datetime.now(timezone.utc).isoformat(),
+959|            "level": record.levelname,
+960|            "logger": record.name,
+961|            "message": record.getMessage(),
+962|            "request_id": request_id_var.get(),
+963|            "session_id": session_id_var.get(),
+964|            "source": {
+965|                "file": record.filename,
+966|                "line": record.lineno,
+967|                "function": record.funcName,
+968|            },
+969|        }
+970|        if record.exc_info:
+971|            log_entry["exception"] = self.formatException(record.exc_info)
+972|        return json.dumps(log_entry, default=str)
+973|
+974|
+975|def setup_logging(level: str = "INFO"):
+976|    """Configure structured JSON logging."""
+977|    handler = logging.StreamHandler(sys.stdout)
+978|    handler.setFormatter(StructuredLogFormatter())
+979|
+980|    root = logging.getLogger()
+981|    root.setLevel(level)
+982|    root.handlers = [handler]
+983|
+984|    # Reduce noise from libraries
+985|    logging.getLogger("httpx").setLevel(logging.WARNING)
+986|    logging.getLogger("httpcore").setLevel(logging.WARNING)
+987|
+988|
+989|def get_logger(name: str) -> logging.Logger:
+990|    return logging.getLogger(name)
+991|```
+992|
+993|### 6.3 Log Pipeline Architecture
+994|
+995|```
+996|┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+997|│  AgentHarness │───▶│  Fluent Bit  │───▶│  OpenSearch  │───▶│  Dashboards  │
+998|│  (JSON logs)  │    │  (shipper)   │    │  (storage)   │    │  (Kibana)    │
+999|└──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
+1000|                           │
+1001|                           ▼
+1002|                    ┌──────────────┐
+1003|                    │  S3 (archive)│
+1004|                    └──────────────┘
+1005|```
+1006|
+1007|### 6.4 Audit Logging (Already Present)
+1008|
+1009|AgentHarness already has audit logging in `ah/core/provider.py`:
+1010|
+1011|```python
+1012|_audit_logger = logging.getLogger("ah.audit")
+1013|# Logs: agent_run_start, agent_run_complete, tool_call_start, tool_call_complete, llm_call_start, llm_call_complete
+1014|```
+1015|
+1016|**Production enhancement:** ship audit logs to a separate sink (immutable storage) for compliance:
+1017|
+1018|```python
+1019|# ah/observability/audit.py
+1020|import json
+1021|import time
+1022|import uuid
+1023|from datetime import datetime, timezone
+1024|
+1025|_audit_events = []
+1026|
+1027|def audit_log(event_type: str, **kwargs):
+1028|    """Structured audit event with full context."""
+1029|    entry = {
+1030|        "id": str(uuid.uuid4()),
+1031|        "timestamp": datetime.now(timezone.utc).isoformat(),
+1032|        "event": event_type,
+1033|        "request_id": request_id_var.get(),
+1034|        "session_id": session_id_var.get(),
+1035|        **kwargs,
+1036|    }
+1037|    # Write to stdout (captured by Fluent Bit → S3/OpenSearch)
+1038|    print(json.dumps(entry, default=str), flush=True)
+1039|```
+1040|
+1041|---
+1042|
+1043|## 7. Logging
+1044|
+1045|### 7.1 Log Levels and What to Log
+1046|
+1047|| Level | What | Example |
+1048||-------|------|---------|
+1049|| **DEBUG** | Full LLM prompts/responses, tool args/results | Development only |
+1050|| **INFO** | Agent run start/complete, tool calls, session lifecycle | Production default |
+1051|| **WARNING** | Retry attempts, rate limit hits, budget warnings | Production |
+1052|| **ERROR** | LLM failures, tool execution failures, DB errors | Production |
+1053|| **CRITICAL** | DB connection loss, provider auth failure | Production |
+1054|
+1055|### 7.2 What NOT to Log
+1056|
+1057|| Data | Reason |
+1058||------|--------|
+1059|| `OPENROUTER_API_KEY` | Secret — never log |
+1060|| `DATABASE_URL` (with password) | Secret — log only host/port/db |
+1061|| Full user messages (in prod) | PII concern — log metadata only |
+1062|| Full LLM responses (in prod) | Cost/size — log token counts + preview |
+1063|| Tool arguments containing secrets | Redact known secret patterns |
+1064|
+1065|### 7.3 Log Retention
+1066|
+1067|| Environment | Hot Storage | Cold Archive | Retention |
+1068||-------------|-------------|--------------|-----------|
+1069|| Development | Local stdout | None | N/A |
+1070|| Staging | OpenSearch (7d) | S3 (30d) | 30 days |
+1071|| Production | OpenSearch (30d) | S3 Glacier (1yr) | 1 year |
+1072|| Compliance | OpenSearch (90d) | S3 Glacier (7yr) | 7 years |
+1073|
+1074|### 7.4 Docker Compose Logging
+1075|
+1076|```yaml
+1077|# docker-compose.yml (logging section)
+1078|services:
+1079|  agentharness:
+1080|    logging:
+1081|      driver: json-file
+1082|      options:
+1083|        max-size: "10m"
+1084|        max-file: "5"
+1085|        labels: "service,environment"
+1086|        tag: "{{.ImageName}}/{{.Name}}/{{.ID}}"
+1087|```
+1088|
+1089|### 7.5 K8s Logging
+1090|
+1091|```yaml
+1092|# Fluent Bit ConfigMap for K8s log shipping
+1093|apiVersion: v1
+1094|kind: ConfigMap
+1095|metadata:
+1096|  name: fluent-bit-config
+1097|data:
+1098|  fluent-bit.conf: |
+1099|    [INPUT]
+1100|        Name              tail
+1101|        Path              /var/log/containers/agentharness-*.log
+1102|        Parser            docker
+1103|        Tag               agentharness.*
+1104|        Refresh_Interval  5
+1105|
+1106|    [FILTER]
+1107|        Name              kubernetes
+1108|        Match             agentharness.*
+1109|        Kube_URL          https://kubernetes.default.svc:443
+1110|        Merge_Log         On
+1111|
+1112|    [OUTPUT]
+1113|        Name              opensearch
+1114|        Match             agentharness.*
+1115|        Host              opensearch-cluster
+1116|        Port              9200
+1117|        Index             agentharness-logs
+1118|        Suppress_Type_Name On
+1119|```
+1120|
+1121|---
+1122|
+1123|## 8. Secrets Management
+1124|
+1125|### 8.1 Current State
+1126|
+1127|AgentHarness reads secrets from environment variables (`DATABASE_URL`, `OPENROUTER_API_KEY`) loaded via `python-dotenv`, with `*_FILE` mounted-secret support and optional HashiCorp Vault or AWS Secrets Manager backends (`AGENT_HARNESS_SECRET_BACKEND`). Environment variables are still the default; the external backends cover production secret rotation.
+1128|
+1129|### 8.2 Secrets Inventory
+1130|
+1131|| Secret | Source | Rotation Frequency |
+1132||--------|--------|-------------------|
+1133|| `DATABASE_URL` | PostgreSQL credentials | 90 days |
+1134|| `OPENROUTER_API_KEY` | OpenRouter dashboard | On compromise |
+1135|| `POSTGRES_PASSWORD` | PostgreSQL user password | 90 days |
+1136|| `JWT_SECRET` (future) | Session signing key | 180 days |
+1137|| `ENCRYPTION_KEY` (future) | Data encryption at rest | 365 days |
+1138|
+1139|### 8.3 Secret Management Solutions
+1140|
+1141|| Solution | Best For | Integration |
+1142||----------|---------|-------------|
+1143|| **Docker Secrets** | Single-node Swarm | `echo "secret" \| docker secret create db_password -` |
+1144|| **Kubernetes Secrets** | K8s deployments | `kubectl create secret generic agentharness-secrets` |
+1145|| **HashiCorp Vault** | Enterprise, multi-app | `vault kv get secret/agentharness` |
+1146|| **AWS Secrets Manager** | AWS deployments | `aws secretsmanager get-secret-value` |
+1147|| **Doppler** | Team-friendly SaaS | `doppler secrets download --format env` |
+1148|| **SOPS + Age** | Git-encrypted secrets | `sops -d secrets.enc.yaml` |
+1149|
+1150|### 8.4 Kubernetes Secrets (with External Secrets Operator)
+1151|
+1152|```yaml
+1153|# External Secrets Operator — sync from AWS Secrets Manager
+1154|apiVersion: external-secrets.io/v1beta1
+1155|kind: ExternalSecret
+1156|metadata:
+1157|  name: agentharness-secrets
+1158|spec:
+1159|  refreshInterval: 1h
+1160|  secretStoreRef:
+1161|    name: aws-secrets-manager
+1162|    kind: ClusterSecretStore
+1163|  target:
+1164|    name: agentharness-secrets
+1165|    creationPolicy: Owner
+1166|  data:
+1167|    - secretKey: database-url
+1168|      remoteRef:
+1169|        key: agentharness/production
+1170|        property: database-url
+1171|    - secretKey: openrouter-api-key
+1172|      remoteRef:
+1173|        key: agentharness/production
+1174|        property: openrouter-api-key
+1175|```
+1176|
+1177|### 8.5 Runtime Secret Injection
+1178|
+1179|The current runtime in `ah/security/secrets.py` resolves each named secret from
+1180|the environment variable, then the matching `NAME_FILE` path, then the
+1181|configured Vault or AWS Secrets Manager backend. It does not scan mounted
+1182|secret directories. For a mounted secret, point the matching variable at the
+1183|file, such as `OPENROUTER_API_KEY_FILE=/run/secrets/openrouter-api-key`.
+1184|
+1185|### 8.6 Secret Rotation Strategy
+1186|
+1187|```
+1188|┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+1189|│   Generate   │────▶│   Deploy    │────▶│   Verify    │
+1190|│   new secret │     │   new secret│     │   rotation  │
+1191|└─────────────┘     └─────────────┘     └─────────────┘
+1192|       │                                       │
+1193|       │         ┌─────────────┐               │
+1194|       └────────▶│   Revoke    │◀──────────────┘
+1195|                 │   old secret│
+1196|                 └─────────────┘
+1197|```
+1198|
+1199|1. Generate new secret (e.g., new API key)
+1200|2. Deploy alongside old secret (dual-key period)
+1201|3. Verify new secret works
+1202|4. Revoke old secret
+1203|5. Update secret store
+1204|
+1205|---
+1206|
+1207|## 9. Backup Strategies
+1208|
+1209|### 9.1 What Needs Backing Up
+1210|
+1211|| Data | Location | Backup Method | Frequency |
+1212||------|----------|---------------|-----------|
+1213|| PostgreSQL data | `pgdata` volume / PVC | `pg_dump` + WAL archiving | Daily full + continuous WAL |
+1214|| Session state | `sessions.state_msgpack` | Included in pg_dump | — |
+1215|| Context chunks | `context_chunks` table | Included in pg_dump | — |
+1216|| Embeddings | `context_chunks.embedding` | Included in pg_dump | — |
+1217|| Skills | `skills/` directory | Git + S3 sync | On change |
+1218|| Configuration | `.env` / K8s secrets | Git (encrypted) + Vault | On change |
+1219|| Audit logs | OpenSearch / S3 | S3 cross-region replication | Continuous |
+1220|
+1221|### 9.2 PostgreSQL Backup Strategy
+1222|
+1223|```bash
+1224|#!/usr/bin/env bash
+1225|# scripts/backup.sh — run via cron or Kubernetes CronJob
+1226|
+1227|set -euo pipefail
+1228|
+1229|BACKUP_DIR="/backups"
+1230|TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+1231|RETENTION_DAYS=30
+1232|S3_BUCKET="s3://agentharness-backups"
+1233|
+1234|# Full backup with pg_dump
+1235|pg_dump "$DATABASE_URL" \
+1236|    --format=custom \
+1237|    --compress=9 \
+1238|    --file="${BACKUP_DIR}/agentharness_${TIMESTAMP}.dump"
+1239|
+1240|# Verify backup
+1241|pg_restore --list "${BACKUP_DIR}/agentharness_${TIMESTAMP}.dump" > /dev/null
+1242|
+1243|# Upload to S3
+1244|aws s3 cp "${BACKUP_DIR}/agentharness_${TIMESTAMP}.dump" "${S3_BUCKET}/daily/"
+1245|
+1246|# Clean old local backups
+1247|find "${BACKUP_DIR}" -name "*.dump" -mtime +${RETENTION_DAYS} -delete
+1248|
+1249|# Clean old S3 backups (lifecycle policy also handles this)
+1250|aws s3 ls "${S3_BUCKET}/daily/" | \
+1251|    awk -v date="$(date -d "${RETENTION_DAYS} days ago" +%Y%m%d)" \
+1252|    '$1 < date {print $4}' | \
+1253|    xargs -I {} aws s3 rm "${S3_BUCKET}/daily/{}"
+1254|
+1255|echo "Backup completed: agentharness_${TIMESTAMP}.dump"
+1256|```
+1257|
+1258|### 9.3 Point-in-Time Recovery (PITR)
+1259|
+1260|```yaml
+1261|# postgresql.conf — WAL archiving for PITR
+1262|wal_level = replica
+1263|archive_mode = on
+1264|archive_command = 'aws s3 cp %p s3://agentharness-backups/wal/%f'
+1265|max_wal_senders = 3
+1266|```
+1267|
+1268|```bash
+1269|# Recovery procedure
+1270|# 1. Stop PostgreSQL
+1271|# 2. Restore base backup
+1272|pg_restore -d "$DATABASE_URL" agentharness_20241001_000000.dump
+1273|
+1274|# 3. Create recovery.conf
+1275|echo "restore_command = 'aws s3 cp s3://agentharness-backups/wal/%f %p'" > $PGDATA/recovery.signal
+1276|echo "recovery_target_time = '2024-10-01 12:34:56'" >> $PGDATA/recovery.signal
+1277|
+1278|# 4. Start PostgreSQL — it replays WAL up to target time
+1279|```
+1280|
+1281|### 9.4 Kubernetes CronJob for Backups
+1282|
+1283|```yaml
+1284|apiVersion: batch/v1
+1285|kind: CronJob
+1286|metadata:
+1287|  name: agentharness-backup
+1288|spec:
+1289|  schedule: "0 2 * * *"  # 2 AM daily
+1290|  concurrencyPolicy: Forbid
+1291|  jobTemplate:
+1292|    spec:
+1293|      template:
+1294|        spec:
+1295|          containers:
+1296|            - name: backup
+1297|              image: pgvector/pgvector:pg16
+1298|              command:
+1299|                - /bin/bash
+1300|                - -c
+1301|                - |
+1302|                  pg_dump "$DATABASE_URL" --format=custom --compress=9 \
+1303|                    | aws s3 cp - s3://agentharness-backups/daily/agentharness_$(date +%Y%m%d).dump
+1304|              env:
+1305|                - name: DATABASE_URL
+1306|                  valueFrom:
+1307|                    secretKeyRef:
+1308|                      name: agentharness-secrets
+1309|                      key: database-url
+1310|              resources:
+1311|                requests:
+1312|                  cpu: 100m
+1313|                  memory: 256Mi
+1314|          restartPolicy: OnFailure
+1315|```
+1316|
+1317|### 9.5 Backup Verification
+1318|
+1319|```bash
+1320|#!/usr/bin/env bash
+1321|# scripts/verify-backup.sh — weekly backup verification
+1322|
+1323|set -euo pipefail
+1324|
+1325|LATEST_BACKUP=$(aws s3 ls s3://agentharness-backups/daily/ | sort | tail -1 | awk '{print $4}')
+1326|TEMP_DB="agentharness_verify_$(date +%s)"
+1327|
+1328|# Download and restore to temp database
+1329|aws s3 cp "s3://agentharness-backups/daily/${LATEST_BACKUP}" /tmp/verify.dump
+1330|createdb "$TEMP_DB"
+1331|pg_restore -d "$TEMP_DB" /tmp/verify.dump
+1332|
+1333|# Run verification queries
+1334|psql "$TEMP_DB" -c "SELECT COUNT(*) FROM sessions;" > /dev/null
+1335|psql "$TEMP_DB" -c "SELECT COUNT(*) FROM context_chunks;" > /dev/null
+1336|psql "$TEMP_DB" -c "SELECT pg_size_pretty(pg_database_size('${TEMP_DB}'));"
+1337|
+1338|# Cleanup
+1339|dropdb "$TEMP_DB"
+1340|rm /tmp/verify.dump
+1341|
+1342|echo "Backup verification passed: ${LATEST_BACKUP}"
+1343|```
+1344|
+1345|### 9.6 Disaster Recovery Runbook
+1346|
+1347|| Scenario | RTO | RPO | Procedure |
+1348||----------|-----|-----|-----------|
+1349|| Single container crash | 1 min | 0 | Docker/K8s auto-restart |
+1350|| PostgreSQL corruption | 30 min | 5 min | Restore from PITR |
+1351|| Full node failure | 1 hour | 1 hour | Redeploy on new node from backups |
+1352|| Region outage | 4 hours | 1 hour | Cross-region S3 restore |
+1353|| Accidental data deletion | 15 min | 5 min | PITR to just before deletion |
+1354|
+1355|### 9.7 Backup Architecture
+1356|
+1357|```
+1358|┌─────────────────────────────────────────────────────────┐
+1359|│                    Production                             │
+1360|│  ┌──────────┐    ┌──────────┐    ┌──────────┐          │
+1361|│  │ AgentHarness│    │ PostgreSQL│    │  Skills  │          │
+1362|│  └─────┬────┘    └─────┬────┘    └─────┬────┘          │
+1363|│        │               │               │                 │
+1364|└────────┼───────────────┼───────────────┼─────────────────┘
+1365|         │               │               │
+1366|         ▼               ▼               ▼
+1367|┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+1368|│  S3 Standard  │  │  S3 Standard  │  │  Git + S3    │
+1369|│  (daily dumps)│  │  (WAL archive)│  │  (versioned) │
+1370|└──────┬───────┘  └──────┬───────┘  └──────────────┘
+1371|       │                 │
+1372|       ▼                 ▼
+1373|┌──────────────┐  ┌──────────────┐
+1374|│  S3 Glacier  │  │  S3 Glacier  │
+1375|│  (30d → 1yr) │  │  (30d → 7yr) │
+1376|└──────────────┘  └──────────────┘
+1377|       │
+1378|       ▼
+1379|┌──────────────┐
+1380|│  S3 Cross-   │
+1381|│  Region      │
+1382|│  Replication │
+1383|└──────────────┘
+1384|```
+1385|
+1386|---
+1387|
+1388|## 10. Production Readiness Checklist
+1389|
+1390|### 10.1 Immediate (Pre-Production)
+1391|
+1392|- [ ] Add `prometheus-client` dependency
+1393|- [ ] Add OpenTelemetry SDK dependency
+1394|- [ ] Create `Dockerfile` + `docker-compose.yml`
+1395|- [ ] Add `/health` and `/metrics` endpoints
+1396|- [ ] Move secrets to environment-based config (no hardcoded DSN)
+1397|- [ ] Add structured JSON logging
+1398|- [ ] Add `pg_dump` backup script
+1399|- [ ] Add Trivy + Bandit to CI
+1400|- [ ] Add `.dockerignore`
+1401|- [ ] Create production `values.yaml` for Helm
+1402|
+1403|### 10.2 Short-Term (1–3 Months)
+1404|
+1405|- [ ] Add HTTP API server (FastAPI/aiohttp) for remote agent invocation
+1406|- [ ] Add authentication (API keys or OAuth2)
+1407|- [ ] Add rate limiting per user/session
+1408|- [ ] Set up Grafana dashboards
+1409|- [ ] Set up alerting rules
+1410|- [ ] Add distributed tracing with Jaeger or Tempo
+1411|- [ ] Implement secret rotation automation
+1412|- [ ] Add integration tests with testcontainers
+1413|- [ ] Create Helm chart
+1414|- [ ] Set up staging environment
+1415|
+1416|### 10.3 Medium-Term (3–6 Months)
+1417|
+1418|- [ ] Multi-agent orchestration (parallel tool execution)
+1419|- [ ] Horizontal scaling with K8s HPA
+1420|- [ ] Database read replicas for query scaling
+1421|- [ ] Redis caching layer for session state
+1422|- [ ] CI/CD with GitOps (ArgoCD)
+1423|- [ ] Chaos engineering tests
+1424|- [ ] Load testing suite
+1425|- [ ] Documentation site
+1426|- [ ] Community onboarding guide
+1427|
+1428|---
+1429|
+1430|## 11. Architecture Diagram
+1431|
+1432|```
+1433|                         ┌─────────────────────────────────────┐
+1434|                         │           Users / Clients            │
+1435|                         └──────────────┬──────────────────────┘
+1436|                                        │
+1437|                         ┌──────────────▼──────────────────────┐
+1438|                         │     Ingress / Load Balancer          │
+1439|                         │     (nginx / Traefik / ALB)          │
+1440|                         └──────────────┬──────────────────────┘
+1441|                                        │
+1442|                    ┌───────────────────┼───────────────────┐
+1443|                    │                   │                   │
+1444|          ┌─────────▼────────┐ ┌────────▼─────────┐ ┌──────▼──────────┐
+1445|          │  AgentHarness    │ │  AgentHarness    │ │  AgentHarness   │
+1446|          │  Pod 1           │ │  Pod 2           │ │  Pod N          │
+1447|          │                  │ │                  │ │                 │
+1448|          │  ┌────────────┐  │ │  ┌────────────┐  │ │  ┌───────────┐ │
+1449|          │  │ ReAct Loop │  │ │  │ ReAct Loop │  │ │  │ ReAct Loop│ │
+1450|          │  └─────┬──────┘  │ │  └─────┬──────┘  │ │  └─────┬─────┘ │
+1451|          │        │         │ │        │         │ │        │       │
+1452|          │  ┌─────▼──────┐  │ │  ┌─────▼──────┐  │ │  ┌─────▼─────┐ │
+1453|          │  │  Provider   │  │ │  │  Provider   │  │ │  │  Provider  │ │
+1454|          │  │ (httpx)     │  │ │  │ (httpx)     │  │ │  │ (httpx)    │ │
+1455|          │  └─────┬──────┘  │ │  └─────┬──────┘  │ │  └─────┬─────┘ │
+1456|          └────────┼─────────┘ └────────┼─────────┘ └──────┼───────┘
+1457|                   │                    │                   │
+1458|                   └────────────────────┼───────────────────┘
+1459|                                        │
+1460|                              ┌─────────▼─────────┐
+1461|                              │   PostgreSQL      │
+1462|                              │   + pgvector      │
+1463|                              │                   │
+1464|                              │  ┌─────────────┐  │
+1465|                              │  │  sessions   │  │
+1466|                              │  ├─────────────┤  │
+1467|                              │  │context_chunks│ │
+1468|                              │  └─────────────┘  │
+1469|                              └─────────┬─────────┘
+1470|                                        │
+1471|                              ┌─────────▼─────────┐
+1472|                              │   S3 / Glacier    │
+1473|                              │   (backups)       │
+1474|                              └───────────────────┘
+1475|
+1476|          ┌──────────────────────────────────────────────────────┐
+1477|          │              Observability Stack                       │
+1478|          │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │
+1479|          │  │Prometheus│  │  Grafana │  │  Jaeger / Tempo  │   │
+1480|          │  │(metrics) │  │(dashboard)│  │  (traces)        │   │
+1481|          │  └──────────┘  └──────────┘  └──────────────────┘   │
+1482|          │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │
+1483|          │  │Fluent Bit│  │OpenSearch│  │  S3 (archive)    │   │
+1484|          │  │(shipper) │  │(logs)    │  │                  │   │
+1485|          │  └──────────┘  └──────────┘  └──────────────────┘   │
+1486|          └──────────────────────────────────────────────────────┘
+1487|```
+1488|
+1489|---
+1490|
+1491|## 12. Technology Stack Summary
+1492|
+1493|| Layer | Technology | Alternative |
+1494||-------|-----------|-------------|
+1495|| **Container** | Docker + Compose | Podman, containerd |
+1496|| **Orchestration** | Kubernetes + Helm | Docker Swarm, Nomad |
+1497|| **CI/CD** | GitHub Actions + ArgoCD | GitLab CI, Jenkins, Flux |
+1498|| **Metrics** | Prometheus | VictoriaMetrics, Datadog |
+1499|| **Dashboards** | Grafana | Datadog, New Relic |
+1500|| **Tracing** | OpenTelemetry + Jaeger | Zipkin, Honeycomb |
+1501|| **Logging** | Fluent Bit + OpenSearch | Loki, Datadog |
+1502|| **Secrets** | Vault + External Secrets Operator | AWS Secrets Manager, Doppler |
+1503|| **Backups** | pg_dump + S3 | WAL-G, pgBackRest |
+1504|| **Database** | PostgreSQL 16 + pgvector | Neon, Supabase, Crunchy Data |
+1505|| **LLM Gateway** | LiteLLM (future) | Direct provider APIs |
+1506|
+1507|---
+1508|
+1509|## 13. References
+1510|
+1511|- [OpenTelemetry GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
+1512|- [pgvector documentation](https://github.com/pgvector/pgvector)
+1513|- [Crunchy Data PostgreSQL Operator](https://github.com/CrunchyData/postgres-operator)
+1514|- [External Secrets Operator](https://external-secrets.io/)
+1515|- [kagent — Kubernetes-native agent framework](https://kagent.dev/)
+1516|- [Intel Enterprise Agent Toolkit](https://github.com/intel/enterprise-agent-toolkit)
+1517|- [Langship deployment guide](https://docs.lyzr.ai/open-source/langship/deployment)
+1518|- [AgentArea deployment patterns](https://docs.agentarea.ai/deployment)
+1519|- [Docker Agent](https://docker.github.io/docker-agent/)

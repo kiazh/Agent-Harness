@@ -19,7 +19,10 @@ from ah.skills.registry import SkillParser, SkillRegistry, skill_registry
 logger = logging.getLogger(__name__)
 
 _SKILL_NAME = re.compile(r"^[a-z][a-z0-9_-]{2,63}$")
-_TRIGGER = re.compile(r"\b(document|repeatable|workflow|procedure|runbook|remember how)\b", re.I)
+_TRIGGER = re.compile(
+    r"\b(document|repeatable|workflow|procedure|runbook|remember how|automate|standardize|template|checklist|guideline|best practice|process|steps to|how to)\b",
+    re.I,
+)
 
 
 class LearningReviewer:

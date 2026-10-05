@@ -93,6 +93,11 @@ async def evaluate_identity_scenarios(
             await db.execute("DELETE FROM agent_belief_history WHERE agent_id = $1", agent_id)
             await db.execute("DELETE FROM memories WHERE agent_id = $1", agent_id)
             await db.execute("DELETE FROM agent_beliefs WHERE agent_id = $1", agent_id)
+            await db.execute("DELETE FROM memory_provenance WHERE source_agent = $1", agent_id)
+            await db.execute(
+                "DELETE FROM shared_memory_deliveries WHERE recipient_agent = $1", agent_id
+            )
+            await db.execute("DELETE FROM learning_reviews WHERE agent_id = $1", agent_id)
     return DriftMetrics(
         scenarios=len(scenarios),
         transitions=transitions,

@@ -174,7 +174,7 @@ class Gateway:
         except RpcError as e:
             self._send_error(rid, e.code, e.message)
             return
-        except Exception as e:  # never let a handler crash the gateway
+        except Exception:  # never let a handler crash the gateway
             logger.exception("Gateway method %s failed", method)
             self._send_error(rid, INTERNAL_ERROR, "internal error")
             return
@@ -425,7 +425,7 @@ class Gateway:
         except asyncio.CancelledError:
             complete(cancelled=True)
             return
-        except Exception as e:
+        except Exception:
             logger.exception("Turn %s failed", turn_id)
             emit("error", message="agent turn failed")
             complete()
@@ -435,14 +435,12 @@ class Gateway:
                 del self._turns[sid]
         complete(final)
 
-    async def _run_turn_with_timeout(
-        self, session_id: uuid.UUID, turn_id: str, text: str
-    ) -> None:
+    async def _run_turn_with_timeout(self, session_id: uuid.UUID, turn_id: str, text: str) -> None:
         """Run a turn with a configurable timeout."""
         timeout = config.get("turn_timeout")
         try:
             await asyncio.wait_for(self._run_turn(session_id, turn_id, text), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Turn %s timed out after %ss", turn_id, timeout)
             sid = str(session_id)
             self._write(

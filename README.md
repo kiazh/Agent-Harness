@@ -285,7 +285,8 @@ agent-harness/
 │   │   ├── reranker.py      # CohereReranker, IdentityReranker
 │   │   └── search.py        # HybridSearch (BM25 + dense + RRF)
 │   ├── skills/
-│   │   └── registry.py      # SkillParser + SkillRegistry (SKILL.md + YAML frontmatter)
+│   │   ├── registry.py      # SkillParser + SkillRegistry (SKILL.md + YAML frontmatter)
+│   │   └── learning.py      # Opt-in post-turn skill proposals and reviews
 │   └── tools/
 │       ├── base.py          # ToolRegistry (decorator, validation, caching)
 │       ├── builtins.py      # web_search, web_extract, search_files

@@ -248,8 +248,8 @@ class SoulSpec:
     @dataclass
     class Config:
         model: str | None = None
-        max_iterations: int = 10
-        context_budget: int = 8000
+        max_iterations: int | None = None
+        context_budget: int | None = None
         permissions: SoulSpec.Permissions | None = None
 
     # ─── Constructors ────────────────────────────────────────────────────
@@ -305,7 +305,7 @@ class SoulSpec:
             "specVersion": "0.5",
             "name": self.name,
             "displayName": self.persona.name or self.name,
-            "version": self.version,
+            "version": self.version or "1.0.0",
             "description": self.persona.description[:160],
             "author": author_info,
             "license": license if license is not None else source.get("license", "MIT"),
@@ -319,8 +319,14 @@ class SoulSpec:
         for relative in references.values():
             if relative not in output_files:
                 raise ValueError(f"missing package file: {relative}")
-            _package_file(root, relative)
         root.mkdir(parents=True, exist_ok=True)
+        # Remove stale files: any file in the output directory that is not in
+        # the new manifest (and is not soul.json itself) should be deleted.
+        new_files = {_package_file(root, relative) for relative in references.values()}
+        new_files.add(_package_file(root, "soul.json"))
+        for existing in root.iterdir():
+            if existing.is_file() and existing not in new_files:
+                existing.unlink()
         for relative in references.values():
             destination = _package_file(root, relative)
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -503,5 +509,7 @@ class SoulSpec:
             system_prompt=system_prompt,
             tools=tools,
             model=self.config.model if self.config else None,
-            max_iterations=self.config.max_iterations if self.config else 10,
+            max_iterations=self.config.max_iterations
+            if self.config and self.config.max_iterations is not None
+            else 10,
         )

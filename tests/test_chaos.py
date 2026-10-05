@@ -220,7 +220,7 @@ class TestLLMChaos:
                 assert "error" in response.content.lower() or "429" in response.content
 
     async def test_agent_handles_malformed_llm_response(self, mock_session):
-        """Agent should handle completely malformed LLM response."""
+        """Agent should handle completely malformed LLM response gracefully."""
         provider = AsyncMock()
         provider.complete = AsyncMock(
             return_value=LLMResponse(
@@ -240,13 +240,11 @@ class TestLLMChaos:
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
-                # Should not crash
-                try:
-                    response = await agent.run(mock_session.id, "test", verbose=False)
-                    assert response is not None
-                except (TypeError, AttributeError):
-                    # Acceptable if it raises a specific error
-                    pass
+                # Should not crash — should return a valid response
+                response = await agent.run(mock_session.id, "test", verbose=False)
+                assert response is not None
+                assert hasattr(response, 'content')
+                assert hasattr(response, 'iterations')
 
     async def test_agent_handles_very_long_llm_response(self, mock_session):
         """Agent should handle very long LLM response."""
@@ -414,12 +412,19 @@ class TestToolChaos:
                 with patch("ah.core.agent.registry", test_registry):
                     agent = ReActAgent(provider=provider, max_iterations=5)
 
-                    # Should timeout, not hang forever
-                    with pytest.raises(asyncio.TimeoutError):
-                        await asyncio.wait_for(
-                            agent.run(mock_session.id, "test", verbose=False),
-                            timeout=5,
-                        )
+                    # Agent should have its own timeout mechanism for tool execution
+                    # The tool will sleep for 1000s, but the agent should timeout
+                    # and return an error response, not hang forever
+                    response = await asyncio.wait_for(
+                        agent.run(mock_session.id, "test", verbose=False),
+                        timeout=10,
+                    )
+                    assert response is not None
+                    # Agent should complete within the timeout window (not hang)
+                    # and return a response indicating something went wrong
+                    assert response.iterations >= 1
+                    # The tool calls should show errors (from timeout)
+                    assert any("Error" in tc.get("result_preview", "") for tc in response.tool_calls)
 
     async def test_agent_handles_tool_returning_none(self, mock_session):
         """Agent should handle tool returning None."""

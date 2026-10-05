@@ -93,6 +93,24 @@ def _is_safe_url(url: str) -> bool:
     return True
 
 
+def _resolve_safe_ip(hostname: str) -> str | None:
+    """Resolve hostname to a safe (non-private) IP address.
+
+    Returns the first safe IP address, or None if no safe address is found.
+    This is used to pin the resolved IP for the actual connection, preventing
+    TOCTOU races where DNS resolution changes between validation and connection.
+    """
+    try:
+        addr_infos = socket.getaddrinfo(hostname, None)
+        for _, _, _, _, sockaddr in addr_infos:
+            ip = ipaddress.ip_address(sockaddr[0])
+            if not (ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local):
+                return str(ip)
+    except (socket.gaierror, ValueError):
+        pass
+    return None
+
+
 @registry.register(description="Search the web for information")
 async def web_search(query: str, limit: int = 5) -> str:
     """Search the web using SearXNG (self-hosted) or DuckDuckGo."""
@@ -169,21 +187,37 @@ async def web_extract(url: str) -> str:
             f"URL rejected by security policy (private/internal address or invalid protocol): {url}"
         )
 
+    # Pin the resolved IP to prevent TOCTOU race
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    pinned_ip = _resolve_safe_ip(hostname) if hostname else None
+    if pinned_ip is None:
+        raise ValidationError(f"Could not resolve safe IP for: {hostname}")
+
     try:
         # The fetch is performed by the Jina Reader proxy, so the URL is passed
         # through unchanged. Rewriting it to a pinned IP (and overriding Host)
         # sent the *target's* hostname to r.jina.ai and broke TLS/SNI there.
-        resp = await asyncio.to_thread(
-            httpx.get,
-            f"https://r.jina.ai/{url}",
-            timeout=30,
-            headers={"Accept": "text/markdown"},
-            follow_redirects=False,  # Don't follow redirects to prevent SSRF bypass
-        )
-        if resp.status_code == 200:
-            # Limit response size to 5000 chars
-            return resp.text[:5000]
-        raise ToolError(f"HTTP {resp.status_code} for {url}")
+        # Stream with byte limit to avoid loading full response into memory
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+            async with client.stream(
+                "GET",
+                f"https://r.jina.ai/{url}",
+                headers={"Accept": "text/markdown"},
+            ) as resp:
+                if resp.status_code != 200:
+                    raise ToolError(f"HTTP {resp.status_code} for {url}")
+                # Read at most 20000 bytes (enough for ~5000 chars of UTF-8)
+                chunks = []
+                total_bytes = 0
+                max_bytes = 20000
+                async for chunk in resp.aiter_bytes():
+                    total_bytes += len(chunk)
+                    if total_bytes > max_bytes:
+                        break
+                    chunks.append(chunk)
+                content = b"".join(chunks)[:max_bytes].decode("utf-8", errors="replace")
+                return content[:5000]
     except httpx.TimeoutException:
         raise ToolError(f"Request timed out for {url}") from None
     except httpx.HTTPError as e:
@@ -210,6 +244,9 @@ async def search_files(pattern: str, path: str = ".", file_glob: str | None = No
         raise ToolError(f"Invalid regex pattern '{pattern}': {e}") from e
 
     glob_pattern = file_glob or "*"
+    # Sanitize glob pattern to prevent path traversal
+    if ".." in glob_pattern or glob_pattern.startswith("/") or glob_pattern.startswith("\\"):
+        raise ToolError(f"Invalid glob pattern: {glob_pattern}")
     matches = []
     try:
 

@@ -12,8 +12,8 @@ from ah.soulspec import (
     ClaudeCodeAdapter,
     CodexAdapter,
     SoulSpec,
-    TestSoulSpecConformance,
     SoulSpecMerger,
+    TestSoulSpecConformance,
 )
 
 # ─── Fixtures ───────────────────────────────────────────────────────────────
@@ -132,7 +132,7 @@ class TestSoulSpecSchema:
         """SoulSpec with only required fields can be created."""
         spec = SoulSpec(name="Minimal")
         assert spec.name == "Minimal"
-        assert spec.version == "1.0.0"
+        assert spec.version is None  # filled from package metadata on write_package
         assert spec.persona is None
         assert spec.workflow == []
         assert spec.skills == []

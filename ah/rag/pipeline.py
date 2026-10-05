@@ -157,21 +157,25 @@ class RAGPipeline:
         if not records:
             return []
 
-        # Insert one row at a time with RETURNING so we get exactly the rows
-        # belonging to this document. Fetching by (session_id, chunk_type) with
-        # a LIMIT would also match documents indexed earlier in the session.
-        rows = []
-        for record in records:
-            row = await db.fetchrow(
-                """
-                INSERT INTO context_chunks
-                    (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
-                """,
-                *record,
-            )
-            rows.append(row)
+        # Batch insert all rows in a single query for better performance.
+        # Use unnest to insert multiple rows at once with RETURNING.
+        rows = await db.fetch(
+            """
+            INSERT INTO context_chunks
+                (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
+            SELECT t.session_id, t.agent_id, t.chunk_type, t.payload_msgpack, t.token_count, t.embedding, t.search_text
+            FROM unnest($1::uuid[], $2::text[], $3::text[], $4::bytea[], $5::int[], $6::text[], $7::text[])
+                AS t(session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
+            RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
+            """,
+            [r[0] for r in records],  # session_id array
+            [r[1] for r in records],  # agent_id array
+            [r[2] for r in records],  # chunk_type array
+            [r[3] for r in records],  # payload_msgpack array
+            [r[4] for r in records],  # token_count array
+            [r[5] for r in records],  # embedding array
+            [r[6] for r in records],  # search_text array
+        )
         stored_chunks = [self._row_to_chunk(r) for r in rows]
 
         audit_log(

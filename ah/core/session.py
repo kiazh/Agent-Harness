@@ -155,16 +155,6 @@ class SessionManager:
         )
         await self._cache_invalidate(session_id)
 
-
-    async def set_status(self, session_id: uuid.UUID, status: str) -> None:
-        """Update session status."""
-        await db.execute(
-            "UPDATE sessions SET status = $2 WHERE id = $1",
-            session_id,
-            status,
-        )
-        await self._cache_invalidate(session_id)
-
     async def archive(self, session_id: uuid.UUID) -> None:
         """Archive a session."""
         await db.execute(

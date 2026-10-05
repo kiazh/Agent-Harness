@@ -185,7 +185,9 @@ class HybridSearch:
         except asyncpg.UndefinedColumnError:
             # search_text column doesn't exist — no fallback possible
             # (casting bytea to text produces hex, not readable text)
-            logger.warning("search_text column not found, skipping BM25 search")
+            logger.warning(
+                "search_text column not found, skipping BM25 search — returning empty results"
+            )
             rows = []
 
         results = []

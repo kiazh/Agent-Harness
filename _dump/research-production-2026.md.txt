@@ -1,0 +1,585 @@
+1|# Production Agent Systems Research Report (2024–2026)
+2|
+3|**Date:** 2026-10-04  
+4|**Scope:** Industry research on production agent systems, usage tracking, observability, evaluation, security, and configuration — mapped to AgentHarness's architecture.
+5|
+6|---
+7|
+8|## Executive Summary
+9|
+10|This report synthesizes research across five critical areas for production AI agent systems. The agent infrastructure landscape has matured significantly from 2024 to 2026, with clear patterns emerging around cost optimization, observability, evaluation, security, and configuration management. AgentHarness already has foundational components in each area; this report identifies specific gaps and actionable recommendations.
+11|
+12|**Key findings:**
+13|- **Cost optimization** is now a $9.2B market (2025) growing at 26.7% CAGR; 40–60% of enterprise LLM spend is waste
+14|- **Observability** has consolidated around 6 major platforms; OpenTelemetry GenAI conventions are the wire standard
+15|- **Evaluation** has moved from research to CI/CD gates; trajectory-level scoring is the differentiator
+16|- **Security** threats have escalated (EchoLeak CVE-2025-32711, 55% of agent attacks are indirect prompt injection)
+17|- **Configuration** is converging on AGENTS.md + Skills patterns with progressive disclosure
+18|
+19|---
+20|
+21|## 1. LLM Usage Tracking and Cost Optimization
+22|
+23|### 1.1 Industry Landscape
+24|
+25|The LLM cost optimization market reached $863.7M in 2025 and is projected to hit $9.2B by 2035 (CAGR 26.7%). Model selection and routing alone capture 41.8% of this market. Key insight: **40–60% of enterprise LLM spend is pure waste** — redundant calls, over-specified models, no caching, and no budget controls.
+26|
+27|### 1.2 Usage Tracking Patterns
+28|
+29|**OpenRouter Analytics API** (2026) is the most complete reference implementation:
+30|- Per-request usage automatically included in every API response (prompt tokens, completion tokens, reasoning tokens, cached tokens, cost)
+31|- Analytics API with management keys for spend analysis grouped by model, API key, app, user, workspace
+32|- Metrics: `total_usage`, `request_count`, `tokens_total`, `cache_hit_rate`, `blended_cost_per_mtok`
+33|- Dimensions: model, API key, app, user, workspace, origin, country, data region, finish reason, context length, session
+34|- Granularity: minute, hour, day, week, month
+35|- Cost components: `usage_upstream` (raw inference), `usage_cache` (savings), `usage_data` (discounts), `usage_web`, `usage_file` (surcharges)
+36|
+37|**OpenRouter State of AI 2025** (100T token study):
+38|- Weak price elasticity: 10% price decrease → only 0.5–0.7% usage increase
+39|- Four usage-cost archetypes: Premium leaders (Claude Sonnet), Efficient giants (Gemini Flash, DeepSeek), Long tail (Qwen, Granite), Premium specialists (GPT-4/5 Pro)
+40|- Key operator insight: **cost-per-successful-outcome** matters more than cost-per-token
+41|
+42|**LLMFlow** (open-source): Local observability proxy that tracks costs, tokens, latency for OpenAI, Anthropic, Gemini, Ollama. Uses OpenTelemetry for trace collection. SQLite backend keeps data local.
+43|
+44|**toolkit-cost-optimizer** (PyPI): Ingests gateway/trace/usage exports, prices every request by token class (input, cache reads/writes, output, reasoning), joins per-request quality scores, finds cheapest routing that keeps quality above a floor. Produces cost/quality Pareto frontier and LiteLLM proxy config.
+45|
+46|**AiFinOps** (open-source): Self-hosted OpenAI-compatible gateway for cost governance. Every call logged to Postgres before response returns. Provider/model allow-list gate. Cost attribution headers (tenant, application, module, user, transaction, region, environment).
+47|
+48|**Obol**: No-SDK cost tracking across 9 providers. $5/month flat. Forecasts month-end bill with exponential smoothing. MAD + CUSUM anomaly detection. Cache savings tracker.
+49|
+50|### 1.3 Cost Optimization Techniques
+51|
+52|| Technique | Typical Savings | Implementation Effort | Best For |
+53||---|---|---|---|
+54|| Prompt optimization | 20–40% | Low (hours) | Everyone, immediate wins |
+55|| Response caching | 30–70% | Low-Medium (days) | Repetitive queries |
+56|| Model routing | 40–60% | Medium (weeks) | Mixed complexity traffic |
+57|| Batching | 20–50% | Medium (weeks) | High-volume, latency-tolerant |
+58|| Prompt caching | 50–90% on cached | Low (hours) | Long system prompts, RAG |
+59|| Self-hosting | 60–90% | High (months) | >1M queries/month |
+60|
+61|**RouteLLM** (ICLR 2025): Well-trained complexity router achieves 95% of GPT-4 performance while routing only 14–26% of requests to the expensive model — **75–85% cost reduction** on routed workloads.
+62|
+63|**Model routing approaches:**
+64|- **Rule-based**: Simple but brittle; misroutes queries that break assumptions
+65|- **Classifier-based**: Trains lightweight model to predict optimal LLM per query; approaches best-single-model performance at significantly lower cost
+66|- **Cascading**: Starts with smallest model, escalates on low confidence; adds latency per escalation
+67|- **Cache-aware routing**: Routes similar queries to same replica to maximize cache hit rates (3x P90 latency improvement)
+68|
+69|**Production pitfalls that kill routing systems:**
+70|1. No structured logging of routing decisions → flying blind
+71|2. No multi-provider fallback → single point of failure
+72|3. Cold start on new query types → misclassification
+73|4. Sequential cascade latency → worse than direct routing
+74|5. Confidence miscalibration at the tail → errors on rare inputs
+75|
+76|**Multi-agent cost guardrails** (critical for AgentHarness):
+77|- Rate limiting at agent level — hard cap on requests per unit time
+78|- Real-time cost monitoring with automatic API key blocking on anomalous spend
+79|- Budget-aware agent design — each agent knows its spend limit before escalating
+80|- Cost kill-switch: soft warn at 70% of budget, hard halt at 100%
+81|- Idempotent run IDs for safe retries
+82|
+83|### 1.4 Recommendations for AgentHarness
+84|
+85|**Current state:** AgentHarness has `ah/observability/metrics.py` and `ah/gateway/` with durable `llm_usage` accounting and enforced session/agent budgets, but no dollar cost attribution or model routing.
+86|
+87|**Priority actions:**
+88|
+89|1. **Implement per-request usage tracking** (Week 1–2)
+90|   - Add `UsageRecord` dataclass: `session_id`, `agent_id`, `model`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `cached_tokens`, `cost_usd`, `latency_ms`, `timestamp`, `cache_hit`
+91|   - Log to structured JSONL with rotation (pattern from AiFinOps)
+92|   - Add cost attribution headers to gateway requests
+93|
+94|2. **Add cost aggregation dashboard** (Week 3–4)
+95|   - Daily summary table: `date`, `agent_id`, `model`, `total_tokens`, `total_cost`, `request_count`, `cache_hit_rate`
+96|   - Per-agent, per-model, per-session cost breakdown
+97|   - Anomaly detection: MAD for spikes, CUSUM for drift
+98|
+99|3. **Implement model routing** (Week 5–8)
+100|   - Start with rule-based routing: dev/staging → cheap model, prod → premium
+101|   - Add complexity classifier for production traffic
+102|   - Implement cascade architecture with confidence thresholds
+103|   - Cache-aware routing for repeated queries
+104|
+105|4. **Add budget controls** (Week 9–10)
+106|   - Per-agent daily/monthly spend caps
+107|   - Soft warn at 70%, hard halt at 100%
+108|   - Gateway-level spend policies (pattern from LangSmith LLM Gateway)
+109|   - Concurrent request limits per agent
+110|
+111|5. **Enable prompt caching** (Week 11–12)
+112|   - Ensure system prompts are cache-stable (static prefix)
+113|   - Version prompts and bust cache on deploy
+114|   - Track cache hit rates per model
+115|
+116|---
+117|
+118|## 2. Agent Observability and Monitoring
+119|
+120|### 2.1 Industry Landscape
+121|
+122|By April 2026, six platforms own the production agent observability conversation:
+123|
+124|| Platform | Type | Pricing | Best For |
+125||---|---|---|---|
+126|| **LangSmith** | Framework-native | $39/seat/mo + usage | LangChain/LangGraph teams |
+127|| **Langfuse** | Open-source | Free self-host; $59/seat cloud | OSS-first, multi-framework |
+128|| **Arize Phoenix** | ML-grade | Open-source + enterprise | OpenTelemetry-native stacks |
+129|| **Helicone** | Drop-in proxy | Free; $79/mo Pro | Simplest install, minimal changes |
+130|| **Datadog LLM** | Enterprise APM | $31+/host/mo + LLM add-on | Datadog shops |
+131|| **Honeycomb LLM** | Event-based | Enterprise | Honeycomb-native shops |
+132|
+133|**Key insight from LangChain's 2026 State of AI Agents report:** 89% of teams have observability in place, but only 52% run offline evals before deployment. Quality is the #1 barrier to deployment at 32%.
+134|
+135|### 2.2 Observability Patterns
+136|
+137|**OpenTelemetry GenAI Semantic Conventions** (exited experimental early 2026):
+138|- Standardized trace shape: `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.reasoning.output_tokens`
+139|- Agent spans: `invoke_agent`, `execute_tool`, `create_agent`
+140|- Framework spans stable in practice through Q1 2026
+141|- Arize's OpenInference aligned its span-kind taxonomy with the spec
+142|
+143|**LangSmith's approach:**
+144|- Hierarchical traces with node-by-node state diffs
+145|- Insights Agent: automated clustering of similar traces to discover usage/error patterns
+146|- Online evaluations: production traffic scored in real-time with LLM-as-judge
+147|- SmithDB: purpose-built database for long, nested agent traces (12–15x faster, P50 trace tree loads ~92ms)
+148|- Polly prompt agent: auto-improvement agent that iterates on prompts
+149|
+150|**Langfuse v3** (2026):
+151|- Rebuilt around OpenTelemetry
+152|- Immutable events table
+153|- Self-hostable, MIT-licensed
+154|- Widest framework coverage among OSS options
+155|
+156|**Production monitoring metrics that matter:**
+157|- Token usage, latency percentiles (P50, P99), error rates, cost breakdowns
+158|- Tool call failure rates, run count by tool
+159|- User satisfaction, whether agent is being used for intended purposes
+160|- Cache hit rates, model routing distribution
+161|
+162|**Two-layer observability pattern:**
+163|- LLM observability platform (LangSmith, Langfuse, Arize) for agent traces, eval, LLM-specific metrics
+164|- Infrastructure observability (Datadog, Honeycomb, New Relic) for host metrics, app errors, deployment health
+165|- Most production deployments need both
+166|
+167|### 2.3 Recommendations for AgentHarness
+168|
+169|**Current state:** AgentHarness has `ah/observability/tracing.py`, `metrics.py`, and `audit.py`. The existing research doc identifies gaps in distributed tracing, metrics aggregation, structured log schema, cost tracking, and alerting.
+170|
+171|**Priority actions:**
+172|
+173|1. **Adopt OpenTelemetry GenAI conventions** (Week 1–2)
+174|   - Map existing traces to `gen_ai.*` semantic conventions
+175|   - Add `trace_id` / `span_id` correlation to all audit events
+176|   - Ensure tool calls are captured as `execute_tool` spans
+177|
+178|2. **Implement structured log envelope** (Week 3–4)
+179|   - Consistent envelope: `timestamp`, `trace_id`, `span_id`, `event_type`, `session_id`, `agent_id`, `model`, `tokens`, `cost`, `latency_ms`, `metadata`
+180|   - Add PII redaction at ingest (tool_args, result_preview)
+181|   - File rotation with gzip for old logs
+182|
+183|3. **Add metrics aggregation** (Week 5–6)
+184|   - Token counts per agent, per model, per session
+185|   - Latency percentiles (P50, P90, P99)
+186|   - Cost per request, cost per session
+187|   - Cache hit rates
+188|   - Tool call success/failure rates
+189|
+190|4. **Implement production monitoring** (Week 7–8)
+191|   - Custom dashboards for business-critical metrics
+192|   - Alerts on: latency regression, cost spikes, error rate increases, tool call failures
+193|   - Webhook/PagerDuty integration for critical alerts
+194|   - Insights Agent pattern: automated clustering of similar traces
+195|
+196|5. **Add replay mechanism** (Week 9–10)
+197|   - Given a trace ID, reconstruct exact prompt, tool responses, and decisions
+198|   - JSONL file per run: one line per event (timestamp, trace_id, event_type, payload)
+199|   - Gzip old files, store for 30+ days
+200|
+201|---
+202|
+203|## 3. Agent Evaluation and Testing
+204|
+205|### 3.1 Industry Landscape
+206|
+207|Agent evaluation has become its own discipline, distinct from LLM evaluation. Key insight: **you score trajectories — plan, tool calls, arguments, final answer — not just text.**
+208|
+209|**Four eval layers every production agent needs:**
+210|
+211|| Layer | What it tests | When it runs | Cost |
+212||---|---|---|---|
+213|| **Unit evals** | Individual components (tool call, classifier, extraction) | Every commit | Fast (<5s), cheap |
+214|| **Trajectory evals** | Full agent on fixed dataset (50–200 real prompts) | Every PR | Medium |
+215|| **Outcome evals** | Final output correctness (LLM-as-judge or ground truth) | Nightly | Expensive |
+216|| **Online evals** | 1–5% live production traffic, async grading | Continuous | Ongoing |
+217|
+218|**Key evaluation frameworks:**
+219|
+220|- **DeepEval**: 50+ research-backed metrics, Pytest-style, CI/CD regression testing. `@observe` decorator captures component-level traces. `deepeval test run` works as Pytest plugin.
+221|- **Braintrust**: Eval-first with CI/CD blocking, datasets, experiments. Native GitHub Action posts results to PRs and blocks merges. One-click production-to-eval conversion. Loop AI for automated scorer/dataset generation.
+222|- **LangSmith**: Native LangChain integration, trajectory evaluators (deterministic match + LLM-as-judge), annotation queues, online evals.
+223|- **Langfuse**: OSS, self-hosted, programmatic dataset runs.
+224|- **Promptfoo**: Config-as-code, YAML/JSON, security testing.
+225|
+226|**Trajectory evaluation metrics:**
+227|- **TrajectoryAccuracy**: How closely agent's step sequence matches golden path
+228|- **ToolCallAccuracy**: Was the right tool called with the right arguments?
+229|- **TrajectoryEfficiency**: Was the path the shortest one that worked?
+230|- **PlanQuality**: Did the agent decide on a sensible sequence before acting?
+231|- **PlanAdherence**: Did the agent stick to its plan?
+232|- **StepEfficiency**: Did the agent finish in reasonable steps without redundant retries?
+233|
+234|**Statistical pass/fail for non-deterministic agents:**
+235|- Define thresholds on aggregate scores, not individual assertions
+236|- Use `num_repetitions` to average out single-run noise
+237|- Compare against named baseline, not absolute thresholds
+238|- Gate on dimensions separately (safety, correctness, relevance)
+239|
+240|**Production-to-eval flywheel:**
+241|1. Production failure captured as trace
+242|2. Trace's tool inputs/outputs recorded
+243|3. Agent re-run against frozen tool responses (deterministic regression test)
+244|4. Failed trace added to regression dataset
+245|5. Eval suite grows stronger with every production incident
+246|
+247|**Sierra's tau-bench** introduced `pass^k` reliability metric: decays exponentially, exposes gap between "sometimes works" and "reliably works."
+248|
+249|**AgentAssay** (arXiv 2603.02601): Sampling-based approaches for statistical confidence without exhaustive re-evaluation.
+250|
+251|### 3.2 Recommendations for AgentHarness
+252|
+253|**Current state:** AgentHarness has `skills/testing-qa/` and `docs/research-testing.md` with LoCoMo evidence retrieval, memory-policy training, and identity-drift evaluations (`ah/research/`), but no CI eval gate.
+254|
+255|**Priority actions:**
+256|
+257|1. **Build unit eval layer** (Week 1–2)
+258|   - Test individual tools, classifiers, extraction prompts
+259|   - Fast (<5s), runs on every commit
+260|   - Block merges on regressions
+261|
+262|2. **Build trajectory eval layer** (Week 3–6)
+263|   - Curate 50–200 representative tasks with known-good trajectories
+264|   - Implement trajectory evaluators: deterministic match + LLM-as-judge
+265|   - Run on every PR, block merge if trajectory score drops below threshold
+266|   - Use statistical thresholds (aggregate averages, not individual assertions)
+267|
+268|3. **Build outcome eval layer** (Week 7–8)
+269|   - LLM-as-judge or ground-truth labels on curated 100-prompt set
+270|   - Run nightly, track accuracy delta over time
+271|   - Metrics: correctness, faithfulness, helpfulness, refusal correctness
+272|
+273|4. **Build online eval layer** (Week 9–10)
+274|   - Sample 1–5% of live production traffic
+275|   - Grade asynchronously with LLM-as-judge
+276|   - Alert on accuracy drops over 24-hour window
+277|   - Production failures automatically become regression cases
+278|
+279|5. **Implement production-to-eval flywheel** (Week 11–12)
+280|   - Capture failed traces with full tool inputs/outputs
+281|   - Freeze tool responses for deterministic replay
+282|   - Auto-add to regression dataset
+283|   - Track eval suite growth from real production failures
+284|
+285|---
+286|
+287|## 4. Agent Security Patterns
+288|
+289|### 4.1 Threat Landscape
+290|
+291|**EchoLeak (CVE-2025-32711)**: Zero-click indirect prompt injection in Microsoft 365 Copilot. Exfiltrated internal documents from a single crafted email. CVSS 9.3. Every enterprise rebuilt their agent threat model after this.
+292|
+293|**OWASP Top 10 for Agentic Applications** (December 2025):
+294|- Prompt injection holds the top spot
+295|- New categories: System Prompt Leakage, Vector and Embedding Weaknesses
+296|- Excessive Agency rewritten for tool-using agents
+297|
+298|**Attack statistics (2025–2026):**
+299|- Indirect prompt injection: 55% of all observed agent attacks
+300|- Multi-hop attacks growing 70% year over year
+301|- 62% of successful enterprise exploits pass through injected document/email/tool output
+302|- AgentDojo: 97 realistic tasks, 629 security test cases
+303|- InjecAgent: ReAct-prompted GPT-4 vulnerable to indirect prompt injection 24% of the time
+304|- AgentVigil: 71% success on AgentDojo, 70% on VWA-adv against o3-mini and GPT-4o
+305|
+306|**Real-world CVEs:**
+307|- CVE-2025-32711 (EchoLeak): M365 Copilot zero-click exfiltration
+308|- CVE-2025-53355: MCP server indirect prompt injection → arbitrary command execution
+309|- CVE-2025-54073: MCP server command execution
+310|- Antigravity sandbox escape: `find_by_name` tool `-X` flag injection → arbitrary code execution
+311|
+312|### 4.2 Security Patterns
+313|
+314|**Design patterns for securing LLM agents** (arXiv 2506.08837):
+315|
+316|1. **Input/output detection systems**: Heuristic/AI-based filters for prompt injection attempts. Raise the bar but cannot guarantee prevention.
+317|
+318|2. **Isolation mechanisms**: Constrain agent capabilities when handling untrusted input. Predefined tool sets, system controller disables all others.
+319|
+320|3. **System-level isolation**: Sandboxing, capability control, information-flow labels.
+321|
+322|**Production security architecture** (from Sandboxing and Capability Control paper):
+323|
+324|- **Policy-enforced tool brokers**: All tool calls pass through a policy engine
+325|- **Object-capability grants**: Fine-grained permissions per tool, per resource
+326|- **Information-flow labels**: Track data sensitivity through the system
+327|- **Isolated execution sandboxes**: Code execution in containers with no network access
+328|- **Scoped identities**: Per-tool credentials with minimal permissions
+329|- **Egress control**: Network egress filtering
+330|- **Approval gates**: Human-in-the-loop for high-risk actions
+331|- **Adversarial evaluation**: Treat agent as compromised until proven otherwise
+332|
+333|**Scoped permissions and sandboxing** (OWASP ASI03, ASI05):
+334|- Scoped credentials for every tool
+335|- Isolated runtime for code execution
+336|- Blast radius capping: what can the agent physically reach if it decides to act?
+337|
+338|**Multi-agent security:**
+339|- Cross-agent manipulation is an emerging threat
+340|- Trust boundaries between agents must be explicit
+341|- Agent-to-agent communication needs authentication and authorization
+342|
+343|### 4.3 Recommendations for AgentHarness
+344|
+345|**Current state:** AgentHarness has `ah/security/secrets.py` and `skills/security-sandboxing/` with the Docker terminal sandbox shipped, secrets redaction, and prompt-injection screening in skills; comprehensive tool-abuse prevention and injection defense in depth remain open.
+346|
+347|**Priority actions:**
+348|
+349|1. **Implement input sanitization** (Week 1–2)
+350|   - Strip control characters, system tag injections
+351|   - Deny obvious dangerous patterns (sudo, rm -rf, drop table)
+352|   - Length caps on user input
+353|   - Validate structured output
+354|
+355|2. **Add prompt injection detection** (Week 3–4)
+356|   - Heuristic filters for common injection patterns
+357|   - LLM-based detection for sophisticated attacks
+358|   - Fence untrusted text (delimiters, XML tags)
+359|   - Treat retrieved content as data, not instructions
+360|
+361|3. **Implement tool broker with policy enforcement** (Week 5–8)
+362|   - All tool calls pass through policy engine
+363|   - Per-tool risk ratings (low/medium/high)
+364|   - Per-tool scoped credentials
+365|   - Approval gates for high-risk actions
+366|   - Rate limiting per tool
+367|
+368|4. **Add sandboxing for code execution** (Week 9–10)
+369|   - Containerized execution with no network access
+370|   - Resource limits (CPU, memory, disk, time)
+371|   - Filesystem isolation (read-only except designated workspace)
+372|   - No runtime package installation
+373|
+374|5. **Implement audit and monitoring** (Week 11–12)
+375|   - Log all tool calls with full context
+376|   - Alert on anomalous patterns (unusual tool sequences, repeated failures, privilege escalation attempts)
+377|   - Regular adversarial testing (AgentDojo-style)
+378|   - Incident response playbook
+379|
+380|---
+381|
+382|## 5. Agent Configuration and Skill Systems
+383|
+384|### 5.1 Industry Landscape
+385|
+386|**AGENTS.md** has emerged as the de facto standard for project-level agent instructions:
+387|- Open standard, tool-agnostic
+388|- Root of repository, loaded at session start
+389|- Converts generic agent into project-aware agent
+390|- Keep to ~100 lines as pointer map; knowledge lives in `docs/`
+391|- Nested AGENTS.md files for subprojects (closest takes precedence)
+392|- Codex: root-down concatenation, `AGENTS.override.md` for replacements, 32 KiB combined limit
+393|- Claude Code: cwd-up walk, `CLAUDE.md` with `@AGENTS.md` reference
+394|
+395|**Agent configuration as managed supply chain** (arXiv 2606.26924):
+396|- 10,008 public GitHub repos studied; 6,145 agent config files found
+397|- 10.1% exact-duplicate rate (cross-org)
+398|- 75.5% of clone pairs cross organizational boundaries
+399|- 58% single-commit; 0.4 commits/month (vs 0.6 for comparator files)
+400|- <1% declare permission boundaries (vs 33% for GitHub Actions workflows)
+401|- Four control-plane mechanisms: content addressing, permission declaration, state-machine promotion, drift detection
+402|
+403|**SoulSpec v0.5** (open standard for agent personas):
+404|- `soul.json` manifest + `SOUL.md` personality + `AGENTS.md` workflows + `STYLE.md` + `HEARTBEAT.md`
+405|- Three-level progressive disclosure: Level 1 (quick scan: `soul.json` only), Level 2 (full read: `SOUL.md` + `IDENTITY.md`), Level 3 (deep dive: `AGENTS.md`, `STYLE.md`, `HEARTBEAT.md`, examples)
+406|- `allowedTools` for tool transparency
+407|- `recommendedSkills` with version constraints and required/optional flags
+408|- `compatibility.frameworks` for multi-framework support
+409|- SoulScan: checks for prompt injection, secret leaks, 50+ patterns
+410|
+411|**Claude Agent Skills** (Anthropic, open standard):
+412|- Directory with `SKILL.md` (YAML frontmatter: `name`, `description`)
+413|- Progressive disclosure: name+description in system prompt, full body loaded on demand
+414|- Additional files (scripts, references) loaded as needed
+415|- Code execution environment with filesystem access, bash, pre-installed packages
+416|- No network access, no runtime package installation
+417|- Skills vs AGENTS.md: AGENTS.md = project orientation, Skills = task knowledge
+418|
+419|**Production system prompt architecture** (from 102K-char production prompt analysis):
+420|- XML-tagged concern isolation (~25 named sections)
+421|- Temporal grounding at head (cache-stable)
+422|- Static tool definitions with runtime masking
+423|- Skills as pointers (not inlined content)
+424|- Discrete safety/compliance blocks
+425|- Runtime parameters at tail (cache-optimal)
+426|- Cache stability: any change to earlier token invalidates all cached content
+427|
+428|### 5.2 Configuration Patterns
+429|
+430|**Layered instruction scopes:**
+431|- Global defaults → project-level files → directory overrides
+432|- Most specific rule always wins
+433|- `AGENTS.override.md` for temporary replacements
+434|
+435|**Prompt governance:**
+436|- Store as plain markdown in git
+437|- PRs for behavior changes
+438|- Content-addressed pinning (SHA-256)
+439|- Permission declaration (tools, paths, network)
+440|- State-machine promotion (dev → staging → prod)
+441|- Drift detection
+442|
+443|**Context engineering patterns:**
+444|- Just-in-time context loading (lightweight identifiers, dynamic retrieval)
+445|- Compaction (summarize conversation nearing context limit)
+446|- Structured note-taking (persistent memory outside context)
+447|- Sub-agent architectures (specialized agents with clean context)
+448|- Hybrid strategy (some data up front, rest on demand)
+449|
+450|### 5.3 Recommendations for AgentHarness
+451|
+452|**Current state:** AgentHarness has `ah/skills/registry.py` and `skills/` directory with 18+ skills. Uses SKILL.md format with YAML frontmatter.
+453|
+454|**Priority actions:**
+455|
+456|1. **Adopt SoulSpec v0.5 manifest** (Week 1–2)
+457|   - Add `soul.json` to each agent configuration
+458|   - Implement three-level progressive disclosure
+459|   - Add `allowedTools` for tool transparency
+460|   - Add `recommendedSkills` with version constraints
+461|   - Add `compatibility.frameworks` for multi-framework support
+462|
+463|2. **Implement skill registry with versioning** (Week 3–4)
+464|   - Content-addressed skills (SHA-256 pinning)
+465|   - Version constraints and required/optional flags
+466|   - Drift detection (compare pinned hash vs runtime bytes)
+467|   - State-machine promotion (dev → staging → prod)
+468|   - SoulScan integration for security auditing
+469|
+470|3. **Optimize prompt architecture** (Week 5–6)
+471|   - XML-tag concern isolation for system prompts
+472|   - Temporal grounding at head (cache-stable)
+473|   - Static tool definitions with runtime masking
+474|   - Skills as pointers (not inlined content)
+475|   - Runtime parameters at tail
+476|
+477|4. **Implement context engineering** (Week 7–8)
+478|   - Just-in-time context loading
+479|   - Compaction for long conversations
+480|   - Structured note-taking for persistent memory
+481|   - Sub-agent architectures for complex tasks
+482|
+483|5. **Add configuration governance** (Week 9–10)
+484|   - PR-based workflow for agent config changes
+485|   - Permission declaration in config files
+486|   - Audit trail for all config changes
+487|   - Rollback capability
+488|
+489|---
+490|
+491|## 6. Implementation Roadmap
+492|
+493|### Phase 1: Foundation (Weeks 1–4)
+494|- Per-request usage tracking
+495|- OpenTelemetry GenAI conventions
+496|- Structured log envelope
+497|- Input sanitization
+498|- SoulSpec v0.5 manifest
+499|
+500|### Phase 2: Visibility (Weeks 5–8)
+501|- Cost aggregation dashboard
+502|- Metrics aggregation
+503|- Model routing (rule-based)
+504|- Prompt injection detection
+505|- Tool broker with policy enforcement
+506|- Skill registry with versioning
+507|
+508|### Phase 3: Quality (Weeks 9–12)
+509|- Unit eval layer
+510|- Trajectory eval layer
+511|- Budget controls
+512|- Sandboxing for code execution
+513|- Prompt architecture optimization
+514|
+515|### Phase 4: Production Hardening (Weeks 13–16)
+516|- Outcome eval layer
+517|- Online eval layer
+518|- Production-to-eval flywheel
+519|- Audit and monitoring
+520|- Context engineering
+521|- Configuration governance
+522|
+523|---
+524|
+525|## 7. Key Citations
+526|
+527|### Cost Optimization
+528|- OpenRouter Analytics API: https://openrouter.ai/docs/cookbook/administration/analytics-cost-control
+529|- OpenRouter State of AI 2025: https://openrouter.ai/state-of-ai
+530|- RouteLLM (ICLR 2025): https://lmsys.org/blog/2024-07-01-routellm/
+531|- toolkit-cost-optimizer: https://pypi.org/project/toolkit-cost-optimizer/
+532|- AiFinOps: https://github.com/ankurngm/AiFinOps
+533|- LLM cost optimization market: https://market.us/report/llm-cost-optimization-market/
+534|
+535|### Observability
+536|- LangSmith: https://www.langchain.com/langsmith/observability
+537|- Langfuse: https://langfuse.com/
+538|- Arize Phoenix: https://github.com/Arize-ai/phoenix
+539|- Helicone: https://www.helicone.ai/
+540|- Agent observability 2026 comparison: https://www.digitalapplied.com/blog/agent-observability-platforms-langsmith-langfuse-arize-2026
+541|- LangChain production monitoring: https://www.langchain.com/blog/production-monitoring
+542|
+543|### Evaluation
+544|- Evaluation and Benchmarking of LLM Agents: A Survey (KDD 2025): https://arxiv.org/abs/2507.21504
+545|- Unified Framework for LLM Agentic Capabilities: https://arxiv.org/html/2605.27898v1
+546|- LogicHunter: Testing LLM Agent Frameworks: https://arxiv.org/pdf/2607.06195
+547|- IBM agent-evaluation: https://github.com/awslabs/agent-evaluation
+548|- Agent evaluation pipeline 2026: https://bestaiweb.ai/how-to-build-an-agent-evaluation-pipeline-with-langsmith-braintrust-and-deepeval-in-2026
+549|- CI/CD for agents: https://klementgunndu1.hashnode.dev/your-unit-tests-pass-but-your-ai-agent-broke-in-production-heres-what-cicd-for-a
+550|
+551|### Security
+552|- Sandboxing and Capability Control for Tool-Using Autonomous Agents: https://richards.ai/papers/security-sandboxing-and-capability-control-for-tool-using-autonomous-agen
+553|- Design Patterns for Securing LLM Agents (arXiv 2506.08837): https://arxiv.org/pdf/2506.08837v2
+554|- SoK: The Attack Surface of Agentic AI: https://arxiv.org/pdf/2603.22928
+555|- EchoLeak CVE-2025-32711: https://reactify-solutions.com/articles/ai-agent-security-2026
+556|- OWASP Top 10 for Agentic Applications: https://theagentecosystem.com/blog/ai-agent-security-sandboxing-permissions
+557|
+558|### Configuration
+559|- SoulSpec: https://soulspec.org/
+560|- AGENTS.md: https://agents.md/
+561|- Claude Agent Skills: https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview
+562|- Agent config as managed supply chain (arXiv 2606.26924): https://agentpatterns.ai/instructions/agent-config-as-managed-supply-chain/
+563|- Production system prompt architecture: https://agentpatterns.ai/instructions/production-system-prompt-architecture/
+564|- Effective context engineering: https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents
+565|
+566|---
+567|
+568|## 8. Summary of Recommendations
+569|
+570|| Area | Current State | Priority | Impact |
+571||---|---|---|---|
+572|| Usage Tracking | Durable `llm_usage` + audit events | P1 | High |
+573|| Cost Optimization | None | P0 | High |
+574|| Observability | Basic tracing + metrics | P0 | High |
+575|| Evaluation | LoCoMo/policy/identity evals exist; no CI gate | P1 | High |
+576|| Security | Secrets backend + Docker sandbox + redaction | P2 | High |
+577|| Configuration | Basic skill registry | P2 | Medium |
+578|
+579|**Top 5 immediate actions:**
+580|1. Implement per-request usage tracking with cost attribution
+581|2. Adopt OpenTelemetry GenAI conventions for all traces
+582|3. Build unit + trajectory eval layers with CI/CD integration
+583|4. Add input sanitization and prompt injection detection
+584|5. Implement SoulSpec v0.5 manifests with progressive disclosure
+585|

@@ -191,8 +191,12 @@ class OpenAIEmbedder(Embedder):
             logger.error("Embedding API call failed: %s", e)
             raise
 
-        # Sort by index to maintain order
-        items = sorted(data.get("data", []), key=lambda x: x.get("index", 0))
+        # Sort by index to maintain order — validate index field
+        items = data.get("data", [])
+        for item in items:
+            if "index" not in item:
+                raise ValueError("Embedding API response missing 'index' field")
+        items.sort(key=lambda x: x["index"])
         embeddings = [item["embedding"] for item in items]
 
         audit_log(
@@ -210,11 +214,6 @@ class OpenAIEmbedder(Embedder):
     async def close(self) -> None:
         """Close the HTTP client."""
         await self._client.aclose()
-
-
-    def clear_cache(self) -> None:
-        """Clear the embedding cache."""
-        self._cache.clear()
 
     @property
     def cache_size(self) -> int:

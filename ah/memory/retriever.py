@@ -242,9 +242,18 @@ class MemoryRetriever:
             params.append(category)
             param_idx += 1
 
-        # Use FTS: to_tsvector('english', content) @@ plainto_tsquery('english', $N)
-        # This leverages the GIN index on to_tsvector for fast full-text search
-        conditions.append(f"to_tsvector('english', content) @@ plainto_tsquery('english', ${param_idx})")
+        # FTS is exact on stemmed lexemes, so keep ILIKE substring matching
+        # as well: queries that are a prefix of a longer indexed token
+        # (e.g. a session tag with a random suffix) must still hit.
+        like_conditions = []
+        for kw in keywords:
+            like_conditions.append(f"content ILIKE ${param_idx}")
+            params.append(f"%{kw}%")
+            param_idx += 1
+        conditions.append(
+            f"(to_tsvector('english', content) @@ plainto_tsquery('english', ${param_idx})"
+            f" OR ({' OR '.join(like_conditions)}))"
+        )
         params.append(" ".join(keywords))
         param_idx += 1
 

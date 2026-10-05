@@ -624,18 +624,6 @@ class ContextManager:
 
         return evicted
 
-    async def enforce_budget(self, session_id: uuid.UUID, budget: int) -> int:
-        """Enforce context budget by evicting old chunks.
-
-        Args:
-            session_id: The session to enforce budget on.
-            budget: Maximum token budget.
-
-        Returns:
-            Number of chunks evicted.
-        """
-        return await self.evict_old_chunks(session_id, max_tokens=budget)
-
     def _row_to_chunk(self, row: asyncpg.Record) -> ContextChunk:
         return row_to_chunk(row)
 
@@ -647,4 +635,3 @@ class ContextManager:
 
 
 context_manager = ContextManager()
-

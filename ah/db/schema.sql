@@ -1,7 +1,8 @@
 -- AgentHarness PostgreSQL Schema
--- Minimal schema: sessions + context_chunks only
+-- Core tables (sessions, context) plus memory, jobs, usage, audit, and identity.
 
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;  -- required by the gin_trgm_ops index below
 
 -- ─── Sessions ───────────────────────────────────────────────────────────────
 
@@ -84,9 +85,23 @@ ALTER TABLE context_archive ADD COLUMN IF NOT EXISTS original_created_at TIMESTA
 ALTER TABLE context_archive ADD COLUMN IF NOT EXISTS search_text TEXT;
 
 -- Older installations created this table without the session foreign key.
-DELETE FROM context_archive a WHERE NOT EXISTS (
-    SELECT 1 FROM sessions s WHERE s.id = a.session_id
-);
+-- Make migration idempotent: only delete if orphan rows exist, and log the count.
+DO $$
+DECLARE
+    deleted_count INT;
+BEGIN
+    -- Count orphan rows before deletion
+    SELECT COUNT(*) INTO deleted_count
+    FROM context_archive a
+    WHERE NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = a.session_id);
+
+    IF deleted_count > 0 THEN
+        RAISE NOTICE 'context_archive migration: deleting % orphan rows', deleted_count;
+        DELETE FROM context_archive a WHERE NOT EXISTS (
+            SELECT 1 FROM sessions s WHERE s.id = a.session_id
+        );
+    END IF;
+END $$;
 DO $$ BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint
@@ -228,25 +243,11 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 CREATE INDEX IF NOT EXISTS idx_agent_messages_session ON agent_messages(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_messages_to ON agent_messages(to_agent, status);
 
--- FK constraints: from_agent/to_agent reference agents(name)
-DELETE FROM agent_messages m WHERE NOT EXISTS (
-    SELECT 1 FROM agents a WHERE a.name = m.from_agent
-);
-DELETE FROM agent_messages m WHERE NOT EXISTS (
-    SELECT 1 FROM agents a WHERE a.name = m.to_agent
-);
-DO $$ BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conrelid = 'agent_messages'::regclass
-          AND confrelid = 'agents'::regclass AND contype = 'f'
-    ) THEN
-        ALTER TABLE agent_messages ADD CONSTRAINT agent_messages_from_agent_fk
-            FOREIGN KEY (from_agent) REFERENCES agents(name) ON DELETE CASCADE;
-        ALTER TABLE agent_messages ADD CONSTRAINT agent_messages_to_agent_fk
-            FOREIGN KEY (to_agent) REFERENCES agents(name) ON DELETE CASCADE;
-    END IF;
-END $$;
+-- No FK from agent_messages to agents(name): from_agent/to_agent also cover
+-- built-in names ('harness', 'orchestrator', 'delegate-tool') and YAML-defined
+-- agents that are not rows in the agents table.
+ALTER TABLE agent_messages DROP CONSTRAINT IF EXISTS agent_messages_from_agent_fk;
+ALTER TABLE agent_messages DROP CONSTRAINT IF EXISTS agent_messages_to_agent_fk;
 
 -- ─── Scheduled Jobs (Phase 6a: scheduler) ───────────────────────────────────
 

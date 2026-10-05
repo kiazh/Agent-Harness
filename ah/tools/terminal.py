@@ -83,8 +83,28 @@ def _run_bounded(args: list[str], timeout: int, cwd: str | None) -> str:
         timer.start()
         try:
             assert process.stdout is not None
-            output = process.stdout.read(MAX_OUTPUT_CHARS + 1)
-            truncated = len(output) > MAX_OUTPUT_CHARS
+            # Read output in a separate thread to avoid deadlock on large output
+            # (blocking read() may not return promptly after kill on Windows)
+            output_parts = []
+            total_read = 0
+            truncated = False
+
+            def read_output():
+                nonlocal total_read, truncated
+                while total_read <= MAX_OUTPUT_CHARS:
+                    chunk = process.stdout.read(MAX_OUTPUT_CHARS + 1 - total_read)
+                    if not chunk:
+                        break
+                    output_parts.append(chunk)
+                    total_read += len(chunk)
+                    if total_read > MAX_OUTPUT_CHARS:
+                        truncated = True
+                        break
+
+            reader_thread = threading.Thread(target=read_output, daemon=True)
+            reader_thread.start()
+            reader_thread.join(timeout=timeout + 1)  # Give extra time for read to complete
+
             if truncated and process.poll() is None:
                 process.kill()
             process.wait()
@@ -93,6 +113,7 @@ def _run_bounded(args: list[str], timeout: int, cwd: str | None) -> str:
 
         if expired.is_set():
             raise subprocess.TimeoutExpired(args, timeout)
+        output = "".join(output_parts)
         if truncated:
             return output[:MAX_OUTPUT_CHARS] + "\n[output truncated]"
         return output or f"(exit code {process.returncode}, no output)"

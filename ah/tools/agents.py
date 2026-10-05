@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from contextvars import ContextVar
@@ -60,12 +61,15 @@ async def delegate(agent: str, task: str) -> str:
     if parent_session_id is not None:
         from_agent, parent_session_id = await active_agent_scope()
     try:
-        result = await orchestrator.delegate(
-            agent,
-            task,
-            from_agent=from_agent,
-            parent_session_id=parent_session_id,
-            _hop_count=delegation_depth.get() + 1,
+        result = await asyncio.wait_for(
+            orchestrator.delegate(
+                agent,
+                task,
+                from_agent=from_agent,
+                parent_session_id=parent_session_id,
+                _hop_count=delegation_depth.get() + 1,
+            ),
+            timeout=60,
         )
     except AgentNotFoundError as e:
         raise ToolError(f"{e}. Use list_agents to see available agents.") from None

@@ -199,7 +199,9 @@ class IdentityGate:
         # with no established beliefs yet.
         if memory.agent_id != agent_id:
             try:
-                provenance = provenance or await self._load_provenance(memory.id, connection=connection)
+                provenance = provenance or await self._load_provenance(
+                    memory.id, connection=connection
+                )
             except Exception as exc:
                 logger.warning(
                     "Provenance lookup failed for memory %s (%s)", memory.id, type(exc).__name__
@@ -238,7 +240,9 @@ class IdentityGate:
 
         if memory.agent_id == agent_id:
             try:
-                provenance = provenance or await self._load_provenance(memory.id, connection=connection)
+                provenance = provenance or await self._load_provenance(
+                    memory.id, connection=connection
+                )
             except Exception as exc:
                 logger.warning(
                     "Provenance lookup failed for memory %s (%s)", memory.id, type(exc).__name__
@@ -337,7 +341,9 @@ class IdentityGate:
             logger.error("Drift containment failed: %s", exc)
             return False
 
-    async def _load_beliefs(self, agent_id: str, *, connection: Any | None = None) -> AgentBelief | None:
+    async def _load_beliefs(
+        self, agent_id: str, *, connection: Any | None = None
+    ) -> AgentBelief | None:
         """Load agent beliefs from the database."""
         row = await (connection or db).fetchrow(
             "SELECT agent_id, belief, version, updated_at FROM agent_beliefs WHERE agent_id = $1",

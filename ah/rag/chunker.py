@@ -255,6 +255,7 @@ class RecursiveCharacterTextSplitter:
 
         result = [chunks[0]]
         overlap_chars = self.chunk_overlap * 4  # Approximate
+        max_chars = self.chunk_size * 4
 
         for i in range(1, len(chunks)):
             prev_text = result[-1].text
@@ -273,13 +274,27 @@ class RecursiveCharacterTextSplitter:
             else:
                 merged = prev_text + current_text
 
-            result.append(
-                Chunk(
-                    text=merged,
-                    metadata=chunks[i].metadata,
-                    token_count=self._estimate_tokens(merged),
+            # Post-merge size check: split if merged exceeds chunk_size
+            if len(merged) > max_chars:
+                # Split the merged text into pieces that fit within max_chars
+                for j in range(0, len(merged), max_chars):
+                    piece = merged[j : j + max_chars]
+                    if piece:
+                        result.append(
+                            Chunk(
+                                text=piece,
+                                metadata=chunks[i].metadata,
+                                token_count=self._estimate_tokens(piece),
+                            )
+                        )
+            else:
+                result.append(
+                    Chunk(
+                        text=merged,
+                        metadata=chunks[i].metadata,
+                        token_count=self._estimate_tokens(merged),
+                    )
                 )
-            )
 
         return result
 

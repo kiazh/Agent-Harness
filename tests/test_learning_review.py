@@ -46,7 +46,7 @@ async def test_successful_turn_schedules_opt_in_learning_without_blocking(monkey
 def test_skill_creation_refuses_to_overwrite_an_existing_skill(tmp_path):
     registry = SkillRegistry(tmp_path / "skills")
     registry.create_skill("safe-checks", "First", "Check health first.")
-    with pytest.raises(FileExistsError):
+    with pytest.raises(ValueError, match="already exists"):
         registry.create_skill("safe-checks", "Second", "Overwrite the first skill.")
     assert registry.get("safe-checks").content == "Check health first."
 

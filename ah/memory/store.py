@@ -65,9 +65,9 @@ class MemoryStore:
                 parent_memory_id=parent_memory_id,
             )
 
-        # Validate against identity gate
-        # When source_agent is provided, the memory is being stored on behalf
-        # of that agent, so validation must use source_agent (not agent_id).
+        # Validate against the identity gate of the *target* agent (the memory's
+        # owner). The memory's attribution stays with the source, so a shared
+        # delivery without valid provenance is quarantined instead of accepted.
         pre_memory = MemoryEntry(
             id=memory_id,
             session_id=session_id,
@@ -77,7 +77,7 @@ class MemoryStore:
             importance=importance,
         )
         validation = await identity_gate.validate_incoming(
-            source, pre_memory, provenance, connection=connection
+            agent_id, pre_memory, provenance, connection=connection
         )
         quarantined = not validation.is_valid
 
