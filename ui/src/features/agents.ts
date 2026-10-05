@@ -1,14 +1,14 @@
 // Agent commands: agents (list, show, delete) and delegate (run a task on another agent).
 
-import { keyValues, table } from "../format.ts";
-import type { AgentInfo, DelegationResult } from "../protocol.ts";
+import { keyValues, table, when } from "../format.ts";
+import type { AgentInfo, AgentSaveResult, AgentHistoryResult, DelegationResult } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
 import { confirm, options, requireArgs, type Command } from "./types.ts";
 
 export const agentsCommand: Command = {
 	name: "agents",
-	description: "Agents: list, show, delete",
-	argumentHint: "[list|show|delete]",
+	description: "Agents: list, show, save, history, delete",
+	argumentHint: "[list|show|save|history|delete]",
 	getArgumentCompletions: options([
 		["list", "All available agents"],
 		["show", "Read an agent's definition <name>"],
@@ -47,7 +47,40 @@ export const agentsCommand: Command = {
 				);
 				return;
 			}
-			case "delete": {
+			case "save": {
+			const name = requireArgs(rest, "/agents save <name> [description]");
+			const desc = rest.replace(/^\S+\s*/, "").trim() || `Custom agent: ${name}`;
+			const { agent } = await host.request<AgentSaveResult>("agents.save", {
+				name: name.toLowerCase(),
+				description: desc,
+				systemPrompt: "",
+				tools: [],
+				maxIterations: 10,
+			});
+			host.print(`Saved agent "${agent.name}".`, "success");
+			return;
+		}
+		case "history": {
+			const limit = parseInt(rest) || 50;
+			const { messages } = await host.request<AgentHistoryResult>("agents.history", {
+				sessionId: host.session()?.id,
+				limit,
+			});
+			if (!messages.length) {
+				host.print("No agent messages yet.", "plain");
+				return;
+			}
+			host.print(
+				table(
+					["From", "To", "Status", "Tokens", "When"],
+					messages.map((m) => [m.fromAgent, m.toAgent, m.status, String(m.tokens), when(m.createdAt)]),
+					60,
+				),
+				"plain",
+				);
+			return;
+		}
+		case "delete": {
 				const name = requireArgs(rest, "/agents delete <name>");
 				if (!(await confirm(host, `Delete agent "${name}"?`, "Delete"))) {
 					host.print("Kept the agent.");
@@ -58,7 +91,7 @@ export const agentsCommand: Command = {
 				return;
 			}
 			default:
-				throw new Error(`Unknown /agents option "${sub}". Try: list, show, delete.`);
+				throw new Error(`Unknown /agents option "${sub}". Try: list, show, save, history, delete.`);
 		}
 	},
 };

@@ -1,8 +1,8 @@
 // Settings commands: config, profile, status, model, provider.
 
 import { userInfo } from "node:os";
-import { keyValues } from "../format.ts";
-import type { ConfigGetResult, ConfigSetResult, ProfileInfo, StatusResult } from "../protocol.ts";
+import { keyValues, table } from "../format.ts";
+import type { ConfigGetResult, ConfigSetResult, ProfileInfo, ProfileListResult, StatusResult, UsageResult } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
 import { formatValue, options, type Command, type FeatureHost } from "./types.ts";
 
@@ -97,6 +97,54 @@ export const settingsCommands: Command[] = [
 					["Context chunks", s.contextChunks],
 					["Memories", `${s.memories} (${s.pendingMemories} pending)`],
 					["Tools", s.tools.join(", ")],
+				]),
+				"plain",
+			);
+		},
+	},
+	{
+		name: "profiles",
+		description: "List all user profiles",
+		async run(_args, host) {
+			const { profiles } = await host.request<ProfileListResult>("profile.list", { limit: 50 });
+			if (!profiles.length) {
+				host.print("No profiles found.", "plain");
+				return;
+			}
+			host.print(
+				table(
+					["User", "Interactions", "Top topics"],
+					profiles.map((p) => [
+						p.userId,
+						String(p.interactionCount),
+						p.topTopics.map((t) => `${t.topic} (${t.count})`).join(", ") || "—",
+					]),
+					60,
+				),
+				"plain",
+				);
+		},
+	},
+	{
+		name: "usage",
+		description: "Token and request usage for this session",
+		async run(_args, host) {
+			const session = host.session();
+			if (!session) throw new Error("No active session. Use /new.");
+			const u = await host.request<UsageResult>("usage.get", { sessionId: session.id });
+			host.print(
+				keyValues([
+					["Session requests", u.session.requests],
+					["Session tokens", u.session.accountedTokens],
+					["Session charged requests", u.session.chargedRequests],
+					["Session charged tokens", u.session.chargedTokens],
+					["Agent requests", u.agent.requests],
+					["Agent tokens", u.agent.accountedTokens],
+					["Unknown calls", u.session.unknownCalls],
+					["Request limit", u.session.requestLimit ?? "—"],
+					["Token limit", u.session.tokenLimit ?? "—"],
+					["Requests remaining", u.session.requestsRemaining ?? "—"],
+					["Tokens remaining", u.session.tokensRemaining ?? "—"],
 				]),
 				"plain",
 			);

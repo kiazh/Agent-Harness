@@ -179,6 +179,50 @@ export interface DelegationResult {
 	status: string;
 }
 
+export interface AgentMessage {
+	id: string;
+	fromAgent: string;
+	toAgent: string;
+	task: string;
+	response: string;
+	status: string;
+	tokens: number;
+	createdAt: string | null;
+}
+
+export interface AgentHistoryResult {
+	messages: AgentMessage[];
+}
+
+export interface AgentSaveResult {
+	agent: AgentInfo;
+}
+
+export interface ProfileListResult {
+	profiles: ProfileInfo[];
+}
+
+export interface UsageView {
+	requests: number;
+	accountedTokens: number;
+	chargedRequests: number;
+	chargedTokens: number;
+	knownPromptTokens: number;
+	knownCompletionTokens: number;
+	unknownCalls: number;
+	requestLimit: number | null;
+	tokenLimit: number | null;
+	requestsRemaining: number | null;
+	tokensRemaining: number | null;
+}
+
+export interface UsageResult {
+	sessionId: string;
+	agentId: string;
+	session: UsageView;
+	agent: UsageView;
+}
+
 export interface JobInfo {
 	id: string;
 	name: string;
