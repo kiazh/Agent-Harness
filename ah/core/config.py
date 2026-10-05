@@ -56,6 +56,8 @@ DEFAULTS: dict[str, Any] = {
     "usage_agent_token_limit": 0,
     "usage_agent_request_limit": 0,
     "memory_enabled": True,
+    "persona_memory_enabled": True,
+    "persona_default_emotion": "trust",
     "learning_review_enabled": False,
     "learning_review_max_per_session": 3,
     "rag_enabled": True,
@@ -118,6 +120,8 @@ class Config:
     usage_agent_token_limit: int = 0
     usage_agent_request_limit: int = 0
     memory_enabled: bool = True
+    persona_memory_enabled: bool = True
+    persona_default_emotion: str = "trust"
     learning_review_enabled: bool = False
     learning_review_max_per_session: int = 3
     rag_enabled: bool = True

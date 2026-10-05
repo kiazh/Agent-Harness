@@ -401,7 +401,7 @@ class Gateway:
         elif key == "provider":
             self._set_provider(value)
         elif key in SECRET_KEYS:
-            raise RpcError(INVALID_PARAMS, f"{key} is a secret; set it in .env instead")
+            raise RpcError(INVALID_PARAMS, f"{key} is a secret; use /keys or .env instead")
         elif isinstance(key, str) and key in DEFAULTS:
             config.set(
                 key, features.coerce_config_value(key, value), persist=bool(params.get("persist"))

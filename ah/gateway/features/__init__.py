@@ -46,6 +46,7 @@ from ah.gateway.features.memory import (
     memory_share,
     memory_stats,
 )
+from ah.gateway.features.secrets import secrets_clear, secrets_list, secrets_set
 from ah.gateway.features.sessions import (
     context_compress,
     context_get,
@@ -113,6 +114,9 @@ METHODS: dict[str, Handler] = {
     "learning.approve": learning_approve,
     "learning.reject": learning_reject,
     "config.get": config_get,
+    "secrets.list": secrets_list,
+    "secrets.set": secrets_set,
+    "secrets.clear": secrets_clear,
     "profile.get": profile_get,
     "profile.set": profile_set,
     "profile.list": profile_list,

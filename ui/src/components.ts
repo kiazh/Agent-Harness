@@ -12,7 +12,7 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { NoticeKind } from "./features/index.ts";
-import { markdownTheme, selectListTheme, theme } from "./theme.ts";
+import { markdownTheme, selectListTheme, skinArt, theme } from "./theme.ts";
 
 /** A user turn: highlighted block with a marker. */
 export class UserMessage extends Box {
@@ -22,18 +22,34 @@ export class UserMessage extends Box {
 	}
 }
 
-/** An assistant turn rendered as Markdown; text grows as deltas stream in. */
-export class AssistantMessage extends Markdown {
+/**
+ * An assistant turn rendered as Markdown inside a contrasting box
+ * (opencode-style), so model output reads as a card against the background.
+ * Text grows as deltas stream in.
+ */
+export class AssistantMessage implements Component {
+	private readonly box: Box;
+	private readonly md: Markdown;
 	private content: string;
 
 	constructor(text = "") {
-		super(text, 1, 0, markdownTheme, { color: theme.text });
 		this.content = text;
+		this.md = new Markdown(text, 1, 0, markdownTheme, { color: theme.text });
+		this.box = new Box(1, 0, theme.assistantBg);
+		this.box.addChild(this.md);
 	}
 
 	append(delta: string): void {
 		this.content += delta;
-		this.setText(this.content);
+		this.md.setText(this.content);
+	}
+
+	render(width: number): string[] {
+		return this.box.render(width);
+	}
+
+	invalidate(): void {
+		this.box.invalidate();
 	}
 }
 
@@ -139,15 +155,21 @@ export class Footer implements Component {
 	invalidate(): void {}
 }
 
-/** Startup banner. */
+/** Startup banner: skin ASCII art beside the title (opencode-style masthead). */
 export function header(version: string): Text {
-	return new Text(
-		`${theme.accentBold("AgentHarness")} ${theme.dim(`v${version}`)}\n${theme.muted(
-			"Enter to send · Shift+Enter newline · Esc to stop a reply · /help for commands · Ctrl+C to exit",
-		)}`,
-		1,
-		1,
-	);
+	const art = skinArt();
+	const right = [
+		`${theme.accentBold("AgentHarness")} ${theme.dim(`v${version}`)}`,
+		theme.muted("Enter to send · Shift+Enter newline · Esc to stop a reply · /help for commands · Ctrl+C to exit"),
+	];
+	const rows = Math.max(art.length, right.length);
+	const lines: string[] = [];
+	for (let i = 0; i < rows; i++) {
+		const left = art[i] ? theme.accent(art[i]) : "";
+		const pad = " ".repeat(Math.max(0, 16 - visibleWidth(art[i] ?? "")));
+		lines.push(`${left}${pad}${right[i] ?? ""}`);
+	}
+	return new Text(lines.join("\n"), 1, 1);
 }
 
 /** A titled, filterable list shown as an overlay (e.g. the session picker). */

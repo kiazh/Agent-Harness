@@ -35,10 +35,18 @@ async def memory_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def memory_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Search memories."""
+    """Search memories (persona-conditioned by default)."""
     gw.require_db()
+    from ah.memory.persona import EmotionTopology
     from ah.memory.retriever import MemoryRetriever
 
+    emotion = params.get("emotion")
+    if emotion is not None:
+        if not isinstance(emotion, str) or not emotion.strip():
+            raise RpcError(INVALID_PARAMS, "emotion must be a non-empty string")
+        emotion = emotion.strip()
+        if emotion not in EmotionTopology.EMOTION_PROFILES:
+            raise RpcError(INVALID_PARAMS, "unknown emotion")
     retriever = MemoryRetriever(top_k=_int(params, "limit", 10, 1, 100))
     session = await gw.get_session(params) if params.get("sessionId") else None
     found = await retriever.retrieve(
@@ -46,8 +54,9 @@ async def memory_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         category=_category(params),
         agent_id=session.agent_id if session else None,
         session_id=session.id if session else None,
+        emotion=emotion,
     )
-    return {"results": [_memory(r.memory, r.score) for r in found]}
+    return {"results": [_memory(r.memory, r.score, r.persona_interpretation) for r in found]}
 
 
 async def memory_add(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:

@@ -754,8 +754,13 @@ def doctor():
         f'Run: npm install --ignore-scripts --prefix "{ui_dir()}"',
     )
 
-    check("OPENROUTER_API_KEY", bool(config.get("openrouter_api_key")), "", "Set it in .env.")
-    check("DATABASE_URL", bool(config.get("database_url")), "", "Set it in .env.")
+    check(
+        "OPENROUTER_API_KEY",
+        bool(config.get("openrouter_api_key")),
+        "",
+        "Run `ah setup` or set it in .env.",
+    )
+    check("DATABASE_URL", bool(config.get("database_url")), "", "Run `ah setup` or set it in .env.")
 
     async def _check_db():
         try:
@@ -798,6 +803,114 @@ def init(
         output.muted("Run `ah` to open the interactive UI.")
 
     _run(_init())
+
+
+@app.command()
+def setup(
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite an existing .env file"),
+    non_interactive: bool = typer.Option(
+        False, "--non-interactive", help="Create a blank .env without prompting"
+    ),
+):
+    """First-launch setup — create the .env file and configure API keys.
+
+    Creates the git-ignored ``.env`` next to the project (or at
+    ``$AH_ENV_FILE``) with one entry per model family you use. Existing
+    values are kept when you press Enter; ``--force`` starts over.
+    """
+    import secrets as _secrets
+
+    from ah.security.env_file import PROVIDER_KEYS, find_env_file, read_env_values, set_env_values
+
+    target = find_env_file()
+    if target.is_file() and force:
+        console.print(f"[bold]Overwriting existing .env:[/bold] {target}")
+        existing: dict[str, str] = {}
+    elif target.is_file():
+        console.print(f"[bold]Found existing .env:[/bold] {target}")
+        console.print("Press Enter to keep each current value (use --force to start over).")
+        existing = read_env_values(target)
+    else:
+        console.print(f"[bold]Creating new .env:[/bold] {target}")
+        existing = {}
+
+    prompts: list[tuple[str, str, str, bool]] = [
+        (
+            "DATABASE_URL",
+            "PostgreSQL connection string",
+            "postgresql://postgres:postgres@localhost:5432/agentharness",
+            False,
+        ),
+        *[(key, desc, "", True) for key, desc in PROVIDER_KEYS],
+        ("AGENT_HARNESS_API_KEY", "HTTP API key (blank = auto-generate)", "", True),
+        ("AGENT_HARNESS_PROVENANCE_KEY", "Memory provenance key (blank = auto-generate)", "", True),
+    ]
+
+    updates: dict[str, str] = {}
+    if not non_interactive:
+        for key, desc, default, hidden in prompts:
+            current = existing.get(key, "")
+            shown_default = default or ("" if hidden else current)
+            if hidden and current.strip():
+                prompt_text = f"{key} ({desc}) [currently set — Enter to keep]"
+            elif hidden:
+                prompt_text = f"{key} ({desc}) [Enter to skip]"
+            elif current.strip():
+                prompt_text = f"{key} [Enter to keep]"
+                shown_default = current
+            else:
+                prompt_text = f"{key} ({desc})"
+            try:
+                answer = typer.prompt(
+                    prompt_text,
+                    default=shown_default,
+                    hide_input=hidden,
+                    show_default=bool(shown_default) and not hidden,
+                )
+            except (typer.Abort, KeyboardInterrupt):
+                console.print("\n[dim]Setup cancelled.[/dim]")
+                raise typer.Exit(1) from None
+            answer = (answer or "").strip()
+            if hidden and not answer and current.strip():
+                continue  # keep existing secret
+            if not hidden and not answer and current.strip():
+                continue
+            if key in ("AGENT_HARNESS_API_KEY", "AGENT_HARNESS_PROVENANCE_KEY") and not answer:
+                answer = _secrets.token_hex(32)
+                console.print(f"  Generated random {key}.")
+            if answer != current:
+                updates[key] = answer
+    else:
+        # Blank file: seed connection defaults, leave provider keys for the /keys menu.
+        updates = {
+            "DATABASE_URL": existing.get(
+                "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/agentharness"
+            )
+        }
+        if "DATABASE_URL" in existing:
+            updates = {}
+
+    if not target.is_file():
+        # Seed from .env.example so comments/docs carry over, then apply values.
+        example = target.parent / ".env.example"
+        if example.is_file():
+            target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+        else:
+            target.write_text("# AgentHarness environment (git-ignored)\n", encoding="utf-8")
+    if updates:
+        set_env_values(updates, target)
+        changed = ", ".join(sorted(updates))
+        console.print(f"\n[green]✓ Wrote {len(updates)} value(s) to .env:[/green] {changed}")
+    else:
+        console.print("\n[dim]No changes written.[/dim]")
+    console.print()
+    output.muted("Next: run `ah doctor`, then `ah init` to create the database schema.")
+
+    # Show key status without ever printing values.
+    stored = read_env_values(target)
+    for key, _desc in PROVIDER_KEYS:
+        mark = "[green]set[/green]" if stored.get(key, "").strip() else "[dim]not set[/dim]"
+        console.print(f"  {key}: {mark}")
 
 
 @app.command()
@@ -929,6 +1042,8 @@ def memory_search(
                     f"\n  [{i}] [cyan]({m.category}, importance={m.importance:.2f}, score={rm.score:.3f})[/cyan]"
                 )
                 console.print(f"      {m.content[:200]}")
+                if rm.persona_interpretation:
+                    console.print(f"      [dim][persona] {rm.persona_interpretation[:200]}[/dim]")
             console.print()
         finally:
             await db.close()

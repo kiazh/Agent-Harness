@@ -43,7 +43,9 @@ def _iso(value: Any) -> str | None:
     return value.isoformat() if value else None
 
 
-def _memory(m: Any, score: float | None = None) -> dict[str, Any]:
+def _memory(
+    m: Any, score: float | None = None, persona_interpretation: str | None = None
+) -> dict[str, Any]:
     data = {
         "id": str(m.id),
         "content": m.content,
@@ -55,6 +57,8 @@ def _memory(m: Any, score: float | None = None) -> dict[str, Any]:
     }
     if score is not None:
         data["score"] = round(float(score), 4)
+    if persona_interpretation is not None:
+        data["personaInterpretation"] = persona_interpretation
     return data
 
 

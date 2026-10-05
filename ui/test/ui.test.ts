@@ -145,3 +145,34 @@ test("every widget respects the render width", () => {
 test("formatArgs summarizes arguments", () => {
 	assert.equal(formatArgs({ path: "a.py", limit: 20, flags: ["-n"] }), 'path=a.py, limit=20, flags=["-n"]');
 });
+
+test("assistant output renders boxed and respects width", async () => {
+	const { AssistantMessage, header } = await import("../src/components.ts");
+	const message = new AssistantMessage("hello **world**");
+	message.append(" more");
+	for (const width of [20, 40, 80, 120]) {
+		for (const line of message.render(width)) {
+			assert.ok(visibleWidth(line) <= width, `line wider than ${width}`);
+		}
+	}
+	assert.match(plain(message, 80), /hello/);
+	const banner = plain(header("0.1.0"), 80);
+	assert.match(banner, /AgentHarness/);
+	assert.match(banner, /◆|▲|●|┌|\.--|\( moon\)/);
+});
+
+test("skins switch palette and art, unknown names throw", async () => {
+	const { SKIN_NAMES, getSkin, setSkin, skinArt } = await import("../src/theme.ts");
+	assert.ok(SKIN_NAMES.includes("default") && SKIN_NAMES.length >= 5);
+	const before = getSkin();
+	try {
+		for (const name of SKIN_NAMES) {
+			setSkin(name);
+			assert.equal(getSkin(), name);
+			assert.ok(skinArt(name).length > 0);
+		}
+		assert.throws(() => setSkin("nope"), /Unknown skin/);
+	} finally {
+		setSkin(before);
+	}
+});

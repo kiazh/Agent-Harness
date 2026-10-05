@@ -111,7 +111,7 @@ async def remember(
 
 @registry.register(
     name="recall",
-    description="Retrieve relevant memories. Use when you need past context, user preferences, or previous decisions.",
+    description="Retrieve relevant memories. Use when you need past context, user preferences, or previous decisions. Persona interpretations are included by default.",
     parameters={
         "type": "object",
         "properties": {
@@ -129,6 +129,10 @@ async def remember(
                 "description": "Maximum number of memories to return (default 5)",
                 "default": 5,
             },
+            "emotion": {
+                "type": "string",
+                "description": "Optional emotional state override (joy, sadness, anger, fear, trust, disgust, anticipation, surprise). Defaults to configured persona_default_emotion.",
+            },
         },
         "required": ["query"],
     },
@@ -138,14 +142,17 @@ async def recall(
     category: str | None = None,
     limit: int = 5,
     agent_id: str = "harness",
+    emotion: str | None = None,
 ) -> str:
-    """Retrieve relevant memories for a query.
+    """Retrieve relevant memories for a query (persona-conditioned by default).
 
     Args:
         query: Search query to find relevant memories.
         category: Optional category filter.
         limit: Maximum number of memories to return.
         agent_id: The agent ID (defaults to 'harness').
+        emotion: Optional emotion override. When None, the configured default
+            emotion is used for persona weighting.
 
     Returns:
         Formatted string with retrieved memories.
@@ -158,6 +165,7 @@ async def recall(
             query=query,
             agent_id=agent_id,
             category=category,
+            emotion=emotion,
         )
 
         if not results:
@@ -171,6 +179,8 @@ async def recall(
                 f"score={rm.score:.3f}, source={rm.source})"
             )
             lines.append(f"      {m.content[:200]}")
+            if rm.persona_interpretation:
+                lines.append(f"      [persona] {rm.persona_interpretation[:200]}")
 
         return "\n".join(lines)
 

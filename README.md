@@ -297,7 +297,7 @@ agent-harness/
 
 **Production-ready:**
 - ReAct loop, PostgreSQL context, cross-session recall
-- Long-term memory (extraction, scoring, forgetting, retrieval)
+- Long-term memory (extraction, scoring, forgetting, retrieval, persona-conditioned by default)
 - RAG pipeline, multi-agent delegation, scheduling
 - HTTP API, usage accounting, tool registry, skills system
 - Terminal UI, observability (audit + metrics + logging)
@@ -306,7 +306,6 @@ agent-harness/
 
 **Research baseline (not wired into runtime):**
 - RL-trained memory policy
-- Persona-conditioned retrieval (implemented but not default)
 - SoulSpec cross-framework runs (adapters, not certification)
 - LoCoMo answer accuracy (harness works, needs live LLM budget)
 

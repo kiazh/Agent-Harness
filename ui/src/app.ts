@@ -19,6 +19,7 @@ import { Footer, header, Picker } from "./components.ts";
 import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features/index.ts";
 import type { GatewayClient } from "./gateway.ts";
 import type {
+	ConfigGetResult,
 	ConfigResult,
 	GatewayEvent,
 	HistoryEntry,
@@ -27,7 +28,7 @@ import type {
 	SessionInfo,
 	SessionResult,
 } from "./protocol.ts";
-import { editorTheme, theme } from "./theme.ts";
+import { editorTheme, setSkin, theme } from "./theme.ts";
 import { Transcript } from "./transcript.ts";
 
 export interface AppOptions {
@@ -104,6 +105,12 @@ export class App implements FeatureHost {
 			);
 			this.version = init.version;
 			Object.assign(this.footer, { cwd: init.cwd, branch: init.branch, model: init.model, status: "ready" });
+			try {
+				const { config } = await this.client.request<ConfigGetResult>("config.get", {}, 30_000);
+				if (typeof config.theme === "string" && config.theme) setSkin(config.theme);
+			} catch {
+				// Saved skin is best-effort; the default applies otherwise.
+			}
 			if (this.options.sessionId) {
 				const { session, history } = await this.client.request<ResumeResult>("session.resume", {
 					sessionId: this.options.sessionId,
@@ -192,6 +199,12 @@ export class App implements FeatureHost {
 		this.tui.requestRender();
 	}
 
+	banner(): void {
+		this.transcript.clear();
+		this.transcriptView.addChild(header(this.version));
+		this.tui.requestRender();
+	}
+
 	async exit(): Promise<void> {
 		if (this.exiting) return;
 		this.exiting = true;
@@ -236,9 +249,11 @@ export class App implements FeatureHost {
 		}
 
 		this.editor.setText("");
-		this.editor.addToHistory(text);
 
 		const command = parseCommand(text);
+		// Never keep secrets in input history: /keys set carries a raw value.
+		const secret = command?.name === "keys" && command.args.startsWith("set");
+		if (!secret) this.editor.addToHistory(text);
 		if (command) {
 			await runCommand(command, this);
 		} else {

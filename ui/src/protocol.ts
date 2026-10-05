@@ -74,6 +74,25 @@ export interface ConfigGetResult {
 	secrets: string[];
 }
 
+export interface SecretInfo {
+	key: string;
+	description: string;
+	set: boolean;
+	liveSet: boolean;
+}
+
+export interface SecretsListResult {
+	secrets: SecretInfo[];
+	envFile: string;
+}
+
+export interface SecretsSetResult {
+	key: string;
+	set: boolean;
+	persisted: boolean;
+	envFile: string | null;
+}
+
 export interface MemoryInfo {
 	id: string;
 	content: string;

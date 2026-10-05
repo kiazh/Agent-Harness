@@ -49,6 +49,8 @@ class MemoryRetriever:
         top_k: int = DEFAULT_TOP_K,
         rerank: bool = True,
         persona_store: PersonaMemoryStore | None = None,
+        persona_enabled: bool | None = None,
+        default_emotion: str | None = None,
     ) -> None:
         self.store = store or memory_store
         self.llm = llm_provider
@@ -56,6 +58,38 @@ class MemoryRetriever:
         self.rerank = rerank
         self.emotion_topology = EmotionTopology()
         self.persona_store = persona_store or PersonaMemoryStore()
+        # None = resolve from config at call time so runtime toggles apply.
+        self._persona_enabled_override = persona_enabled
+        self._default_emotion_override = default_emotion
+
+    def _persona_enabled(self, override: bool | None = None) -> bool:
+        """Whether persona-conditioned retrieval applies (default-on)."""
+        if override is not None:
+            return override
+        if self._persona_enabled_override is not None:
+            return self._persona_enabled_override
+        try:
+            from ah.core.config import get_config
+
+            return bool(get_config().get("persona_memory_enabled"))
+        except Exception:
+            return True
+
+    def _default_emotion(self, override: str | None = None) -> str:
+        """Fallback emotion when none is supplied (neutral-ish default)."""
+        if override:
+            return override
+        if self._default_emotion_override:
+            return self._default_emotion_override
+        try:
+            from ah.core.config import get_config
+
+            configured = get_config().get("persona_default_emotion")
+            if isinstance(configured, str) and configured.strip():
+                return configured.strip()
+        except Exception:
+            pass
+        return "trust"
 
     async def retrieve(
         self,
@@ -66,6 +100,9 @@ class MemoryRetriever:
         query_embedding: list[float] | None = None,
         session_id: uuid.UUID | None = None,
         emotion: str | None = None,
+        persona_id: str | None = None,
+        persona_enabled: bool | None = None,
+        default_emotion: str | None = None,
     ) -> list[RetrievedMemory]:
         """Retrieve relevant memories for a query.
 
@@ -76,6 +113,12 @@ class MemoryRetriever:
             date_range: Optional (start, end) datetime tuple.
             query_embedding: Pre-computed embedding for the query. If None,
                 only sparse keyword search is performed.
+            emotion: Explicit emotional state. When None, the configured
+                ``persona_default_emotion`` is used.
+            persona_id: Persona filter for persona memories. Defaults to
+                ``agent_id`` when None.
+            persona_enabled: Override for ``persona_memory_enabled`` config.
+            default_emotion: Override for ``persona_default_emotion`` config.
 
         Returns:
             List of RetrievedMemory objects, sorted by relevance score.
@@ -121,9 +164,18 @@ class MemoryRetriever:
         if self.rerank and len(candidates) > 1:
             candidates = await self._rerank(query, candidates, session_id, agent_id)
 
-        # Step 6: Emotion-weighted persona memory retrieval (if emotion specified)
-        if emotion:
-            candidates = await self._retrieve_with_emotion(candidates, emotion, agent_id)
+        # Step 6: Persona-conditioned retrieval (default-on).
+        # Uses the explicit emotion, else the configured default. No-op when
+        # disabled or when no persona rows exist for these facts.
+        if self._persona_enabled(persona_enabled) and candidates:
+            effective_emotion = emotion or self._default_emotion(default_emotion)
+            if effective_emotion:
+                candidates = await self._retrieve_with_emotion(
+                    candidates,
+                    effective_emotion,
+                    agent_id,
+                    persona_id if persona_id is not None else agent_id,
+                )
 
         # Update access stats for retrieved memories (batch)
         ids_to_update = [rm.memory.id for rm in candidates[: self.top_k]]
@@ -140,6 +192,7 @@ class MemoryRetriever:
         candidates: list[RetrievedMemory],
         emotion: str,
         agent_id: str | None = None,
+        persona_id: str | None = None,
     ) -> list[RetrievedMemory]:
         """Retrieve persona memories weighted by emotional state.
 
@@ -152,9 +205,11 @@ class MemoryRetriever:
             if not fact_ids:
                 return candidates
 
-            # Fetch persona memories for these facts
+            # Fetch persona memories for these facts. persona_id defaults to
+            # agent_id for backward compatibility.
+            persona_filter = persona_id if persona_id is not None else agent_id
             persona_memories = await self.persona_store.search_persona_for_facts(
-                fact_ids, agent_id, 10
+                fact_ids, persona_filter, 10
             )
 
             if not persona_memories:
@@ -192,8 +247,12 @@ class MemoryRetriever:
         agent_id: str | None = None,
         category: str | None = None,
         limit: int = 5,
+        emotion: str | None = None,
+        persona_id: str | None = None,
+        persona_enabled: bool | None = None,
+        default_emotion: str | None = None,
     ) -> list[RetrievedMemory]:
-        """Retrieve memories by embedding similarity only."""
+        """Retrieve memories by embedding similarity, with persona boost by default."""
         results = await self.store.search_by_embedding(
             embedding=embedding,
             agent_id=agent_id,
@@ -201,6 +260,16 @@ class MemoryRetriever:
             limit=limit,
         )
         retrieved = [RetrievedMemory(memory=m, score=s, source="dense") for m, s in results]
+        if self._persona_enabled(persona_enabled) and retrieved:
+            effective_emotion = emotion or self._default_emotion(default_emotion)
+            if effective_emotion:
+                retrieved = await self._retrieve_with_emotion(
+                    retrieved,
+                    effective_emotion,
+                    agent_id,
+                    persona_id if persona_id is not None else agent_id,
+                )
+                retrieved = retrieved[:limit]
         # Update access (batch)
         ids_to_update = [rm.memory.id for rm in retrieved]
         if ids_to_update:

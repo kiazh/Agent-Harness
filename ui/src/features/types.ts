@@ -20,6 +20,8 @@ export interface FeatureHost {
 	writeFile(path: string, text: string): Promise<string>;
 	onConfig(result: ConfigResult): void;
 	clear(): void;
+	/** Re-render the startup banner (used after a skin change). */
+	banner(): void;
 	exit(): Promise<void>;
 }
 

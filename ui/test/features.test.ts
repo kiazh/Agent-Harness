@@ -60,6 +60,7 @@ class FakeHost implements FeatureHost {
 		this.configured.push(result);
 	}
 	clear() {}
+	banner() {}
 	async exit() {}
 
 	last(): { text: string; kind: NoticeKind } {
@@ -413,4 +414,101 @@ test("format helpers", () => {
 	assert.throws(() => resolvePrefix("q", ["abc"], "thing"), /No thing starts with/);
 	const t = table(["A", "B"], [["1", "two"], ["three", "4"]]);
 	assert.equal(t.split("\n").length, 4);
+});
+
+test("/keys list shows status without ever echoing values", async () => {
+	const host = new FakeHost();
+	host.responses["secrets.list"] = {
+		secrets: [
+			{ key: "OPENROUTER_API_KEY", description: "OpenRouter", set: true, liveSet: true },
+			{ key: "ANTHROPIC_API_KEY", description: "Anthropic", set: false, liveSet: false },
+		],
+		envFile: "/tmp/.env",
+	};
+	await run("/keys list", host);
+	assert.match(host.last().text, /OPENROUTER_API_KEY/);
+	assert.match(host.last().text, /not set/);
+	assert.doesNotMatch(host.last().text, /sk-or/);
+});
+
+test("/keys set saves by default and --no-save stays session-only", async () => {
+	const host = new FakeHost();
+	host.responses["secrets.set"] = (p: Record<string, unknown>) => ({
+		key: p.key,
+		set: true,
+		persisted: p.persist,
+		envFile: p.persist ? "/tmp/.env" : null,
+	});
+	await run("/keys set openrouter_api_key sk-or-secret", host);
+	assert.deepEqual(host.calls.at(-1), {
+		method: "secrets.set",
+		params: { key: "OPENROUTER_API_KEY", value: "sk-or-secret", persist: true },
+	});
+	assert.match(host.last().text, /OPENROUTER_API_KEY set/);
+	assert.doesNotMatch(host.last().text, /sk-or-secret/, "value is never echoed");
+	await run("/keys set groq_api_key gsk-x --no-save", host);
+	assert.deepEqual(host.calls.at(-1)!.params, { key: "GROQ_API_KEY", value: "gsk-x", persist: false });
+	assert.match(host.last().text, /session only/);
+});
+
+test("/keys clear resolves a prefix", async () => {
+	const host = new FakeHost();
+	host.responses["secrets.list"] = {
+		secrets: [{ key: "COHERE_API_KEY", description: "Cohere", set: true, liveSet: true }],
+		envFile: "/tmp/.env",
+	};
+	host.responses["secrets.clear"] = { key: "COHERE_API_KEY", set: false };
+	await run("/keys clear cohere", host);
+	assert.deepEqual(host.calls.at(-1), { method: "secrets.clear", params: { key: "COHERE_API_KEY" } });
+	assert.match(host.last().text, /cleared/);
+});
+
+test("/keys with no args opens the picker menu", async () => {
+	const host = new FakeHost();
+	host.responses["secrets.list"] = {
+		secrets: [{ key: "OPENAI_API_KEY", description: "OpenAI", set: false, liveSet: false }],
+		envFile: "/tmp/.env",
+	};
+	host.picks.push("OPENAI_API_KEY");
+	await run("/keys", host);
+	assert.match(host.last().text, /\/keys set OPENAI_API_KEY/);
+});
+
+test("/models picker applies the curated model and provider", async () => {
+	const host = new FakeHost();
+	host.responses["config.set"] = (p: Record<string, unknown>) => ({ model: "m", provider: "p", key: p.key, value: p.value });
+	host.picks.push("ollama::llama3.1");
+	await run("/models", host);
+	assert.deepEqual(
+		host.calls.map((c) => [c.method, c.params]),
+		[
+			["config.set", { key: "provider", value: "ollama" }],
+			["config.set", { key: "model", value: "llama3.1" }],
+		],
+	);
+	assert.match(host.last().text, /\/keys/);
+});
+
+test("/models filters by query and warns when nothing matches", async () => {
+	const host = new FakeHost();
+	await run("/models zekefake", host);
+	assert.equal(host.last().kind, "warning");
+	assert.equal(host.calls.length, 0);
+});
+
+test("/theme switches skin and persists it", async () => {
+	const { getSkin, setSkin } = await import("../src/theme.ts");
+	const host = new FakeHost();
+	host.responses["config.set"] = { model: "m", provider: "p", key: "theme", value: "forest" };
+	const before = getSkin();
+	try {
+		await run("/theme forest", host);
+		assert.equal(getSkin(), "forest");
+		assert.deepEqual(host.calls.at(-1)!.params, { key: "theme", value: "forest", persist: true });
+		assert.match(host.last().text, /Skin: forest/);
+		await run("/theme nope", host);
+		assert.match(host.last().text, /Unknown skin/);
+	} finally {
+		setSkin(before);
+	}
 });
