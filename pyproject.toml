@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agent-harness"
+name = "AgentHarness"
 version = "0.2.0"
 description = "Self-hosted multi-agent AI orchestration framework with PostgreSQL-backed context"
 readme = "README.md"

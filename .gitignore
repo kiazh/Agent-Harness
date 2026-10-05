@@ -52,3 +52,47 @@ Thumbs.db
 
 # Test-run scratch directories (subagent/TDD harnesses)
 .*-tmp/
+
+# Internal research and development files
+_dump/
+.locomo10.json
+docs/superpowers/
+docs/research-*.md
+docs/roadmap.md
+docs/plugins.md
+communications/
+research/results/
+research/identity_scenarios_example.json
+verify_issues.py
+scripts/
+agents/
+skills/telemetry.json
+.skill-hub/
+.coverage
+.hypothesis/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.egg-info/
+
+# Internal research and development files
+_dump/
+.locomo10.json
+docs/superpowers/
+docs/research-*.md
+docs/roadmap.md
+docs/plugins.md
+communications/
+research/results/
+research/identity_scenarios_example.json
+verify_issues.py
+scripts/
+agents/
+skills/telemetry.json
+.skill-hub/
+.coverage
+.hypothesis/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.egg-info/
