@@ -15,7 +15,8 @@ def test_all_feature_methods_accessible_after_split():
         "memory.approveAll", "memory.rejectAll", "memory.stats",
         "skills.list", "skills.show", "skills.learn", "skills.delete", "skills.curator",
         "learning.list", "learning.approve", "learning.reject",
-        "config.get", "profile.get", "profile.set", "profile.list", "status",
+        "config.get", "secrets.list", "secrets.set", "secrets.clear",
+        "profile.get", "profile.set", "profile.list", "status",
         "agents.list", "agents.save", "agents.delete", "agents.run", "agents.history",
         "jobs.create", "jobs.list", "jobs.setEnabled", "jobs.delete",
     }
@@ -24,13 +25,14 @@ def test_all_feature_methods_accessible_after_split():
 
 def test_submodules_importable():
     """Each domain module must be importable."""
-    from ah.gateway.features import agents, config, jobs, memory, sessions, skills
+    from ah.gateway.features import agents, config, jobs, memory, secrets, sessions, skills
     assert hasattr(sessions, "session_fork")
     assert hasattr(memory, "memory_list")
     assert hasattr(skills, "skills_list")
     assert hasattr(agents, "agents_list")
     assert hasattr(jobs, "jobs_create")
     assert hasattr(config, "config_get")
+    assert hasattr(secrets, "secrets_list")
 
 
 def test_register_still_works():
