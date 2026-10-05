@@ -155,6 +155,7 @@ class SessionManager:
         )
         await self._cache_invalidate(session_id)
 
+
     async def set_status(self, session_id: uuid.UUID, status: str) -> None:
         """Update session status."""
         await db.execute(

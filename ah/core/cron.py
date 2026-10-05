@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+__all__ = ["next_cron_time"]
+
 
 def _field(text: str, minimum: int, maximum: int) -> set[int]:
     values: set[int] = set()

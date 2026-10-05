@@ -45,6 +45,18 @@ test("talks to the real gateway", { skip, timeout: 90_000 }, async () => {
 	assert.equal(crashed(), false, `gateway crashed:\n${client.stderr().join("\n")}`);
 });
 
+test("readline interfaces are closed after stop()", { skip, timeout: 90_000 }, async () => {
+	const { client } = startClient();
+	await client.request("initialize", {}, 60_000);
+	await client.stop();
+	const internal = client as unknown as {
+		stdoutInterface?: { closed: boolean };
+		stderrInterface?: { closed: boolean };
+	};
+	assert.equal(internal.stdoutInterface?.closed, true, "stdout readline interface closed");
+	assert.equal(internal.stderrInterface?.closed, true, "stderr readline interface closed");
+});
+
 test("slash commands work against the real gateway and database", { skip, timeout: 120_000 }, async () => {
 	const { client, crashed } = startClient();
 	const dir = await mkdtemp(join(tmpdir(), "ah-ui-e2e-"));

@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import subprocess
 import uuid
 from collections.abc import Awaitable, Callable
@@ -37,6 +38,7 @@ from ah.gateway.errors import (  # noqa: F401 — re-exported for clients and te
     PARSE_ERROR,
     SESSION_NOT_FOUND,
     TURN_IN_PROGRESS,
+    UNAUTHORIZED,
     RpcError,
 )
 from ah.gateway.serializers import history_from_chunks, session_to_dict
@@ -106,6 +108,7 @@ class Gateway:
         self._db_ready = False
         self._job_runner = None
         self._turns: dict[str, asyncio.Task[None]] = {}
+        self._auth_token: str | None = None
         self._methods: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] = {
             "initialize": self._initialize,
             "session.create": self._session_create,
@@ -152,9 +155,18 @@ class Gateway:
             self._send_error(rid, INVALID_PARAMS, "params must be an object")
             return
 
-        handler = self._methods.get(message["method"])
+        # Token-based authentication: reject all methods except initialize
+        # if the gateway has a token set and the caller hasn't authenticated.
+        method = message["method"]
+        if self._auth_token is not None and method != "initialize":
+            token = params.get("token")
+            if not isinstance(token, str) or not secrets.compare_digest(token, self._auth_token):
+                self._send_error(rid, UNAUTHORIZED, "unauthorized")
+                return
+
+        handler = self._methods.get(method)
         if handler is None:
-            self._send_error(rid, METHOD_NOT_FOUND, f"unknown method: {message['method']}")
+            self._send_error(rid, METHOD_NOT_FOUND, f"unknown method: {method}")
             return
 
         try:
@@ -163,8 +175,8 @@ class Gateway:
             self._send_error(rid, e.code, e.message)
             return
         except Exception as e:  # never let a handler crash the gateway
-            logger.exception("Gateway method %s failed", message["method"])
-            self._send_error(rid, INTERNAL_ERROR, f"{type(e).__name__}: {e}")
+            logger.exception("Gateway method %s failed", method)
+            self._send_error(rid, INTERNAL_ERROR, "internal error")
             return
 
         if rid is not None:
@@ -312,7 +324,9 @@ class Gateway:
         if running is not None and not running.done():
             raise RpcError(TURN_IN_PROGRESS, "a turn is already running for this session")
         turn_id = uuid.uuid4().hex[:12]
-        self._turns[key] = asyncio.create_task(self._run_turn(session.id, turn_id, text.strip()))
+        self._turns[key] = asyncio.create_task(
+            self._run_turn_with_timeout(session.id, turn_id, text.strip())
+        )
         return {"turnId": turn_id}
 
     async def _prompt_cancel(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -413,13 +427,55 @@ class Gateway:
             return
         except Exception as e:
             logger.exception("Turn %s failed", turn_id)
-            emit("error", message=f"{type(e).__name__}: {e}")
+            emit("error", message="agent turn failed")
             complete()
             return
         finally:
             if self._turns.get(sid) is asyncio.current_task():
                 del self._turns[sid]
         complete(final)
+
+    async def _run_turn_with_timeout(
+        self, session_id: uuid.UUID, turn_id: str, text: str
+    ) -> None:
+        """Run a turn with a configurable timeout."""
+        timeout = config.get("turn_timeout")
+        try:
+            await asyncio.wait_for(self._run_turn(session_id, turn_id, text), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning("Turn %s timed out after %ss", turn_id, timeout)
+            sid = str(session_id)
+            self._write(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "event",
+                    "params": {
+                        "type": "error",
+                        "sessionId": sid,
+                        "turnId": turn_id,
+                        "message": "turn timed out",
+                    },
+                }
+            )
+            self._write(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "event",
+                    "params": {
+                        "type": "message.complete",
+                        "sessionId": sid,
+                        "turnId": turn_id,
+                        "text": "",
+                        "tokens": 0,
+                        "iterations": 0,
+                        "toolCalls": 0,
+                        "cancelled": False,
+                    },
+                }
+            )
+            # Clean up the turns dict
+            if self._turns.get(sid) is not None:
+                del self._turns[sid]
 
 
 def _parse_session_id(params: dict[str, Any]) -> uuid.UUID:

@@ -2,20 +2,21 @@
 
 The key is read from the ``AGENT_HARNESS_API_KEY`` environment variable (via
 ``.env``). If it is unset the server refuses every authenticated request with
-503 rather than silently running wide open — opt into no-auth explicitly with
-``AGENT_HARNESS_API_KEY=disabled`` for local development.
+503 rather than silently running wide open.
 """
 
 from __future__ import annotations
 
 import hmac
+import logging
 
 from fastapi import Header, HTTPException, status
 
 from ah.security.secrets import get_secret
 
+logger = logging.getLogger(__name__)
+
 API_KEY_ENV = "AGENT_HARNESS_API_KEY"
-_NO_AUTH = "disabled"
 
 
 def configured_key() -> str | None:
@@ -42,10 +43,8 @@ async def require_api_key(
     if expected is None:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            f"API key not configured; set {API_KEY_ENV} (or {API_KEY_ENV}={_NO_AUTH} to disable auth)",
+            f"API key not configured; set {API_KEY_ENV}",
         )
-    if expected == _NO_AUTH:
-        return
     presented = _extract(authorization, x_api_key)
     # Constant-time comparison so a wrong key cannot be guessed by timing.
     if presented is None or not hmac.compare_digest(presented, expected):

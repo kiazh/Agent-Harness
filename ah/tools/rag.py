@@ -31,6 +31,7 @@ async def get_rag_pipeline() -> RAGPipeline:
     return _rag_pipeline
 
 
+
 def set_rag_pipeline(pipeline: RAGPipeline) -> None:
     """Set the global RAG pipeline instance (for testing or custom config)."""
     global _rag_pipeline

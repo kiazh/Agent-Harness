@@ -66,6 +66,8 @@ class MemoryStore:
             )
 
         # Validate against identity gate
+        # When source_agent is provided, the memory is being stored on behalf
+        # of that agent, so validation must use source_agent (not agent_id).
         pre_memory = MemoryEntry(
             id=memory_id,
             session_id=session_id,
@@ -75,7 +77,7 @@ class MemoryStore:
             importance=importance,
         )
         validation = await identity_gate.validate_incoming(
-            agent_id, pre_memory, provenance, connection=connection
+            source, pre_memory, provenance, connection=connection
         )
         quarantined = not validation.is_valid
 
@@ -416,7 +418,7 @@ class MemoryStore:
                        created_at, last_accessed, access_count, embedding,
                        explicitly_important, base_strength, quarantined
                 FROM memories
-                WHERE agent_id = $1 AND importance < $2
+                WHERE agent_id = $1 AND importance < $2 AND quarantined = FALSE
                 ORDER BY importance ASC
                 LIMIT $3
                 """,
@@ -431,7 +433,7 @@ class MemoryStore:
                        created_at, last_accessed, access_count, embedding,
                        explicitly_important, base_strength, quarantined
                 FROM memories
-                WHERE importance < $1
+                WHERE importance < $1 AND quarantined = FALSE
                 ORDER BY importance ASC
                 LIMIT $2
                 """,

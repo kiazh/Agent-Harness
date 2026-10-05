@@ -51,10 +51,17 @@ export class App implements FeatureHost {
 	private running = false;
 	/** Session ids of turns that are still in flight (prompt submitted, no message.complete yet). */
 	private readonly inFlight = new Set<string>();
+	/** Timers that auto-clear stale in-flight entries to prevent permanent locks. */
+	private readonly inFlightTimers = new Map<string, NodeJS.Timeout>();
+	/** The session ID of the most recent in-flight turn (for cancel). */
+	private inFlightSessionId: string | undefined;
 	private sessionTokens = 0;
 	private overlay: OverlayHandle | undefined;
 	private exiting = false;
 	private resolveExit: () => void = () => {};
+	private inputListenerDisposer: (() => void) | undefined;
+
+	private static readonly IN_FLIGHT_TIMEOUT_MS = 120_000;
 
 	constructor(tui: TUI, client: GatewayClient, options: AppOptions = {}) {
 		this.tui = tui;
@@ -78,7 +85,7 @@ export class App implements FeatureHost {
 		this.tui.addChild(this.editor);
 		this.tui.addChild(this.footer);
 		this.tui.setFocus(this.editor);
-		this.tui.addInputListener((data) => this.onKey(data));
+		this.inputListenerDisposer = this.tui.addInputListener((data) => this.onKey(data));
 
 		this.footer.cwd = process.cwd();
 		this.footer.status = "offline";
@@ -90,8 +97,7 @@ export class App implements FeatureHost {
 		this.client.start();
 
 		try {
-			const init = await this.client.request<InitializeResult>(
-				"initialize",
+			const init = await this.client.initialize<InitializeResult>(
 				{ model: this.options.model, provider: this.options.provider },
 				60_000,
 			);
@@ -188,6 +194,7 @@ export class App implements FeatureHost {
 	async exit(): Promise<void> {
 		if (this.exiting) return;
 		this.exiting = true;
+		this.inputListenerDisposer?.();
 		this.tui.stop();
 		await this.client.stop();
 		this.resolveExit();
@@ -217,8 +224,17 @@ export class App implements FeatureHost {
 
 	private async submit(raw: string): Promise<void> {
 		const text = raw.trim();
-		this.editor.setText("");
 		if (!text) return;
+
+		// Check in-flight before clearing the editor so we don't lose input
+		// if the previous turn is still running.
+		if (this.current && this.inFlight.has(this.current.id)) {
+			this.transcript.addNotice("The previous turn is still finishing. Try again shortly.", "warning");
+			this.tui.requestRender();
+			return;
+		}
+
+		this.editor.setText("");
 		this.editor.addToHistory(text);
 
 		const command = parseCommand(text);
@@ -249,20 +265,57 @@ export class App implements FeatureHost {
 		this.transcript.addUser(text);
 		this.setRunning(true);
 		this.inFlight.add(sessionId);
+		this.inFlightSessionId = sessionId;
+		this.startInFlightTimer(sessionId);
 		this.tui.requestRender();
 		try {
 			await this.client.request("prompt.submit", { sessionId, text });
 		} catch (error) {
-			this.inFlight.delete(sessionId);
+			this.clearInFlight(sessionId);
 			this.setRunning(this.current ? this.inFlight.has(this.current.id) : false);
 			throw error;
 		}
 	}
 
+	/** Start a timer that auto-clears a stale in-flight entry to prevent permanent locks. */
+	private startInFlightTimer(sessionId: string): void {
+		this.inFlightTimers.get(sessionId)?.unref();
+		const timer = setTimeout(() => {
+			this.inFlightTimers.delete(sessionId);
+			if (this.inFlight.has(sessionId)) {
+				this.inFlight.delete(sessionId);
+				this.setRunning(this.current ? this.inFlight.has(this.current.id) : false);
+				this.transcript.addNotice("The previous turn timed out. You can submit again.", "warning");
+				this.tui.requestRender();
+			}
+		}, App.IN_FLIGHT_TIMEOUT_MS);
+		timer.unref();
+		this.inFlightTimers.set(sessionId, timer);
+	}
+
+	/** Remove a session from in-flight tracking and cancel its stale timer. */
+	private clearInFlight(sessionId: string): void {
+		this.inFlight.delete(sessionId);
+		const timer = this.inFlightTimers.get(sessionId);
+		if (timer) {
+			clearTimeout(timer);
+			this.inFlightTimers.delete(sessionId);
+		}
+		if (this.inFlightSessionId === sessionId) {
+			this.inFlightSessionId = undefined;
+		}
+	}
+
 	private cancel(): void {
-		if (!this.current) return;
-		this.setRunning(false);
-		this.client.request("prompt.cancel", { sessionId: this.current.id }).catch(() => {});
+		const sessionId = this.inFlightSessionId;
+		if (!sessionId) return;
+		// Don't setRunning(false) if the session is still in inFlight —
+		// the completion event hasn't arrived yet and the guard will reject
+		// the next submit if we clear running now.
+		if (!this.inFlight.has(sessionId)) {
+			this.setRunning(false);
+		}
+		this.client.request("prompt.cancel", { sessionId }).catch(() => {});
 	}
 
 	private setRunning(running: boolean): void {
@@ -277,15 +330,20 @@ export class App implements FeatureHost {
 		// against in-flight turns, not just the current session.
 		if (!this.inFlight.has(event.sessionId)) return;
 		if (event.sessionId !== this.current?.id) {
-			if (event.type === "message.complete") this.inFlight.delete(event.sessionId);
+			if (event.type === "message.complete" || event.type === "error") {
+				this.clearInFlight(event.sessionId);
+			}
 			this.setRunning(this.current ? this.inFlight.has(this.current.id) : false);
 			this.tui.requestRender();
 			return;
 		}
 		const summary = this.transcript.apply(event);
 		if (event.type === "usage") this.footer.tokens = this.sessionTokens + event.tokens;
-		if (summary) {
-			this.inFlight.delete(event.sessionId);
+		if (event.type === "error") {
+			this.clearInFlight(event.sessionId);
+			this.setRunning(this.current ? this.inFlight.has(this.current.id) : false);
+		} else if (summary) {
+			this.clearInFlight(event.sessionId);
 			this.sessionTokens += summary.tokens;
 			this.footer.tokens = this.sessionTokens;
 			this.setRunning(this.inFlight.has(event.sessionId));
@@ -295,6 +353,10 @@ export class App implements FeatureHost {
 
 	private onGatewayExit(code: number | null, stderr: string[]): void {
 		if (this.exiting) return;
+		// Clear all in-flight tracking so the session isn't permanently locked.
+		for (const sessionId of [...this.inFlight]) {
+			this.clearInFlight(sessionId);
+		}
 		this.setRunning(false);
 		this.footer.status = "offline";
 		this.transcript.addNotice(`The gateway stopped${code === null ? "" : ` (exit code ${code})`}.`, "error");

@@ -129,6 +129,10 @@ ALTER TABLE memories ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAU
 
 -- Index for agent+category filtering
 CREATE INDEX IF NOT EXISTS idx_memories_agent_category ON memories(agent_id, category);
+-- Composite index for MemoryStore.search(): WHERE agent_id = $1 AND quarantined = FALSE ORDER BY importance DESC, created_at DESC
+CREATE INDEX IF NOT EXISTS idx_memories_agent_importance_created ON memories(agent_id, importance DESC, created_at DESC);
+-- Partial index: every search filters quarantined = FALSE
+CREATE INDEX IF NOT EXISTS idx_memories_quarantined_false ON memories(quarantined) WHERE quarantined = FALSE;
 -- HNSW index for vector similarity search
 CREATE INDEX IF NOT EXISTS idx_memories_embedding ON memories
     USING hnsw (embedding vector_cosine_ops)
@@ -137,6 +141,10 @@ CREATE INDEX IF NOT EXISTS idx_memories_embedding ON memories
 CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance ASC);
 -- Index for session-based cleanup
 CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
+
+-- GIN trigram index for ILIKE pattern matching (fixes full table scan)
+CREATE INDEX IF NOT EXISTS idx_memories_content_trgm ON memories
+    USING GIN (content gin_trgm_ops);
 
 -- Full-text search index for BM25 hybrid search
 CREATE INDEX IF NOT EXISTS idx_context_chunks_fts ON context_chunks
@@ -168,6 +176,8 @@ CREATE INDEX IF NOT EXISTS idx_pending_memories_status ON pending_memories(statu
 CREATE INDEX IF NOT EXISTS idx_pending_memories_agent ON pending_memories(agent_id);
 CREATE INDEX IF NOT EXISTS idx_pending_memories_session ON pending_memories(session_id);
 CREATE INDEX IF NOT EXISTS idx_pending_memories_created ON pending_memories(created_at DESC);
+-- Composite index for list_pending: WHERE status = $1 [AND agent_id = $2] ORDER BY created_at DESC
+CREATE INDEX IF NOT EXISTS idx_pending_memories_status_agent_created ON pending_memories(status, agent_id, created_at DESC);
 
 -- ─── User Profiles ──────────────────────────────────────────────────────────
 
@@ -217,6 +227,26 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 
 CREATE INDEX IF NOT EXISTS idx_agent_messages_session ON agent_messages(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_messages_to ON agent_messages(to_agent, status);
+
+-- FK constraints: from_agent/to_agent reference agents(name)
+DELETE FROM agent_messages m WHERE NOT EXISTS (
+    SELECT 1 FROM agents a WHERE a.name = m.from_agent
+);
+DELETE FROM agent_messages m WHERE NOT EXISTS (
+    SELECT 1 FROM agents a WHERE a.name = m.to_agent
+);
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'agent_messages'::regclass
+          AND confrelid = 'agents'::regclass AND contype = 'f'
+    ) THEN
+        ALTER TABLE agent_messages ADD CONSTRAINT agent_messages_from_agent_fk
+            FOREIGN KEY (from_agent) REFERENCES agents(name) ON DELETE CASCADE;
+        ALTER TABLE agent_messages ADD CONSTRAINT agent_messages_to_agent_fk
+            FOREIGN KEY (to_agent) REFERENCES agents(name) ON DELETE CASCADE;
+    END IF;
+END $$;
 
 -- ─── Scheduled Jobs (Phase 6a: scheduler) ───────────────────────────────────
 
@@ -286,9 +316,11 @@ CREATE INDEX IF NOT EXISTS idx_persona_memories_valence ON persona_memories(emot
 
 -- ─── LLM usage (Phase 7: durable accounting and budgets) ────────────────────
 
--- Keep usage after a session is deleted so agent-wide budgets and operational
--- totals do not silently reset. No prompts, completions, or credentials live
--- in this table.
+-- INTENTIONAL: session_id has NO foreign key to sessions(id). Usage rows must
+-- survive session deletion so agent-wide budgets and operational totals do not
+-- silently reset. No prompts, completions, or credentials live in this table.
+-- Orphaned rows are acceptable: they represent real token consumption that
+-- occurred during the session's lifetime.
 CREATE TABLE IF NOT EXISTS llm_usage (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     session_id UUID NOT NULL,
@@ -305,6 +337,10 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_llm_usage_session ON llm_usage(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_agent ON llm_usage(agent_id, created_at DESC);
+-- Composite index for UsageStore.summary(): WHERE session_id = $1 [FILTER status]
+CREATE INDEX IF NOT EXISTS idx_llm_usage_session_status ON llm_usage(session_id, status);
+-- Composite index for UsageStore.summary(): WHERE agent_id = $1 [FILTER status]
+CREATE INDEX IF NOT EXISTS idx_llm_usage_agent_status ON llm_usage(agent_id, status);
 
 -- ─── Agent Beliefs (Gap 2: Identity Model) ─────────────────────────────────
 

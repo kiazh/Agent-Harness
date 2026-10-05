@@ -11,6 +11,8 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
+__all__ = ["MetricsCollector", "metrics", "timed"]
+
 logger = logging.getLogger("ah.metrics")
 
 
@@ -226,7 +228,6 @@ def timed(operation: str) -> Generator[None, None, None]:
         duration_ms = (time.monotonic() - start) * 1000
         metrics.record_latency(operation, duration_ms)
         metrics.increment_counter(f"{operation}.calls")
-
 
 def setup_structured_logging(level: int = logging.INFO) -> None:
     """Set up structured JSON logging for the ah.metrics logger."""

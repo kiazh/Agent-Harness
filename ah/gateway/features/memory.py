@@ -20,6 +20,7 @@ def _category(params: dict[str, Any], *, required: bool = False) -> str | None:
 
 
 async def memory_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """List memories."""
     gw.require_db()
     from ah.memory.store import memory_store
 
@@ -34,6 +35,7 @@ async def memory_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def memory_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Search memories."""
     gw.require_db()
     from ah.memory.retriever import MemoryRetriever
 
@@ -49,6 +51,7 @@ async def memory_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def memory_add(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Add a memory."""
     gw.require_db()
     from ah.memory.store import memory_store
 
@@ -97,6 +100,7 @@ async def memory_share(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def memory_forget(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Forget a memory."""
     gw.require_db()
     from ah.memory.store import memory_store
 
@@ -110,6 +114,7 @@ async def memory_forget(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def memory_pending(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """List pending memories."""
     gw.require_db()
     from ah.memory.approval import ApprovalStatus, memory_approval_gate
 
@@ -120,6 +125,7 @@ async def memory_pending(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def memory_approve(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Approve a pending memory."""
     gw.require_db()
     from ah.memory.approval import memory_approval_gate
 
@@ -132,6 +138,7 @@ async def memory_approve(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def memory_reject(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Reject a pending memory."""
     gw.require_db()
     from ah.memory.approval import memory_approval_gate
 
@@ -144,6 +151,7 @@ async def memory_reject(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def memory_approve_all(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Approve all pending memories."""
     gw.require_db()
     from ah.memory.approval import memory_approval_gate
 
@@ -151,6 +159,7 @@ async def memory_approve_all(gw: Gateway, params: dict[str, Any]) -> dict[str, A
 
 
 async def memory_reject_all(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Reject all pending memories."""
     gw.require_db()
     from ah.memory.approval import memory_approval_gate
 
@@ -158,7 +167,33 @@ async def memory_reject_all(gw: Gateway, params: dict[str, Any]) -> dict[str, An
     return {"count": await memory_approval_gate.reject_all(review_note=note)}
 
 
+async def memory_share(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Deliver one owned memory through the recipient's identity gate."""
+    gw.require_db()
+    from ah.memory.shared_bus import shared_memory_bus
+
+    session = await gw.get_session(params)
+    try:
+        receipt = await shared_memory_bus.deliver(
+            _uuid(params, "id"),
+            _str(params, "recipientAgent", max_len=128),
+            publisher_agent=session.agent_id,
+        )
+    except PermissionError:
+        raise RpcError(NOT_FOUND, "memory not found for this agent") from None
+    except ValueError as exc:
+        raise RpcError(INVALID_PARAMS, str(exc)) from None
+    return {
+        "sourceMemoryId": str(receipt.source_memory_id),
+        "recipientAgent": receipt.recipient_agent,
+        "targetMemoryId": str(receipt.target_memory_id) if receipt.target_memory_id else None,
+        "status": receipt.status,
+        "reason": receipt.reason,
+    }
+
+
 async def memory_stats(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Get memory statistics."""
     gw.require_db()
     from ah.memory.approval import memory_approval_gate
     from ah.memory.store import memory_store

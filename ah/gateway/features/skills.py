@@ -20,10 +20,12 @@ def _registry():
 
 
 async def skills_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """List all skills."""
     return {"skills": [_skill(s) for s in sorted(_registry().list_skills(), key=lambda s: s.name)]}
 
 
 async def skills_show(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Show a skill by name."""
     skill = _registry().get(_str(params, "name", max_len=200))
     if skill is None:
         raise RpcError(NOT_FOUND, f"skill {params.get('name')!r} not found")
@@ -31,6 +33,7 @@ async def skills_show(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def skills_learn(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Learn a new skill from a file, URL, or existing skill."""
     triggers = params.get("triggers")
     if triggers is not None and (
         not isinstance(triggers, list) or not all(isinstance(t, str) for t in triggers)
@@ -66,6 +69,7 @@ async def skills_curator(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def learning_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """List learning proposals."""
     gw.require_db()
     from ah.skills.learning import learning_reviewer
 
@@ -78,6 +82,7 @@ async def learning_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def learning_approve(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Approve a learning proposal."""
     gw.require_db()
     from ah.skills.learning import learning_reviewer
 
@@ -92,6 +97,7 @@ async def learning_approve(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
 
 
 async def learning_reject(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Reject a learning proposal."""
     gw.require_db()
     from ah.skills.learning import learning_reviewer
 

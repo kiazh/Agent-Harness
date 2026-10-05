@@ -23,6 +23,13 @@ from ah.core.models import (  # noqa: F401 — re-exported for backward compat
 )
 from ah.core.usage import usage_store
 
+__all__ = [
+    "audit_log",
+    "AsyncTokenBucket",
+    "LLMProvider",
+    "get_provider",
+]
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------

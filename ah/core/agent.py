@@ -30,6 +30,16 @@ from ah.plugins.registry import plugin_registry
 from ah.rag.pipeline import RAGPipeline
 from ah.tools.base import registry
 
+__all__ = [
+    "BaseReActAgent",
+    "ReActAgent",
+    "SYSTEM_PROMPT",
+    "MAX_TOKEN_BUDGET",
+    "MAX_PENDING_LEARNING_REVIEWS",
+    "instrument_run",
+    "instrument_stream",
+]
+
 logger = logging.getLogger(__name__)
 
 console = Console()

@@ -195,7 +195,6 @@ async def status_summary() -> dict[str, Any]:
         "provider": config.get("provider"),
     }
 
-
 def parse_session_id(value: Any) -> uuid.UUID:
     try:
         return uuid.UUID(str(value))

@@ -95,6 +95,8 @@ export interface GatewayClientOptions {
 	python: string;
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
+	/** Auth token for the gateway (read from AH_GATEWAY_TOKEN by default). */
+	token?: string;
 }
 
 const STDERR_TAIL_LINES = 40;
@@ -109,6 +111,8 @@ export class GatewayClient {
 	private channel: JsonRpcChannel | undefined;
 	private readonly stderrTail: string[] = [];
 	private stopping = false;
+	private stdoutInterface: ReturnType<typeof createInterface> | undefined;
+	private stderrInterface: ReturnType<typeof createInterface> | undefined;
 
 	constructor(options: GatewayClientOptions) {
 		this.options = options;
@@ -130,8 +134,10 @@ export class GatewayClient {
 		channel.onEvent = (event) => this.onEvent?.(event);
 		this.channel = channel;
 
-		createInterface({ input: proc.stdout! }).on("line", (line) => channel.handleLine(line));
-		createInterface({ input: proc.stderr! }).on("line", (line) => {
+		this.stdoutInterface = createInterface({ input: proc.stdout! });
+		this.stdoutInterface.on("line", (line) => channel.handleLine(line));
+		this.stderrInterface = createInterface({ input: proc.stderr! });
+		this.stderrInterface.on("line", (line) => {
 			this.stderrTail.push(line);
 			if (this.stderrTail.length > STDERR_TAIL_LINES) this.stderrTail.shift();
 		});
@@ -152,6 +158,13 @@ export class GatewayClient {
 		return this.channel.request<T>(method, params, timeoutMs);
 	}
 
+	/** Initialize the gateway, including the auth token if one is configured. */
+	initialize<T = unknown>(params: Record<string, unknown> = {}, timeoutMs = 60_000): Promise<T> {
+		const token = this.options.token ?? process.env.AH_GATEWAY_TOKEN;
+		const initParams = token ? { ...params, token } : params;
+		return this.request<T>("initialize", initParams, timeoutMs);
+	}
+
 	stderr(): string[] {
 		return [...this.stderrTail];
 	}
@@ -170,5 +183,7 @@ export class GatewayClient {
 		proc.stdin?.end();
 		const timeout = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 3_000).unref());
 		if ((await Promise.race([exited, timeout])) === "timeout") proc.kill();
+		this.stdoutInterface?.close();
+		this.stderrInterface?.close();
 	}
 }

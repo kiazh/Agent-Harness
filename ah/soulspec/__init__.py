@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ah.soulspec.adapters import AgentHarnessAdapter, ClaudeCodeAdapter, CodexAdapter
-from ah.soulspec.conformance import SoulSpecConformance, ValidationResult
+from ah.soulspec.conformance import TestSoulSpecConformance, ValidationResult
 from ah.soulspec.merge import SoulSpecMerger
 from ah.soulspec.schema import SoulSpec
 
@@ -12,7 +12,7 @@ __all__ = [
     "ClaudeCodeAdapter",
     "CodexAdapter",
     "SoulSpec",
-    "SoulSpecConformance",
+    "TestSoulSpecConformance",
     "SoulSpecMerger",
     "ValidationResult",
 ]

@@ -119,25 +119,25 @@ class MemoryConsolidator:
             await self.store.search(agent_id=agent_id, limit=1000) if eligible else []
         )
 
-        # Batch check for duplicates
+        # Batch check for duplicates using SQL vector similarity
+        # instead of O(n*m) nested loop cosine similarity.
         if candidates_with_embedding:
+            # Use search_by_embedding for each candidate — this leverages
+            # the HNSW index for O(log n) similarity search per candidate,
+            # avoiding the O(n*m) nested loop over all existing memories.
             for candidate in candidates_with_embedding:
                 is_duplicate = False
-                for existing in existing_memories:
-                    if existing.embedding and len(candidate.embedding) == len(existing.embedding):
-                        # Simple cosine similarity check
-                        dot = sum(
-                            a * b
-                            for a, b in zip(candidate.embedding, existing.embedding, strict=True)
-                        )
-                        norm_a = sum(a * a for a in candidate.embedding) ** 0.5
-                        norm_b = sum(b * b for b in existing.embedding) ** 0.5
-                        if norm_a > 0 and norm_b > 0:
-                            similarity = dot / (norm_a * norm_b)
-                            if similarity > self.dedup_threshold:
-                                await self.store.update_access(existing.id)
-                                is_duplicate = True
-                                break
+                # Use the store's vector search with a tight threshold
+                similar = await self.store.search_by_embedding(
+                    embedding=candidate.embedding,
+                    agent_id=agent_id,
+                    limit=5,
+                )
+                for existing, similarity in similar:
+                    if similarity > self.dedup_threshold:
+                        await self.store.update_access(existing.id)
+                        is_duplicate = True
+                        break
                 if not is_duplicate:
                     new_memories.append(candidate)
 

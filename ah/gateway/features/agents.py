@@ -16,6 +16,7 @@ def _agent(d: Any) -> dict[str, Any]:
 
 
 async def agents_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """List all agents."""
     gw.require_db()
     from ah.core.agent_def import agent_registry
 
@@ -23,6 +24,7 @@ async def agents_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def agents_save(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Save a new agent."""
     gw.require_db()
     from ah.core.agent_def import BUILTIN_AGENTS, AgentDef, agent_registry
 
@@ -47,6 +49,7 @@ async def agents_save(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def agents_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Delete an agent."""
     gw.require_db()
     from ah.core.agent_def import BUILTIN_AGENTS, agent_registry
 
@@ -125,6 +128,7 @@ async def agents_run(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def agents_history(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Get orchestrator history for a session."""
     gw.require_db()
     from ah.core.orchestrator import orchestrator
 

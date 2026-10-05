@@ -12,6 +12,8 @@ import msgpack
 from ah.core.text_search import build_or_tsquery
 from ah.db.connection import db
 
+__all__ = ["RecallHit", "RecallMessage", "SessionRecall"]
+
 RecallSource = Literal["live", "archive", "title"]
 
 

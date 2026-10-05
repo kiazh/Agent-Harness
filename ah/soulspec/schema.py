@@ -13,6 +13,10 @@ import yaml
 
 from ah.core.agent_def import AgentDef
 
+# Unique sentinel object for an explicitly empty tool allowlist.
+# Using a dedicated object (not a string) prevents collision with real tool names.
+_NO_TOOLS_SENTINEL = object()
+
 _LICENSES = {
     "Apache-2.0",
     "MIT",
@@ -188,7 +192,7 @@ class SoulSpec:
     """Open standard for agent configuration."""
 
     name: str
-    version: str = "1.0.0"
+    version: str | None = None
     persona: SoulSpec.Persona | None = None
     workflow: list[SoulSpec.Workflow] = field(default_factory=list)
     skills: list[SoulSpec.Skill] = field(default_factory=list)
@@ -492,7 +496,7 @@ class SoulSpec:
             if not tools and (permissions.allowed_tools or permissions.denied_tools):
                 # AgentDef uses [] to mean every tool; a private sentinel keeps
                 # an explicitly empty effective allowlist empty at runtime.
-                tools = ["__no_tools__"]
+                tools = [_NO_TOOLS_SENTINEL]
         return AgentDef(
             name=self.name,
             description=self.persona.description if self.persona else "",

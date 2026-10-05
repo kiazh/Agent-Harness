@@ -11,6 +11,8 @@ from pathlib import Path
 
 from ah.memory.redaction import redact_secrets
 
+__all__ = ["resolve_script_path", "run_job_script"]
+
 SCRIPT_TIMEOUT_SECONDS = 30.0
 MAX_SCRIPT_OUTPUT_BYTES = 64 * 1024
 _WINDOWS_BOOTSTRAP = (

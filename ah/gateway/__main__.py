@@ -28,6 +28,7 @@ sys.stdout = sys.stderr
 import asyncio  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
+import secrets  # noqa: E402
 import threading  # noqa: E402
 from typing import Any  # noqa: E402
 
@@ -59,6 +60,9 @@ async def _serve() -> None:
     from ah.gateway.server import Gateway
 
     gateway = Gateway(_write)
+    # Use the token from AH_GATEWAY_TOKEN if set (by the UI launcher),
+    # otherwise generate one for standalone use.
+    gateway._auth_token = os.environ.get("AH_GATEWAY_TOKEN") or secrets.token_hex(32)
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     _start_stdin_reader(asyncio.get_running_loop(), queue)
     try:

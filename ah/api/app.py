@@ -91,6 +91,7 @@ class CreateDocumentRequest(BaseModel):
     source: str = Field(..., min_length=1, max_length=500)
     content: str = Field(..., min_length=1, max_length=1_000_000)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    agent: str | None = None
 
 
 class RpcRequest(BaseModel):
@@ -107,11 +108,23 @@ class _RpcGateway:
     The Gateway class expects a ``write`` callable that receives response
     frames. We capture the last frame with a matching ``id`` so the HTTP
     layer can return it to the client.
+
+    Thread safety: uses an ``asyncio.Lock`` to protect ``_next_id`` increment
+    and ``_responses`` dict access, making it safe for concurrent use across
+    multiple HTTP requests.
+
+    TTL cleanup: entries in ``_responses`` that are older than
+    ``_RESPONSE_TTL_SECONDS`` are automatically cleaned up to prevent
+    unbounded growth when responses never arrive.
     """
+
+    _RESPONSE_TTL_SECONDS = 60.0
 
     def __init__(self) -> None:
         self._responses: dict[int, dict[str, Any]] = {}
+        self._response_timestamps: dict[int, float] = {}
         self._next_id = 0
+        self._lock = asyncio.Lock()
         self._gateway = Gateway(self._capture, owns_db=False)
         self._gateway._db_ready = db.connected
 
@@ -119,13 +132,29 @@ class _RpcGateway:
         rid = frame.get("id")
         if rid is not None:
             self._responses[rid] = frame
+            self._response_timestamps[rid] = asyncio.get_event_loop().time()
+
+    def _cleanup_old_responses(self) -> None:
+        """Remove entries from _responses that have exceeded the TTL."""
+        now = asyncio.get_event_loop().time()
+        expired = [
+            rid
+            for rid, ts in self._response_timestamps.items()
+            if now - ts > self._RESPONSE_TTL_SECONDS
+        ]
+        for rid in expired:
+            self._responses.pop(rid, None)
+            self._response_timestamps.pop(rid, None)
 
     async def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        self._next_id += 1
-        rid = self._next_id
-        frame = {"jsonrpc": "2.0", "id": rid, "method": method, "params": params}
-        await self._gateway.handle_line(json.dumps(frame))
-        response = self._responses.pop(rid, None)
+        async with self._lock:
+            self._next_id += 1
+            rid = self._next_id
+            self._cleanup_old_responses()
+            frame = {"jsonrpc": "2.0", "id": rid, "method": method, "params": params}
+            await self._gateway.handle_line(json.dumps(frame))
+            response = self._responses.pop(rid, None)
+            self._response_timestamps.pop(rid, None)
         if response is None:
             raise RpcError(-32603, "no response from gateway")
         if "error" in response:
@@ -226,46 +255,6 @@ def create_app() -> FastAPI:
             )
         return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
 
-    # ── sessions ────────────────────────────────────────────────────────────
-
-    @app.post("/api/v1/sessions", dependencies=[Depends(require_api_key)])
-    @app.post("/sessions", dependencies=[Depends(require_api_key)])
-    async def create_session(req: CreateSessionRequest) -> dict[str, Any]:
-        from ah.memory.persona import EmotionTopology
-
-        if req.emotion and req.emotion not in EmotionTopology.EMOTION_PROFILES:
-            raise HTTPException(400, "unknown emotion")
-        session = await session_manager.create(
-            title=req.title,
-            model=req.model or config.get("model"),
-            provider=req.provider or config.get("provider"),
-            goal=req.goal,
-            context_budget=config.get("context_budget"),
-            state={"emotion": req.emotion} if req.emotion else None,
-        )
-        return {"session": session_to_dict(session)}
-
-    @app.get("/api/v1/sessions", dependencies=[Depends(require_api_key)])
-    @app.get("/sessions", dependencies=[Depends(require_api_key)])
-    async def list_sessions(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
-        sessions = await session_manager.list_sessions(limit=limit)
-        return {"sessions": [session_to_dict(s) for s in sessions]}
-
-    @app.get("/api/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])
-    @app.get("/sessions/{session_id}", dependencies=[Depends(require_api_key)])
-    async def get_session(session_id: str) -> dict[str, Any]:
-        try:
-            sid = uuid.UUID(session_id)
-        except ValueError:
-            raise HTTPException(400, "invalid session ID") from None
-        session = await session_manager.get(sid)
-        if session is None:
-            raise HTTPException(404, "session not found")
-        chunks = await context_manager.get_chunks(sid, limit=200)
-        return {
-            "session": session_to_dict(session),
-            "history": history_from_chunks(chunks),
-        }
 
     @app.get("/api/v1/sessions/{session_id}/usage", dependencies=[Depends(require_api_key)])
     async def get_session_usage(session_id: uuid.UUID, agent: str | None = None) -> dict[str, Any]:
@@ -275,6 +264,7 @@ def create_app() -> FastAPI:
         if session is None:
             raise HTTPException(404, "session not found")
         return await usage_store.summary(session_id, agent or session.agent_id)
+
 
     @app.patch("/api/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])
     async def update_session(session_id: uuid.UUID, req: UpdateSessionRequest) -> dict[str, Any]:
@@ -301,11 +291,141 @@ def create_app() -> FastAPI:
             await session_manager.set_goal(session_id, req.goal)
         return {"session": session_to_dict(await session_manager.get(session_id))}
 
+
     @app.delete("/api/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])
     async def delete_session(session_id: uuid.UUID) -> dict[str, bool]:
         if not await session_manager.delete(session_id):
             raise HTTPException(404, "session not found")
         return {"deleted": True}
+
+
+    @app.post("/api/v1/memory", dependencies=[Depends(require_api_key)])
+    async def create_memory(req: CreateMemoryRequest) -> dict[str, Any]:
+        from ah.memory.store import memory_store
+
+        if req.category not in {"preference", "decision", "fact", "event", "transient"}:
+            raise HTTPException(400, "invalid memory category")
+        if req.sessionId is not None and await session_manager.get(req.sessionId) is None:
+            raise HTTPException(404, "session not found")
+        entry = await memory_store.add(
+            session_id=req.sessionId,
+            agent_id=req.agent,
+            content=req.content,
+            category=req.category,
+            importance=req.importance,
+            explicitly_important=True,
+        )
+        return {
+            "memory": {"id": str(entry.id), "content": entry.content, "category": entry.category}
+        }
+
+
+    @app.post("/api/v1/persona-memory", dependencies=[Depends(require_api_key)])
+    async def create_persona_memory(req: CreatePersonaMemoryRequest) -> dict[str, Any]:
+        from ah.memory.persona import persona_memory_store
+        from ah.memory.store import memory_store
+
+        fact = await memory_store.get(req.factId)
+        if fact is None or fact.quarantined:
+            raise HTTPException(404, "fact not found")
+        entry = await persona_memory_store.add_persona(
+            fact_id=req.factId,
+            persona_id=req.personaId,
+            interpretation=req.interpretation,
+            emotional_valence=req.emotionalValence,
+            emotional_arousal=req.emotionalArousal,
+            confidence=req.confidence,
+        )
+        return {"personaMemory": {"id": str(entry.id), "factId": str(entry.fact_id)}}
+
+
+    @app.get("/api/v1/memory/search", dependencies=[Depends(require_api_key)])
+    async def search_memory(
+        query: str = Query(..., min_length=1, max_length=2000),
+        limit: int = Query(5, ge=1, le=50),
+        agent: str | None = None,
+        category: str | None = None,
+        emotion: str | None = None,
+    ) -> dict[str, Any]:
+        from ah.memory.persona import EmotionTopology
+        from ah.memory.retriever import MemoryRetriever
+
+        if emotion and emotion not in EmotionTopology.EMOTION_PROFILES:
+            raise HTTPException(400, "unknown emotion")
+
+        results = await MemoryRetriever(top_k=limit).retrieve(
+            query, agent_id=agent, category=category, emotion=emotion
+        )
+        return {
+            "memories": [
+                {
+                    "id": str(item.memory.id),
+                    "content": item.memory.content,
+                    "category": item.memory.category,
+                    "score": item.score,
+                    "personaInterpretation": item.persona_interpretation,
+                }
+                for item in results
+            ]
+        }
+
+
+    @app.delete("/api/v1/jobs/{job_id}", dependencies=[Depends(require_api_key)])
+    async def delete_job(job_id: uuid.UUID) -> dict[str, bool]:
+        from ah.core.scheduler import job_store
+
+        if not await job_store.delete(job_id):
+            raise HTTPException(404, "job not found")
+        return {"deleted": True}
+
+
+
+    # ── sessions ────────────────────────────────────────────────────────────
+
+    @app.post("/api/v1/sessions", dependencies=[Depends(require_api_key)])
+    @app.post("/sessions", dependencies=[Depends(require_api_key)])
+    async def create_session(req: CreateSessionRequest) -> dict[str, Any]:
+        """Create a new session."""
+        from ah.memory.persona import EmotionTopology
+
+        if req.emotion and req.emotion not in EmotionTopology.EMOTION_PROFILES:
+            raise HTTPException(400, "unknown emotion")
+        session = await session_manager.create(
+            title=req.title,
+            model=req.model or config.get("model"),
+            provider=req.provider or config.get("provider"),
+            goal=req.goal,
+            context_budget=config.get("context_budget"),
+            state={"emotion": req.emotion} if req.emotion else None,
+        )
+        return {"session": session_to_dict(session)}
+
+    @app.get("/api/v1/sessions", dependencies=[Depends(require_api_key)])
+    @app.get("/sessions", dependencies=[Depends(require_api_key)])
+    async def list_sessions(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
+        """List sessions."""
+        sessions = await session_manager.list_sessions(limit=limit)
+        return {"sessions": [session_to_dict(s) for s in sessions]}
+
+    @app.get("/api/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])
+    @app.get("/sessions/{session_id}", dependencies=[Depends(require_api_key)])
+    async def get_session(session_id: str) -> dict[str, Any]:
+        """Get a session by ID."""
+        try:
+            sid = uuid.UUID(session_id)
+        except ValueError:
+            raise HTTPException(400, "invalid session ID") from None
+        session = await session_manager.get(sid)
+        if session is None:
+            raise HTTPException(404, "session not found")
+        chunks = await context_manager.get_chunks(sid, limit=200)
+        return {
+            "session": session_to_dict(session),
+            "history": history_from_chunks(chunks),
+        }
+
+
+
 
     @app.post("/api/v1/sessions/{session_id}/chat", dependencies=[Depends(require_api_key)])
     @app.post("/sessions/{session_id}/prompt", dependencies=[Depends(require_api_key)])
@@ -421,81 +541,21 @@ def create_app() -> FastAPI:
             "total": await memory_store.count(session_id=sid),
         }
 
-    @app.post("/api/v1/memory", dependencies=[Depends(require_api_key)])
-    async def create_memory(req: CreateMemoryRequest) -> dict[str, Any]:
-        from ah.memory.store import memory_store
 
-        if req.category not in {"preference", "decision", "fact", "event", "transient"}:
-            raise HTTPException(400, "invalid memory category")
-        if req.sessionId is not None and await session_manager.get(req.sessionId) is None:
-            raise HTTPException(404, "session not found")
-        entry = await memory_store.add(
-            session_id=req.sessionId,
-            agent_id=req.agent,
-            content=req.content,
-            category=req.category,
-            importance=req.importance,
-            explicitly_important=True,
-        )
-        return {
-            "memory": {"id": str(entry.id), "content": entry.content, "category": entry.category}
-        }
 
-    @app.post("/api/v1/persona-memory", dependencies=[Depends(require_api_key)])
-    async def create_persona_memory(req: CreatePersonaMemoryRequest) -> dict[str, Any]:
-        from ah.memory.persona import persona_memory_store
-        from ah.memory.store import memory_store
-
-        fact = await memory_store.get(req.factId)
-        if fact is None or fact.quarantined:
-            raise HTTPException(404, "fact not found")
-        entry = await persona_memory_store.add_persona(
-            fact_id=req.factId,
-            persona_id=req.personaId,
-            interpretation=req.interpretation,
-            emotional_valence=req.emotionalValence,
-            emotional_arousal=req.emotionalArousal,
-            confidence=req.confidence,
-        )
-        return {"personaMemory": {"id": str(entry.id), "factId": str(entry.fact_id)}}
-
-    @app.get("/api/v1/memory/search", dependencies=[Depends(require_api_key)])
-    async def search_memory(
-        query: str = Query(..., min_length=1, max_length=2000),
-        limit: int = Query(5, ge=1, le=50),
-        agent: str | None = None,
-        category: str | None = None,
-        emotion: str | None = None,
-    ) -> dict[str, Any]:
-        from ah.memory.persona import EmotionTopology
-        from ah.memory.retriever import MemoryRetriever
-
-        if emotion and emotion not in EmotionTopology.EMOTION_PROFILES:
-            raise HTTPException(400, "unknown emotion")
-
-        results = await MemoryRetriever(top_k=limit).retrieve(
-            query, agent_id=agent, category=category, emotion=emotion
-        )
-        return {
-            "memories": [
-                {
-                    "id": str(item.memory.id),
-                    "content": item.memory.content,
-                    "category": item.memory.category,
-                    "score": item.score,
-                    "personaInterpretation": item.persona_interpretation,
-                }
-                for item in results
-            ]
-        }
 
     @app.post("/api/v1/documents", dependencies=[Depends(require_api_key)])
     async def index_document(req: CreateDocumentRequest) -> dict[str, Any]:
+        """Index a document into the RAG pipeline."""
         from ah.rag.loaders import Document
         from ah.tools.rag import get_rag_pipeline
 
-        if await session_manager.get(req.sessionId) is None:
+        session = await session_manager.get(req.sessionId)
+        if session is None:
             raise HTTPException(404, "session not found")
+        agent = req.agent or session.agent_id
+        if agent != session.agent_id:
+            raise HTTPException(403, "agent does not own this session")
         try:
             pipeline = await get_rag_pipeline()
             chunks = await pipeline.index_document(
@@ -513,11 +573,17 @@ def create_app() -> FastAPI:
         sessionId: uuid.UUID,
         query: str = Query(..., min_length=1, max_length=2000),
         topK: int = Query(5, ge=1, le=50),
+        agent: str | None = None,
     ) -> dict[str, Any]:
+        """Search indexed documents."""
         from ah.tools.rag import get_rag_pipeline
 
-        if await session_manager.get(sessionId) is None:
+        session = await session_manager.get(sessionId)
+        if session is None:
             raise HTTPException(404, "session not found")
+        agent = agent or session.agent_id
+        if agent != session.agent_id:
+            raise HTTPException(403, "agent does not own this session")
         try:
             pipeline = await get_rag_pipeline()
             results = await pipeline.search(query=query, session_id=sessionId, top_k=topK)
@@ -539,6 +605,7 @@ def create_app() -> FastAPI:
     @app.post("/api/v1/sessions/{session_id}/jobs", dependencies=[Depends(require_api_key)])
     @app.post("/sessions/{session_id}/jobs", dependencies=[Depends(require_api_key)])
     async def create_job(session_id: str, req: CreateJobRequest) -> dict[str, Any]:
+        """Create a new job."""
         try:
             sid = uuid.UUID(session_id)
         except ValueError:
@@ -573,6 +640,7 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/sessions/{session_id}/jobs", dependencies=[Depends(require_api_key)])
     @app.get("/sessions/{session_id}/jobs", dependencies=[Depends(require_api_key)])
     async def list_jobs(session_id: str, limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
+        """List jobs for a session."""
         try:
             sid = uuid.UUID(session_id)
         except ValueError:
@@ -585,18 +653,12 @@ def create_app() -> FastAPI:
         jobs = await job_store.list(session_id=sid, limit=limit)
         return {"jobs": [j.to_dict() for j in jobs]}
 
-    @app.delete("/api/v1/jobs/{job_id}", dependencies=[Depends(require_api_key)])
-    async def delete_job(job_id: uuid.UUID) -> dict[str, bool]:
-        from ah.core.scheduler import job_store
-
-        if not await job_store.delete(job_id):
-            raise HTTPException(404, "job not found")
-        return {"deleted": True}
 
     # ── agents ──────────────────────────────────────────────────────────────
 
     @app.get("/agents", dependencies=[Depends(require_api_key)])
     async def list_agents() -> dict[str, Any]:
+        """List all agents."""
         from ah.core.agent_def import agent_registry
 
         agents = await agent_registry.list()

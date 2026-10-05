@@ -18,6 +18,7 @@ from ah.gateway.features._common import _int, _str, _uuid
 
 
 async def session_fork(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Fork a session — create a new session with copied state and context."""
     gw.require_db()
     source = await gw.get_session(params)
     title = _str(params, "title", required=False, max_len=80) or None
@@ -25,6 +26,7 @@ async def session_fork(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def session_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Delete a session."""
     gw.require_db()
     session = await gw.get_session(params)
     if gw.turn_running(session.id):
@@ -33,6 +35,7 @@ async def session_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def session_rename(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Rename a session."""
     gw.require_db()
     session = await gw.get_session(params)
     await session_manager.set_title(session.id, _str(params, "title", max_len=80))
@@ -40,6 +43,7 @@ async def session_rename(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def session_set_goal(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Set the goal for a session."""
     gw.require_db()
     session = await gw.get_session(params)
     await session_manager.set_goal(session.id, _str(params, "goal", max_len=2000))
@@ -47,6 +51,7 @@ async def session_set_goal(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
 
 
 async def session_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Search sessions by title."""
     gw.require_db()
     found = await session_manager.search(
         _str(params, "query", max_len=200), limit=_int(params, "limit", 20, 1, 200)
@@ -106,11 +111,13 @@ async def session_recall_window(gw: Gateway, params: dict[str, Any]) -> dict[str
 
 
 async def session_export(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Export a session as markdown."""
     gw.require_db()
     return {"markdown": await services.export_markdown(await gw.get_session(params))}
 
 
 async def context_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Get context chunks for a session."""
     gw.require_db()
     session = await gw.get_session(params)
     chunks = await context_manager.get_chunks(session.id, limit=_int(params, "limit", 20, 1, 1000))
@@ -132,6 +139,7 @@ async def context_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def context_compress(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Compress context for a session."""
     gw.require_db()
     session = await gw.get_session(params)
     if gw.turn_running(session.id):

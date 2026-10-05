@@ -18,6 +18,8 @@ from ah.rag.pipeline import RAGPipeline
 from ah.skills.registry import SkillRegistry, skill_registry
 from ah.tools.base import ToolRegistry, registry
 
+__all__ = ["Container", "container"]
+
 
 @dataclass
 class Container:
@@ -96,6 +98,7 @@ class Container:
     def context_manager(self) -> ContextManager:
         return self._context_manager
 
+
     @property
     def tool_registry(self) -> ToolRegistry:
         return self._tool_registry
@@ -115,6 +118,7 @@ class Container:
     @property
     def importance_scorer(self) -> ImportanceScorer:
         return self._importance_scorer
+
 
     @property
     def forgetting_model(self) -> ForgettingModel:

@@ -344,7 +344,7 @@ async def test_versioned_memory_and_document_routes(monkeypatch):
     monkeypatch.setenv("AGENT_HARNESS_API_KEY", "phase6-test")
     monkeypatch.setenv("AGENT_HARNESS_HTTP_RATE_LIMIT", "100")
     session_id = uuid.uuid4()
-    monkeypatch.setattr(session_manager, "get", AsyncMock(return_value=SimpleNamespace(id=session_id)))
+    monkeypatch.setattr(session_manager, "get", AsyncMock(return_value=SimpleNamespace(id=session_id, agent_id="harness")))
     memory = SimpleNamespace(id=uuid.uuid4(), content="saved", category="fact")
     add_memory = AsyncMock(return_value=memory)
     monkeypatch.setattr(memory_store, "add", add_memory)

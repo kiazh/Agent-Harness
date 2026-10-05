@@ -197,6 +197,27 @@ class MemoryApprovalGate:
 
         return pending
 
+    async def get_pending(self, pending_id: uuid.UUID) -> PendingMemory | None:
+        """Get a pending memory by ID."""
+        row = await db.fetchrow(
+            "SELECT * FROM pending_memories WHERE id = $1",
+            pending_id,
+        )
+        if row is None:
+            return None
+        return PendingMemory(
+            id=row["id"],
+            memory_id=row["memory_id"],
+            content=row["content"],
+            category=row["category"],
+            importance=row["importance"],
+            agent_id=row["agent_id"],
+            session_id=row["session_id"],
+            redactions=row["redactions"],
+            status=row["status"],
+            created_at=row["created_at"],
+        )
+
     async def approve(
         self,
         pending_id: uuid.UUID,
@@ -277,30 +298,35 @@ class MemoryApprovalGate:
 
         Returns True if the pending record was found and rejected.
         """
-        row = await db.fetchrow(
-            "SELECT status FROM pending_memories WHERE id = $1",
-            pending_id,
-        )
-        if row is None:
-            logger.warning("Pending memory %s not found for rejection", pending_id)
-            return False
+        # Lock the row and update in the same transaction to prevent
+        # race conditions where concurrent approvals/rejections could
+        # leave the record in an inconsistent state.
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT status FROM pending_memories WHERE id = $1 FOR UPDATE",
+                    pending_id,
+                )
+                if row is None:
+                    logger.warning("Pending memory %s not found for rejection", pending_id)
+                    return False
 
-        if row["status"] != ApprovalStatus.PENDING.value:
-            logger.warning("Pending memory %s already %s", pending_id, row["status"])
-            return False
+                if row["status"] != ApprovalStatus.PENDING.value:
+                    logger.warning("Pending memory %s already %s", pending_id, row["status"])
+                    return False
 
-        now = datetime.now(UTC)
-        await db.execute(
-            """
-            UPDATE pending_memories
-            SET status = $2, reviewed_at = $3, review_note = $4
-            WHERE id = $1
-            """,
-            pending_id,
-            ApprovalStatus.REJECTED.value,
-            now,
-            review_note,
-        )
+                now = datetime.now(UTC)
+                await conn.execute(
+                    """
+                    UPDATE pending_memories
+                    SET status = $2, reviewed_at = $3, review_note = $4
+                    WHERE id = $1
+                    """,
+                    pending_id,
+                    ApprovalStatus.REJECTED.value,
+                    now,
+                    review_note,
+                )
 
         audit_log(
             "memory_rejected",
@@ -332,20 +358,6 @@ class MemoryApprovalGate:
         )
         return [self._row_to_pending(row) for row in rows]
 
-    async def get_pending(self, pending_id: uuid.UUID) -> PendingMemory | None:
-        """Get a single pending memory by ID."""
-        row = await db.fetchrow(
-            """
-            SELECT id, memory_id, content, category, importance, agent_id,
-                   session_id, redactions, status, created_at, reviewed_at,
-                   review_note
-            FROM pending_memories WHERE id = $1
-            """,
-            pending_id,
-        )
-        if row is None:
-            return None
-        return self._row_to_pending(row)
 
     async def approve_all(self, agent_id: str | None = None) -> int:
         """Approve all pending memories, optionally filtered by agent.

@@ -18,6 +18,14 @@ from typing import Any
 from ah.core.assembler import get_token_count
 from ah.core.models import ContextChunk
 
+__all__ = [
+    "CompressionConfig",
+    "CompressionResult",
+    "ContextCompressor",
+    "RollingCompaction",
+    "compress_context_chunks",
+]
+
 logger = logging.getLogger(__name__)
 
 

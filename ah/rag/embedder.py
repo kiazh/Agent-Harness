@@ -211,6 +211,7 @@ class OpenAIEmbedder(Embedder):
         """Close the HTTP client."""
         await self._client.aclose()
 
+
     def clear_cache(self) -> None:
         """Clear the embedding cache."""
         self._cache.clear()

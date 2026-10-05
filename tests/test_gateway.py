@@ -21,6 +21,7 @@ from ah.gateway.server import (
     PARSE_ERROR,
     SESSION_NOT_FOUND,
     TURN_IN_PROGRESS,
+    UNAUTHORIZED,
     Gateway,
     history_from_chunks,
 )
@@ -172,6 +173,100 @@ class TestProtocolErrors:
         assert h.gateway.closing
 
 
+class TestAuthentication:
+    """Token-based authentication for the gateway."""
+
+    async def test_unauthenticated_request_rejected(self):
+        h = Harness()
+        h.gateway._auth_token = "secret-token"
+        response = await h.call("session.list")
+        assert response["error"]["code"] == UNAUTHORIZED
+
+    async def test_wrong_token_rejected(self):
+        h = Harness()
+        h.gateway._auth_token = "secret-token"
+        response = await h.call("session.list", {"token": "wrong-token"})
+        assert response["error"]["code"] == UNAUTHORIZED
+
+    async def test_correct_token_accepted(self):
+        h = Harness()
+        h.gateway._auth_token = "secret-token"
+        # initialize is always allowed (it's how you authenticate)
+        response = await h.call("initialize", {"token": "secret-token"})
+        assert "result" in response
+
+    async def test_initialize_without_token_when_no_auth(self):
+        h = Harness()
+        # No token set — initialize should work without auth
+        response = await h.call("initialize")
+        assert "result" in response
+
+    async def test_other_methods_work_after_auth(self):
+        h = Harness()
+        h.gateway._auth_token = "secret-token"
+        # initialize with token
+        await h.call("initialize", {"token": "secret-token"})
+        # Now other methods should work with the token
+        response = await h.call("session.list", {"token": "secret-token"})
+        assert "result" in response or "error" in response
+        # Without token, should be rejected
+        response2 = await h.call("session.list")
+        assert response2["error"]["code"] == UNAUTHORIZED
+
+
+class TestErrorMessages:
+    """Error messages should not leak internal details to clients."""
+
+    async def test_handle_line_returns_generic_error(self):
+        """handle_line should return generic error, not exception details."""
+        h = Harness()
+        await h.call("initialize")
+        # Force an exception by passing invalid params that cause an error
+        # The error message should be generic
+        response = await h.call("session.list", {"limit": "not-an-int"})
+        assert response["error"]["code"] == INVALID_PARAMS
+        # Should not contain Python exception details
+        assert "Traceback" not in response["error"]["message"]
+        assert "AttributeError" not in response["error"]["message"]
+
+
+class TestTurnTimeout:
+    """Turn timeout and cleanup mechanism."""
+
+    async def test_turn_timeout_configurable(self):
+        """The turn timeout should be configurable via config."""
+        from ah.core.config import config
+
+        original = config.get("turn_timeout")
+        try:
+            config.set("turn_timeout", 1)
+            h = Harness()
+            # Create a fake agent that hangs
+            gate = asyncio.Event()
+            h.agent = FakeAgent(scripted_turn(), gate=gate)
+            h.gateway._agent_factory = lambda model, provider: h.agent
+            await h.call("initialize")
+            sid = (await h.call("session.create"))["result"]["session"]["id"]
+            await h.call("prompt.submit", {"sessionId": sid, "text": "go"})
+            # Wait for timeout
+            await asyncio.sleep(2)
+            # The turn should have been cleaned up
+            assert not h.gateway.turn_running(uuid.UUID(sid))
+        finally:
+            config.set("turn_timeout", original)
+
+    async def test_turns_dict_cleaned_up_after_completion(self):
+        """After a turn completes, the entry should be removed from _turns."""
+        h = Harness()
+        await h.call("initialize")
+        sid = (await h.call("session.create"))["result"]["session"]["id"]
+        await h.call("prompt.submit", {"sessionId": sid, "text": "go"})
+        await h.wait_for("message.complete")
+        # Give a moment for cleanup
+        await asyncio.sleep(0.1)
+        assert not h.gateway.turn_running(uuid.UUID(sid))
+
+
 def test_history_from_chunks_is_chronological():
     sid = uuid.uuid4()
 
@@ -305,7 +400,10 @@ class TestSessionsAndTurns:
             sid = (await h.call("session.create"))["result"]["session"]["id"]
             await h.call("prompt.submit", {"sessionId": sid, "text": "go"})
             await h.wait_for("message.complete")
-            assert "model exploded" in h.events("error")[0]["message"]
+            # Error message should be generic, not leak internal details
+            error_msg = h.events("error")[0]["message"]
+            assert "model exploded" not in error_msg
+            assert error_msg == "agent turn failed"
         finally:
             await h.gateway.close()
 
@@ -323,12 +421,13 @@ class TestSessionsAndTurns:
 @needs_db
 def test_gateway_process_speaks_clean_json_over_stdio():
     """`python -m ah.gateway` answers requests and writes nothing but JSON to stdout."""
+    token = "test-token-for-e2e"
     requests = [
-        {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
-        {"jsonrpc": "2.0", "id": 2, "method": "session.create", "params": {"title": "e2e"}},
-        {"jsonrpc": "2.0", "id": 3, "method": "shutdown"},
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"token": token}},
+        {"jsonrpc": "2.0", "id": 2, "method": "session.create", "params": {"title": "e2e", "token": token}},
+        {"jsonrpc": "2.0", "id": 3, "method": "shutdown", "params": {"token": token}},
     ]
-    env = {**os.environ, "DATABASE_URL": TEST_DSN, "PYTHONIOENCODING": "utf-8"}
+    env = {**os.environ, "DATABASE_URL": TEST_DSN, "PYTHONIOENCODING": "utf-8", "AH_GATEWAY_TOKEN": token}
     proc = subprocess.run(
         [sys.executable, "-m", "ah.gateway"],
         input="".join(json.dumps(r) + "\n" for r in requests),

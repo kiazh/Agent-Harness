@@ -28,12 +28,22 @@ SECRET_KEYS = frozenset({"openrouter_api_key", "openai_api_key", "cohere_api_key
 # Real environment variables always win over .env values.
 load_dotenv(override=False)
 
+__all__ = [
+    "Config",
+    "DEFAULT_CONFIG_PATH",
+    "SECRET_KEYS",
+    "LEGACY_ENV_VARS",
+    "DEFAULTS",
+    "get_config",
+]
+
 # Sensible defaults for all settings
 DEFAULTS: dict[str, Any] = {
     "model": "openrouter/free",
     "provider": "openrouter",
     "context_budget": 8000,
     "max_iterations": 10,
+    "turn_timeout": 300,
     "verbose": True,
     "agent_id": "harness",
     "temperature": 0.7,
@@ -97,6 +107,7 @@ class Config:
     provider: str = "openrouter"
     context_budget: int = 8000
     max_iterations: int = 10
+    turn_timeout: int = 300
     verbose: bool = True
     agent_id: str = "harness"
     temperature: float = 0.7
@@ -185,6 +196,7 @@ class Config:
 
         if persist:
             self.save()
+
 
     def set_session_override(self, key: str, value: Any) -> None:
         """Set a per-session override (not persisted to file)."""

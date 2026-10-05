@@ -13,12 +13,14 @@ if TYPE_CHECKING:
 
 
 async def config_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Get current configuration."""
     snapshot = _config_snapshot()
     snapshot["model"], snapshot["provider"] = gw.model, gw.provider
     return {"config": snapshot, "secrets": sorted(SECRET_KEYS)}
 
 
 async def profile_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Get a user profile."""
     gw.require_db()
     from ah.memory.user_profile import user_profile_store
 
@@ -30,6 +32,7 @@ async def profile_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def profile_set(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Set a user preference."""
     gw.require_db()
     from ah.memory.user_profile import user_profile_store
 
@@ -40,6 +43,7 @@ async def profile_set(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def profile_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """List all user profiles."""
     gw.require_db()
     from ah.memory.user_profile import user_profile_store
 
@@ -48,6 +52,7 @@ async def profile_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def status(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Get system status."""
     gw.require_db()
     summary = await services.status_summary()
     summary["model"], summary["provider"] = gw.model, gw.provider

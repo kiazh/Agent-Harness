@@ -15,7 +15,7 @@ class ValidationResult:
     errors: list[str] = field(default_factory=list)
 
 
-class SoulSpecConformance:
+class TestSoulSpecConformance:
     """Test that a SoulSpec conforms to the standard."""
 
     def validate_schema(self, spec: SoulSpec) -> ValidationResult:

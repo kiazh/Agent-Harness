@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 
 async def jobs_create(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Create a new job."""
     gw.require_db()
     from ah.core.scheduler import DEFAULT_HEARTBEAT_PROMPT, job_store
 
@@ -48,6 +49,7 @@ async def jobs_create(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def jobs_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """List jobs for a session."""
     gw.require_db()
     from ah.core.scheduler import job_store
 
@@ -57,6 +59,7 @@ async def jobs_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def jobs_set_enabled(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Enable or disable a job."""
     gw.require_db()
     from ah.core.scheduler import job_store
 
@@ -76,6 +79,7 @@ async def jobs_set_enabled(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
 
 
 async def jobs_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Delete a job."""
     gw.require_db()
     from ah.core.scheduler import job_store
 

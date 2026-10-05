@@ -5,6 +5,7 @@ Pipeline: dense vector search + sparse keyword search → merge → re-rank → 
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -216,18 +217,17 @@ class MemoryRetriever:
         category: str | None = None,
         limit: int = 10,
     ) -> list[tuple[MemoryEntry, float]]:
-        """Simple keyword-based search using ILIKE.
+        """Keyword-based search using PostgreSQL full-text search (FTS).
 
-        This is a lightweight sparse search. For production, consider
-        using PostgreSQL's built-in full-text search (tsvector) or a
-        dedicated BM25 index.
+        Uses to_tsvector/plainto_tsquery for efficient indexed text search
+        instead of ILIKE which causes full table scans.
         """
         # Extract keywords from query (simple tokenization)
         keywords = self._extract_keywords(query)
         if not keywords:
             return []
 
-        # Build ILIKE conditions for each keyword
+        # Build FTS query using to_tsvector and plainto_tsquery
         conditions = ["quarantined = FALSE"]
         params: list[Any] = []
         param_idx = 1
@@ -242,16 +242,11 @@ class MemoryRetriever:
             params.append(category)
             param_idx += 1
 
-        # Keyword matching: any keyword in content
-        # Note: keywords are passed as parameters, not interpolated into SQL
-        keyword_conditions = []
-        for kw in keywords:
-            keyword_conditions.append(f"content ILIKE ${param_idx}")
-            params.append(f"%{kw}%")
-            param_idx += 1
-
-        if keyword_conditions:
-            conditions.append(f"({' OR '.join(keyword_conditions)})")
+        # Use FTS: to_tsvector('english', content) @@ plainto_tsquery('english', $N)
+        # This leverages the GIN index on to_tsvector for fast full-text search
+        conditions.append(f"to_tsvector('english', content) @@ plainto_tsquery('english', ${param_idx})")
+        params.append(" ".join(keywords))
+        param_idx += 1
 
         where_clause = " AND ".join(conditions) if conditions else "TRUE"
 
@@ -348,15 +343,18 @@ Candidates:
 Return a JSON array of indices in order of relevance (most relevant first).
 Return ONLY the JSON array, no other text."""
 
-            response = await usage_store.complete_call(
-                self.llm,
-                session_id,
-                agent_id or "harness",
-                messages=[
-                    {"role": "system", "content": "You are a memory re-ranking system."},
-                    {"role": "user", "content": rerank_prompt},
-                ],
-                tools=[],
+            response = await asyncio.wait_for(
+                usage_store.complete_call(
+                    self.llm,
+                    session_id,
+                    agent_id or "harness",
+                    messages=[
+                        {"role": "system", "content": "You are a memory re-ranking system."},
+                        {"role": "user", "content": rerank_prompt},
+                    ],
+                    tools=[],
+                ),
+                timeout=10.0,
             )
 
             # Parse response

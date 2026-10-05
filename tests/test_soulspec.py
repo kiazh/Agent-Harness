@@ -12,7 +12,7 @@ from ah.soulspec import (
     ClaudeCodeAdapter,
     CodexAdapter,
     SoulSpec,
-    SoulSpecConformance,
+    TestSoulSpecConformance,
     SoulSpecMerger,
 )
 
@@ -321,7 +321,7 @@ class TestMergeSemantics:
 class TestConformance:
     def test_conformance_schema_validation(self, sample_spec: SoulSpec) -> None:
         """Schema validation works for valid and invalid specs."""
-        conf = SoulSpecConformance()
+        conf = TestSoulSpecConformance()
         result = conf.validate_schema(sample_spec)
         assert result.valid
         assert result.errors == []
@@ -333,12 +333,12 @@ class TestConformance:
 
     def test_conformance_merge_semantics(self) -> None:
         """Merge semantics are correct per the conformance suite."""
-        conf = SoulSpecConformance()
+        conf = TestSoulSpecConformance()
         conf.test_merge_semantics()  # should not raise
 
     def test_conformance_progressive_disclosure(self) -> None:
         """Skills load at correct disclosure level."""
-        conf = SoulSpecConformance()
+        conf = TestSoulSpecConformance()
         conf.test_progressive_disclosure()  # should not raise
 
     def test_conformance_progressive_disclosure_levels(self) -> None:

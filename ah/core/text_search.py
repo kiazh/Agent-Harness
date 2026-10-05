@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+__all__ = ["build_or_tsquery"]
+
 _SEARCH_STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "does",
     "for", "from", "how", "in", "is", "it", "of", "on", "or", "the", "to",

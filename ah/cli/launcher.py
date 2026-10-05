@@ -8,6 +8,7 @@ to it over JSON-RPC on stdio.
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -87,7 +88,10 @@ def launch_ui(
     if session_id:
         args += ["--session", session_id]
 
-    env = {**os.environ, "AH_PYTHON": sys.executable}
+    # Generate a random auth token for the gateway. The UI client reads this
+    # from AH_GATEWAY_TOKEN and includes it in the initialize call.
+    gateway_token = secrets.token_hex(32)
+    env = {**os.environ, "AH_PYTHON": sys.executable, "AH_GATEWAY_TOKEN": gateway_token}
     try:
         return subprocess.call(args, env=env)
     except KeyboardInterrupt:
