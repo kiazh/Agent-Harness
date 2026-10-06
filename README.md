@@ -45,6 +45,14 @@ AgentHarness is a complete AI agent framework that runs on your machine. You cha
 
 ## Quick start
 
+### One-liner (just works)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kiazh/Agent-Harness/main/install.sh | bash
+# installer: clones (or reuses checkout), venv + pip install, npm ui,
+# .env with generated secrets, auto-starts local pgvector via docker if needed, ah init
+```
+
 ### Prerequisites
 
 - Python 3.11+
