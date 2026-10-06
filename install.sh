@@ -17,9 +17,11 @@
 #   3. Creates .venv, pip install -e . (or .[dev])
 #   4. npm install --prefix ui (unless --no-ui)
 #   5. Creates .env with sane defaults + random API/provenance keys (never prompts when piped)
-#   6. Tries `ah init`; if Postgres is down and docker exists, starts pgvector/pgvector:pg16
-#      on localhost:5432 automatically and retries
-#   7. Installs an `ah` shim on PATH (~/.local/bin) so `ah` just works after restart
+#   6. Tries `ah init`; on failure auto-provisions Postgres (docker, then
+#      Homebrew on macOS) and retries. OS-aware: macos | windows | linux.
+#   7. Installs an `ah` shim in ~/.local/bin, persists it to the shell rc
+#      (~/.zshrc / ~/.bash_profile / ~/.bashrc), and on Windows registers the
+#      venv in the user Path for PowerShell — so `ah` works in new shells.
 #   8. Prints exact next steps. Missing LLM key is a warning, never a fatal error.
 #
 set -euo pipefail
@@ -32,6 +34,8 @@ INTERACTIVE=0
 ASSUME_YES=0
 SKIP_INIT=0
 DOCKER_DB="auto" # auto | yes | no
+DB_AUTO="yes" # provision a local Postgres (docker, then Homebrew on macOS) when ah init fails
+SHELL_RC="yes" # append ~/.local/bin to PATH in the shell rc file (opt out with --no-shell-rc)
 PYTHON_BIN=""
 
 log()  { printf '\033[1;32m[install]\033[0m %s\n' "$*"; }
@@ -51,7 +55,9 @@ Options:
   -y, --yes, --non-interactive
                    Never prompt; generate defaults and finish (default when piped)
   --with-docker-db Force auto-start of local Postgres via docker on init failure
-  --no-docker-db   Never touch docker; just warn on init failure
+  --no-docker-db   Never use docker for the DB
+  --no-auto-db     Never auto-provision Postgres (docker or Homebrew); just warn
+  --no-shell-rc    Don't touch shell rc files (~/.zshrc etc.); print PATH hint only
   --skip-init      Skip `ah init` (DB schema creation)
   -h, --help       Show this help
 
@@ -68,6 +74,8 @@ while [ $# -gt 0 ]; do
     -y|--yes|--non-interactive) ASSUME_YES=1; shift ;;
     --with-docker-db) DOCKER_DB="yes"; shift ;;
     --no-docker-db) DOCKER_DB="no"; shift ;;
+    --no-auto-db) DB_AUTO="no"; shift ;;
+    --no-shell-rc) SHELL_RC="no"; shift ;;
     --skip-init) SKIP_INIT=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown option: $1 (see --help)" ;;
@@ -95,6 +103,23 @@ pick_python() {
 }
 
 rand_hex() { "$PYTHON_BIN" -c 'import secrets; print(secrets.token_hex(32))'; }
+
+# --- OS detection ------------------------------------------------------------
+# OS_FAMILY: macos | windows | linux | other. Drives shell-rc selection
+# (~/.zshrc vs ~/.bash_profile vs ~/.bashrc), the Windows PowerShell Path
+# registration, and how Postgres gets auto-provisioned.
+detect_os() {
+  local kernel
+  kernel="$(uname -s 2>/dev/null || echo unknown)"
+  case "$kernel" in
+    Darwin*) printf '%s' "macos" ;;
+    MINGW* | MSYS* | CYGWIN*) printf '%s' "windows" ;;
+    Linux*) printf '%s' "linux" ;;
+    *) printf '%s' "other" ;;
+  esac
+}
+OS_FAMILY="$(detect_os)"
+log "Detected OS: $OS_FAMILY"
 
 # --- Locate or clone the checkout -------------------------------------------
 if is_repo_dir "$(pwd)"; then
@@ -274,6 +299,41 @@ start_docker_db() {
   return 0
 }
 
+start_brew_db() {
+  # macOS fallback when docker is unavailable: Homebrew PostgreSQL + pgvector.
+  # Best-effort — if any step fails we return 1 and the caller prints manual fixes.
+  # stdin is /dev/null so nothing here can block waiting on a piped install.
+  [ "$OS_FAMILY" = "macos" ] || return 1
+  command -v brew >/dev/null 2>&1 || return 1
+  log "Installing PostgreSQL + pgvector via Homebrew (takes a few minutes)"
+  brew install postgresql@16 pgvector < /dev/null || return 1
+  brew services start postgresql@16 < /dev/null || return 1
+  local pg_bin pg_user i
+  pg_bin="$(brew --prefix postgresql@16 2>/dev/null)/bin"
+  [ -x "$pg_bin/pg_isready" ] || return 1
+  for i in $(seq 1 30); do
+    if "$pg_bin/pg_isready" -h localhost -p 5432 >/dev/null 2>&1; then break; fi
+    [ "$i" = "30" ] && return 1
+    sleep 2
+  done
+  pg_user="${USER:-$(whoami 2>/dev/null || echo postgres)}"
+  if ! "$pg_bin/psql" -h localhost -U "$pg_user" -d postgres -tc \
+    "SELECT 1 FROM pg_roles WHERE rolname='postgres'" 2>/dev/null | grep -q 1; then
+    "$pg_bin/createuser" -h localhost -U "$pg_user" -s postgres < /dev/null || return 1
+  fi
+  "$pg_bin/psql" -h localhost -U "$pg_user" -d postgres \
+    -c "ALTER USER postgres PASSWORD 'postgres';" >/dev/null 2>&1
+  if ! "$pg_bin/psql" -h localhost -U "$pg_user" -d postgres -tc \
+    "SELECT 1 FROM pg_database WHERE datname='agentharness'" 2>/dev/null | grep -q 1; then
+    "$pg_bin/createdb" -h localhost -U "$pg_user" -O postgres agentharness < /dev/null || return 1
+  fi
+  # Fails when the brew pgvector build targets a different postgres major —
+  # caller falls through to manual instructions.
+  "$pg_bin/psql" -h localhost -U postgres -d agentharness \
+    -c "CREATE EXTENSION IF NOT EXISTS vector;" >/dev/null 2>&1 || return 1
+  return 0
+}
+
 wait_for_init() {
   local i
   for i in $(seq 1 30); do
@@ -289,20 +349,101 @@ else
   log "Initializing database schema (ah init)"
   if try_init; then
     log "Schema ready"
-  elif [ "$DOCKER_DB" = "no" ]; then
-    warn "`ah init` failed. Start Postgres (pgvector/pgvector:pg16), check DATABASE_URL in .env, then run: ah init"
-  elif start_docker_db && wait_for_init; then
+  elif [ "$DB_AUTO" = "no" ]; then
+    warn "\`ah init\` failed and auto-provisioning is off (--no-auto-db)."
+    warn "Start Postgres (pgvector/pgvector:pg16), check DATABASE_URL in .env, then run: ah init"
+  elif [ "$DOCKER_DB" != "no" ] && start_docker_db && wait_for_init; then
     log "Schema ready (via auto-started docker Postgres)"
+  elif start_brew_db && wait_for_init; then
+    log "Schema ready (via Homebrew Postgres)"
   else
-    warn "`ah init` failed. Fixes:"
-    warn "  1) docker path (recommended): docker start agentharness-db 2>/dev/null || docker run -d --name agentharness-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=agentharness -p 5432:5432 pgvector/pgvector:pg16"
-    warn "  2) then: ah init"
-    warn "  3) or point DATABASE_URL in .env at your Postgres and re-run ah init"
+    warn "\`ah init\` failed. Pick one, then re-run: ah init"
+    case "$OS_FAMILY" in
+      macos)
+        warn "  docker:  docker run -d --name agentharness-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=agentharness -p 5432:5432 pgvector/pgvector:pg16"
+        warn "  brew:    brew install postgresql@16 pgvector && brew services start postgresql@16"
+        warn "           createuser -s postgres && createdb -O postgres agentharness && psql -U postgres -d agentharness -c 'CREATE EXTENSION vector;'"
+        ;;
+      windows)
+        warn "  docker (Docker Desktop): same docker run line as above"
+        warn "  native:  winget install -e --id PostgreSQL.16 (then add pgvector via StackBuilder), create the agentharness DB, set DATABASE_URL in .env"
+        ;;
+      *)
+        warn "  docker:  docker run -d --name agentharness-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=agentharness -p 5432:5432 pgvector/pgvector:pg16"
+        warn "  apt:     sudo apt-get install -y postgresql postgresql-contrib (plus pgvector for your PG major), create the agentharness DB, set DATABASE_URL in .env"
+        ;;
+    esac
   fi
 fi
 
 log "Checking setup (ah doctor; DB/key warnings are OK, see hints above)"
 "$AH_BIN" doctor || true
+
+# --- PATH persistence ----------------------------------------------------------
+# A piped `curl | bash` runs in a subshell, so `export PATH=...` would die with
+# it. Instead we persist ~/.local/bin into the shell rc file (idempotent) and,
+# on Windows, register the venv Scripts dir in the user Path via PowerShell so
+# `ah` also works in PowerShell/cmd — all without prompting.
+shell_rc_file() {
+  case "${SHELL:-}" in
+    *fish*) printf '%s' "$HOME/.config/fish/config.fish" ;;
+    *zsh*) printf '%s' "$HOME/.zshrc" ;;
+    *bash*)
+      if [ "$OS_FAMILY" = "macos" ]; then printf '%s' "$HOME/.bash_profile"
+      else printf '%s' "$HOME/.bashrc"; fi
+      ;;
+    *)
+      if [ "$OS_FAMILY" = "macos" ]; then printf '%s' "$HOME/.zshrc"
+      else printf '%s' "$HOME/.profile"; fi
+      ;;
+  esac
+}
+
+ensure_path_in_rc() {
+  local dir="$1" rc line
+  if [ "$SHELL_RC" = "no" ]; then
+    warn "Add to PATH once (then restart your shell):"
+    warn "  zsh (macOS default): echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && source ~/.zshrc"
+    warn "  bash:                echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc && source ~/.bashrc"
+    warn "  current shell only:  export PATH=\"\$HOME/.local/bin:\$PATH\""
+    return 0
+  fi
+  case "${SHELL:-}" in
+    *fish*) line="set -gx PATH $dir \$PATH" ;;
+    *) line="export PATH=\"$dir:\$PATH\"" ;;
+  esac
+  rc="$(shell_rc_file)"
+  mkdir -p "$(dirname "$rc")" 2>/dev/null || true
+  touch "$rc" 2>/dev/null || {
+    warn "Cannot write $rc; add this line yourself: $line"
+    return 0
+  }
+  if grep -Fq ".local/bin" "$rc" 2>/dev/null; then
+    log "~/.local/bin already referenced in $rc"
+  else
+    printf '\n# AgentHarness installer: `ah` on PATH\n%s\n' "$line" >> "$rc"
+    log "Added $dir to PATH in $rc — restart your shell (or: source $rc)"
+  fi
+}
+
+register_windows_path() {
+  # On Windows, also register the venv Scripts dir in the *user* Path so `ah`
+  # resolves in PowerShell/cmd, not just Git Bash. Idempotent, best-effort.
+  [ "$OS_FAMILY" = "windows" ] || return 0
+  command -v powershell.exe >/dev/null 2>&1 || return 0
+  command -v cygpath >/dev/null 2>&1 || return 0
+  local windir
+  windir="$(cygpath -w "$(pwd)/$VENV_BIN" 2>/dev/null || true)"
+  [ -n "$windir" ] || return 0
+  if powershell.exe -NoProfile -NonInteractive -Command \
+    "[Environment]::SetEnvironmentVariable('Path', (([Environment]::GetEnvironmentVariable('Path','User') -split ';' | Where-Object { \$_ -ne '$windir' }) + '$windir') -join ';', 'User')" \
+    >/dev/null 2>&1; then
+    log "Registered $windir in Windows user Path (new PowerShell windows will see \`ah\`)"
+  else
+    warn "Could not update Windows user Path; in PowerShell run:"
+    warn "  [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';$windir', 'User')"
+  fi
+}
 
 # --- PATH shim so `ah` just works ------------------------------------------------
 # Absolute path: APP_DIR may be relative (e.g. ./agent-harness), which would
@@ -310,8 +451,12 @@ log "Checking setup (ah doctor; DB/key warnings are OK, see hints above)"
 VENV_AH="$(pwd)/$AH_BIN"
 SHIM_DIR="$HOME/.local/bin"
 if [ -f "$VENV_AH" ]; then
-  if command -v ah >/dev/null 2>&1; then
-    log "\`ah\` already on PATH: $(command -v ah)"
+  # NOTE: don't trust `command -v ah` alone here — during install the venv is
+  # activated, so `ah` resolves even when no other shell can see it. Only skip
+  # the shim when `ah` resolves to something outside this venv.
+  existing_ah="$(command -v ah 2>/dev/null || true)"
+  if [ -n "$existing_ah" ] && [ "$existing_ah" != "$VENV_AH" ]; then
+    log "\`ah\` already on PATH: $existing_ah (leaving it)"
   elif mkdir -p "$SHIM_DIR" 2>/dev/null; then
     cat > "$SHIM_DIR/ah" <<EOF2
 #!/usr/bin/env sh
@@ -320,13 +465,14 @@ EOF2
     chmod +x "$SHIM_DIR/ah"
     log "Installed \`ah\` shim to $SHIM_DIR/ah"
     case ":$PATH:" in
-      *":$SHIM_DIR:"*) ;;
-      *) warn "Add to PATH once: export PATH=\"\$HOME/.local/bin:\$PATH\"  (then restart your shell)" ;;
+      *":$SHIM_DIR:"*) log "$SHIM_DIR already on PATH in this shell" ;;
+      *) ensure_path_in_rc "$SHIM_DIR" ;;
     esac
   else
     warn "Could not write $SHIM_DIR/ah; activate the venv instead: source .venv/bin/activate"
   fi
 fi
+register_windows_path
 
 cat <<EOF
 
@@ -337,5 +483,5 @@ Done. Next:
 
 Keys:   ah setup  (or /keys in the UI; values never echo)
 Health: ah doctor
-Docs:   $APP_DIR/README.md
+Docs:   $(pwd)/README.md
 EOF
