@@ -1392,6 +1392,109 @@ def _shim_points_at(shim_text: str, app_root: str) -> bool:
     return app_root.rstrip("/\\").lower() in shim_text.lower()
 
 
+def _docker_container_exists(name: str = "agentharness-db") -> bool:
+    """True when a docker container called *name* exists (running or stopped)."""
+    if shutil.which("docker") is None:
+        return False
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["docker", "ps", "-a", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if out.returncode != 0:
+        return False
+    return any(line.strip() == name for line in out.stdout.splitlines())
+
+
+def _remove_docker_container(name: str = "agentharness-db") -> tuple[bool, str]:
+    """Stop and remove the docker container (its data goes with it)."""
+    import subprocess
+
+    for action in (["docker", "stop", name], ["docker", "rm", name]):
+        try:
+            out = subprocess.run(action, capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as e:
+            return False, f"docker {' '.join(action[1:])} failed ({e})"
+        if out.returncode != 0 and "No such container" not in (out.stderr or ""):
+            return False, f"docker {' '.join(action[1:])} failed: {(out.stderr or '').strip()}"
+    return True, f"container {name} stopped and removed (its data is gone)"
+
+
+def _brew_postgres_present() -> bool:
+    """True when Homebrew's postgresql@16 is installed (macOS installer path)."""
+    import subprocess
+    import sys
+
+    if not sys.platform.startswith("darwin") or shutil.which("brew") is None:
+        return False
+    try:
+        out = subprocess.run(
+            ["brew", "--prefix", "postgresql@16"], capture_output=True, text=True, timeout=15
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.returncode == 0 and bool(out.stdout.strip())
+
+
+def _remove_brew_postgres() -> tuple[bool, str]:
+    """Stop the brew service and uninstall postgresql@16 + pgvector."""
+    import subprocess
+
+    for action in (
+        ["brew", "services", "stop", "postgresql@16"],
+        ["brew", "uninstall", "postgresql@16", "pgvector"],
+    ):
+        try:
+            out = subprocess.run(action, capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.SubprocessError) as e:
+            return False, f"{' '.join(action)} failed ({e})"
+        if out.returncode != 0:
+            return False, f"{' '.join(action)} failed: {(out.stderr or out.stdout or '').strip()}"
+    return True, "brew postgresql@16 + pgvector uninstalled (its data is gone)"
+
+
+def _valid_db_identifier(name: str) -> bool:
+    """Conservative identifier check so DROP DATABASE can't escape its quoting."""
+    import re
+
+    return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$", name or ""))
+
+
+def _split_database_dsn(dsn: str) -> tuple[str, str] | None:
+    """Split a Postgres DSN into (maintenance_dsn, dbname) for DROP DATABASE.
+
+    Returns None when the URL doesn't parse or names a protected database.
+    """
+    from urllib.parse import urlparse
+
+    try:
+        parts = urlparse(dsn)
+    except ValueError:
+        return None
+    dbname = (parts.path or "").lstrip("/")
+    if not _valid_db_identifier(dbname) or dbname in ("postgres", "template0", "template1"):
+        return None
+    maintenance = parts._replace(path="/postgres").geturl()
+    return maintenance, dbname
+
+
+async def _drop_database(maintenance_dsn: str, dbname: str) -> None:
+    """DROP DATABASE on the maintenance connection. Raises on failure."""
+    import asyncpg
+
+    conn = await asyncpg.connect(maintenance_dsn, timeout=15)
+    try:
+        await conn.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+    finally:
+        await conn.close()
+
+
 def _remove_windows_user_path_entries(remove: list[str]) -> tuple[bool, str]:
     """Drop entries from the HKCU ``Path`` value. Returns (changed, detail)."""
     if os.name != "nt":
@@ -1441,23 +1544,34 @@ def uninstall(
     delete_checkout: bool = typer.Option(
         False, "--delete-checkout", help="Delete the whole checkout directory"
     ),
+    remove_docker: bool = typer.Option(
+        False, "--remove-docker", help="Stop and remove the agentharness-db docker container"
+    ),
+    drop_db: bool = typer.Option(
+        False, "--drop-db", help="DROP the agentharness Postgres database"
+    ),
+    remove_postgres: bool = typer.Option(
+        False,
+        "--remove-postgres",
+        help="Uninstall Homebrew postgresql@16 + pgvector (macOS installer path)",
+    ),
     full: bool = typer.Option(
-        False, "--full", help="All of the above: venv, .env, config and checkout"
+        False, "--full", help="Everything: PATH, venv, .env, config, checkout, docker, database"
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
 ):
-    """Uninstall AgentHarness — remove it from PATH and delete its files.
+    """Uninstall AgentHarness — asks what to remove, then removes it.
 
-    By default removes the PATH registration (Windows user Path entry for this
-    checkout's ``.venv\\Scripts`` plus the ``~/.local/bin/ah`` shim when it
-    points here) and leaves files in place. Add flags to delete files too:
+    With no flags each item is offered interactively (PATH, venv, .env,
+    config, docker container, database, Homebrew postgres, checkout).
+    Answer yes to everything and nothing is left behind:
 
         ah uninstall --full --force    # everything, no prompt
     """
     app_root = _uninstall_app_root()
     venv_dir = app_root / ".venv"
-    from ah.security.env_file import find_env_file
+    from ah.security.env_file import find_env_file, read_env_values
 
     try:
         env_file = find_env_file()
@@ -1468,47 +1582,145 @@ def uninstall(
 
     if full:
         remove_venv = remove_env_file = remove_config = delete_checkout = True
+        remove_docker = drop_db = remove_postgres = True
+
+    # Discover what's actually there so we only ask about real things.
+    has_docker = _docker_container_exists()
+    has_brew_pg = _brew_postgres_present()
+    maintenance_dsn: str | None = None
+    dbname = ""
+    if env_file.is_file():
+        for key in ("DATABASE_URL",):
+            dsn = read_env_values(env_file).get(key, "")
+            if dsn:
+                split = _split_database_dsn(dsn)
+                if split is not None:
+                    maintenance_dsn, dbname = split
+                break
+
+    selective = any(
+        (
+            remove_venv,
+            remove_env_file,
+            remove_config,
+            delete_checkout,
+            remove_docker,
+            drop_db,
+            remove_postgres,
+        )
+    )
+    if not (force or yes) and not selective:
+        # Ask mode: one prompt per item, PATH defaults to yes.
+        console.print("[bold]What should go?[/bold] ([Y/n] / [y/N])")
+        remove_path = typer.confirm("Remove PATH registration (user Path + shim)?", default=True)
+        remove_venv = typer.confirm(f"Delete the virtualenv ({venv_dir})?", default=False)
+        remove_env_file = typer.confirm(f"Delete the env file ({env_file})?", default=False)
+        remove_config = typer.confirm(f"Delete local config ({local_config})?", default=False)
+        if has_docker:
+            remove_docker = typer.confirm(
+                "Stop and remove the agentharness-db docker container (its data too)?",
+                default=False,
+            )
+        if maintenance_dsn:
+            drop_db = typer.confirm(
+                f'DROP the Postgres database "{dbname}" (all sessions/memories/jobs)?',
+                default=False,
+            )
+        if has_brew_pg:
+            remove_postgres = typer.confirm(
+                "Uninstall Homebrew postgresql@16 + pgvector entirely?", default=False
+            )
+        delete_checkout = typer.confirm(f"Delete the whole checkout ({app_root})?", default=False)
+        if not remove_path and not any(
+            (
+                remove_venv,
+                remove_env_file,
+                remove_config,
+                delete_checkout,
+                remove_docker,
+                drop_db,
+                remove_postgres,
+            )
+        ):
+            console.print("[dim]Nothing selected.[/dim]")
+            raise typer.Exit(0)
+    else:
+        remove_path = True
+        if not (force or yes) and not typer.confirm("Proceed with uninstall?"):
+            console.print("[dim]Cancelled.[/dim]")
+            raise typer.Exit(0)
 
     path_targets = [str(venv_dir / "Scripts"), str(venv_dir / "bin")]
-    plan: list[str] = ["Remove PATH registration (user Path entry + ~/.local/bin/ah shim)"]
+    plan: list[str] = []
+    if remove_path:
+        plan.append("Remove PATH registration (user Path entry + ~/.local/bin/ah shim)")
     if remove_venv and venv_dir.is_dir():
         plan.append(f"Delete {venv_dir}")
     if remove_env_file and env_file.is_file():
         plan.append(f"Delete {env_file}")
     if remove_config and local_config.exists():
         plan.append(f"Delete {local_config}")
+    if remove_docker and has_docker:
+        plan.append("Stop + remove docker container agentharness-db (with its data)")
+    if drop_db and maintenance_dsn:
+        plan.append(f'DROP DATABASE "{dbname}"')
+    if remove_postgres and has_brew_pg:
+        plan.append("Uninstall Homebrew postgresql@16 + pgvector")
     if delete_checkout:
         plan.append(f"Delete checkout {app_root}")
 
     console.print("[bold]Uninstall plan:[/bold]")
     for item in plan:
         console.print(f"  • {item}")
-    if not (force or yes) and not typer.confirm("Proceed with uninstall?"):
-        console.print("[dim]Cancelled.[/dim]")
-        raise typer.Exit(0)
 
     # 1. PATH: Windows registry + shim file (created by install.sh).
-    changed, detail = _remove_windows_user_path_entries(path_targets)
-    output.status_line("PATH", detail, "success" if changed else "warning")
-    if shim.is_file():
-        try:
-            points_here = _shim_points_at(
-                shim.read_text(encoding="utf-8", errors="replace"), str(app_root)
-            )
-        except OSError:
-            points_here = False
-        if points_here or full:
+    if remove_path:
+        changed, detail = _remove_windows_user_path_entries(path_targets)
+        output.status_line("PATH", detail, "success" if changed else "warning")
+        if shim.is_file():
             try:
-                shim.unlink()
-                output.status_line("Shim", f"deleted {shim}", "success")
-            except OSError as e:
-                output.error(f"Could not delete shim {shim}: {e}")
+                points_here = _shim_points_at(
+                    shim.read_text(encoding="utf-8", errors="replace"), str(app_root)
+                )
+            except OSError:
+                points_here = False
+            if points_here or full:
+                try:
+                    shim.unlink()
+                    output.status_line("Shim", f"deleted {shim}", "success")
+                except OSError as e:
+                    output.error(f"Could not delete shim {shim}: {e}")
+            else:
+                output.muted(f"Shim {shim} points elsewhere, leaving it.")
         else:
-            output.muted(f"Shim {shim} points elsewhere, leaving it.")
+            output.muted("No ~/.local/bin/ah shim found.")
     else:
-        output.muted("No ~/.local/bin/ah shim found.")
+        output.muted("Keeping PATH registration.")
 
-    # 2. Files.
+    # 2. Docker + database before files (drop-db needs the DSN from .env).
+    if remove_docker:
+        if has_docker:
+            ok, detail = _remove_docker_container()
+            output.status_line("Docker", detail, "success" if ok else "error")
+        else:
+            output.muted("No agentharness-db container found.")
+    if drop_db:
+        if maintenance_dsn:
+            try:
+                _run(_drop_database(maintenance_dsn, dbname))
+                output.status_line("Database", f'dropped "{dbname}"', "success")
+            except Exception as e:
+                output.error(f'Could not drop database "{dbname}": {e}')
+        else:
+            output.muted("No droppable DATABASE_URL found in .env.")
+    if remove_postgres:
+        if has_brew_pg:
+            ok, detail = _remove_brew_postgres()
+            output.status_line("Postgres", detail, "success" if ok else "error")
+        else:
+            output.muted("No Homebrew postgresql@16 found.")
+
+    # 3. Files.
     def _rmtree(path: Path, label: str) -> None:
         try:
             shutil.rmtree(path, ignore_errors=False)
@@ -1534,13 +1746,9 @@ def uninstall(
             except OSError as e:
                 output.error(f"Could not delete {local_config}: {e}")
 
-    # 3. Checkout last — the running `ah` binary lives inside it, so on
+    # 4. Checkout last — the running `ah` binary lives inside it, so on
     # Windows the delete can fail with a file lock. Report leftovers + manual cmd.
     if delete_checkout:
-        if full or remove_venv:
-            console.print(
-                "[dim]Skipping live checkout delete would leave a broken tree; attempting anyway.[/dim]"
-            )
         try:
             shutil.rmtree(app_root, ignore_errors=False)
             output.status_line("Checkout", f"deleted {app_root}", "success")
@@ -1554,10 +1762,6 @@ def uninstall(
                 console.print(f'[dim]Then run: rm -rf "{app_root}"[/dim]')
 
     console.print()
-    output.muted(
-        "Database left intact (uninstall never drops Postgres). "
-        "To remove data too, drop the database from .env DATABASE_URL, then delete this checkout."
-    )
     output.success("Uninstall complete. Open a new terminal for the PATH change to take effect.")
 
 

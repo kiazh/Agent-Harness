@@ -308,9 +308,19 @@ start_brew_db() {
   log "Installing PostgreSQL + pgvector via Homebrew (takes a few minutes)"
   brew install postgresql@16 pgvector < /dev/null || return 1
   brew services start postgresql@16 < /dev/null || return 1
-  local pg_bin pg_user i
+  local pg_bin pg_user i extdir
   pg_bin="$(brew --prefix postgresql@16 2>/dev/null)/bin"
   [ -x "$pg_bin/pg_isready" ] || return 1
+  log "Postgres: $("$pg_bin/pg_config" --version 2>/dev/null || echo unknown)"
+  # The bottled pgvector is built against Homebrew's *unversioned* postgres —
+  # whenever that major differs from @16, the extension files land in the
+  # wrong tree and CREATE EXTENSION can never succeed. Detect it up front and
+  # go straight to a source build instead of failing minutes later.
+  extdir="$("$pg_bin/pg_config" --sharedir 2>/dev/null)/extension"
+  if [ ! -f "$extdir/vector.control" ]; then
+    warn "Brew pgvector wasn't built for postgresql@16; building pgvector from source"
+    brew_vector_from_source "$pg_bin" || return 1
+  fi
   for i in $(seq 1 30); do
     if "$pg_bin/pg_isready" -h localhost -p 5432 >/dev/null 2>&1; then break; fi
     [ "$i" = "30" ] && return 1
@@ -327,19 +337,46 @@ start_brew_db() {
     "SELECT 1 FROM pg_database WHERE datname='agentharness'" 2>/dev/null | grep -q 1; then
     "$pg_bin/createdb" -h localhost -U "$pg_user" -O postgres agentharness < /dev/null || return 1
   fi
-  # Fails when the brew pgvector build targets a different postgres major —
-  # caller falls through to manual instructions.
-  "$pg_bin/psql" -h localhost -U postgres -d agentharness \
-    -c "CREATE EXTENSION IF NOT EXISTS vector;" >/dev/null 2>&1 || return 1
+  if ! "$pg_bin/psql" -h localhost -U postgres -d agentharness \
+    -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>&1; then
+    warn "Brew pgvector doesn't fit postgresql@16; building pgvector from source"
+    brew_vector_from_source "$pg_bin" || return 1
+    "$pg_bin/psql" -h localhost -U postgres -d agentharness \
+      -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>&1 || return 1
+  fi
+  return 0
+}
+
+brew_vector_from_source() {
+  # Compile pgvector against postgresql@16's pg_config when the bottle was
+  # built for another PG major. Needs Xcode CLT (present if brew works) + git.
+  local pg_bin="$1" build_dir
+  command -v git >/dev/null 2>&1 || return 1
+  command -v make >/dev/null 2>&1 || return 1
+  build_dir="$(mktemp -d 2>/dev/null || echo /tmp/pgvector-build-$$)"
+  (
+    cd "$build_dir" \
+      && git clone --depth 1 https://github.com/pgvector/pgvector.git < /dev/null \
+      && cd pgvector \
+      && make PG_CONFIG="$pg_bin/pg_config" < /dev/null \
+      && make PG_CONFIG="$pg_bin/pg_config" install < /dev/null
+  ) || return 1
+  rm -rf "$build_dir"
   return 0
 }
 
 wait_for_init() {
-  local i
+  # Retry `ah init` while Postgres wakes up; on final failure print the real
+  # error instead of swallowing it.
+  local i out
   for i in $(seq 1 30); do
-    if try_init >/dev/null 2>&1; then return 0; fi
+    if out="$(try_init 2>&1)"; then
+      printf '%s\n' "$out"
+      return 0
+    fi
     sleep 2
   done
+  printf '%s\n' "$out"
   return 1
 }
 
