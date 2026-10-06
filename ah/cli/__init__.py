@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import shutil
 import uuid
+from pathlib import Path
 
 import typer
 from rich.markup import escape
@@ -90,7 +93,10 @@ def chat(
     session_id: str | None = typer.Option(None, "--session", "-s", help="Resume specific session"),
     model: str = typer.Option(None, "--model", "-m", help="Model to use (e.g., openrouter/free)"),
     provider: str = typer.Option(
-        "openrouter", "--provider", "-p", help="LLM provider (openrouter, ollama)"
+        "openrouter",
+        "--provider",
+        "-p",
+        help="LLM provider (openrouter, openai, anthropic, google, mistral, groq, together, deepseek, xai, ollama)",
     ),
     verbose: bool = typer.Option(True, "--verbose/--quiet", "-v/-q", help="Show tool calls"),
     interactive: bool = typer.Option(False, "--interactive", "-i", help="Open the interactive UI"),
@@ -1364,6 +1370,195 @@ def user_profile_list(
             await db.close()
 
     _run(_user_profile_list())
+
+
+def _uninstall_app_root() -> Path:
+    """Checkout root this ``ah`` binary was installed from."""
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def _filter_path_entries(path_value: str, remove: list[str]) -> str:
+    """Return PATH with every entry in ``remove`` dropped.
+
+    Comparison is case-insensitive with trailing separators stripped, so
+    ``C:\\x\\.venv\\Scripts`` matches ``c:\\x\\.venv\\Scripts\\``.
+    """
+    gone = {r.rstrip("/\\").lower() for r in remove}
+    return ";".join(p for p in path_value.split(";") if p.rstrip("/\\").lower() not in gone)
+
+
+def _shim_points_at(shim_text: str, app_root: str) -> bool:
+    """True when a ``~/.local/bin/ah`` shim execs an ``ah`` inside ``app_root``."""
+    return app_root.rstrip("/\\").lower() in shim_text.lower()
+
+
+def _remove_windows_user_path_entries(remove: list[str]) -> tuple[bool, str]:
+    """Drop entries from the HKCU ``Path`` value. Returns (changed, detail)."""
+    if os.name != "nt":
+        return False, "not Windows, skipping registry edit"
+    try:
+        import winreg
+    except ImportError as e:
+        return False, f"winreg unavailable ({e})"
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE
+        ) as key:
+            try:
+                current, _ = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                return False, "no user Path value found"
+            updated = _filter_path_entries(current, remove)
+            if updated == current:
+                return False, "no matching entries in user Path"
+            winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, updated)
+    except OSError as e:
+        return False, f"registry edit failed ({e})"
+    # Best-effort: tell Explorer/new processes the environment changed.
+    try:
+        import ctypes
+
+        HWND_BROADCAST, WM_SETTINGCHANGE = 0xFFFF, 0x1A
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment", 0x0002, 5000, None
+        )
+    except Exception:  # noqa: BLE001 — broadcast is cosmetic
+        pass
+    return True, "removed from user Path (takes effect in new terminals)"
+
+
+@app.command()
+def uninstall(
+    remove_venv: bool = typer.Option(
+        False, "--remove-venv", help="Delete the .venv directory in the checkout"
+    ),
+    remove_env_file: bool = typer.Option(
+        False, "--remove-env-file", help="Delete the .env file (git-ignored secrets)"
+    ),
+    remove_config: bool = typer.Option(
+        False, "--remove-config", help="Delete ~/.agent-harness (config, logs, scripts)"
+    ),
+    delete_checkout: bool = typer.Option(
+        False, "--delete-checkout", help="Delete the whole checkout directory"
+    ),
+    full: bool = typer.Option(
+        False, "--full", help="All of the above: venv, .env, config and checkout"
+    ),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+):
+    """Uninstall AgentHarness — remove it from PATH and delete its files.
+
+    By default removes the PATH registration (Windows user Path entry for this
+    checkout's ``.venv\\Scripts`` plus the ``~/.local/bin/ah`` shim when it
+    points here) and leaves files in place. Add flags to delete files too:
+
+        ah uninstall --full --force    # everything, no prompt
+    """
+    app_root = _uninstall_app_root()
+    venv_dir = app_root / ".venv"
+    from ah.security.env_file import find_env_file
+
+    try:
+        env_file = find_env_file()
+    except Exception:  # noqa: BLE001 — fall back to the checkout .env
+        env_file = app_root / ".env"
+    shim = Path.home() / ".local" / "bin" / "ah"
+    local_config = Path.home() / ".agent-harness"
+
+    if full:
+        remove_venv = remove_env_file = remove_config = delete_checkout = True
+
+    path_targets = [str(venv_dir / "Scripts"), str(venv_dir / "bin")]
+    plan: list[str] = ["Remove PATH registration (user Path entry + ~/.local/bin/ah shim)"]
+    if remove_venv and venv_dir.is_dir():
+        plan.append(f"Delete {venv_dir}")
+    if remove_env_file and env_file.is_file():
+        plan.append(f"Delete {env_file}")
+    if remove_config and local_config.exists():
+        plan.append(f"Delete {local_config}")
+    if delete_checkout:
+        plan.append(f"Delete checkout {app_root}")
+
+    console.print("[bold]Uninstall plan:[/bold]")
+    for item in plan:
+        console.print(f"  • {item}")
+    if not (force or yes) and not typer.confirm("Proceed with uninstall?"):
+        console.print("[dim]Cancelled.[/dim]")
+        raise typer.Exit(0)
+
+    # 1. PATH: Windows registry + shim file (created by install.sh).
+    changed, detail = _remove_windows_user_path_entries(path_targets)
+    output.status_line("PATH", detail, "success" if changed else "warning")
+    if shim.is_file():
+        try:
+            points_here = _shim_points_at(
+                shim.read_text(encoding="utf-8", errors="replace"), str(app_root)
+            )
+        except OSError:
+            points_here = False
+        if points_here or full:
+            try:
+                shim.unlink()
+                output.status_line("Shim", f"deleted {shim}", "success")
+            except OSError as e:
+                output.error(f"Could not delete shim {shim}: {e}")
+        else:
+            output.muted(f"Shim {shim} points elsewhere, leaving it.")
+    else:
+        output.muted("No ~/.local/bin/ah shim found.")
+
+    # 2. Files.
+    def _rmtree(path: Path, label: str) -> None:
+        try:
+            shutil.rmtree(path, ignore_errors=False)
+            output.status_line(label, f"deleted {path}", "success")
+        except Exception as e:
+            output.error(f"Could not delete {path}: {e}")
+
+    if remove_venv and venv_dir.is_dir():
+        _rmtree(venv_dir, "Venv")
+    if remove_env_file and env_file.is_file():
+        try:
+            env_file.unlink()
+            output.status_line("Env file", f"deleted {env_file}", "success")
+        except OSError as e:
+            output.error(f"Could not delete {env_file}: {e}")
+    if remove_config and local_config.exists():
+        if local_config.is_dir():
+            _rmtree(local_config, "Config")
+        else:
+            try:
+                local_config.unlink()
+                output.status_line("Config", f"deleted {local_config}", "success")
+            except OSError as e:
+                output.error(f"Could not delete {local_config}: {e}")
+
+    # 3. Checkout last — the running `ah` binary lives inside it, so on
+    # Windows the delete can fail with a file lock. Report leftovers + manual cmd.
+    if delete_checkout:
+        if full or remove_venv:
+            console.print(
+                "[dim]Skipping live checkout delete would leave a broken tree; attempting anyway.[/dim]"
+            )
+        try:
+            shutil.rmtree(app_root, ignore_errors=False)
+            output.status_line("Checkout", f"deleted {app_root}", "success")
+        except Exception as e:  # noqa: BLE001 — locked running exe on Windows
+            output.error(f"Could not delete checkout {app_root}: {e}")
+            if os.name == "nt":
+                console.print(
+                    f'[dim]Close this terminal, then run: Remove-Item -Recurse -Force "{app_root}"[/dim]'
+                )
+            else:
+                console.print(f'[dim]Then run: rm -rf "{app_root}"[/dim]')
+
+    console.print()
+    output.muted(
+        "Database left intact (uninstall never drops Postgres). "
+        "To remove data too, drop the database from .env DATABASE_URL, then delete this checkout."
+    )
+    output.success("Uninstall complete. Open a new terminal for the PATH change to take effect.")
 
 
 if __name__ == "__main__":

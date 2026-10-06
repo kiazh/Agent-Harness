@@ -27,9 +27,17 @@ export const settingsCommands: Command[] = [
 	{
 		name: "provider",
 		description: "Show or set the provider",
-		argumentHint: "[openrouter|ollama]",
+		argumentHint: "[openrouter|openai|anthropic|google|mistral|groq|together|deepseek|xai|ollama]",
 		getArgumentCompletions: options([
-			["openrouter", "OpenRouter (cloud models)"],
+			["openrouter", "OpenRouter (multi-model)"],
+			["openai", "OpenAI direct"],
+			["anthropic", "Anthropic direct"],
+			["google", "Google direct (Gemini)"],
+			["mistral", "Mistral direct"],
+			["groq", "Groq direct"],
+			["together", "Together AI direct"],
+			["deepseek", "DeepSeek direct"],
+			["xai", "xAI direct (Grok)"],
 			["ollama", "Ollama (local models)"],
 		]),
 		async run(args, host) {
@@ -37,6 +45,26 @@ export const settingsCommands: Command[] = [
 				const { config } = await host.request<ConfigGetResult>("config.get");
 				host.print(`Provider: ${config.provider}`);
 			} else await setConfig(host, "provider", args.toLowerCase(), false);
+		},
+	},
+	{
+		name: "effort",
+		description: "Show or set reasoning effort (low|medium|high|off)",
+		argumentHint: "[low|medium|high|off]",
+		getArgumentCompletions: options([
+			["low", "Shallow reasoning, fast and cheap"],
+			["medium", "Balanced reasoning depth"],
+			["high", "Deep reasoning for hard problems"],
+			["off", "Provider default (no effort override)"],
+		]),
+		async run(args, host) {
+			const value = args.trim().toLowerCase();
+			if (!value) {
+				const { config } = await host.request<ConfigGetResult>("config.get");
+				host.print(`Reasoning effort: ${config.reasoning_effort || "off (provider default)"}`);
+				return;
+			}
+			await setConfig(host, "reasoning_effort", value, false);
 		},
 	},
 	{

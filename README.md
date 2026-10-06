@@ -88,6 +88,29 @@ ah chat "What is the capital of France?"   # one-shot CLI
 ah serve --host 127.0.0.1 --port 8000      # HTTP API server
 ```
 
+### Make `ah` available everywhere (PATH)
+
+The installer writes a shim to `~/.local/bin/ah`. If `ah` is not found, add it once:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"   # Linux/macOS/Git Bash, current shell
+# persist: append that line to ~/.bashrc or ~/.zshrc, then restart the shell
+```
+
+Windows (PowerShell — run from your checkout; permanent, no `setx` truncation risk):
+
+```powershell
+$dir = "$pwd\.venv\Scripts"  # or the full path to your checkout's .venv\Scripts
+$u = [Environment]::GetEnvironmentVariable('Path','User')
+if (($u -split ';') -notcontains $dir) {
+  [Environment]::SetEnvironmentVariable('Path', ($u.TrimEnd(';') + ';' + $dir), 'User')
+}
+$env:Path = $dir + ';' + $env:Path  # current shell only
+# open a NEW terminal, then verify:
+Get-Command ah
+ah doctor
+```
+
 ### Option B — Docker Compose
 
 ```bash
@@ -125,10 +148,12 @@ Secrets never echo, never enter history, never touch `config.yaml`.
 ### Models
 
 ```
-/models                # picker over curated OpenRouter + Ollama list
+/models                # picker over curated direct-provider + Ollama list
 /models <query>        # filter, e.g. /models llama
-/model <id>            # off-list, e.g. /model anthropic/claude-3.5-sonnet
-/provider <name>       # openrouter | ollama
+/model <id>            # off-list, e.g. /model deepseek-reasoner
+/provider <name>       # openrouter | openai | anthropic | google | mistral | groq | together | deepseek | xai | ollama
+/effort [low|medium|high|off]  # reasoning depth (provider default when off)
+/keys set DEEPSEEK_API_KEY ... # each family uses its own direct key, never routed via OpenRouter
 ```
 
 ### All slash commands
@@ -145,7 +170,7 @@ Secrets never echo, never enter history, never touch `config.yaml`.
 | `agents`, `delegate` | List/show/save agents; delegate a task |
 | `jobs` | `list · add · script · heartbeat · cron · on · off · delete` |
 | `keys` | `list · set · clear` |
-| `models`, `model`, `provider` | Picker; custom model; provider |
+| `models`, `model`, `provider`, `effort` | Picker; custom model; provider; reasoning effort |
 | `config` | Show/set settings (`--save` persists) |
 | `theme` | Switch skin |
 | `profile`, `profiles` | Preferences and topics |
@@ -226,6 +251,8 @@ Non-secrets in `~/.agent-harness/config.yaml` or `AGENT_HARNESS_<KEY>` env. **Se
 | `OPENROUTER_API_KEY` | Default provider key | — |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `TOGETHER_API_KEY`, `DEEPSEEK_API_KEY`, `XAI_API_KEY`, `COHERE_API_KEY` | Per-family keys | — |
 | `AGENT_HARNESS_MODEL` | Model id | `openrouter/free` |
+| `AGENT_HARNESS_PROVIDER` | Provider (`openrouter`, `openai`, `anthropic`, `google`, `mistral`, `groq`, `together`, `deepseek`, `xai`, `ollama`) | `openrouter` |
+| `AGENT_HARNESS_REASONING_EFFORT` | Reasoning depth (`low`, `medium`, `high`, blank = provider default) | blank |
 | `AGENT_HARNESS_API_KEY` | HTTP API key (fail-closed 503 if unset) | — |
 | `AGENT_HARNESS_PROVENANCE_KEY` | HMAC key for memory sharing | — |
 | `AGENT_HARNESS_PERSONA_MEMORY_ENABLED` | Persona rerank | `true` |
@@ -388,7 +415,7 @@ agent-harness/
 | CLI | Typer + Rich | Typed UX |
 | TUI | TypeScript + pi-tui | Flicker-free |
 | UI↔agent | JSON-RPC 2.0 stdio | Hermes/opencode split |
-| Cloud LLM | OpenRouter | Multi-model compat |
+| Cloud LLM | OpenRouter + direct per-family APIs | Multi-model compat; DeepSeek/xAI/etc. hit their own endpoints |
 | Local LLM | Ollama | Self-hosted |
 | Search | SearXNG → DDG → Jina | Self-host first |
 

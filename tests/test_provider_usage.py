@@ -14,6 +14,7 @@ def _make_openrouter_provider():
     provider = OpenRouterProvider.__new__(OpenRouterProvider)
     provider.api_key = "test-key"
     provider.model = "test-model"
+    provider._default_effort = ""
     provider._rate_limiter = AsyncMock()
     provider.client = MagicMock()
 
@@ -35,6 +36,7 @@ def _make_ollama_provider():
     provider = OllamaProvider.__new__(OllamaProvider)
     provider.model = "test-model"
     provider.base_url = "http://localhost:11434"
+    provider._default_effort = ""
     provider._rate_limiter = AsyncMock()
     provider.client = MagicMock()
 
@@ -144,6 +146,7 @@ async def test_openrouter_complete_calls_finish_with_failed_on_error(monkeypatch
     provider = OpenRouterProvider.__new__(OpenRouterProvider)
     provider.api_key = "test-key"
     provider.model = "test-model"
+    provider._default_effort = ""
     provider._rate_limiter = AsyncMock()
     provider.client = MagicMock()
     provider.client.post = AsyncMock(side_effect=RuntimeError("API down"))
@@ -177,6 +180,7 @@ async def test_openrouter_stream_complete_calls_usage_store_when_session_id_prov
     provider = OpenRouterProvider.__new__(OpenRouterProvider)
     provider.api_key = "test-key"
     provider.model = "test-model"
+    provider._default_effort = ""
     provider._rate_limiter = AsyncMock()
     provider.client = MagicMock()
 
@@ -231,6 +235,7 @@ async def test_openrouter_stream_complete_skips_usage_store_when_no_session_id(m
     provider = OpenRouterProvider.__new__(OpenRouterProvider)
     provider.api_key = "test-key"
     provider.model = "test-model"
+    provider._default_effort = ""
     provider._rate_limiter = AsyncMock()
     provider.client = MagicMock()
 

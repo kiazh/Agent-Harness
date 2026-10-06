@@ -29,9 +29,63 @@ __all__ = [
     "AsyncTokenBucket",
     "LLMProvider",
     "get_provider",
+    "PROVIDERS",
+    "PROVIDER_SPECS",
+    "ProviderSpec",
+    "REASONING_EFFORTS",
+    "normalize_reasoning_effort",
 ]
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Reasoning effort — per-provider reasoning depth (low|medium|high).
+#
+# Each provider family exposes this differently, so the mapping lives here
+# next to the transport code:
+#   openai/deepseek/xai/groq/together .. top-level ``reasoning_effort``
+#   openrouter ........................ ``reasoning: {"effort": ...}``
+#   anthropic ......................... ``thinking`` budget in tokens
+#   ollama ............................ boolean ``think`` flag
+#   mistral/google .................... no API knob (model choice expresses it)
+# The value is only ever sent when explicitly set (per-call argument or the
+# ``reasoning_effort`` config key); unset means "provider default", so existing
+# behavior is unchanged.
+# ---------------------------------------------------------------------------
+REASONING_EFFORTS = ("low", "medium", "high")
+
+# Anthropic thinking budgets per effort level (tokens reserved for thinking).
+ANTHROPIC_THINKING_BUDGETS = {"low": 1024, "medium": 4096, "high": 10000}
+
+
+def normalize_reasoning_effort(value: str | None) -> str:
+    """Normalize a reasoning-effort value; ``""``/None means unset (provider default)."""
+    if value is None:
+        return ""
+    normalized = str(value).strip().lower()
+    if normalized in ("", "none", "off", "default", "auto"):
+        return ""
+    if normalized not in REASONING_EFFORTS:
+        raise ValidationError(
+            f"reasoning_effort must be one of {REASONING_EFFORTS} (or unset), got {value!r}"
+        )
+    return normalized
+
+
+def _resolve_effort(explicit: str | None, instance_default: str | None = None) -> str:
+    """Effort precedence: per-call argument > provider instance > config key."""
+    if explicit is not None:
+        return normalize_reasoning_effort(explicit)
+    if instance_default:
+        return normalize_reasoning_effort(instance_default)
+    try:
+        return normalize_reasoning_effort(config.get("reasoning_effort"))
+    except ValidationError:
+        # A bad value in config.yaml should surface loudly at call time, not
+        # be silently swallowed — re-raise.
+        raise
+    except Exception:
+        return ""
 
 # ---------------------------------------------------------------------------
 # Retry with backoff for rate-limited (429) responses
@@ -61,6 +115,100 @@ _FREE_FALLBACK_MODELS = (
 def _is_free_model(model: str) -> bool:
     m = (model or "").lower()
     return m == "openrouter/free" or m.endswith(":free") or m.endswith("/free")
+
+
+# ---------------------------------------------------------------------------
+# Direct provider specs — one entry per model family with its own API.
+# All of these expose an OpenAI-compatible ``/chat/completions`` endpoint
+# (verified against vendor docs), so a single transport class serves them.
+# ``reasoning`` controls how ``reasoning_effort`` is sent:
+#   "openai" .. top-level ``reasoning_effort`` param (openai, deepseek, xai,
+#               groq, together all document it)
+#   "none" .... no knob; model choice expresses effort (mistral, google)
+# ---------------------------------------------------------------------------
+class ProviderSpec:
+    """Static config for one direct (OpenAI-compatible) provider family."""
+
+    def __init__(
+        self,
+        name: str,
+        base_url: str,
+        api_key_env: str,
+        default_model: str,
+        reasoning: str = "none",
+        description: str = "",
+    ) -> None:
+        self.name = name
+        self.base_url = base_url
+        self.api_key_env = api_key_env
+        self.config_key = api_key_env.lower()
+        self.default_model = default_model
+        self.reasoning = reasoning
+        self.description = description
+
+
+PROVIDER_SPECS: dict[str, ProviderSpec] = {
+    "openai": ProviderSpec(
+        name="openai",
+        base_url="https://api.openai.com/v1",
+        api_key_env="OPENAI_API_KEY",
+        default_model="gpt-4o-mini",
+        reasoning="openai",
+        description="OpenAI (GPT models)",
+    ),
+    "deepseek": ProviderSpec(
+        name="deepseek",
+        base_url="https://api.deepseek.com",
+        api_key_env="DEEPSEEK_API_KEY",
+        default_model="deepseek-chat",
+        reasoning="openai",
+        description="DeepSeek (chat + reasoner)",
+    ),
+    "xai": ProviderSpec(
+        name="xai",
+        base_url="https://api.x.ai/v1",
+        api_key_env="XAI_API_KEY",
+        default_model="grok-4",
+        reasoning="openai",
+        description="xAI (Grok models)",
+    ),
+    "groq": ProviderSpec(
+        name="groq",
+        base_url="https://api.groq.com/openai/v1",
+        api_key_env="GROQ_API_KEY",
+        default_model="llama-3.3-70b-versatile",
+        reasoning="openai",
+        description="Groq (fast inference)",
+    ),
+    "together": ProviderSpec(
+        name="together",
+        base_url="https://api.together.xyz/v1",
+        api_key_env="TOGETHER_API_KEY",
+        default_model="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        reasoning="openai",
+        description="Together AI (open models)",
+    ),
+    "mistral": ProviderSpec(
+        name="mistral",
+        base_url="https://api.mistral.ai/v1",
+        api_key_env="MISTRAL_API_KEY",
+        default_model="mistral-small-latest",
+        reasoning="none",
+        description="Mistral models",
+    ),
+    "google": ProviderSpec(
+        name="google",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        api_key_env="GOOGLE_API_KEY",
+        default_model="gemini-2.0-flash",
+        reasoning="none",
+        description="Google (Gemini models, OpenAI-compat endpoint)",
+    ),
+}
+
+# Every chat provider the harness can route to: OpenRouter (multi-model),
+# the direct families above, Anthropic (native API), and local Ollama.
+PROVIDERS = ("openrouter", *tuple(PROVIDER_SPECS), "anthropic", "ollama")
 
 
 def _quota_exhausted(resp: httpx.Response) -> bool:
@@ -443,11 +591,17 @@ class OpenRouterProvider(LLMProvider):
 
     BASE_URL = "https://openrouter.ai/api/v1"
 
-    def __init__(self, api_key: str | None = None, model: str = "openrouter/free") -> None:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str = "openrouter/free",
+        reasoning_effort: str | None = None,
+    ) -> None:
         self.api_key = api_key or config.get("openrouter_api_key") or ""
         if not self.api_key:
             raise ValidationError("OPENROUTER_API_KEY not set")
         self.model = model
+        self._default_effort = normalize_reasoning_effort(reasoning_effort)
         self._rate_limiter = _get_rate_limiter("openrouter")
         self.client = httpx.AsyncClient(
             base_url=self.BASE_URL,
@@ -466,6 +620,7 @@ class OpenRouterProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         tools: list[ToolDefinition] | None = None,
+        reasoning_effort: str | None = None,
         session_id: uuid.UUID | None = None,
         agent_id: str | None = None,
     ) -> LLMResponse:
@@ -485,6 +640,9 @@ class OpenRouterProvider(LLMProvider):
         }
         if tools:
             payload["tools"] = _tools_payload(tools)
+        effort = _resolve_effort(reasoning_effort, self._default_effort)
+        if effort:
+            payload["reasoning"] = {"effort": effort}
 
         # Check cache before making any HTTP request
         ckey = _cache_key(messages, tools, model)
@@ -661,6 +819,7 @@ class OpenRouterProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         tools: list[ToolDefinition] | None = None,
+        reasoning_effort: str | None = None,
         session_id: uuid.UUID | None = None,
         agent_id: str | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
@@ -695,6 +854,9 @@ class OpenRouterProvider(LLMProvider):
             payload["stream_options"] = {"include_usage": True}
         if tools:
             payload["tools"] = _tools_payload(tools)
+        effort = _resolve_effort(reasoning_effort, self._default_effort)
+        if effort:
+            payload["reasoning"] = {"effort": effort}
 
         audit_log(
             "llm_stream_start", provider="openrouter", model=model, message_count=len(messages)
@@ -916,11 +1078,24 @@ class OpenRouterProvider(LLMProvider):
 class OllamaProvider(LLMProvider):
     """Local Ollama provider — free, self-hosted."""
 
-    def __init__(self, model: str = "llama3.1", base_url: str = "http://localhost:11434") -> None:
+    def __init__(
+        self,
+        model: str = "llama3.1",
+        base_url: str = "http://localhost:11434",
+        reasoning_effort: str | None = None,
+    ) -> None:
         self.model = model
         self.base_url = base_url
+        self._default_effort = normalize_reasoning_effort(reasoning_effort)
         self._rate_limiter = _get_rate_limiter("ollama")
         self.client = httpx.AsyncClient(base_url=base_url, timeout=120.0)
+
+    @staticmethod
+    def _think_flag(effort: str) -> bool | None:
+        """Map effort to Ollama's boolean ``think`` flag (None = omit, model default)."""
+        if not effort:
+            return None
+        return effort != "low"
 
     async def complete(
         self,
@@ -929,6 +1104,7 @@ class OllamaProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         tools: list[ToolDefinition] | None = None,
+        reasoning_effort: str | None = None,
         session_id: uuid.UUID | None = None,
         agent_id: str | None = None,
     ) -> LLMResponse:
@@ -950,6 +1126,10 @@ class OllamaProvider(LLMProvider):
         }
         if tools:
             payload["tools"] = _tools_payload(tools)
+
+        think = self._think_flag(_resolve_effort(reasoning_effort, self._default_effort))
+        if think is not None:
+            payload["think"] = think
 
         # Check cache before making any HTTP request
         ckey = _cache_key(messages, tools, model or self.model)
@@ -1070,6 +1250,7 @@ class OllamaProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         tools: list[ToolDefinition] | None = None,
+        reasoning_effort: str | None = None,
         session_id: uuid.UUID | None = None,
         agent_id: str | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
@@ -1092,6 +1273,9 @@ class OllamaProvider(LLMProvider):
         }
         if tools:
             payload["tools"] = _tools_payload(tools)
+        think = self._think_flag(_resolve_effort(reasoning_effort, self._default_effort))
+        if think is not None:
+            payload["think"] = think
 
         audit_log(
             "llm_stream_start",
@@ -1201,14 +1385,667 @@ class OllamaProvider(LLMProvider):
         await self.client.aclose()
 
 
+# ---------------------------------------------------------------------------
+# Direct provider — one transport for every OpenAI-compatible family
+# (OpenAI, DeepSeek, xAI, Groq, Together, Mistral, Google). Driven by a
+# ProviderSpec so base URL, key, default model and effort mapping stay
+# accurate in one table instead of seven copy-pasted classes.
+# ---------------------------------------------------------------------------
+class DirectProvider(LLMProvider):
+    """OpenAI-compatible chat API for a single vendor (see PROVIDER_SPECS)."""
+
+    def __init__(
+        self,
+        spec: ProviderSpec,
+        api_key: str | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> None:
+        self.spec = spec
+        self.api_key = api_key or config.get(spec.config_key) or ""
+        if not self.api_key:
+            raise ValidationError(f"{spec.api_key_env} not set")
+        self.model = model or spec.default_model
+        self._default_effort = normalize_reasoning_effort(reasoning_effort)
+        self._rate_limiter = _get_rate_limiter(spec.name)
+        self.client = httpx.AsyncClient(
+            base_url=spec.base_url,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=120.0,
+        )
+
+    def _effort_payload(self, reasoning_effort: str | None) -> dict[str, Any]:
+        """Extra body params for the requested effort ({} when unset/unsupported)."""
+        effort = _resolve_effort(reasoning_effort, self._default_effort)
+        if effort and self.spec.reasoning == "openai":
+            return {"reasoning_effort": effort}
+        return {}
+
+    def _cache_key_for(self, messages, tools, model: str) -> str:
+        # Namespace by provider so identical model ids on two vendors can't collide.
+        return _cache_key(messages, tools, f"{self.spec.name}:{model}")
+
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[ToolDefinition] | None = None,
+        reasoning_effort: str | None = None,
+        session_id: uuid.UUID | None = None,
+        agent_id: str | None = None,
+    ) -> LLMResponse:
+        _validate_messages(messages)
+        _validate_params(temperature, max_tokens)
+        await self._rate_limiter.acquire()
+
+        model = model or self.model
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            **self._effort_payload(reasoning_effort),
+        }
+        if tools:
+            payload["tools"] = _tools_payload(tools)
+
+        ckey = self._cache_key_for(messages, tools, model)
+        cached = _cache_get(ckey)
+        if cached is not None:
+            logger.debug("cache hit for %s model=%s", self.spec.name, model)
+            return cached
+
+        audit_log(
+            "llm_call_start", provider=self.spec.name, model=model, message_count=len(messages)
+        )
+
+        reservation_id = None
+        if session_id is not None and agent_id is not None:
+            reservation_id = await usage_store.reserve(
+                session_id, agent_id, self.spec.name, model, messages, tools or [], max_tokens
+            )
+
+        start = time.monotonic()
+        try:
+            resp = await _post_with_retry(self.client, "/chat/completions", payload)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            duration_ms = (time.monotonic() - start) * 1000
+            metrics.record_llm_call(
+                session_id="", model=model, duration_ms=duration_ms, is_error=True
+            )
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
+            audit_log("llm_call_error", provider=self.spec.name, model=model, error=str(e))
+            raise
+
+        duration_ms = (time.monotonic() - start) * 1000
+        choices = data.get("choices")
+        if not choices or not isinstance(choices, list):
+            error = data.get("error") or {}
+            detail = error.get("message") if isinstance(error, dict) else str(error)
+            message = (
+                f"provider returned no choices for {model}: {detail or data or 'empty response'}"
+            )
+            metrics.record_llm_call(
+                session_id="", model=model, duration_ms=duration_ms, is_error=True
+            )
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
+            audit_log("llm_call_error", provider=self.spec.name, model=model, error="no_choices")
+            raise ProviderError(message)
+
+        choice = choices[0]
+        message = choice.get("message") or {}
+        content = message.get("content", "")
+        tool_calls = message.get("tool_calls", []) or []
+        usage = data.get("usage", {})
+
+        metrics.record_llm_call(
+            session_id="",
+            model=data.get("model", model),
+            duration_ms=duration_ms,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+        )
+        if reservation_id is not None:
+            await usage_store.finish(reservation_id, usage, model=data.get("model", model))
+        audit_log(
+            "llm_call_complete",
+            provider=self.spec.name,
+            model=data.get("model", model),
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0),
+            tool_calls=len(tool_calls),
+        )
+        response = LLMResponse(
+            content=content,
+            model=data.get("model", model),
+            usage={
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+            },
+            raw=data,
+            tool_calls=tool_calls,
+        )
+        _cache_put(ckey, response)
+        return response
+
+    async def stream_complete(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[ToolDefinition] | None = None,
+        reasoning_effort: str | None = None,
+        session_id: uuid.UUID | None = None,
+        agent_id: str | None = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Stream completion via SSE — yields text deltas as they arrive."""
+        _validate_messages(messages)
+        _validate_params(temperature, max_tokens)
+        await self._rate_limiter.acquire()
+
+        model = model or self.model
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+            **self._effort_payload(reasoning_effort),
+        }
+        # NOTE: no stream_options here — unlike OpenAI proper, several vendors
+        # 400 on it. Streamed turns report estimated usage via the reservation,
+        # like Ollama streams.
+        if tools:
+            payload["tools"] = _tools_payload(tools)
+
+        audit_log(
+            "llm_stream_start", provider=self.spec.name, model=model, message_count=len(messages)
+        )
+
+        reservation_id = None
+        if session_id is not None and agent_id is not None:
+            reservation_id = await usage_store.reserve(
+                session_id, agent_id, self.spec.name, model, messages, tools or [], max_tokens
+            )
+
+        content_parts: list[str] = []
+        tool_calls_by_index: dict[int, dict[str, str]] = {}
+        resolved_model = model
+        try:
+            async with self.client.stream("POST", "/chat/completions", json=payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    resolved_model = chunk.get("model") or resolved_model
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    content = delta.get("content", "")
+                    if content:
+                        content_parts.append(content)
+                        yield StreamEvent(type="text", content=content)
+                    for tc_delta in delta.get("tool_calls", []):
+                        idx = tc_delta.get("index", 0)
+                        if idx not in tool_calls_by_index:
+                            tool_calls_by_index[idx] = {"id": "", "name": "", "arguments": ""}
+                        tc = tool_calls_by_index[idx]
+                        if tc_delta.get("id"):
+                            tc["id"] = tc_delta["id"]
+                        func = tc_delta.get("function", {})
+                        if func.get("name"):
+                            tc["name"] = func["name"]
+                        if func.get("arguments"):
+                            frag = func["arguments"]
+                            if isinstance(frag, dict):
+                                frag = json.dumps(frag)
+                            tc["arguments"] += frag
+        except Exception as e:
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
+            audit_log("llm_stream_error", provider=self.spec.name, model=model, error=str(e))
+            raise
+
+        tool_calls: list[dict] = []
+        for idx in sorted(tool_calls_by_index.keys()):
+            tc = tool_calls_by_index[idx]
+            tool_calls.append(
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                }
+            )
+        full_content = "".join(content_parts)
+        if reservation_id is not None:
+            await usage_store.finish(reservation_id, {}, model=resolved_model)
+        audit_log(
+            "llm_stream_complete", provider=self.spec.name, model=model, tool_calls=len(tool_calls)
+        )
+        yield StreamEvent(
+            type="done",
+            response=LLMResponse(
+                content=full_content, model=resolved_model, usage={}, tool_calls=tool_calls
+            ),
+        )
+
+    async def close(self) -> None:
+        await self.client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Anthropic provider — native Messages API (Anthropic has no OpenAI-compatible
+# endpoint). Requests/responses are normalized to the harness's OpenAI-style
+# shapes so the agent loop works unchanged.
+# ---------------------------------------------------------------------------
+class AnthropicProvider(LLMProvider):
+    """Anthropic Messages API — https://api.anthropic.com/v1/messages."""
+
+    BASE_URL = "https://api.anthropic.com"
+    API_VERSION = "2023-06-01"
+    DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> None:
+        self.api_key = api_key or config.get("anthropic_api_key") or ""
+        if not self.api_key:
+            raise ValidationError("ANTHROPIC_API_KEY not set")
+        self.model = model or self.DEFAULT_MODEL
+        self._default_effort = normalize_reasoning_effort(reasoning_effort)
+        self._rate_limiter = _get_rate_limiter("anthropic")
+        self.client = httpx.AsyncClient(
+            base_url=self.BASE_URL,
+            headers={
+                "x-api-key": self.api_key,
+                "anthropic-version": self.API_VERSION,
+                "Content-Type": "application/json",
+            },
+            timeout=120.0,
+        )
+
+    @staticmethod
+    def _to_anthropic_messages(
+        messages: list[dict[str, Any]],
+    ) -> tuple[str | None, list[dict[str, Any]]]:
+        """Split OpenAI-style history into (system, anthropic messages).
+
+        Handles the harness's shapes: plain role/content dicts, assistant
+        messages carrying OpenAI ``tool_calls``, and ``role: tool`` results.
+        """
+        system_parts: list[str] = []
+        out: list[dict[str, Any]] = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            if role == "system":
+                system_parts.append(str(msg.get("content", "")))
+                continue
+            if role == "tool":
+                out.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": msg.get("tool_call_id", ""),
+                                "content": str(msg.get("content", "")),
+                            }
+                        ],
+                    }
+                )
+                continue
+            tool_calls = msg.get("tool_calls")
+            if role == "assistant" and tool_calls:
+                blocks: list[dict[str, Any]] = []
+                if msg.get("content"):
+                    blocks.append({"type": "text", "text": str(msg.get("content"))})
+                for tc in tool_calls:
+                    fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+                    args = fn.get("arguments", "{}")
+                    try:
+                        parsed = json.loads(args) if isinstance(args, str) else args
+                    except (json.JSONDecodeError, TypeError):
+                        parsed = {}
+                    blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc.get("id", "") if isinstance(tc, dict) else "",
+                            "name": fn.get("name", ""),
+                            "input": parsed if isinstance(parsed, dict) else {},
+                        }
+                    )
+                out.append({"role": "assistant", "content": blocks})
+                continue
+            out.append({"role": role, "content": str(msg.get("content", ""))})
+        return ("\n\n".join(system_parts) if system_parts else None, out)
+
+    @staticmethod
+    def _from_response_blocks(content: list[dict[str, Any]]) -> tuple[str, list[dict]]:
+        """Normalize Anthropic content blocks to (text, OpenAI-style tool_calls)."""
+        texts: list[str] = []
+        tool_calls: list[dict] = []
+        for block in content or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and block.get("text"):
+                texts.append(block["text"])
+            elif block.get("type") == "tool_use":
+                tool_calls.append(
+                    {
+                        "id": block.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": block.get("name", ""),
+                            "arguments": json.dumps(block.get("input", {})),
+                        },
+                    }
+                )
+        return "".join(texts), tool_calls
+
+    def _thinking_payload(
+        self, reasoning_effort: str | None, max_tokens: int, temperature: float
+    ) -> tuple[dict[str, Any], int, float]:
+        """Return (extra body, effective max_tokens, effective temperature)."""
+        effort = _resolve_effort(reasoning_effort, self._default_effort)
+        if not effort:
+            return {}, max_tokens, temperature
+        budget = ANTHROPIC_THINKING_BUDGETS[effort]
+        # Thinking requires max_tokens above the budget and temperature 1.
+        return (
+            {"thinking": {"type": "enabled", "budget_tokens": budget}},
+            max(max_tokens, budget + 1024),
+            1.0,
+        )
+
+    def _payload(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        tools: list[ToolDefinition] | None,
+        reasoning_effort: str | None,
+        stream: bool,
+    ) -> dict[str, Any]:
+        system, anthropic_messages = self._to_anthropic_messages(messages)
+        thinking, max_tokens, temperature = self._thinking_payload(
+            reasoning_effort, max_tokens, temperature
+        )
+        payload: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": anthropic_messages,
+            **thinking,
+        }
+        if system:
+            payload["system"] = system
+        if temperature != 1.0:
+            payload["temperature"] = temperature
+        if tools:
+            payload["tools"] = [
+                {"name": t.name, "description": t.description, "input_schema": t.parameters}
+                for t in tools
+            ]
+        if stream:
+            payload["stream"] = True
+        return payload
+
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[ToolDefinition] | None = None,
+        reasoning_effort: str | None = None,
+        session_id: uuid.UUID | None = None,
+        agent_id: str | None = None,
+    ) -> LLMResponse:
+        _validate_messages(messages)
+        _validate_params(temperature, max_tokens)
+        await self._rate_limiter.acquire()
+
+        model = model or self.model
+        payload = self._payload(
+            messages, model, temperature, max_tokens, tools, reasoning_effort, False
+        )
+
+        ckey = _cache_key(messages, tools, f"anthropic:{model}")
+        cached = _cache_get(ckey)
+        if cached is not None:
+            logger.debug("cache hit for anthropic model=%s", model)
+            return cached
+
+        audit_log("llm_call_start", provider="anthropic", model=model, message_count=len(messages))
+
+        reservation_id = None
+        if session_id is not None and agent_id is not None:
+            reservation_id = await usage_store.reserve(
+                session_id, agent_id, "anthropic", model, messages, tools or [], max_tokens
+            )
+
+        start = time.monotonic()
+        try:
+            resp = await _post_with_retry(self.client, "/v1/messages", payload)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            duration_ms = (time.monotonic() - start) * 1000
+            metrics.record_llm_call(
+                session_id="", model=model, duration_ms=duration_ms, is_error=True
+            )
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
+            audit_log("llm_call_error", provider="anthropic", model=model, error=str(e))
+            raise
+
+        duration_ms = (time.monotonic() - start) * 1000
+        if data.get("type") == "error" or "content" not in data:
+            error = data.get("error") or {}
+            detail = error.get("message") if isinstance(error, dict) else str(error)
+            metrics.record_llm_call(
+                session_id="", model=model, duration_ms=duration_ms, is_error=True
+            )
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
+            audit_log("llm_call_error", provider="anthropic", model=model, error="no_content")
+            raise ProviderError(f"Anthropic returned no content for {model}: {detail or data}")
+
+        content, tool_calls = self._from_response_blocks(data.get("content", []))
+        usage_in = data.get("usage", {})
+        usage = {
+            "prompt_tokens": usage_in.get("input_tokens", 0),
+            "completion_tokens": usage_in.get("output_tokens", 0),
+            "total_tokens": usage_in.get("input_tokens", 0) + usage_in.get("output_tokens", 0),
+        }
+        metrics.record_llm_call(
+            session_id="",
+            model=data.get("model", model),
+            duration_ms=duration_ms,
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+        )
+        if reservation_id is not None:
+            await usage_store.finish(reservation_id, usage, model=data.get("model", model))
+        audit_log(
+            "llm_call_complete",
+            provider="anthropic",
+            model=data.get("model", model),
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            total_tokens=usage["total_tokens"],
+            tool_calls=len(tool_calls),
+        )
+        response = LLMResponse(
+            content=content,
+            model=data.get("model", model),
+            usage=usage,
+            raw=data,
+            tool_calls=tool_calls,
+        )
+        _cache_put(ckey, response)
+        return response
+
+    async def stream_complete(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[ToolDefinition] | None = None,
+        reasoning_effort: str | None = None,
+        session_id: uuid.UUID | None = None,
+        agent_id: str | None = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Stream via Anthropic SSE — yields text deltas as they arrive."""
+        _validate_messages(messages)
+        _validate_params(temperature, max_tokens)
+        await self._rate_limiter.acquire()
+
+        model = model or self.model
+        payload = self._payload(
+            messages, model, temperature, max_tokens, tools, reasoning_effort, True
+        )
+
+        audit_log(
+            "llm_stream_start", provider="anthropic", model=model, message_count=len(messages)
+        )
+
+        reservation_id = None
+        if session_id is not None and agent_id is not None:
+            reservation_id = await usage_store.reserve(
+                session_id, agent_id, "anthropic", model, messages, tools or [], max_tokens
+            )
+
+        text_parts: list[str] = []
+        blocks: dict[int, dict[str, Any]] = {}
+        input_tokens = 0
+        output_tokens = 0
+        resolved_model = model
+        try:
+            async with self.client.stream("POST", "/v1/messages", json=payload) as resp:
+                resp.raise_for_status()
+                event_type = ""
+                async for line in resp.aiter_lines():
+                    if line.startswith("event: "):
+                        event_type = line[7:].strip()
+                        continue
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        data = json.loads(line[6:])
+                    except json.JSONDecodeError:
+                        continue
+                    if event_type == "message_start":
+                        msg = data.get("message", {})
+                        resolved_model = msg.get("model") or resolved_model
+                        input_tokens = msg.get("usage", {}).get("input_tokens", input_tokens)
+                    elif event_type == "content_block_start":
+                        idx = data.get("index", 0)
+                        block = data.get("content_block", {})
+                        if block.get("type") == "tool_use":
+                            blocks[idx] = {
+                                "id": block.get("id", ""),
+                                "name": block.get("name", ""),
+                                "arguments": "",
+                            }
+                    elif event_type == "content_block_delta":
+                        idx = data.get("index", 0)
+                        delta = data.get("delta", {})
+                        if delta.get("type") == "text_delta" and delta.get("text"):
+                            text_parts.append(delta["text"])
+                            yield StreamEvent(type="text", content=delta["text"])
+                        elif delta.get("type") == "input_json_delta" and delta.get("partial_json"):
+                            blocks.setdefault(idx, {"id": "", "name": "", "arguments": ""})[
+                                "arguments"
+                            ] += delta["partial_json"]
+                    elif event_type == "message_delta":
+                        output_tokens = data.get("usage", {}).get("output_tokens", output_tokens)
+        except Exception as e:
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
+            audit_log("llm_stream_error", provider="anthropic", model=model, error=str(e))
+            raise
+
+        tool_calls = [
+            {
+                "id": b["id"],
+                "type": "function",
+                "function": {"name": b["name"], "arguments": b["arguments"]},
+            }
+            for _, b in sorted(blocks.items())
+            if b.get("name") or b.get("arguments")
+        ]
+        usage = {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }
+        if reservation_id is not None:
+            await usage_store.finish(reservation_id, usage, model=resolved_model)
+        audit_log(
+            "llm_stream_complete", provider="anthropic", model=model, tool_calls=len(tool_calls)
+        )
+        yield StreamEvent(
+            type="done",
+            response=LLMResponse(
+                content="".join(text_parts),
+                model=resolved_model,
+                usage=usage,
+                tool_calls=tool_calls,
+            ),
+        )
+
+    async def close(self) -> None:
+        await self.client.aclose()
+
+
 def get_provider(
     provider: str = "openrouter",
     model: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> LLMProvider:
-    """Factory: return configured provider."""
+    """Factory: return the configured provider.
+
+    ``reasoning_effort`` (low|medium|high) optionally pins the reasoning depth;
+    otherwise each provider falls back to the ``reasoning_effort`` config key.
+    """
     if provider == "openrouter":
-        return OpenRouterProvider(model=model or "openrouter/free")
+        return OpenRouterProvider(
+            model=model or "openrouter/free", reasoning_effort=reasoning_effort
+        )
+    elif provider == "anthropic":
+        return AnthropicProvider(
+            model=model or AnthropicProvider.DEFAULT_MODEL, reasoning_effort=reasoning_effort
+        )
     elif provider == "ollama":
-        return OllamaProvider(model=model or "llama3.1")
-    else:
-        raise ValidationError(f"Unknown provider: {provider}")
+        return OllamaProvider(model=model or "llama3.1", reasoning_effort=reasoning_effort)
+    spec = PROVIDER_SPECS.get(provider)
+    if spec is not None:
+        return DirectProvider(
+            spec, model=model or spec.default_model, reasoning_effort=reasoning_effort
+        )
+    raise ValidationError(f"Unknown provider: {provider}. Choose one of: {', '.join(PROVIDERS)}")

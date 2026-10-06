@@ -20,7 +20,21 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONFIG_PATH = Path.home() / ".agent-harness" / "config.yaml"
 
 # Secrets live in the environment (.env), never in config.yaml.
-SECRET_KEYS = frozenset({"openrouter_api_key", "openai_api_key", "cohere_api_key", "database_url"})
+SECRET_KEYS = frozenset(
+    {
+        "openrouter_api_key",
+        "openai_api_key",
+        "anthropic_api_key",
+        "google_api_key",
+        "mistral_api_key",
+        "groq_api_key",
+        "together_api_key",
+        "deepseek_api_key",
+        "xai_api_key",
+        "cohere_api_key",
+        "database_url",
+    }
+)
 
 # Load the nearest .env before the config singleton below is built. With no
 # path, python-dotenv searches upward from this file's directory, so the
@@ -48,6 +62,11 @@ DEFAULTS: dict[str, Any] = {
     "agent_id": "harness",
     "temperature": 0.7,
     "max_tokens": 4096,
+    # Reasoning depth for providers that support it: "" (provider default),
+    # "low", "medium" or "high". Sent as reasoning_effort (OpenAI, DeepSeek,
+    # xAI, Groq, Together), reasoning.effort (OpenRouter), a thinking budget
+    # (Anthropic) or the think flag (Ollama); ignored where unsupported.
+    "reasoning_effort": "",
     "rate_limit_calls_per_minute": 10,
     # Zero disables a budget. Limits include requests that fail after reaching
     # the provider; unknown token usage retains its pre-call reservation.
@@ -67,6 +86,13 @@ DEFAULTS: dict[str, Any] = {
     # API keys and service URLs
     "openrouter_api_key": "",
     "openai_api_key": "",
+    "anthropic_api_key": "",
+    "google_api_key": "",
+    "mistral_api_key": "",
+    "groq_api_key": "",
+    "together_api_key": "",
+    "deepseek_api_key": "",
+    "xai_api_key": "",
     "cohere_api_key": "",
     "database_url": "",
     "searxng_url": "http://localhost:8080",
@@ -85,6 +111,13 @@ DEFAULTS: dict[str, Any] = {
 LEGACY_ENV_VARS: dict[str, str] = {
     "openrouter_api_key": "OPENROUTER_API_KEY",
     "openai_api_key": "OPENAI_API_KEY",
+    "anthropic_api_key": "ANTHROPIC_API_KEY",
+    "google_api_key": "GOOGLE_API_KEY",
+    "mistral_api_key": "MISTRAL_API_KEY",
+    "groq_api_key": "GROQ_API_KEY",
+    "together_api_key": "TOGETHER_API_KEY",
+    "deepseek_api_key": "DEEPSEEK_API_KEY",
+    "xai_api_key": "XAI_API_KEY",
     "cohere_api_key": "COHERE_API_KEY",
     "database_url": "DATABASE_URL",
     "searxng_url": "SEARXNG_URL",
@@ -114,6 +147,7 @@ class Config:
     agent_id: str = "harness"
     temperature: float = 0.7
     max_tokens: int = 4096
+    reasoning_effort: str = ""
     rate_limit_calls_per_minute: int = 10
     usage_session_token_limit: int = 0
     usage_session_request_limit: int = 0
@@ -131,6 +165,13 @@ class Config:
     # API keys and service URLs
     openrouter_api_key: str = ""
     openai_api_key: str = ""
+    anthropic_api_key: str = ""
+    google_api_key: str = ""
+    mistral_api_key: str = ""
+    groq_api_key: str = ""
+    together_api_key: str = ""
+    deepseek_api_key: str = ""
+    xai_api_key: str = ""
     cohere_api_key: str = ""
     database_url: str = ""
     searxng_url: str = "http://localhost:8080"

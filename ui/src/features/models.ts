@@ -9,18 +9,20 @@ import type { Command, FeatureHost } from "./types.ts";
 
 interface ModelEntry {
 	model: string;
-	provider: "openrouter" | "ollama";
+	provider: "openrouter" | "openai" | "anthropic" | "google" | "mistral" | "groq" | "together" | "deepseek" | "xai" | "ollama";
 	description: string;
 }
 
 export const CURATED_MODELS: ModelEntry[] = [
-	{ model: "openrouter/free", provider: "openrouter", description: "Default free tier" },
-	{ model: "openai/gpt-4o", provider: "openrouter", description: "OpenAI flagship via OpenRouter" },
-	{ model: "openai/gpt-4o-mini", provider: "openrouter", description: "OpenAI, cheap and fast" },
-	{ model: "anthropic/claude-3.5-sonnet", provider: "openrouter", description: "Anthropic via OpenRouter" },
-	{ model: "google/gemini-flash-1.5", provider: "openrouter", description: "Google, long context" },
-	{ model: "meta-llama/llama-3.1-70b-instruct", provider: "openrouter", description: "Open weights, large" },
-	{ model: "deepseek/deepseek-chat", provider: "openrouter", description: "Strong value coder" },
+	{ model: "openrouter/free", provider: "openrouter", description: "Default free tier (multi-model)" },
+	{ model: "gpt-4o-mini", provider: "openai", description: "OpenAI direct, cheap and fast" },
+	{ model: "claude-3-5-sonnet-20241022", provider: "anthropic", description: "Anthropic direct (native API)" },
+	{ model: "gemini-2.0-flash", provider: "google", description: "Google direct, long context" },
+	{ model: "mistral-small-latest", provider: "mistral", description: "Mistral direct" },
+	{ model: "llama-3.3-70b-versatile", provider: "groq", description: "Groq direct, fast inference" },
+	{ model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", provider: "together", description: "Together AI direct, open weights" },
+	{ model: "deepseek-chat", provider: "deepseek", description: "DeepSeek direct (use deepseek-reasoner to think)" },
+	{ model: "grok-4", provider: "xai", description: "xAI direct (Grok)" },
 	{ model: "llama3.1", provider: "ollama", description: "Local via Ollama" },
 	{ model: "mistral", provider: "ollama", description: "Local via Ollama" },
 	{ model: "codellama", provider: "ollama", description: "Local code model" },

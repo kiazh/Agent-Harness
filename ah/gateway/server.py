@@ -24,6 +24,7 @@ from ah import __version__
 from ah.core.config import config
 from ah.core.context import context_manager
 from ah.core.models import Session
+from ah.core.provider import PROVIDERS
 from ah.core.session import session_manager
 from ah.db.connection import db
 from ah.gateway import features
@@ -94,7 +95,8 @@ def _setup_gateway_logging() -> None:
 
 _setup_gateway_logging()
 
-PROVIDERS = ("openrouter", "ollama")
+# PROVIDERS is single-sourced from ah.core.provider (imported above) so the
+# gateway, HTTP API and UI always agree on valid provider names.
 MAX_TOOL_RESULT_CHARS = 4000
 
 Writer = Callable[[dict[str, Any]], None]
@@ -447,6 +449,13 @@ class Gateway:
             elif isinstance(key, str) and key in DEFAULTS:
                 # Coerce first so invalid values raise; persist the coerced value.
                 value = features.coerce_config_value(key, value)
+                if key == "reasoning_effort":
+                    from ah.core.provider import normalize_reasoning_effort
+
+                    try:
+                        value = normalize_reasoning_effort(value)
+                    except Exception as e:
+                        raise RpcError(INVALID_PARAMS, str(e)) from None
                 config.set(key, value, persist=persist)
             else:
                 raise RpcError(INVALID_PARAMS, f"unknown setting: {key}")

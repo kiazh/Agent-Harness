@@ -9,7 +9,19 @@ import pytest_asyncio
 # Config keys that must never leak from the developer's real
 # ~/.agent-harness/config.yaml into tests (keeps tests hermetic and prevents
 # accidental real API calls with a personal key).
-_SECRET_CONFIG_KEYS = ("openrouter_api_key", "openai_api_key", "cohere_api_key", "database_url")
+_SECRET_CONFIG_KEYS = (
+    "openrouter_api_key",
+    "openai_api_key",
+    "anthropic_api_key",
+    "google_api_key",
+    "mistral_api_key",
+    "groq_api_key",
+    "together_api_key",
+    "deepseek_api_key",
+    "xai_api_key",
+    "cohere_api_key",
+    "database_url",
+)
 
 
 @pytest.fixture(autouse=True)

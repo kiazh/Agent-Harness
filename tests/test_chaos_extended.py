@@ -72,6 +72,7 @@ class TestProviderMalformedJSON:
         provider = OpenRouterProvider.__new__(OpenRouterProvider)
         provider.api_key = "test-key"
         provider.model = "test-model"
+        provider._default_effort = ""
         provider._rate_limiter = AsyncMock()
         provider.client = MagicMock()
         mock_response = MagicMock()
@@ -186,6 +187,7 @@ class TestProviderMidStreamFailure:
         provider = OpenRouterProvider.__new__(OpenRouterProvider)
         provider.api_key = "test-key"
         provider.model = "test-model"
+        provider._default_effort = ""
         provider._rate_limiter = AsyncMock()
         provider.client = MagicMock()
 

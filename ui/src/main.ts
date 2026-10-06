@@ -9,7 +9,7 @@ import { ProcessTerminal, TuiAltScreen } from "@earendil-works/pi-tui";
 import { App } from "./app.ts";
 import { GatewayClient } from "./gateway.ts";
 
-const USAGE = `Usage: ah [--model MODEL] [--provider openrouter|ollama] [--session ID] [--no-clear]
+const USAGE = `Usage: ah [--model MODEL] [--provider PROVIDER] [--session ID] [--no-clear]
 
 Interactive AgentHarness terminal UI. Set AH_PYTHON to the Python interpreter
 that has AgentHarness installed (the \`ah\` command does this for you).
