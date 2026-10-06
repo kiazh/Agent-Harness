@@ -31,36 +31,21 @@ def test_shim_points_at_matches_prefix_case_insensitively() -> None:
     assert not _shim_points_at('exec "/other/.venv/bin/ah" "$@"', "/app")
 
 
-def test_uninstall_plan_only_touches_nothing_by_default(tmp_path: Path, monkeypatch) -> None:
-    """Default `uninstall --force` removes PATH registration but deletes no files."""
+def test_uninstall_ask_path_only_keeps_files(tmp_path: Path, monkeypatch) -> None:
+    """Yes to PATH, no to files: PATH helper runs, files stay."""
     import ah.cli as cli
-    import ah.security.env_file as env_file_mod
 
-    fake_root = tmp_path / "checkout"
-    (fake_root / ".venv").mkdir(parents=True)
-    fake_env = tmp_path / ".env"
-    fake_env.write_text("DATABASE_URL=postgres://x\n", encoding="utf-8")
-    monkeypatch.setattr(cli, "_uninstall_app_root", lambda: fake_root)
-    monkeypatch.setattr(env_file_mod, "find_env_file", lambda: fake_env)
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
-    removed: list[list[str]] = []
-    monkeypatch.setattr(
-        cli,
-        "_remove_windows_user_path_entries",
-        lambda targets: (removed.append(targets), (True, "ok"))[1],
-    )
-
+    fake_root, fake_env, removed = _isolate_uninstall(tmp_path, monkeypatch)
     runner = CliRunner()
-    result = runner.invoke(cli.app, ["uninstall", "--force"])
+    result = runner.invoke(cli.app, ["uninstall"], input="y\nn\nn\nn\nn\n")
     assert result.exit_code == 0, result.output
     assert "Uninstall plan" in result.output
     assert removed and str(fake_root) in removed[0][0]
-    # Nothing deleted by default.
     assert (fake_root / ".venv").is_dir()
     assert fake_env.is_file()
 
 
-def test_uninstall_full_deletes_files_and_shim(tmp_path: Path, monkeypatch) -> None:
+def test_uninstall_ask_yes_to_all_deletes_files(tmp_path: Path, monkeypatch) -> None:
     import ah.cli as cli
     import ah.security.env_file as env_file_mod
 
@@ -79,19 +64,18 @@ def test_uninstall_full_deletes_files_and_shim(tmp_path: Path, monkeypatch) -> N
     monkeypatch.setattr(env_file_mod, "find_env_file", lambda: fake_env)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.setattr(cli, "_remove_windows_user_path_entries", lambda targets: (True, "ok"))
+    monkeypatch.setattr(cli, "_docker_container_exists", lambda: False)
+    monkeypatch.setattr(cli, "_brew_postgres_present", lambda: False)
 
     runner = CliRunner()
-    # Point the checkout delete at a copy so the assertion below is meaningful
-    # without touching the real repo: --full minus checkout via individual flags.
-    result = runner.invoke(
-        cli.app,
-        ["uninstall", "--remove-venv", "--remove-env-file", "--remove-config", "--force"],
-    )
+    # PATH, venv, env file, config, checkout — yes to all five.
+    result = runner.invoke(cli.app, ["uninstall"], input="y\ny\ny\ny\ny\n")
     assert result.exit_code == 0, result.output
     assert not (fake_root / ".venv").exists()
     assert not fake_env.exists()
     assert not shim.exists()
     assert not local_config.exists()
+    assert not fake_root.exists()
 
 
 # ─── docker / brew / database helpers ───────────────────────────────────────
@@ -228,21 +212,8 @@ def test_uninstall_ask_mode_yes_to_nothing(tmp_path: Path, monkeypatch) -> None:
     assert fake_env.is_file()
 
 
-def test_uninstall_ask_mode_path_only(tmp_path: Path, monkeypatch) -> None:
-    """Yes to PATH, no to files: PATH helper runs, files stay."""
-    import ah.cli as cli
-
-    fake_root, fake_env, removed = _isolate_uninstall(tmp_path, monkeypatch)
-    runner = CliRunner()
-    result = runner.invoke(cli.app, ["uninstall"], input="y\nn\nn\nn\nn\n")
-    assert result.exit_code == 0, result.output
-    assert removed and str(fake_root) in removed[0][0]
-    assert (fake_root / ".venv").is_dir()
-    assert fake_env.is_file()
-
-
-def test_uninstall_full_force_removes_everything(tmp_path: Path, monkeypatch) -> None:
-    """--full --force with docker/db/brew present removes all of it."""
+def test_uninstall_full_yes_to_all_removes_everything(tmp_path: Path, monkeypatch) -> None:
+    """Yes to all eight questions with docker/db/brew present removes all of it."""
     import ah.cli as cli
     import ah.security.env_file as env_file_mod
 
@@ -277,7 +248,7 @@ def test_uninstall_full_force_removes_everything(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr(cli, "_drop_database", drop_db)
 
     runner = CliRunner()
-    result = runner.invoke(cli.app, ["uninstall", "--full", "--force"])
+    result = runner.invoke(cli.app, ["uninstall"], input="y\n" * 8)
     assert result.exit_code == 0, result.output
     assert docker_removed == [True]
     assert brew_removed == [True]

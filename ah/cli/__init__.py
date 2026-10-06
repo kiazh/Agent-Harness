@@ -1531,43 +1531,12 @@ def _remove_windows_user_path_entries(remove: list[str]) -> tuple[bool, str]:
 
 
 @app.command()
-def uninstall(
-    remove_venv: bool = typer.Option(
-        False, "--remove-venv", help="Delete the .venv directory in the checkout"
-    ),
-    remove_env_file: bool = typer.Option(
-        False, "--remove-env-file", help="Delete the .env file (git-ignored secrets)"
-    ),
-    remove_config: bool = typer.Option(
-        False, "--remove-config", help="Delete ~/.agent-harness (config, logs, scripts)"
-    ),
-    delete_checkout: bool = typer.Option(
-        False, "--delete-checkout", help="Delete the whole checkout directory"
-    ),
-    remove_docker: bool = typer.Option(
-        False, "--remove-docker", help="Stop and remove the agentharness-db docker container"
-    ),
-    drop_db: bool = typer.Option(
-        False, "--drop-db", help="DROP the agentharness Postgres database"
-    ),
-    remove_postgres: bool = typer.Option(
-        False,
-        "--remove-postgres",
-        help="Uninstall Homebrew postgresql@16 + pgvector (macOS installer path)",
-    ),
-    full: bool = typer.Option(
-        False, "--full", help="Everything: PATH, venv, .env, config, checkout, docker, database"
-    ),
-    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
-):
-    """Uninstall AgentHarness — asks what to remove, then removes it.
+def uninstall():
+    """Uninstall AgentHarness — answers yes to everything and nothing is left.
 
-    With no flags each item is offered interactively (PATH, venv, .env,
-    config, docker container, database, Homebrew postgres, checkout).
-    Answer yes to everything and nothing is left behind:
-
-        ah uninstall --full --force    # everything, no prompt
+    Asks one yes/no question per item (PATH registration, virtualenv, .env,
+    local config, docker container, Postgres database, Homebrew postgres,
+    checkout) and removes everything you confirm.
     """
     app_root = _uninstall_app_root()
     venv_dir = app_root / ".venv"
@@ -1579,10 +1548,6 @@ def uninstall(
         env_file = app_root / ".env"
     shim = Path.home() / ".local" / "bin" / "ah"
     local_config = Path.home() / ".agent-harness"
-
-    if full:
-        remove_venv = remove_env_file = remove_config = delete_checkout = True
-        remove_docker = drop_db = remove_postgres = True
 
     # Discover what's actually there so we only ask about real things.
     has_docker = _docker_container_exists()
@@ -1598,7 +1563,34 @@ def uninstall(
                     maintenance_dsn, dbname = split
                 break
 
-    selective = any(
+    console.print("[bold]What should go?[/bold] (yes/no)")
+    remove_path = typer.confirm("Remove PATH registration (user Path + shim)?", default=True)
+    remove_venv = typer.confirm(f"Delete the virtualenv ({venv_dir})?", default=False)
+    remove_env_file = typer.confirm(f"Delete the env file ({env_file})?", default=False)
+    remove_config = typer.confirm(f"Delete local config ({local_config})?", default=False)
+    remove_docker = (
+        typer.confirm(
+            "Stop and remove the agentharness-db docker container (its data too)?",
+            default=False,
+        )
+        if has_docker
+        else False
+    )
+    drop_db = (
+        typer.confirm(
+            f'DROP the Postgres database "{dbname}" (all sessions/memories/jobs)?',
+            default=False,
+        )
+        if maintenance_dsn
+        else False
+    )
+    remove_postgres = (
+        typer.confirm("Uninstall Homebrew postgresql@16 + pgvector entirely?", default=False)
+        if has_brew_pg
+        else False
+    )
+    delete_checkout = typer.confirm(f"Delete the whole checkout ({app_root})?", default=False)
+    if not remove_path and not any(
         (
             remove_venv,
             remove_env_file,
@@ -1608,47 +1600,9 @@ def uninstall(
             drop_db,
             remove_postgres,
         )
-    )
-    if not (force or yes) and not selective:
-        # Ask mode: one prompt per item, PATH defaults to yes.
-        console.print("[bold]What should go?[/bold] ([Y/n] / [y/N])")
-        remove_path = typer.confirm("Remove PATH registration (user Path + shim)?", default=True)
-        remove_venv = typer.confirm(f"Delete the virtualenv ({venv_dir})?", default=False)
-        remove_env_file = typer.confirm(f"Delete the env file ({env_file})?", default=False)
-        remove_config = typer.confirm(f"Delete local config ({local_config})?", default=False)
-        if has_docker:
-            remove_docker = typer.confirm(
-                "Stop and remove the agentharness-db docker container (its data too)?",
-                default=False,
-            )
-        if maintenance_dsn:
-            drop_db = typer.confirm(
-                f'DROP the Postgres database "{dbname}" (all sessions/memories/jobs)?',
-                default=False,
-            )
-        if has_brew_pg:
-            remove_postgres = typer.confirm(
-                "Uninstall Homebrew postgresql@16 + pgvector entirely?", default=False
-            )
-        delete_checkout = typer.confirm(f"Delete the whole checkout ({app_root})?", default=False)
-        if not remove_path and not any(
-            (
-                remove_venv,
-                remove_env_file,
-                remove_config,
-                delete_checkout,
-                remove_docker,
-                drop_db,
-                remove_postgres,
-            )
-        ):
-            console.print("[dim]Nothing selected.[/dim]")
-            raise typer.Exit(0)
-    else:
-        remove_path = True
-        if not (force or yes) and not typer.confirm("Proceed with uninstall?"):
-            console.print("[dim]Cancelled.[/dim]")
-            raise typer.Exit(0)
+    ):
+        console.print("[dim]Nothing selected.[/dim]")
+        raise typer.Exit(0)
 
     path_targets = [str(venv_dir / "Scripts"), str(venv_dir / "bin")]
     plan: list[str] = []
@@ -1684,7 +1638,7 @@ def uninstall(
                 )
             except OSError:
                 points_here = False
-            if points_here or full:
+            if points_here:
                 try:
                     shim.unlink()
                     output.status_line("Shim", f"deleted {shim}", "success")
