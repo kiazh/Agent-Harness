@@ -130,6 +130,13 @@ else
   APP_DIR="$INSTALL_DIR"
   if [ -d "$APP_DIR" ] && is_repo_dir "$APP_DIR"; then
     log "Using existing checkout: $APP_DIR"
+    # Re-runs must pick up new code: fast-forward the checkout. Best-effort —
+    # offline/diverged checkouts keep working with what's on disk.
+    if git -C "$APP_DIR" pull --ff-only 2>/dev/null; then
+      log "Checkout updated to latest"
+    else
+      warn "Could not git pull (offline or diverged); using local checkout as-is"
+    fi
   else
     command -v git >/dev/null 2>&1 || die "git is required: https://git-scm.com/downloads"
     log "Cloning $REPO_URL -> $APP_DIR"
