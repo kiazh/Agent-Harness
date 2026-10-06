@@ -131,32 +131,68 @@ if [ "$DO_UI" = "1" ]; then
 fi
 
 # --- Python venv ---------------------------------------------------------------
-if [ ! -d ".venv" ]; then
-  log "Creating virtualenv (.venv)"
-  "$PYTHON_BIN" -m venv .venv
-fi
+# Never trust an existing .venv blindly: a stale/broken one (no interpreter
+# inside) is the most common install failure. Verify, rebuild if needed, and
+# always invoke the venv binaries by explicit path so a broken `activate`
+# script (common on Git Bash/Windows) cannot break the install.
+venv_python() {
+  # Print the venv interpreter path, if present and executable.
+  if [ -x ".venv/bin/python" ]; then
+    printf '%s' ".venv/bin/python"
+  elif [ -x ".venv/Scripts/python.exe" ]; then
+    printf '%s' ".venv/Scripts/python.exe"
+  else
+    return 1
+  fi
+}
 
+venv_healthy() {
+  local py
+  py="$(venv_python 2>/dev/null)" || return 1
+  [ "$("$py" -c 'import sys; print(1 if sys.version_info >= (3, 11) else 0)' 2>/dev/null || echo 0)" = "1" ]
+}
+
+if venv_healthy; then
+  log "Reusing healthy virtualenv (.venv)"
+else
+  if [ -d ".venv" ]; then
+    warn "Existing .venv has no working python; rebuilding it"
+    deactivate 2>/dev/null || true
+  else
+    log "Creating virtualenv (.venv) with $PYTHON_BIN"
+  fi
+  rm -rf .venv
+  "$PYTHON_BIN" -m venv .venv
+  venv_healthy || die "Could not build a working .venv with $PYTHON_BIN. Try running '$PYTHON_BIN -m venv --clear .venv' manually (see error above), or install Python 3.11+ from https://www.python.org/downloads/"
+  log "Virtualenv ready"
+fi
+VENV_PY="$(venv_python)"
+VENV_BIN="$(dirname "$VENV_PY")"
+AH_BIN="$VENV_BIN/ah"
+
+# Best-effort activation (convenience only; everything below uses $VENV_PY/$AH_BIN).
 if [ -f ".venv/bin/activate" ]; then
   # shellcheck disable=SC1091
-  . ".venv/bin/activate"
+  . ".venv/bin/activate" 2>/dev/null || true
 elif [ -f ".venv/Scripts/activate" ]; then
   # shellcheck disable=SC1091
-  . ".venv/Scripts/activate"
-else
-  die "Virtualenv activation script not found in .venv"
+  . ".venv/Scripts/activate" 2>/dev/null || true
 fi
-PYTHON_BIN="python" # inside the venv, `python` is the right interpreter
 
-log "Upgrading pip"
-python -m pip install --quiet --upgrade pip
+log "Upgrading pip ($VENV_PY)"
+"$VENV_PY" -m pip install --quiet --upgrade pip
 
 if [ "$DO_DEV" = "1" ]; then
   log "Installing AgentHarness (dev extras)"
-  pip install -e ".[dev]"
+  "$VENV_PY" -m pip install -e ".[dev]"
 else
   log "Installing AgentHarness"
-  pip install -e .
+  "$VENV_PY" -m pip install -e .
 fi
+# Re-resolve: the install creates the `ah` entry point (ah / ah.exe).
+AH_BIN="$VENV_BIN/ah"
+[ -f "$AH_BIN" ] || AH_BIN="$VENV_BIN/ah.exe"
+[ -f "$AH_BIN" ] || die "Install succeeded but no 'ah' binary appeared in $VENV_BIN"
 
 # --- UI deps -------------------------------------------------------------------
 if [ "$DO_UI" = "1" ]; then
@@ -221,7 +257,7 @@ else
 fi
 
 # --- DB: try init, auto-start local pgvector via docker on failure -------------
-try_init() { ah init 2>&1; }
+try_init() { "$AH_BIN" init 2>&1; }
 
 start_docker_db() {
   command -v docker >/dev/null 2>&1 || return 1
@@ -266,11 +302,12 @@ else
 fi
 
 log "Checking setup (ah doctor; DB/key warnings are OK, see hints above)"
-ah doctor || true
+"$AH_BIN" doctor || true
 
 # --- PATH shim so `ah` just works ------------------------------------------------
-VENV_AH="$APP_DIR/.venv/bin/ah"
-[ -f "$VENV_AH" ] || VENV_AH="$APP_DIR/.venv/Scripts/ah"
+# Absolute path: APP_DIR may be relative (e.g. ./agent-harness), which would
+# bake a broken relative exec into the shim.
+VENV_AH="$(pwd)/$AH_BIN"
 SHIM_DIR="$HOME/.local/bin"
 if [ -f "$VENV_AH" ]; then
   if command -v ah >/dev/null 2>&1; then
