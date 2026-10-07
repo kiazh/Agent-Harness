@@ -128,12 +128,17 @@ class RAGPipeline:
         # Store in database (batch)
         stored_chunks: list[ContextChunk] = []
         records = []
+        embed_model_name = getattr(
+            self._embedder, "model_name", getattr(self._embedder, "_model", "unknown")
+        )
         for chunk, embedding in zip(chunks, embeddings, strict=True):
             chunk_meta = {
                 **chunk.metadata,
                 "source": doc.source,
                 "doc_type": doc.doc_type,
                 "chunk_index": chunk.index,
+                "embedding_model": str(embed_model_name),
+                "embedding_dims": len(embedding) if embedding else 0,
             }
             if metadata:
                 chunk_meta.update(metadata)
@@ -242,6 +247,22 @@ class RAGPipeline:
 
         # Embed query
         query_embedding = await self._embedder.embed(query)
+        # Dimension guard: stored vectors are 1536-d. Mixing models without
+        # migration silently corrupts similarity — fail loudly instead.
+        try:
+            from ah.core.serialization import embedding_to_str as _e2s
+
+            probe = _e2s(query_embedding)
+            dims = len(probe.split(",")) if probe else 0
+            if dims and dims != 1536:
+                raise ValueError(
+                    f"embedding dimension mismatch: got {dims}, stored vectors are 1536. "
+                    "Reindex after switching embedding models."
+                )
+        except ValueError:
+            raise
+        except Exception:
+            pass
 
         # Hybrid search (BM25 + dense + RRF)
         if self._config.enable_hybrid_search:
@@ -278,11 +299,19 @@ class RAGPipeline:
         final_results = results[:k]
 
         # Store in TTL cache (store a copy so callers cannot mutate the cache).
-        self._search_cache[cache_key] = (now, list(final_results))
-        # Evict oldest if cache is full (simple approach)
-        if len(self._search_cache) > self._search_cache_max_size:
-            oldest_key = min(self._search_cache, key=lambda k: self._search_cache[k][0])
-            del self._search_cache[oldest_key]
+        # Never cache empty results: a delete+reindex inside the TTL would
+        # otherwise keep serving stale emptiness.
+        if final_results:
+            self._search_cache[cache_key] = (now, list(final_results))
+            # Record embedding model/dims namespace for incompat detection.
+            try:
+                self._last_embed_model = str(embed_model)
+            except Exception:
+                pass
+            # Evict oldest if cache is full (simple approach)
+            if len(self._search_cache) > self._search_cache_max_size:
+                oldest_key = min(self._search_cache, key=lambda k: self._search_cache[k][0])
+                del self._search_cache[oldest_key]
 
         audit_log(
             "rag_search_complete",

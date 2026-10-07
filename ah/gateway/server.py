@@ -160,6 +160,10 @@ class Gateway:
         self._turns: dict[str, asyncio.Task[None]] = {}
         self._turn_locks: dict[str, asyncio.Lock] = {}
         self._turn_progress: dict[str, dict[str, int]] = {}
+        # Pending human approvals by request_id (Phase E). The broker's
+        # approval handler emits permission.required and awaits the future;
+        # approvals.resolve completes it. Reconnect-safe via durable DB rows.
+        self._pending_approvals: dict[str, asyncio.Future[str]] = {}
         self._config_lock = asyncio.Lock()
         # Token-based auth for the stdio channel. Local UIs set
         # AH_GATEWAY_TOKEN; None means "open" (stdio local use) with a warning.
@@ -508,6 +512,30 @@ class Gateway:
         tokens = 0
         final = None
         agent = None
+        # Phase E: human approval handler for this turn. Emits
+        # permission.required and awaits the UI/HTTP resolve without holding
+        # DB transactions — logical turn ownership is retained.
+        from ah.permissions.broker import set_approval_handler as _set_handler
+
+        async def _turn_approver(card: dict) -> str:
+            loop = asyncio.get_running_loop()
+            fut: asyncio.Future[str] = loop.create_future()
+            self._pending_approvals[card["request_id"]] = fut
+            emit(
+                "permission.required",
+                requestId=card["request_id"],
+                operation=card["operation"],
+                target="|".join(card["targets"])[:500] if card.get("targets") else "",
+                cwd=card.get("cwd", ""),
+                backend=card.get("backend", ""),
+                capabilities=card.get("capabilities", []),
+            )
+            try:
+                return await fut
+            finally:
+                self._pending_approvals.pop(card["request_id"], None)
+
+        _set_handler(_turn_approver, principal="tui", turn_id=turn_id)
         try:
             # AH-021/AH-022: resolve the session's stored model/provider and
             # agent definition (allowed_tools/persona). Resumed sessions
@@ -599,6 +627,17 @@ class Gateway:
             complete()
             return
         finally:
+            # Release the approval handler and cancel any still-pending
+            # approval waits (cancellation stops owned waits, not siblings).
+            try:
+                from ah.permissions.broker import set_approval_handler as _clear
+
+                _clear(None)
+            except Exception:
+                pass
+            for _rid, _fut in list(self._pending_approvals.items()):
+                if not _fut.done():
+                    _fut.cancel()
             # AH-023: close only owned providers; shared/injected factories
             # (tests) must not be closed here.
             if agent is not None:
@@ -623,6 +662,15 @@ class Gateway:
             if self._turns.get(sid) is asyncio.current_task():
                 del self._turns[sid]
         complete(final)
+        # Phase C: threshold-triggered auto-compaction at the safe turn
+        # boundary (ownership released above). Bounded fire-and-forget.
+        try:
+            from ah import services as _services
+
+            task = asyncio.create_task(_services.maybe_auto_compact(session_id))
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+        except Exception:
+            pass
 
     async def _run_turn_with_timeout(self, session_id: uuid.UUID, turn_id: str, text: str) -> None:
         """Run a turn with a configurable timeout.

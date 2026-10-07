@@ -574,7 +574,24 @@ class JobRunner:
             # Check ownership loss before the (potentially long) agent run.
             if ownership_lost is not None and ownership_lost.is_set():
                 raise RuntimeError("job ownership lost")
-            await agent.run(job.session_id, prompt, verbose=False)
+            response = await agent.run(job.session_id, prompt, verbose=False)
+            # Headless jobs never hang on hidden prompts (Phase E): a tool
+            # awaiting human approval surfaces as a structured needs_approval
+            # result. Pause durably with a resumable status and free the
+            # worker/lease instead of renewing indefinitely.
+            try:
+                blob = (response.content or "") + str(
+                    [t.get("result_preview", "") for t in response.tool_calls]
+                )
+                if "Needs approval" in blob or "needs_approval" in blob:
+                    raise PermissionError(
+                        "needs_approval: job paused awaiting human approval; "
+                        "resolve via approvals then resume (fresh claim revalidates)."
+                    )
+            except PermissionError:
+                raise
+            except Exception:
+                pass
         finally:
             if owns_provider:
                 try:

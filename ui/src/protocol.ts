@@ -74,6 +74,24 @@ export interface ConfigGetResult {
 	secrets: string[];
 }
 
+export interface ModeResult {
+	mode: string;
+	backend: string;
+	scope?: string;
+}
+
+export interface ApprovalInfo {
+	request_id: string;
+	operation: string;
+	target: string;
+	agent_id: string;
+	status: string;
+}
+
+export interface ApprovalsListResult {
+	approvals: ApprovalInfo[];
+}
+
 export interface SecretInfo {
 	key: string;
 	description: string;
@@ -284,6 +302,16 @@ export type GatewayEvent = EventBase &
 				cancelled: boolean;
 				}
 		| { type: "error"; message: string }
+		| {
+				type: "permission.required";
+				requestId: string;
+				operation: string;
+				target: string;
+				cwd: string;
+				backend: string;
+				capabilities: string[];
+			}
+		| { type: "permission.resolved"; requestId: string; status: string }
 	);
 
 /** Error returned by the gateway for a failed request. */

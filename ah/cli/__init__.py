@@ -24,10 +24,8 @@ from ah import __version__, services
 from ah.cli import output
 from ah.cli.launcher import launch_ui
 from ah.cli.output import console
-from ah.core.agent import ReActAgent
 from ah.core.config import config
 from ah.core.context import context_manager
-from ah.core.provider import get_provider
 from ah.core.session import session_manager
 from ah.db.connection import db
 
@@ -41,8 +39,17 @@ app = typer.Typer(
 
 
 @app.callback()
-def main(ctx: typer.Context) -> None:
+def main(
+    ctx: typer.Context,
+    mode: str = typer.Option(None, "--mode", help="Execution mode: ask|workspace|sandbox|full"),
+) -> None:
     """Open the interactive UI when no subcommand is given."""
+    if mode is not None:
+        normalized = mode.strip().lower()
+        if normalized not in ("ask", "workspace", "sandbox", "full"):
+            output.error("Invalid --mode. Use ask|workspace|sandbox|full.")
+            raise typer.Exit(1)
+        config.set("execution_mode", normalized)
     if ctx.invoked_subcommand is None:
         raise typer.Exit(launch_ui())
 
@@ -100,8 +107,15 @@ def chat(
     ),
     verbose: bool = typer.Option(True, "--verbose/--quiet", "-v/-q", help="Show tool calls"),
     interactive: bool = typer.Option(False, "--interactive", "-i", help="Open the interactive UI"),
+    mode: str = typer.Option(None, "--mode", help="Execution mode: ask|workspace|sandbox|full"),
 ):
     """Send one message to the agent (or open the UI with -i)."""
+    if mode is not None:
+        normalized = mode.strip().lower()
+        if normalized not in ("ask", "workspace", "sandbox", "full"):
+            output.error("Invalid --mode. Use ask|workspace|sandbox|full.")
+            raise typer.Exit(1)
+        config.set("execution_mode", normalized)
     if interactive:
         raise typer.Exit(launch_ui(model=model, provider=provider, session_id=session_id))
 
@@ -113,6 +127,7 @@ def chat(
 
     async def _chat():
         await db.connect()
+        agent = None
         try:
             if continue_:
                 session = await session_manager.get_last_active()
@@ -138,17 +153,27 @@ def chat(
                 session = await session_manager.create(title=message[:50], goal=message[:100])
                 output.muted(f"New session: {session.id}")
 
+            # Same shared factory as gateway/REST/jobs (definition, shared
+            # memory/RAG, authority). Headless: no approver → broker returns
+            # structured needs_approval instead of hanging.
             try:
-                llm = get_provider(provider=provider, model=model)
+                from ah.core.agent_factory import build_agent_for_session
+
+                agent = await build_agent_for_session(session)
+                llm = agent.provider
+                _provider_name = provider or session.provider or config.get("provider")
             except ValueError as e:
                 output.error(
                     f"Provider error: {e}", "Check your provider configuration with `ah config`."
                 )
                 raise typer.Exit(1) from None
 
-            agent = ReActAgent(provider=llm)
             if verbose:
-                output.muted(f"Model: {llm.model} ({provider})")
+                output.muted(f"Model: {llm.model} ({_provider_name})")
+                try:
+                    output.muted(f"Mode: {config.get('execution_mode')} (backend: host)")
+                except Exception:
+                    pass
             console.print()
 
             final = None
@@ -171,6 +196,13 @@ def chat(
                 )
             output.muted(f"Session ID: {session.id}")
         finally:
+            try:
+                if agent is not None:
+                    from ah.core.agent_factory import close_agent_provider
+
+                    await close_agent_provider(agent)
+            except Exception:
+                pass
             await db.close()
 
     _run(_chat())
@@ -215,12 +247,89 @@ def status():
                 output.status_line("OpenRouter API key", "set", "success")
             else:
                 output.status_line("OpenRouter API key", "not set", "warning")
+            # Real capability reporting (never healthy-by-flag alone).
+            try:
+                summary = await services.status_summary()
+                output.status_line(
+                    "Mode", f"{summary.get('mode')} | Backend: {summary.get('backend')}", "success"
+                )
+                if summary.get("workspace"):
+                    output.status_line("Workspace", str(summary.get("workspace")))
+                output.status_line("Chat provider", str(summary.get("chatProvider", "unknown")))
+                output.status_line(
+                    "Memory retrieval",
+                    f"{summary.get('memoryRetrieval')}"
+                    + (
+                        f" ({summary.get('memoryRetrievalReason')})"
+                        if summary.get("memoryRetrievalReason")
+                        else ""
+                    ),
+                )
+                output.status_line("Memory extraction", str(summary.get("memoryExtraction", "")))
+                output.status_line("Document RAG", str(summary.get("documentRag", "")))
+                output.status_line("Reranker", str(summary.get("reranker", "")))
+                output.status_line("Automatic compaction", str(summary.get("autoCompaction", "")))
+                output.status_line("Sandbox", str(summary.get("sandbox", "")))
+                output.status_line(
+                    "Jobs awaiting approval", str(summary.get("jobsAwaitingApproval", 0))
+                )
+                output.status_line("Research training", str(summary.get("researchTraining", "")))
+            except Exception as e:
+                output.status_line("Capabilities", f"unavailable ({e})", "warning")
             console.print()
             output.muted("Run `ah` to open the interactive UI.")
         finally:
             await db.close()
 
     _run(_status())
+
+
+@app.command(name="mode")
+def set_mode(
+    mode: str = typer.Argument(None, help="ask|workspace|sandbox|full (empty shows current)"),
+    revoke: bool = typer.Option(False, "--revoke", help="Revoke grants and return to ask mode"),
+):
+    """Show or set the execution mode."""
+
+    async def _mode():
+        await db.connect()
+        try:
+            if revoke:
+                from ah.permissions.broker import permission_broker
+
+                count = await permission_broker.revoke("*")
+                config.set("execution_mode", "ask")
+                output.status_line("Mode", f"ask ({count} grants revoked)", "success")
+                return
+            if not mode:
+                output.status_line("Mode", str(config.get("execution_mode")), "success")
+                console.print("ask: approval-based (default) | workspace: project operation")
+                console.print("sandbox: isolated container | full: explicit FULL HOST grant")
+                return
+            normalized = mode.strip().lower()
+            if normalized not in ("ask", "workspace", "sandbox", "full"):
+                output.error("Invalid mode. Use ask|workspace|sandbox|full.")
+                raise typer.Exit(1)
+            if normalized == "full":
+                confirm = typer.confirm(
+                    "Grant FULL HOST access (your OS account, this session)? "
+                    "Credentials/elevation/destructive ops still ask.",
+                    default=False,
+                )
+                if not confirm:
+                    output.muted("Full mode not activated.")
+                    return
+            config.set("execution_mode", normalized)
+            output.status_line("Mode", normalized, "success")
+            if normalized == "full":
+                console.print(
+                    "[yellow]FULL HOST active. Sensitive actions still ask. "
+                    "Revoke with `ah mode --revoke`.[/yellow]"
+                )
+        finally:
+            await db.close()
+
+    _run(_mode())
 
 
 @app.command(name="sessions")

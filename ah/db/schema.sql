@@ -449,3 +449,37 @@ CREATE INDEX IF NOT EXISTS idx_learning_reviews_agent
 ALTER TABLE learning_reviews ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_learning_reviews_lease
     ON learning_reviews(status, lease_expires_at) WHERE status = 'reviewing';
+
+-- ─── Permissions (Phase 5: broker grants + approvals) ──────────────────────
+
+CREATE TABLE IF NOT EXISTS permission_grants (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    capability TEXT NOT NULL,
+    scope_path TEXT,
+    digest TEXT NOT NULL,
+    expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    revoked BOOLEAN NOT NULL DEFAULT FALSE
+);
+CREATE INDEX IF NOT EXISTS idx_permission_grants_session ON permission_grants(session_id, revoked);
+
+CREATE TABLE IF NOT EXISTS permission_approvals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    request_id TEXT NOT NULL UNIQUE,
+    session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
+    turn_id TEXT,
+    agent_id TEXT NOT NULL,
+    principal TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    target TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'denied', 'expired', 'cancelled')),
+    consumed BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_permission_approvals_session ON permission_approvals(session_id, status);

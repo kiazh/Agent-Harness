@@ -140,6 +140,15 @@ export class App implements FeatureHost {
 			} catch {
 				// Saved skin is best-effort; the default applies otherwise.
 			}
+			try {
+				const { mode } = await this.client.request<{ mode: string }>("mode.get", {}, 30_000);
+				if (mode === "full") {
+					this.footer.model = `${this.footer.model} · FULL HOST`;
+					this.transcript.addNotice("FULL HOST mode active — ordinary host operations proceed; credentials/elevation/destructive ops still ask.", "warning");
+				}
+			} catch {
+				// Mode display is best-effort.
+			}
 			if (this.options.sessionId) {
 				const { session, history } = await this.client.request<ResumeResult>("session.resume", {
 					sessionId: this.options.sessionId,
@@ -425,6 +434,18 @@ export class App implements FeatureHost {
 		// A turn's events may arrive after the user switched sessions, so match
 		// against in-flight turns, not just the current session.
 		if (!this.inFlight.has(event.sessionId)) return;
+		if (event.type === "permission.required") {
+			// Approval card bound to this exact session/turn — switching
+			// sessions never approves the wrong session (Phase 5.6).
+			void this.promptApproval(event);
+			this.tui.requestRender();
+			return;
+		}
+		if (event.type === "permission.resolved") {
+			this.transcript.addNotice(`Approval ${event.requestId.slice(0, 8)} ${event.status}.`);
+			this.tui.requestRender();
+			return;
+		}
 		if (event.sessionId !== this.current?.id) {
 			if (event.type === "message.complete") {
 				this.clearInFlight(event.sessionId);
@@ -453,8 +474,31 @@ export class App implements FeatureHost {
 		this.tui.requestRender();
 	}
 
-	private onGatewayExit(code: number | null, stderr: string[]): void {
-		if (this.exiting) return;
+	/** Compact approval card: action, cwd/target, backend, grant choices. */
+	private async promptApproval(event: Extract<GatewayEvent, { type: "permission.required" }>): Promise<void> {
+		const short = event.sessionId.slice(0, 8);
+		this.transcript.addNotice(
+			`Approval needed [${short}]: ${event.operation} ${event.target} (cwd: ${event.cwd}, backend: ${event.backend})`,
+			"warning",
+		);
+		this.tui.requestRender();
+		const choice = await this.pick(`Allow ${event.operation}?`, [
+			{ label: "Allow once", value: "approved" },
+			{ label: "Deny", value: "denied" },
+		]);
+		const verdict = choice?.value === "approved" ? "approved" : "denied";
+		try {
+			await this.client.request("approvals.resolve", {
+				requestId: event.requestId,
+				verdict,
+			});
+		} catch (error) {
+			this.transcript.addNotice(`Approval failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+		}
+		this.tui.requestRender();
+	}
+
+	private onGatewayExit(code: number | null, stderr: string[]): void {		if (this.exiting) return;
 		// Clear all in-flight tracking so the session isn't permanently locked.
 		for (const sessionId of [...this.inFlight]) {
 			this.clearInFlight(sessionId);

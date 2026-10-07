@@ -188,6 +188,7 @@ class BaseReActAgent:
         Returns a list of (ContextChunk, score) tuples for prompt assembly.
         """
         if self.rag_pipeline is None:
+            self._last_rag_mode = getattr(self, "_last_rag_mode", "disabled")
             return []
 
         try:
@@ -197,6 +198,7 @@ class BaseReActAgent:
                 top_k=5,
                 rerank=True,
             )
+            self._last_rag_mode = "ready" if results else "empty-index"
             return [(r.chunk, r.score) for r in results]
         except Exception as e:
             logger.warning("RAG retrieval failed: %s", e)
@@ -416,15 +418,28 @@ class BaseReActAgent:
 
         # Build retrieved chunks for the assembler
         retrieved_chunks: list[tuple] = []
+        self._last_retrieval_mode = "disabled"
 
-        # Retrieve relevant long-term memories (optional)
-        if include_memory:
+        # Retrieve relevant long-term memories (optional). memory_enabled
+        # gates auto-retrieval; explicit remember/recall tools stay available
+        # when disabled.
+        memory_enabled = True
+        try:
+            memory_enabled = bool(config.get("memory_enabled"))
+        except Exception:
+            pass
+        if include_memory and memory_enabled:
             try:
+                from ah.memory.embeddings import embed_query
+
+                query_embedding = await embed_query(user_message)
+                self._last_retrieval_mode = "dense+sparse" if query_embedding else "keyword-only"
                 retrieved_memories = await self.memory_retriever.retrieve(
                     query=user_message,
                     agent_id=self.agent_id,
                     session_id=session_id,
                     emotion=session.state.get("emotion"),
+                    query_embedding=query_embedding,
                 )
                 # Convert retrieved memories to ContextChunk-like tuples for assembler
                 from ah.core.models import ContextChunk
@@ -448,8 +463,18 @@ class BaseReActAgent:
             except Exception as e:
                 logger.warning("Memory retrieval failed: %s", e)
 
-        # Retrieve RAG context if pipeline is configured
-        rag_chunks = await self._get_rag_context(session_id, user_message)
+        # Retrieve RAG context if enabled AND material exists. Never scans or
+        # uploads host files implicitly — only previously indexed session docs.
+        rag_enabled = True
+        try:
+            rag_enabled = bool(config.get("rag_enabled"))
+        except Exception:
+            pass
+        if rag_enabled:
+            rag_chunks = await self._get_rag_context(session_id, user_message)
+        else:
+            rag_chunks = []
+            self._last_rag_mode = "disabled"
         retrieved_chunks.extend(rag_chunks)
 
         try:
@@ -675,6 +700,65 @@ class BaseReActAgent:
                     token = current_session_id.set(session_id)
                     agent_token = current_agent_id.set(self.agent_id)
                     try:
+                        # Phase D: permission broker gates every tool path.
+                        # Validation errors stay distinct from authorization:
+                        # malformed actions fail here before any approval.
+                        from ah.permissions import tools as _perm_tools
+                        from ah.permissions.broker import (
+                            ApprovalDenied as _Denied,
+                        )
+                        from ah.permissions.broker import NeedsApproval as _Needs
+                        from ah.permissions.broker import permission_broker as _broker
+                        from ah.permissions.policy import build_request as _build_req
+
+                        _spec = _perm_tools.action_for_tool(tool_name, tool_args)
+                        try:
+                            from ah.core.config import config as _cfg
+
+                            _mode = _cfg.get("execution_mode") or "ask"
+                            _sandbox_cfg = (_cfg.get("terminal_sandbox") or "disabled").lower()
+                        except Exception:
+                            _mode, _sandbox_cfg = "ask", "disabled"
+                        _backend = (
+                            "sandbox"
+                            if (_mode == "sandbox" or _sandbox_cfg == "docker")
+                            and tool_name == "terminal"
+                            else "host"
+                        )
+                        _req = _build_req(
+                            operation=_spec.get("operation", f"tool.{tool_name}"),
+                            targets=_spec.get("targets"),
+                            argv=_spec.get("argv"),
+                            shell_payload=_spec.get("shell_payload", ""),
+                            cwd=_spec.get("cwd", "."),
+                            content=_spec.get("content", ""),
+                            mode=_mode,
+                            backend=_backend,
+                            agent_id=self.agent_id,
+                            session_id=str(session_id),
+                            capabilities=_spec.get("capabilities"),
+                            network=_spec.get("network"),
+                        )
+                        try:
+                            await _broker.guard(_req)
+                        except _Needs as _need:
+                            _ap = _need.approval
+                            result = (
+                                f"Needs approval ({_ap.get('request_id')}:{_ap.get('operation')} "
+                                f"{_ap.get('target')}). The action was NOT executed. "
+                                "Ask the user to approve it (approvals list/resolve), "
+                                "or choose another path."
+                            )
+                            item["result"] = str(result)
+                            item["elapsed_ms"] = (time.monotonic() - start) * 1000
+                            return
+                        except _Denied as _den:
+                            result = (
+                                f"Permission denied: {_den.reason}. The action was NOT executed."
+                            )
+                            item["result"] = str(result)
+                            item["elapsed_ms"] = (time.monotonic() - start) * 1000
+                            return
                         result = await asyncio.wait_for(
                             registry.execute(tool_name, **tool_args),
                             timeout=tool_timeout,
@@ -876,28 +960,59 @@ class BaseReActAgent:
             logger.warning("Could not record interruption marker: %s", e)
 
     def _schedule_memory_consolidation(self, session_id: uuid.UUID) -> None:
-        """Schedule memory consolidation as a background task.
+        """Schedule memory consolidation as a bounded background task.
 
-        Errors in the background task are logged but never propagated
-        to avoid disrupting the user experience.
+        Bounded: at most one consolidation per agent instance at a time;
+        skipped when memory or consolidation is disabled. Watermark cursor
+        (see _consolidate_memories) keeps repeated runs idempotent.
         """
         if not self.memory_consolidator:
+            return
+        try:
+            if not config.get("memory_consolidation_enabled"):
+                return
+        except Exception:
+            pass
+        if any(not t.done() for t in self._consolidation_tasks):
+            logger.debug("consolidation already running, skipping duplicate")
             return
         task = asyncio.create_task(self._consolidate_memories(session_id))
         self._consolidation_tasks.add(task)
         task.add_done_callback(self._consolidation_tasks.discard)
 
     async def _consolidate_memories(self, session_id: uuid.UUID) -> None:
-        """Consolidate session context into long-term memories.
+        """Consolidate new session context into long-term memories.
 
-        Called after each agent run as a background task. Failures are logged
-        but never propagated to avoid disrupting the user experience.
+        Idempotent watermark: stores ``mem_consolidated_up_to`` (newest
+        chunk id + created_at) in session state and skips when nothing new
+        arrived since the last run, so repeated turns don't re-extract the
+        entire history into duplicates. Runs after completed turns and
+        appropriate interrupted turns (callers flush history first).
         """
         try:
+            session = await session_manager.get(session_id)
+            cursor = (session.state or {}).get("mem_consolidated_up_to") if session else None
+            try:
+                newest = await context_manager.get_chunks(session_id, limit=1)
+            except Exception:
+                newest = []
+            if cursor and newest and str(newest[0].id) == str(cursor.get("id")):
+                logger.debug("consolidation cursor unchanged, skipping")
+                return
             new_memories = await self.memory_consolidator.consolidate_session(
                 session_id=session_id,
                 agent_id=self.agent_id,
             )
+            if newest and session is not None:
+                try:
+                    state = dict(session.state or {})
+                    state["mem_consolidated_up_to"] = {
+                        "id": str(newest[0].id),
+                        "at": newest[0].created_at.isoformat() if newest[0].created_at else None,
+                    }
+                    await session_manager.update_state(session_id, state)
+                except Exception as e:
+                    logger.debug("consolidation cursor persist failed: %s", e)
             if new_memories:
                 logger.info(
                     "Consolidated %d new memories for session %s",

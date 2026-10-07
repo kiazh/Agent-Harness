@@ -148,6 +148,17 @@ DEFAULTS: dict[str, Any] = {
     "compression_target_ratio": 0.5,
     "compression_preserve_recent": 3,
     "compression_llm_summarize": True,
+    # Execution modes (Phase 5): ask | workspace | sandbox | full.
+    "execution_mode": "ask",
+    "workspace_root": "",
+    "terminal_sandbox": "disabled",
+    "terminal_image": "agent-harness-tool-sandbox:latest",
+    "approval_timeout": 300,
+    # Feature integration toggles with real enforcement.
+    "memory_consolidation_enabled": True,
+    "auto_compaction_enabled": True,
+    "eviction_max_tokens": 0,
+    "compaction_check_enabled": True,
 }
 
 # Map config keys to their legacy environment variable names
@@ -227,6 +238,16 @@ class Config:
     compression_target_ratio: float = 0.5
     compression_preserve_recent: int = 3
     compression_llm_summarize: bool = True
+    # Execution modes (Phase 5)
+    execution_mode: str = "ask"
+    workspace_root: str = ""
+    terminal_sandbox: str = "disabled"
+    terminal_image: str = "agent-harness-tool-sandbox:latest"
+    approval_timeout: int = 300
+    memory_consolidation_enabled: bool = True
+    auto_compaction_enabled: bool = True
+    eviction_max_tokens: int = 0
+    compaction_check_enabled: bool = True
 
     # Per-session overrides (not persisted to file)
     _session_overrides: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -261,6 +282,18 @@ class Config:
         """
         if key.startswith("_"):
             raise ValueError(f"Cannot set private key: {key}")
+
+        # Validated enums: a configured flag must correspond to enforced behavior.
+        if key == "execution_mode":
+            normalized = str(value).strip().lower()
+            if normalized not in ("ask", "workspace", "sandbox", "full"):
+                raise ValueError("execution_mode must be ask|workspace|sandbox|full")
+            value = normalized
+        if key == "terminal_sandbox":
+            normalized = str(value).strip().lower()
+            if normalized not in ("disabled", "local", "docker"):
+                raise ValueError("terminal_sandbox must be disabled|local|docker")
+            value = normalized
 
         # Type coercion based on defaults
         if key in DEFAULTS:

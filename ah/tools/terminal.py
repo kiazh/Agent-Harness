@@ -54,6 +54,7 @@ def _allowed_workdir_prefixes() -> tuple[str, ...]:
     """Refresh allowed prefixes from config (not frozen at import)."""
     # Respect monkeypatched ALLOWED_WORKDIR_PREFIXES in tests.
     import ah.tools.terminal as _self
+
     try:
         explicit = getattr(_self, "ALLOWED_WORKDIR_PREFIXES", None)
         # If tests override it to a tmp dir different from config, honour it.
@@ -191,9 +192,23 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
     if not args:
         raise ValidationError("Empty command")
 
-    # Check allowlist
+    # Check allowlist. In full mode (explicit session grant) any on-PATH
+    # binary is a *valid* operation — approval already authorized it via the
+    # broker; validation only rejects unknown binaries. Other modes keep the
+    # narrow allowlist.
     base_cmd = os.path.basename(args[0])
-    if base_cmd not in ALLOWED_COMMANDS:
+    try:
+        from ah.core.config import config as _cfg
+
+        _mode = (_cfg.get("execution_mode") or "ask").lower()
+    except Exception:
+        _mode = "ask"
+    if _mode == "full":
+        import shutil as _shutil
+
+        if _shutil.which(args[0]) is None and _shutil.which(base_cmd) is None:
+            raise ValidationError(f"Command '{base_cmd}' not found on PATH")
+    elif base_cmd not in ALLOWED_COMMANDS:
         raise ValidationError(f"Command '{base_cmd}' is not in the allowlist")
 
     # Tighten allowlist: block escape hatches even for allowed commands.
@@ -206,14 +221,50 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
 
     # Local subprocesses are not a security boundary: git aliases, find -exec,
     # and test runners can execute commands outside the command allowlist.
+    # Phase D: the permission broker (agent loop) already authorized this
+    # action; this layer validates backend availability. Host execution is
+    # available in ask/workspace/full modes once approved — Docker sandbox
+    # use stays independent of permission policy.
     sandbox = os.environ.get("AGENT_HARNESS_TERMINAL_SANDBOX", "disabled").lower()
-    if sandbox == "disabled":
-        raise ValidationError("terminal is disabled; configure the Docker sandbox to enable it")
-    if sandbox not in {"local", "docker"}:
+    try:
+        from ah.core.config import config as _cfg2
+
+        cfg_sandbox = (_cfg2.get("terminal_sandbox") or "").lower()
+        if cfg_sandbox in {"disabled", "local", "docker"}:
+            # Config wins when explicitly set; env stays as override for ops.
+            if os.environ.get("AGENT_HARNESS_TERMINAL_SANDBOX") is None:
+                sandbox = cfg_sandbox
+    except Exception:
+        pass
+    if sandbox not in {"disabled", "local", "docker"}:
         raise ValidationError("terminal sandbox must be 'disabled', 'local', or 'docker'")
-    if sandbox == "docker":
+    # "disabled" previously hard-rejected everything. With the broker in place,
+    # host execution proceeds once approved (mode ask/workspace/full); only
+    # sandbox mode forces container isolation.
+    try:
+        from ah.core.config import config as _cfg3
+
+        _mode3 = (_cfg3.get("execution_mode") or "ask").lower()
+    except Exception:
+        _mode3 = "ask"
+    if sandbox == "disabled" and _mode3 == "sandbox":
+        raise ValidationError("sandbox mode requires the Docker backend; Docker is not configured")
+    use_docker = sandbox == "docker" or _mode3 == "sandbox"
+    if use_docker and sandbox != "docker" and _mode3 == "sandbox":
+        raise ValidationError("sandbox mode requires the Docker backend; Docker is not configured")
+    if use_docker:
         workspace = resolved_workdir
         image = os.environ.get("AGENT_HARNESS_TERMINAL_IMAGE", "agent-harness-tool-sandbox:latest")
+        # Read-write project mounts when the approved mode allows writes
+        # (workspace/full); ask keeps read-only. The container root fs stays
+        # read-only; /tmp + /workspace (when rw) are the writable locations.
+        try:
+            from ah.core.config import config as _cfgm
+
+            _mm = (_cfgm.get("execution_mode") or "ask").lower()
+        except Exception:
+            _mm = "ask"
+        _mount_ro = "" if _mm in ("workspace", "full") else ",readonly"
         args = [
             "docker",
             "run",
@@ -236,7 +287,7 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
             "--tmpfs",
             "/tmp:rw,nosuid,size=64m",
             "--mount",
-            f"type=bind,src={workspace},dst=/workspace,readonly",
+            f"type=bind,src={workspace},dst=/workspace{_mount_ro}",
             "--workdir",
             "/workspace",
             "--env",

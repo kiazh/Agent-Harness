@@ -378,19 +378,33 @@ class MemoryRetriever:
     ) -> list[RetrievedMemory]:
         """Merge dense and sparse results, deduplicating by memory ID.
 
-        Combined score = DENSE_WEIGHT * dense_score + SPARSE_WEIGHT * sparse_score
+        Combined score = DENSE_WEIGHT * dense_score + SPARSE_WEIGHT * sparse_score,
+        multiplied by the Ebbinghaus forgetting strength (retrieval-weight
+        mode: high-importance / recently-accessed memories rank higher;
+        decayed memories rank lower but remain retrievable until evicted).
         """
+        from ah.memory.forgetting import ForgettingModel
+
+        _forgetting = ForgettingModel()
         merged: dict[uuid.UUID, RetrievedMemory] = {}
 
         for entry, score in dense_results:
+            try:
+                weight = _forgetting.current_strength(entry)
+            except Exception:
+                weight = 1.0
             merged[entry.id] = RetrievedMemory(
                 memory=entry,
-                score=score * DENSE_WEIGHT,
+                score=score * DENSE_WEIGHT * max(0.05, min(weight, 2.0)),
                 source="dense",
             )
 
         for entry, score in sparse_results:
-            sparse_score = score * SPARSE_WEIGHT
+            try:
+                weight = _forgetting.current_strength(entry)
+            except Exception:
+                weight = 1.0
+            sparse_score = score * SPARSE_WEIGHT * max(0.05, min(weight, 2.0))
             if entry.id in merged:
                 # Memory found in both — combine scores
                 existing = merged[entry.id]

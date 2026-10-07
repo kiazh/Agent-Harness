@@ -170,6 +170,7 @@ Secrets never echo, never enter history, never touch `config.yaml`.
 | `agents`, `delegate` | List/show/save agents; delegate a task |
 | `jobs` | `list · add · script · heartbeat · cron · on · off · delete` |
 | `keys` | `list · set · clear` |
+| `mode`, `approvals` | Execution mode (`ask|workspace|sandbox|full`); pending approvals (`list · allow · deny · revoke`) |
 | `models`, `model`, `provider`, `effort` | Picker; custom model; provider; reasoning effort |
 | `config` | Show/set settings (`--save` persists) |
 | `theme` | Switch skin |
@@ -209,6 +210,20 @@ YAML / DB / Soul Spec v0.5 definitions with tool allowlists and model overrides.
 - **Observability** — sanitized Postgres audit, OpenTelemetry spans, Prometheus `/metrics`, gateway log `~/.agent-harness/logs/gateway.log`.
 - **Security** — allowlisted terminal (blocks `-exec`, `git -c`), jail-checked paths (symlink/O_NOFOLLOW aware), SSRF private/multicast/redirect checks, per-IP rate limit, `.env` atomic writes + newline-injection reject, Vault/AWS/file secrets.
 - **Retry** — 429 backoff (provider 2x + agent guard, no double-stack); global rate buckets.
+
+### Execution modes & permissions
+
+`ask` (default) · `workspace` · `sandbox` · `full` — via `/mode`, `ah --mode ...`, or `ah mode`. Writes, opaque execution, and out-of-scope access pause for scoped approval instead of hard-rejecting; FULL HOST is an explicit session grant (still asks for credentials/elevation/destructive ops). Approvals: `/approvals`, TUI card, `GET/POST /api/v1/approvals`. Headless jobs pause durably as `needs_approval` and resume on a fresh claim.
+
+### What runs when
+
+- **Automatic:** turn pipeline (context+memory keyword retrieval, skill catalog), usage accounting, audit/metrics, redaction.
+- **Conditional:** dense memory retrieval (embedding key set), document RAG (indexed docs exist), delegation (task needs a specialist), auto-compaction (over budget threshold), sandbox backend (Docker present + sandbox mode).
+- **Degraded (reported, not silent):** keyword-only retrieval, passthrough rerank, unavailable sandbox.
+- **Optional:** memory consolidation/extraction, learning reviews, scheduled jobs.
+- **Offline research:** RL/GRPO training, LoCoMo eval, conformance trials — never part of chat.
+
+`ah status` derives each state from live services. Full matrix: `FEATURE_LEDGER.md`.
 
 ---
 

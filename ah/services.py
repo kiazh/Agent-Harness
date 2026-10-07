@@ -18,6 +18,7 @@ from ah.db.connection import db
 __all__ = [
     "ServiceError",
     "compress_session",
+    "maybe_auto_compact",
     "export_markdown",
     "learn_skill",
     "status_summary",
@@ -159,6 +160,72 @@ async def compress_session(
     return result
 
 
+async def maybe_auto_compact(session_id) -> dict | None:
+    """Threshold-triggered rolling compaction at a safe turn boundary.
+
+    Budgets stored rows; skips when disabled, under threshold, or when the
+    last run made no progress (loop guard). Returns a summary dict or None.
+    Call only after turn ownership is released.
+    """
+    try:
+        if not config.get("auto_compaction_enabled"):
+            return None
+        if not config.get("compression_enabled"):
+            return None
+    except Exception:
+        pass
+    try:
+        from ah.core.session import session_manager as _sessions
+
+        session = await _sessions.get(session_id)
+        if session is None:
+            return None
+        total = await context_manager.get_token_usage(session_id)
+        budget = session.context_budget or 8000
+        try:
+            threshold = float(config.get("compression_threshold") or 0.8)
+        except Exception:
+            threshold = 0.8
+        if total < int(budget * threshold):
+            return None
+        # No-progress guard: skip when a previous run already compacted at
+        # nearly this size.
+        state = session.state or {}
+        last = state.get("last_auto_compact_tokens")
+        if isinstance(last, int) and total <= last + max(100, int(budget * 0.05)):
+            return None
+        result = await compress_session(session)
+        if result is None:
+            return None
+        try:
+            state = dict(session.state or {})
+            state["last_auto_compact_tokens"] = result.compressed_tokens
+            await _sessions.update_state(session_id, state)
+        except Exception:
+            pass
+        # Eviction pass when configured (retention policy, distinct from
+        # summarization): keep reversible via archive.
+        try:
+            max_tokens = int(config.get("eviction_max_tokens") or 0)
+        except Exception:
+            max_tokens = 0
+        evicted = 0
+        if max_tokens and max_tokens > 0:
+            try:
+                evicted = await context_manager.evict_old_chunks(session_id, max_tokens=max_tokens)
+            except Exception:
+                evicted = 0
+        return {
+            "compressed": True,
+            "originalTokens": result.original_tokens,
+            "compressedTokens": result.compressed_tokens,
+            "evicted": evicted,
+            "method": result.method,
+        }
+    except Exception:
+        return None
+
+
 def learn_skill(
     source: str,
     *,
@@ -245,11 +312,66 @@ def learn_skill(
 
 
 async def status_summary() -> dict[str, Any]:
-    """Database, counts and configuration health. Requires a connected ``db``."""
+    """Database, counts, mode, and real capability health.
+
+    Every flag maps to enforced behavior or an explicit degraded/unsupported
+    state — never healthy-by-config alone. Requires a connected ``db``.
+    """
     from ah.tools.base import registry
 
     version = await db.fetchval("SELECT version()")
-    return {
+    try:
+        from ah.core.runtime import runtime_services
+
+        runtime = runtime_services.status()
+    except Exception:
+        runtime = {}
+    try:
+        from ah.memory.embeddings import embedding_status
+
+        retrieval = embedding_status()
+    except Exception:
+        retrieval = {"mode": "keyword-only"}
+    try:
+        rag_docs = await db.fetchval(
+            "SELECT COUNT(DISTINCT (payload_msgpack)) FROM context_chunks WHERE chunk_type = 'document'"
+        )
+    except Exception:
+        rag_docs = 0
+    try:
+        from ah.core.config import config as _cfg
+
+        mode = _cfg.get("execution_mode") or "ask"
+        backend = "sandbox" if mode == "sandbox" else "host"
+        workspace = _cfg.get("workspace_root") or _cfg.get("agent_harness_home") or ""
+        reranker = "passthrough"
+        try:
+            if _cfg.get("cohere_api_key"):
+                reranker = "cohere"
+        except Exception:
+            pass
+        auto_compact = bool(_cfg.get("auto_compaction_enabled") and _cfg.get("compression_enabled"))
+        extraction = (
+            "ready"
+            if bool(_cfg.get("memory_consolidation_enabled") and _cfg.get("memory_enabled"))
+            else "disabled"
+        )
+    except Exception:
+        mode, backend, workspace, reranker, auto_compact, extraction = (
+            "ask",
+            "host",
+            "",
+            "passthrough",
+            True,
+            "ready",
+        )
+    try:
+        jobs_waiting = await db.fetchval(
+            "SELECT COUNT(*) FROM jobs WHERE status = 'error' AND last_error ILIKE '%needs_approval%'"
+        )
+    except Exception:
+        jobs_waiting = 0
+    base = {
         "postgres": version.split(",")[0],
         "sessions": await db.fetchval("SELECT COUNT(*) FROM sessions"),
         "contextChunks": await db.fetchval("SELECT COUNT(*) FROM context_chunks"),
@@ -262,3 +384,22 @@ async def status_summary() -> dict[str, Any]:
         "model": config.get("model"),
         "provider": config.get("provider"),
     }
+    base.update(
+        {
+            "mode": mode,
+            "backend": backend,
+            "workspace": workspace,
+            "chatProvider": runtime.get("chat_provider", "unknown"),
+            "memoryRetrieval": retrieval.get("mode", "keyword-only"),
+            "memoryRetrievalReason": retrieval.get("reason", ""),
+            "memoryExtraction": extraction,
+            "documentRag": f"ready; {rag_docs} indexed documents",
+            "reranker": reranker,
+            "autoCompaction": "enabled" if auto_compact else "disabled",
+            "sandbox": runtime.get("sandbox", "unknown"),
+            "jobsAwaitingApproval": jobs_waiting,
+            "researchTraining": "offline, not part of chat runtime",
+            "capabilities": runtime.get("capabilities", []),
+        }
+    )
+    return base

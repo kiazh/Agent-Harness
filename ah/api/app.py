@@ -103,6 +103,11 @@ class CreateDocumentRequest(BaseModel):
     agent: str | None = None
 
 
+class ResolveApprovalRequest(BaseModel):
+    verdict: str = Field(..., min_length=1, max_length=16)
+    sessionId: uuid.UUID | None = None
+
+
 class RpcRequest(BaseModel):
     method: str = Field(..., min_length=1, max_length=100)
     params: dict[str, Any] = Field(default_factory=dict)
@@ -585,6 +590,13 @@ def create_app() -> FastAPI:
                             await _end_turn(sid)
                         except Exception:
                             pass
+                    # Phase C: auto-compaction at the safe turn boundary.
+                    try:
+                        from ah import services as _services
+
+                        await _services.maybe_auto_compact(sid)
+                    except Exception:
+                        pass
                 yield "data: [DONE]\n\n"
 
         return StreamingResponse(
@@ -771,6 +783,37 @@ def create_app() -> FastAPI:
 
         jobs = await job_store.list(session_id=sid, limit=limit)
         return {"jobs": [j.to_dict() for j in jobs]}
+
+    # ── approvals (Phase E: authenticated list/resolve, ownership enforced) ──
+
+    @app.get("/api/v1/approvals", dependencies=[Depends(require_api_key)])
+    async def list_approvals(sessionId: uuid.UUID) -> dict[str, Any]:
+        """List pending human approvals for a session (poll-based recovery)."""
+        from ah.permissions import store as _store
+
+        session = await session_manager.get(sessionId)
+        if session is None:
+            raise HTTPException(404, "session not found")
+        return {"approvals": await _store.list_pending(str(sessionId))}
+
+    @app.post("/api/v1/approvals/{request_id}/resolve", dependencies=[Depends(require_api_key)])
+    async def resolve_approval(request_id: str, req: ResolveApprovalRequest) -> dict[str, Any]:
+        """Resolve a pending approval. Ownership enforced via stored session binding."""
+        from ah.permissions import store as _store
+
+        rec = await _store.get_approval(request_id)
+        if rec is None:
+            raise HTTPException(404, "approval not found")
+        if req.sessionId is not None and str(rec.get("session_id")) != str(req.sessionId):
+            raise HTTPException(403, "approval does not belong to this session")
+        verdict = req.verdict.lower()
+        if verdict not in ("approved", "denied"):
+            raise HTTPException(400, "verdict must be approved|denied")
+        # Authenticated API principal (never agent: prefix).
+        resolved = await _store.resolve_approval(request_id, verdict, principal="http")
+        if resolved is None:
+            raise HTTPException(409, "approval already consumed or not permitted")
+        return {"approval": {"requestId": request_id, "status": verdict}}
 
     # ── agents ──────────────────────────────────────────────────────────────
 

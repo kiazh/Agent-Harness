@@ -46,6 +46,13 @@ from ah.gateway.features.memory import (
     memory_share,
     memory_stats,
 )
+from ah.gateway.features.mode import (
+    approvals_list,
+    approvals_resolve,
+    mode_get,
+    mode_revoke,
+    mode_set,
+)
 from ah.gateway.features.secrets import secrets_clear, secrets_list, secrets_set
 from ah.gateway.features.sessions import (
     context_compress,
@@ -130,6 +137,11 @@ METHODS: dict[str, Handler] = {
     "jobs.list": jobs_list,
     "jobs.setEnabled": jobs_set_enabled,
     "jobs.delete": jobs_delete,
+    "mode.get": mode_get,
+    "mode.set": mode_set,
+    "mode.revoke": mode_revoke,
+    "approvals.list": approvals_list,
+    "approvals.resolve": approvals_resolve,
 }
 
 

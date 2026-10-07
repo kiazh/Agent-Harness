@@ -86,8 +86,32 @@ class Orchestrator:
         # Injectable so tests can supply a fake agent without an API key.
         # AH-023: only the default factory creates owned providers that this
         # scope must close; injected factories manage their own lifecycle.
+        # Phase 4.5/6: default path uses the shared definition-aware factory
+        # (same pipeline, permission broker, accounting, cancellation).
         self._owns_factory_agents = agent_factory is None
-        self._agent_factory = agent_factory or self._build_agent
+        self._agent_factory = agent_factory
+        self._parent_authority: dict | None = None
+
+    async def _default_agent(self, definition: AgentDef, authority: dict | None = None):
+        from ah.core.agent_factory import build_agent_for_session, cap_child_authority
+        from ah.core.models import Session as _Session
+
+        tools = cap_child_authority(authority or {}, definition.tools or None)
+        # Build through the shared factory for identical dependency wiring;
+        # synthesize a session view carrying the child identity.
+        import uuid as _uuid
+
+        view = _Session(
+            id=_uuid.uuid4(),
+            agent_id=definition.name,
+            model=definition.model,
+            provider=definition.provider,
+        )
+        agent = await build_agent_for_session(view, authority=authority)
+        # Enforce the capped tool list (definition ∩ parent caps).
+        if tools is not None:
+            agent.allowed_tools = tools
+        return agent
 
     def _build_agent(self, definition: AgentDef) -> ReActAgent:
         from ah.core.provider import get_provider
@@ -142,7 +166,15 @@ class Orchestrator:
         )
         message_id = await self._record_start(parent_session_id, from_agent, agent_name, task)
 
-        agent = self._agent_factory(definition)
+        # Phase 4.5/6: same factory/accounting/cancellation pipeline as normal
+        # turns. Custom test factories bypass (sync call); default path is
+        # async shared-factory with parent authority caps. Child authority
+        # never exceeds parent caps nor its own definition.
+        parent_authority = dict(self._parent_authority or {})
+        if self._agent_factory is not None:
+            agent = self._agent_factory(definition)
+        else:
+            agent = await self._default_agent(definition, authority=parent_authority)
         depth_token = delegation_depth.set(_hop_count)
         loop = asyncio.get_running_loop()
         deadline_token = delegation_deadline.set(
