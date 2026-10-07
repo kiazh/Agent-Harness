@@ -391,6 +391,18 @@ agent-harness/
 
 ---
 
+## Hang prevention
+
+All end-of-turn cleanup is bounded and lifecycle-managed:
+
+- **Learning tasks**: 2s bounded join, then leftovers cancelled (never blocks answer completion)
+- **Provider close**: 5s bounded timeout, claim release in independent outer finally
+- **Auto-compaction**: fire-and-forget background task, never blocks [DONE] or stream close
+- **Claim release**: always runs in outer finally, independent of provider close errors or cancellation
+- **Progress stages**: sanitized stage tracking (turn_started → building_agent → waiting_for_provider → running_tool → joining_optional_work → closing_owned_clients → releasing_ownership → compaction_maintenance → answer_complete) for hang diagnosis
+
+See `FEATURE_LEDGER.md` for detailed fix mapping (H-01 through H-07, R-01 through R-04).
+
 ## Troubleshooting
 
 | Symptom | Fix |

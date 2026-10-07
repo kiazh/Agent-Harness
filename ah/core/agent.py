@@ -707,7 +707,20 @@ class BaseReActAgent:
                     try:
                         from ah.core.agent_factory import parent_authority_var as _pav
 
-                        authority_token = _pav.set({"tools": self.allowed_tools})
+                        # R-02: Preserve inherited authority (max_mode, etc.)
+                        # and intersect its tools with this agent's definition.
+                        _inherited = _pav.get() or {}
+                        _merged = dict(_inherited)
+                        _parent_tools = _inherited.get("tools")
+                        if _parent_tools is None:
+                            _merged["tools"] = self.allowed_tools
+                        elif self.allowed_tools is None:
+                            _merged["tools"] = list(_parent_tools)
+                        else:
+                            _merged["tools"] = [
+                                t for t in self.allowed_tools if t in _parent_tools
+                            ]
+                        authority_token = _pav.set(_merged)
                     except Exception:
                         authority_token = None
                     try:
@@ -1091,12 +1104,17 @@ class BaseReActAgent:
                 agent_id=self.agent_id,
                 since=since,
             )
-            if newest and session is not None:
+            # R-03: Advance watermark only to the last successfully processed
+            # chunk, NOT to the session's newest chunk. When pending input
+            # exceeds the batch limit, the newest chunk is beyond what was
+            # actually processed.
+            processed_up_to = getattr(self.memory_consolidator, "_last_processed_chunk", None)
+            if processed_up_to and session is not None:
                 try:
                     state = dict(session.state or {})
                     state["mem_consolidated_up_to"] = {
-                        "id": str(newest[0].id),
-                        "at": newest[0].created_at.isoformat() if newest[0].created_at else None,
+                        "id": str(processed_up_to["id"]),
+                        "at": processed_up_to["at"],
                     }
                     await session_manager.update_state(session_id, state)
                 except Exception as e:

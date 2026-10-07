@@ -417,15 +417,6 @@ class ContextCompressor:
             except UsageBudgetExceededError:
                 logger.warning("Summarization skipped: budget exhausted, using truncation")
                 raise
-            except TypeError:
-                # Legacy stub providers exposing only complete(messages,
-                # temperature, max_tokens): direct call, still counted when
-                # the provider reports usage.
-                response = await llm_provider.complete(
-                    messages=[{"role": "user", "content": summary_prompt}],
-                    temperature=0.3,
-                    max_tokens=500,
-                )
 
             summary_text = response.content
 

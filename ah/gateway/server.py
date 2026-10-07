@@ -161,6 +161,9 @@ class Gateway:
         self._turn_locks: dict[str, asyncio.Lock] = {}
         self._turn_tokens: dict[str, str] = {}
         self._turn_progress: dict[str, dict[str, int]] = {}
+        # H-07: Sanitized progress stage tracker for hang diagnosis.
+        # Records the current stage for each turn without logging sensitive data.
+        self._turn_stages: dict[str, dict[str, Any]] = {}
         # Pending human approvals by request_id (Phase E). The broker's
         # approval handler emits permission.required and awaits the future;
         # approvals.resolve completes it. Reconnect-safe via durable DB rows.
@@ -197,6 +200,26 @@ class Gateway:
     def turn_running(self, session_id: uuid.UUID) -> bool:
         task = self._turns.get(str(session_id))
         return task is not None and not task.done()
+
+    def _record_stage(self, turn_id: str, stage: str, **details: Any) -> None:
+        """Record a progress stage for hang diagnosis (H-07).
+
+        Sanitized: no raw keys, prompts, tool payloads, or credentials.
+        Records: stage name, timestamp, elapsed time, and safe metadata.
+        """
+        import time as _time
+
+        now = _time.monotonic()
+        existing = self._turn_stages.get(turn_id)
+        if existing:
+            existing["elapsed_ms"] = int((now - existing["started_at"]) * 1000)
+        self._turn_stages[turn_id] = {
+            "stage": stage,
+            "started_at": now,
+            "elapsed_ms": 0,
+            "details": {k: v for k, v in details.items() if k in ("session_id", "turn_id")},
+        }
+        logger.debug("Turn %s stage: %s", turn_id, stage)
 
     def cancel_turn_approvals(self, turn_id: str) -> int:
         """Cancel pending approval waits for ONE turn (LP additional check).
@@ -522,6 +545,7 @@ class Gateway:
     async def _run_turn(self, session_id: uuid.UUID, turn_id: str, text: str) -> None:
         """Run one agent turn, translating agent stream events into protocol events."""
         sid = str(session_id)
+        self._record_stage(turn_id, "turn_started", session_id=sid)
 
         def emit(event_type: str, **fields: Any) -> None:
             self._write(
@@ -620,7 +644,9 @@ class Gateway:
                 emit("error", message="agent factory unavailable; turn aborted")
                 complete()
                 return
+            self._record_stage(turn_id, "building_agent", session_id=sid)
             agent = await build_agent_for_session(session)
+            self._record_stage(turn_id, "waiting_for_provider", session_id=sid)
             async for event in agent.run_stream(session_id, text, verbose=False):
                 if event.type == "text":
                     safe = _turn_redactor.feed(event.content or "")
@@ -628,6 +654,7 @@ class Gateway:
                         emit("message.delta", text=safe)
                 elif event.type == "tool_call":
                     tool_count += 1
+                    self._record_stage(turn_id, "running_tool", session_id=sid)
                     # AH-020: prefer the agent's stable call ID so out-of-order
                     # completions pair correctly; fall back to turn counter.
                     tool_id = getattr(event, "tool_call_id", "") or f"{turn_id}-{tool_count}"
@@ -693,6 +720,7 @@ class Gateway:
             complete()
             return
         finally:
+            self._record_stage(turn_id, "cleanup_started", session_id=sid)
             # Release the approval handler and cancel any still-pending
             # approval waits (cancellation stops owned waits, not siblings).
             try:
@@ -702,52 +730,65 @@ class Gateway:
             except Exception:
                 pass
             self.cancel_turn_approvals(turn_id)
-            # Join background learning reviews BEFORE closing the owned
-            # provider they read through; then close owned providers only.
-            if agent is not None:
-                try:
-                    await asyncio.gather(
-                        *getattr(agent, "_learning_tasks", ()), return_exceptions=True
-                    )
-                except Exception:
-                    pass
-            # AH-023: close only owned providers; shared/injected factories
-            # (tests) must not be closed here.
-            if agent is not None:
-                try:
-                    from ah.core.agent_factory import close_agent_provider
-
-                    await close_agent_provider(agent)
-                except Exception:
-                    # Fallback for legacy factories that set _owns_provider.
+            # H-01/H-02: Bounded cleanup contract.
+            # 1. Learning tasks: bounded join, then cancel leftovers.
+            # 2. Provider close: bounded with timeout.
+            # 3. Claim release: independent outer finally, always runs.
+            try:
+                _learning = tuple(getattr(agent, "_learning_tasks", ())) if agent is not None else ()
+                if _learning:
+                    self._record_stage(turn_id, "joining_optional_work", session_id=sid)
                     try:
-                        if getattr(agent, "_owns_provider", False):
-                            prov = getattr(agent, "provider", None)
-                            close = getattr(prov, "close", None)
-                            if callable(close):
-                                import inspect as _inspect
+                        await asyncio.wait_for(
+                            asyncio.gather(*_learning, return_exceptions=True),
+                            timeout=2,
+                        )
+                    except (TimeoutError, asyncio.CancelledError, Exception):
+                        for _t in _learning:
+                            try:
+                                if not _t.done():
+                                    _t.cancel()
+                            except Exception:
+                                pass
+            finally:
+                # Claim release in independent outer finally.
+                try:
+                    self._record_stage(turn_id, "closing_owned_clients", session_id=sid)
+                    # AH-023: close only owned providers, bounded.
+                    if agent is not None:
+                        try:
+                            from ah.core.agent_factory import close_agent_provider
 
-                                r = close()
-                                if _inspect.isawaitable(r):
-                                    await r
+                            await asyncio.wait_for(
+                                close_agent_provider(agent),
+                                timeout=5,
+                            )
+                        except (TimeoutError, asyncio.CancelledError):
+                            logger.warning("Provider close timed out for session %s", sid)
+                        except Exception:
+                            logger.exception(
+                                "Could not close turn provider for session %s", sid
+                            )
+                finally:
+                    self._record_stage(turn_id, "releasing_ownership", session_id=sid)
+                    if self._turns.get(sid) is asyncio.current_task():
+                        del self._turns[sid]
+                    # Owner-token release on EVERY exit (success/failure/cancel/timeout).
+                    # Stale-safe: only this turn's token clears its own claim.
+                    try:
+                        from ah.core.turns import end_turn as _end_turn
+
+                        token = self._turn_tokens.pop(sid, None)
+                        if token:
+                            await _end_turn(session_id, token)
                     except Exception:
                         pass
-            if self._turns.get(sid) is asyncio.current_task():
-                del self._turns[sid]
-            # Owner-token release on EVERY exit (success/failure/cancel/timeout).
-            # Stale-safe: only this turn's token clears its own claim.
-            try:
-                from ah.core.turns import end_turn as _end_turn
-
-                token = self._turn_tokens.pop(sid, None)
-                if token:
-                    await _end_turn(session_id, token)
-            except Exception:
-                pass
         complete(final)
+        self._record_stage(turn_id, "answer_complete", session_id=sid)
         # Phase C: threshold-triggered auto-compaction at the safe turn
         # boundary (ownership released above). Bounded fire-and-forget.
         try:
+            self._record_stage(turn_id, "compaction_maintenance", session_id=sid)
             from ah import services as _services
 
             task = asyncio.create_task(_services.maybe_auto_compact(session_id))

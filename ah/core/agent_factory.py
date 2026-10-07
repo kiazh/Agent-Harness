@@ -145,7 +145,7 @@ async def build_agent_for_session(
         except Exception:
             memory_consolidator = None
 
-    rag_pipeline = _shared_rag_pipeline()
+    rag_pipeline = await _shared_rag_pipeline()
 
     # Authority caps (LP-08): key presence/None semantics, never truthiness.
     # tools absent/None = no parent restriction; [] = zero permitted tools.

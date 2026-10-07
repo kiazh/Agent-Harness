@@ -510,6 +510,13 @@ def create_app() -> FastAPI:
         async def event_stream() -> AsyncGenerator[str, None]:
             agent = None
             _stream_cancelled = False
+            _stage = "turn_started"
+
+            def _record_stage(stage: str) -> None:
+                nonlocal _stage
+                _stage = stage
+                logger.debug("Session %s stage: %s", session_id, stage)
+
             # Boundary-safe streaming redaction: hold back a tail across
             # deltas so a secret split at any boundary never leaks (AH-001).
             # Final flush redacts the remainder; the done event carries the
@@ -520,7 +527,9 @@ def create_app() -> FastAPI:
                 # cannot bypass allowed_tools/persona via direct HTTP.
                 from ah.core.agent_factory import build_agent_for_session
 
+                _record_stage("building_agent")
                 agent = await build_agent_for_session(session)
+                _record_stage("waiting_for_provider")
                 # Total turn timeout: a per-anext wait_for against a fixed
                 # deadline so a hung provider cannot hold the stream forever.
                 try:
@@ -575,54 +584,75 @@ def create_app() -> FastAPI:
                 _stream_cancelled = True
                 raise
             finally:
+                _record_stage("cleanup_started")
+                # H-01/H-02/H-03/H-06: Bounded cleanup contract.
+                # 1. Learning tasks: bounded join, then cancel leftovers.
+                # 2. Provider close: bounded with timeout.
+                # 3. Claim release: independent outer finally, always runs.
+                # 4. Auto-compaction: fire-and-forget, never blocks [DONE].
                 try:
                     _learning = tuple(getattr(agent, "_learning_tasks", ())) if agent is not None else ()
                     if _learning:
-                        if _stream_cancelled:
-                            # Consumer gone: bounded join, then cancel
-                            # leftovers so nothing hangs the shutdown.
+                        _record_stage("joining_optional_work")
+                        # Bounded join: learning reviews must never block
+                        # normal answer completion indefinitely.
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.gather(*_learning, return_exceptions=True),
+                                timeout=2,
+                            )
+                        except (TimeoutError, asyncio.CancelledError, Exception):
+                            for _t in _learning:
+                                try:
+                                    if not _t.done():
+                                        _t.cancel()
+                                except Exception:
+                                    pass
+                finally:
+                    # Claim release in independent outer finally so provider
+                    # close errors or cancellation cannot skip it (H-02).
+                    try:
+                        _record_stage("closing_owned_clients")
+                        # AH-023: close only owned providers, bounded.
+                        if agent is not None:
                             try:
+                                from ah.core.agent_factory import close_agent_provider
+
                                 await asyncio.wait_for(
-                                    asyncio.gather(*_learning, return_exceptions=True),
+                                    close_agent_provider(agent),
                                     timeout=5,
                                 )
-                            except (TimeoutError, asyncio.CancelledError, Exception):
-                                for _t in _learning:
-                                    try:
-                                        if not _t.done():
-                                            _t.cancel()
-                                    except Exception:
-                                        pass
-                        else:
-                            # Normal completion: reviews finish before the
-                            # provider closes beneath them.
-                            await asyncio.gather(*_learning, return_exceptions=True)
-                finally:
-                    # AH-023: close only owned providers.
-                    if agent is not None:
-                        try:
-                            from ah.core.agent_factory import close_agent_provider
-
-                            await close_agent_provider(agent)
-                        except Exception:
-                            logger.exception(
-                                "Could not close prompt provider for session %s", session_id
-                            )
-                    if turn_token:
-                        try:
-                            await _end_turn(sid, turn_token)
-                        except Exception:
-                            pass
-                    # Phase C: auto-compaction at the safe turn boundary
-                    # (skipped for cancelled turns; the next boundary handles it).
+                            except (TimeoutError, asyncio.CancelledError):
+                                logger.warning(
+                                    "Provider close timed out for session %s", session_id
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "Could not close prompt provider for session %s",
+                                    session_id,
+                                )
+                    finally:
+                        _record_stage("releasing_ownership")
+                        if turn_token:
+                            try:
+                                await _end_turn(sid, turn_token)
+                            except Exception:
+                                pass
+                    # H-03: Auto-compaction is fire-and-forget background work.
+                    # Never blocks [DONE] or holds the stream open.
                     if not _stream_cancelled:
+                        _record_stage("compaction_maintenance")
                         try:
                             from ah import services as _services
 
-                            await _services.maybe_auto_compact(sid)
+                            task = asyncio.create_task(_services.maybe_auto_compact(sid))
+                            task.add_done_callback(
+                                lambda t: t.exception() if not t.cancelled() else None
+                            )
                         except Exception:
                             pass
                 if not _stream_cancelled:
+                    _record_stage("answer_complete")
                     yield "data: [DONE]\n\n"
 
         return StreamingResponse(

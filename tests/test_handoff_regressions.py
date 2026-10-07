@@ -274,7 +274,7 @@ async def test_acompress_llm_path_is_awaited_directly():
     ]
 
     class _Provider:
-        async def complete(self, messages, temperature=0.3, max_tokens=500):
+        async def complete(self, messages, temperature=0.3, max_tokens=500, tools=None):
             await asyncio.sleep(0.01)
             from ah.core.models import LLMResponse
 

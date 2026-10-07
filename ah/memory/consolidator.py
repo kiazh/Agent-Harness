@@ -121,6 +121,14 @@ class MemoryConsolidator:
             logger.debug("No chunks to consolidate for session %s", session_id)
             return []
 
+        # R-03: Track the last successfully processed chunk for watermark
+        # advancement. The caller uses this to advance the cursor only to
+        # what was actually processed, not to the session's newest chunk.
+        self._last_processed_chunk = {
+            "id": str(chunks[-1].id),
+            "at": chunks[-1].created_at.isoformat() if chunks[-1].created_at else None,
+        }
+
         # Step 1: Format conversation for LLM
         conversation = self._format_conversation(chunks)
 

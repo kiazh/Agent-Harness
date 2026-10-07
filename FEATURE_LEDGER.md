@@ -2,6 +2,27 @@
 
 Checked matrix: implementation → entry points → dependency → trigger → config → fallback → lifecycle → proof test. Statuses: automatic (every turn), conditional (when triggered/material exists), degraded (fallback reported), optional (explicit), offline (research-only).
 
+## Hang fixes (2026-10-07)
+
+| Fix | Location | Change | Proof |
+|---|---|---|---|
+| H-01 | `ah/api/app.py::event_stream`, `ah/gateway/server.py::_run_turn` | Learning tasks bounded join (2s timeout) on all paths; leftovers cancelled | `test_gateway.py` turn tests |
+| H-02 | same | Provider close bounded (5s timeout); claim release in independent outer finally | `test_gateway.py` turn tests |
+| H-03 | `ah/api/app.py::event_stream` | Auto-compaction fire-and-forget (create_task); never blocks [DONE] | `test_gateway.py` turn tests |
+| H-04 | `ah/services.py::compress_session` | Ownership try/finally starts immediately after claim acquisition; all reads/config/provider/compression/persistence inside ownership lifetime | `test_handoff_regressions.py::test_acompress_llm_path_is_awaited_directly` |
+| H-05 | `ah/core/agent_factory.py` | RAG pipeline awaited in async factory; injected pipeline is actual service object, never coroutine | `test_gateway.py` RAG tests (no more `'coroutine' object has no attribute 'search'`) |
+| H-06 | `ah/api/app.py::event_stream` | Generator closure/cancellation contract: bounded cleanup, claim release independent of provider close, no yield after cancellation | `test_gateway.py` turn tests |
+| H-07 | `ah/gateway/server.py`, `ah/api/app.py` | Sanitized progress stage tracking: turn_started, building_agent, waiting_for_provider, running_tool, joining_optional_work, closing_owned_clients, releasing_ownership, compaction_maintenance, answer_complete | Debug logs in test output |
+
+## Correctness fixes (2026-10-07)
+
+| Fix | Location | Change | Proof |
+|---|---|---|---|
+| R-01 | `ah/core/compression.py::_llm_summarize` | Removed TypeError fallback that bypassed accounting; test doubles adapted to match real provider interface | `test_handoff_regressions.py::test_acompress_llm_path_is_awaited_directly` |
+| R-02 | `ah/core/agent.py` | Per-tool authority preserves inherited mode caps; intersects parent tools with agent definition | `test_audit_regressions.py` tool allowlist tests |
+| R-03 | `ah/core/agent.py`, `ah/memory/consolidator.py` | Consolidation watermark advances only to last successfully processed chunk, not session's newest chunk | `test_bug9_bug15_fixes.py` consolidation tests |
+| R-04 | `ah/services.py::_estimate_next_request` | Next-request estimate includes mandatory system/persona instructions; measures actual message list | `test_handoff_regressions.py` compression tests |
+
 ## Runtime
 
 | Feature | Implementation | Entry points | Dependency | Trigger | Config | Fallback | Lifecycle | Proof |

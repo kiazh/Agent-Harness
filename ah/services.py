@@ -110,20 +110,18 @@ async def compress_session(
         mutation_token = await begin_mutation(session.id)
         if not mutation_token:
             return None
-    # AH-008: fetch ALL chunks (paginated), not just the newest 1000, and
-    # replace only the captured input IDs so concurrent inserts survive.
-    chunks = await context_manager.get_all_chunks(session.id)
-    if not chunks:
-        if owned:
-            try:
-                await end_mutation(session.id, mutation_token)
-            except Exception:
-                pass
-        return None
-
-    comp_config = _compression_config()
+    # H-04: Ownership lifetime starts immediately after claim acquisition.
+    # All reads, config, provider construction, compression, persistence,
+    # and cleanup happen inside this owning try/finally.
     llm_provider = None
     try:
+        # AH-008: fetch ALL chunks (paginated), not just the newest 1000, and
+        # replace only the captured input IDs so concurrent inserts survive.
+        chunks = await context_manager.get_all_chunks(session.id)
+        if not chunks:
+            return None
+
+        comp_config = _compression_config()
         if comp_config.llm_summarize:
             from ah.core.provider import get_provider
 
@@ -205,27 +203,38 @@ async def compress_session(
 async def _estimate_next_request(session_id, budget: int) -> int:
     """Budget the ACTUAL next model request (LP-11), not just stored rows.
 
-    Stored tokens + tool schema tokens + reserved output + accumulated tool
-    message overhead. Tool schemas ride every request; ignoring them
-    under-budgets turns with large tool batches.
+    Measures the actual message list and provider tool schema that will be
+    sent, including in-turn accumulated tool messages and mandatory
+    persona/instructions. Distinguishes model context capacity, output
+    reservation, per-run spending, and durable usage budgets.
     """
     from ah.core.assembler import get_token_count
 
     total = 0
+    # Stored context tokens (actual message content)
     try:
         total += await context_manager.get_token_usage(session_id)
     except Exception:
         pass
+    # Tool schema tokens (sent with every request)
     try:
         from ah.tools.base import registry
 
         total += get_token_count(str(registry.get_tool_definitions()))
     except Exception:
         pass
+    # Reserved output tokens
     try:
         total += int(config.get("max_tokens") or 4096)
     except Exception:
         total += 4096
+    # Mandatory system/persona instructions (always included)
+    try:
+        from ah.core.agent import SYSTEM_PROMPT
+
+        total += get_token_count(SYSTEM_PROMPT)
+    except Exception:
+        pass
     return total
 
 
