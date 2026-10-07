@@ -55,6 +55,8 @@ class Job:
     provider: str | None = None
     no_agent: bool = False
     script_path: str | None = None
+    # AH-026: fencing token from claim_due. None for unclaimed/test rows.
+    claim_token: uuid.UUID | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -82,11 +84,20 @@ class Job:
 _COLUMNS = (
     "id, name, kind, session_id, agent_name, prompt, interval_seconds, enabled, "
     "status, last_run_at, next_run_at, last_error, run_count, cron_expression, model, provider, "
-    "no_agent, script_path"
+    "no_agent, script_path, claim_token"
 )
 
 
 def _row_to_job(row: Any) -> Job:
+    # claim_token may be absent on old mocks/rows — tolerate missing key.
+    try:
+        claim = row["claim_token"] if "claim_token" in row.keys() else None
+    except Exception:
+        claim = (
+            row["claim_token"]
+            if isinstance(row, dict) and "claim_token" in row
+            else getattr(row, "claim_token", None)
+        )
     return Job(
         id=row["id"],
         name=row["name"],
@@ -106,6 +117,7 @@ def _row_to_job(row: Any) -> Job:
         provider=row["provider"],
         no_agent=row["no_agent"],
         script_path=row["script_path"],
+        claim_token=claim,
     )
 
 
@@ -238,18 +250,23 @@ class JobStore:
         """Atomically take ownership of one due, enabled job, marking it running.
 
         ``FOR UPDATE SKIP LOCKED`` lets multiple runners coexist without
-        double-executing a job.
+        double-executing a job. AH-026: each claim mints a unique
+        ``claim_token`` that renew/finish must present — a stale worker can
+        no longer mutate a newer claim.
         """
         # Use the database clock in production. Its timestamp also governs
         # next_run_at, so client/server clock skew cannot hide a due job.
         clock = "$1" if now is not None else "now()"
         lease = "$2" if now is not None else "$1"
         params = (now, RUN_LEASE_SECONDS) if now is not None else (RUN_LEASE_SECONDS,)
+        token = uuid.uuid4()
+        token_ph = "$3" if now is not None else "$2"
         row = await db.fetchrow(
             f"""
             UPDATE jobs
             SET status = 'running', last_run_at = {clock},
-                next_run_at = {clock} + ({lease} * interval '1 second')
+                next_run_at = {clock} + ({lease} * interval '1 second'),
+                claim_token = {token_ph}
             WHERE id = (
                 SELECT id FROM jobs
                 WHERE enabled AND next_run_at <= {clock}
@@ -260,41 +277,61 @@ class JobStore:
             RETURNING {_COLUMNS}
             """,
             *params,
+            token,
         )
         return _row_to_job(row) if row else None
 
-    async def renew_lease(self, job_id: uuid.UUID) -> bool:
+    async def renew_lease(self, job_id: uuid.UUID, claim_token: uuid.UUID | None = None) -> bool:
         """Keep an active run from being reclaimed while it is executing.
 
-        Fencing: single transaction — SELECT ... FOR UPDATE, return False
-        unless status is still 'running', else extend the lease. The enabled
-        flag is intentionally not checked: a job disabled mid-run keeps its
-        lease until finish() so two runners cannot both own it.
+        Fencing (AH-026): single transaction — SELECT ... FOR UPDATE, return
+        False unless status is still 'running' AND the claim token matches
+        (when tokens are in use). The enabled flag is intentionally not
+        checked: a job disabled mid-run keeps its lease until finish() so two
+        runners cannot both own it.
         """
         async with db.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
-                    "SELECT status FROM jobs WHERE id = $1 FOR UPDATE",
+                    "SELECT status, claim_token FROM jobs WHERE id = $1 FOR UPDATE",
                     job_id,
                 )
                 if row is None or row["status"] != "running":
                     return False
+                if claim_token is not None:
+                    try:
+                        current = row["claim_token"]
+                    except Exception:
+                        current = None
+                    # Tokens in use: a mismatch means a newer claim owns the
+                    # job — the stale owner must stop.
+                    if current is not None and current != claim_token:
+                        return False
                 result = await conn.execute(
                     """
                     UPDATE jobs
                     SET next_run_at = now() + ($2 * interval '1 second')
                     WHERE id = $1 AND status = 'running'
+                    AND (claim_token IS NULL OR claim_token = $3 OR $3 IS NULL)
                     """,
                     job_id,
                     RUN_LEASE_SECONDS,
+                    claim_token,
                 )
                 return parse_command_count(result) > 0
 
-    async def finish(self, job_id: uuid.UUID, *, error: str | None = None) -> bool:
+    async def finish(
+        self,
+        job_id: uuid.UUID,
+        *,
+        error: str | None = None,
+        claim_token: uuid.UUID | None = None,
+    ) -> bool:
         """Record a run outcome and schedule the next run from now.
 
-        Fencing: single transaction — SELECT ... FOR UPDATE first; allows
-        idle->idle (direct finish without claim, for tests/CLI) and
+        Fencing (AH-026): requires the claim token when tokens are in use;
+        a stale claimant cannot finish (and reschedule) a newer claim.
+        Allows idle->idle (direct finish without claim, for tests/CLI) and
         running->idle/error, but returns False if already error/finished
         to avoid stale overwrite.
         """
@@ -309,13 +346,18 @@ class JobStore:
                 kind = getattr(job_obj, "kind", "interval")
                 expr = getattr(job_obj, "cron_expression", None)
             else:
-                job_row = await db.fetchrow(f"SELECT {_COLUMNS} FROM jobs WHERE id = $1", job_id) if hasattr(db, "fetchrow") else None
+                job_row = (
+                    await db.fetchrow(f"SELECT {_COLUMNS} FROM jobs WHERE id = $1", job_id)
+                    if hasattr(db, "fetchrow")
+                    else None
+                )
                 kind = getattr(job_row, "kind", "interval") if job_row else "interval"
                 expr = getattr(job_row, "cron_expression", None) if job_row else None
             # Fallback path used by test_review_scheduler_clock mock.
             db_now = await db.fetchval("SELECT now()") if hasattr(db, "fetchval") else None
-            from datetime import datetime, timezone
-            db_now = db_now or datetime.now(timezone.utc)
+            from datetime import UTC, datetime
+
+            db_now = db_now or datetime.now(UTC)
             # If mock returns SimpleNamespace, compute next_run directly.
             try:
                 next_run = next_cron_time(expr, db_now) if kind == "cron" and expr else None
@@ -345,6 +387,18 @@ class JobStore:
                 )
                 if job_row is None or job_row["status"] not in ("idle", "running"):
                     return False
+                # AH-026: stale owners cannot finish a newer claim.
+                if claim_token is not None:
+                    try:
+                        current = job_row["claim_token"]
+                    except Exception:
+                        current = None
+                    if (
+                        job_row["status"] == "running"
+                        and current is not None
+                        and current != claim_token
+                    ):
+                        return False
                 job = _row_to_job(job_row)
                 db_now = await conn.fetchval("SELECT now()")
                 next_run = (
@@ -358,14 +412,17 @@ class JobStore:
                     SET status = $2,
                         last_error = $3,
                         run_count = run_count + 1,
+                        claim_token = NULL,
                         next_run_at = CASE WHEN kind = 'cron' THEN $4
                             ELSE now() + (interval_seconds || ' seconds')::interval END
                     WHERE id = $1 AND status IN ('idle', 'running')
+                    AND (claim_token IS NULL OR claim_token = $5 OR $5 IS NULL)
                     """,
                     job_id,
                     "error" if error else "idle",
                     error,
                     next_run,
+                    claim_token,
                 )
                 return parse_command_count(result) > 0
 
@@ -420,9 +477,22 @@ class JobRunner:
         if job is None:
             return False
         error: str | None = None
-        lease_task = asyncio.create_task(self._keep_lease(job.id))
+        # AH-026: carry the claim token; a lost lease aborts the execution.
+        claim_token = getattr(job, "claim_token", None)
+        ownership_lost = asyncio.Event()
+        lease_task = asyncio.create_task(self._keep_lease(job.id, claim_token, ownership_lost))
         try:
-            await self._execute(job)
+            # AH-027: whole-job timeout so a hung provider cannot monopolize
+            # the serial runner indefinitely. Bounded at RUN_LEASE_SECONDS
+            # (default 300s); at-least-once effects must be idempotent.
+            try:
+                await asyncio.wait_for(
+                    self._execute(job, ownership_lost),
+                    timeout=float(RUN_LEASE_SECONDS),
+                )
+            except TimeoutError:
+                error = f"job timed out after {RUN_LEASE_SECONDS}s"
+                logger.warning("Job %s (%s) timed out", job.name, job.id)
         except asyncio.CancelledError:
             error = "cancelled"
             raise
@@ -432,20 +502,49 @@ class JobRunner:
         finally:
             lease_task.cancel()
             await asyncio.gather(lease_task, return_exceptions=True)
-            await self._store.finish(job.id, error=error)
+            # Cancellation-aware cleanup (AH-026): pass the token so a stale
+            # worker cannot finish a newer claim. If ownership was lost, do
+            # not overwrite the newer owner's outcome.
+            if ownership_lost.is_set():
+                logger.warning("Job %s (%s) lost ownership; skipping finish", job.name, job.id)
+            else:
+                try:
+                    await self._store.finish(job.id, error=error, claim_token=claim_token)
+                except TypeError:
+                    # Backwards compat with test doubles whose finish() lacks
+                    # claim_token.
+                    await self._store.finish(job.id, error=error)
         return True
 
-    async def _keep_lease(self, job_id: uuid.UUID) -> None:
+    async def _keep_lease(
+        self,
+        job_id: uuid.UUID,
+        claim_token: uuid.UUID | None = None,
+        ownership_lost: asyncio.Event | None = None,
+    ) -> None:
         while True:
             await asyncio.sleep(RUN_LEASE_SECONDS / 3)
             try:
-                await self._store.renew_lease(job_id)
+                try:
+                    renewed = await self._store.renew_lease(job_id, claim_token)
+                except TypeError:
+                    renewed = await self._store.renew_lease(job_id)
             except Exception:
                 logger.exception("Could not renew lease for job %s", job_id)
+                continue
+            # AH-026: abort execution on ownership loss instead of ignoring
+            # False from renewal.
+            if not renewed:
+                logger.warning("Lost lease for job %s; aborting execution", job_id)
+                if ownership_lost is not None:
+                    ownership_lost.set()
+                return
 
-    async def _execute(self, job: Job) -> None:
+    async def _execute(self, job: Job, ownership_lost: asyncio.Event | None = None) -> None:
         if job.session_id is None:
             raise RuntimeError("job has no session")
+        if ownership_lost is not None and ownership_lost.is_set():
+            raise RuntimeError("job ownership lost before execution")
         if getattr(job, "no_agent", False):
             from ah.core.assembler import get_token_count
             from ah.core.context import context_manager
@@ -468,7 +567,27 @@ class JobRunner:
             model=getattr(job, "model", None),
             provider=getattr(job, "provider", None),
         )
-        await agent.run(job.session_id, prompt, verbose=False)
+        # AH-023: close owned providers in finally; injected test factories
+        # manage their own lifecycle.
+        owns_provider = self._agent_factory is None
+        try:
+            # Check ownership loss before the (potentially long) agent run.
+            if ownership_lost is not None and ownership_lost.is_set():
+                raise RuntimeError("job ownership lost")
+            await agent.run(job.session_id, prompt, verbose=False)
+        finally:
+            if owns_provider:
+                try:
+                    prov = getattr(agent, "provider", None)
+                    close = getattr(prov, "close", None)
+                    if callable(close):
+                        import inspect as _inspect
+
+                        r = close()
+                        if _inspect.isawaitable(r):
+                            await r
+                except Exception:
+                    pass
 
     async def _build_agent(
         self, agent_name: str, *, model: str | None = None, provider: str | None = None

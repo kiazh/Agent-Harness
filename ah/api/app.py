@@ -38,7 +38,7 @@ from ah.gateway.errors import (
 )
 from ah.gateway.serializers import chunk_preview, history_from_chunks, session_to_dict
 from ah.gateway.server import PROVIDERS, Gateway
-from ah.memory.redaction import redact_secrets
+from ah.memory.redaction import StreamingSecretRedactor, redact_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +328,22 @@ def create_app() -> FastAPI:
     @app.delete("/api/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])
     async def delete_session(session_id: uuid.UUID) -> dict[str, bool]:
         """Delete a session by ID."""
+        # AH-017: coordinate with active turns; deletion must not race
+        # persistence. The shared coordinator fences across gateway/REST.
+        try:
+            from ah.core.turns import mutation_lock, turn_locked
+        except Exception:
+            mutation_lock = None  # type: ignore[assignment]
+            turn_locked = None  # type: ignore[assignment]
+        if turn_locked is not None and turn_locked(session_id):
+            raise HTTPException(409, "a turn is already running for this session")
+        if mutation_lock is not None:
+            async with mutation_lock(session_id):
+                if turn_locked is not None and turn_locked(session_id):
+                    raise HTTPException(409, "a turn is already running for this session")
+                if not await session_manager.delete(session_id):
+                    raise HTTPException(404, "session not found")
+                return {"deleted": True}
         if not await session_manager.delete(session_id):
             raise HTTPException(404, "session not found")
         return {"deleted": True}
@@ -460,6 +476,7 @@ def create_app() -> FastAPI:
         }
 
     @app.post("/api/v1/sessions/{session_id}/chat", dependencies=[Depends(require_api_key)])
+    @app.post("/api/v1/sessions/{session_id}/prompt", dependencies=[Depends(require_api_key)])
     @app.post("/sessions/{session_id}/prompt", dependencies=[Depends(require_api_key)])
     async def prompt_session(session_id: str, req: PromptRequest) -> StreamingResponse:
         """Stream agent events as Server-Sent Events."""
@@ -470,23 +487,35 @@ def create_app() -> FastAPI:
         session = await session_manager.get(sid)
         if session is None:
             raise HTTPException(404, "session not found")
+        # AH-017: coordinate with gateway turns via the shared coordinator.
+        # Reject conflicts BEFORE SSE headers so concurrent HTTP turns get a
+        # clean 409 instead of interleaved streams.
+        try:
+            from ah.core.turns import end_turn as _end_turn
+            from ah.core.turns import try_begin_turn as _try_begin
+        except Exception:
+            _try_begin = None  # type: ignore[assignment]
+            _end_turn = None  # type: ignore[assignment]
+        if _try_begin is not None:
+            claimed = await _try_begin(sid)
+            if not claimed:
+                raise HTTPException(409, "a turn is already running for this session")
+        else:
+            claimed = False
 
         async def event_stream() -> AsyncGenerator[str, None]:
-            from ah.core.agent import ReActAgent
-            from ah.core.provider import get_provider
-
-            llm = None
             agent = None
+            # Boundary-safe streaming redaction: hold back a tail across
+            # deltas so a secret split at any boundary never leaks (AH-001).
+            # Final flush redacts the remainder; the done event carries the
+            # fully-redacted concatenation, never the raw accumulation.
+            stream_redactor = StreamingSecretRedactor()
             try:
-                llm = get_provider(
-                    provider=session.provider or config.get("provider"),
-                    model=session.model or config.get("model"),
-                )
-                agent = ReActAgent(
-                    provider=llm,
-                    max_iterations=config.get("max_iterations"),
-                    agent_id=session.agent_id,
-                )
+                # AH-022: definition-aware factory so specialist sessions
+                # cannot bypass allowed_tools/persona via direct HTTP.
+                from ah.core.agent_factory import build_agent_for_session
+
+                agent = await build_agent_for_session(session)
                 # Total turn timeout: a per-anext wait_for against a fixed
                 # deadline so a hung provider cannot hold the stream forever.
                 try:
@@ -503,6 +532,27 @@ def create_app() -> FastAPI:
                         event = await asyncio.wait_for(stream.__anext__(), timeout=remaining)
                     except StopAsyncIteration:
                         break
+                    if event.type == "text":
+                        # Emit only the safe prefix; the tail stays buffered
+                        # until more deltas arrive or flush() runs at done.
+                        safe = stream_redactor.feed(event.content or "")
+                        if safe:
+                            data = _serialize_event(
+                                StreamEvent(type="text", content=safe),
+                                _pre_redacted=True,
+                            )
+                            yield f"data: {json.dumps(data)}\n\n"
+                        continue
+                    if event.type == "done" and event.response is not None:
+                        tail = stream_redactor.flush()
+                        if tail:
+                            # The tail was withheld from earlier deltas; emit
+                            # it now (redacted) before the terminal event.
+                            data = _serialize_event(
+                                StreamEvent(type="text", content=tail),
+                                _pre_redacted=True,
+                            )
+                            yield f"data: {json.dumps(data)}\n\n"
                     data = _serialize_event(event)
                     yield f"data: {json.dumps(data)}\n\n"
             except TimeoutError:
@@ -520,13 +570,21 @@ def create_app() -> FastAPI:
                             *getattr(agent, "_learning_tasks", ()), return_exceptions=True
                         )
                 finally:
-                    if llm is not None:
+                    # AH-023: close only owned providers.
+                    if agent is not None:
                         try:
-                            await llm.close()
+                            from ah.core.agent_factory import close_agent_provider
+
+                            await close_agent_provider(agent)
                         except Exception:
                             logger.exception(
                                 "Could not close prompt provider for session %s", session_id
                             )
+                    if _end_turn is not None and claimed:
+                        try:
+                            await _end_turn(sid)
+                        except Exception:
+                            pass
                 yield "data: [DONE]\n\n"
 
         return StreamingResponse(
@@ -611,6 +669,7 @@ def create_app() -> FastAPI:
             chunks = await pipeline.index_document(
                 Document(content=req.content, source=req.source),
                 session_id=req.sessionId,
+                agent_id=agent,
                 metadata=req.metadata,
             )
         except Exception:
@@ -741,7 +800,11 @@ def create_app() -> FastAPI:
             raise HTTPException(503, "RPC gateway not initialized")
         try:
             result = await gw.call(req.method, req.params)
-            return {"result": result}
+            # AH-002: REST context previews are redacted, so the generic RPC
+            # bridge must apply the same policy — otherwise context.get
+            # previews and session.export markdown leak raw transcript
+            # secrets through /rpc.
+            return {"result": _redact_value(result)}
         except RpcError as e:
             status = _rpc_http_status(e.code)
             raise HTTPException(
@@ -785,17 +848,26 @@ def _redact_value(value: Any) -> Any:
     return value
 
 
-def _serialize_event(event: StreamEvent) -> dict[str, Any]:
-    """Convert a StreamEvent to a JSON-serializable dict."""
+def _serialize_event(event: StreamEvent, *, _pre_redacted: bool = False) -> dict[str, Any]:
+    """Convert a StreamEvent to a JSON-serializable dict.
+
+    When *_pre_redacted* is True the text content already passed through the
+    boundary-safe streaming redactor and must not be redacted a second time
+    (double redaction is harmless but the flag documents the contract).
+    """
     data: dict[str, Any] = {"type": event.type}
     if event.type == "text":
-        data["content"] = redact_secrets(event.content).text
+        data["content"] = event.content if _pre_redacted else redact_secrets(event.content).text
     elif event.type == "tool_call":
         data["tool"] = event.tool_name
         data["args"] = _redact_value(event.tool_args)
+        if getattr(event, "tool_call_id", ""):
+            data["id"] = event.tool_call_id
     elif event.type == "tool_result":
         data["tool"] = event.tool_name
         data["result"] = redact_secrets(event.tool_result).text
+        if getattr(event, "tool_call_id", ""):
+            data["id"] = event.tool_call_id
     elif event.type == "token_usage":
         data["tokens"] = event.tokens_used
     elif event.type == "done" and event.response is not None:

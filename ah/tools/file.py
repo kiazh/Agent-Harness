@@ -20,6 +20,73 @@ _PRIVATE_PARTS = {".git", ".aws", ".ssh", ".agent-harness", "__pycache__"}
 _PRIVATE_FILES = {".env", ".env.local", ".npmrc", ".pypirc", "id_rsa", "id_ed25519"}
 
 
+def _realpath_inside_base(path: Path) -> Path:
+    """Return realpath of *path* or raise if it escapes the base."""
+    try:
+        real = Path(os.path.realpath(path)).resolve()
+    except OSError:
+        real = path.resolve()
+    if not real.is_relative_to(_BASE_DIR):
+        raise ValueError(f"Path '{path}' escapes the allowed base directory")
+    return real
+
+
+def _reject_symlink_components(candidate: Path) -> None:
+    """Reject paths whose ancestor chain contains a symlink escaping the base.
+
+    Handles ancestor symlinks, not only the final component (AH-003). Each
+    component from _BASE_DIR to the candidate is lstat-checked; if any is a
+    symlink, the fully-resolved realpath must still stay inside the base.
+    """
+    try:
+        rel = candidate.relative_to(_BASE_DIR)
+    except ValueError:
+        raise ValueError(f"Path '{candidate}' escapes the allowed base directory") from None
+    cur = _BASE_DIR
+    for part in rel.parts:
+        cur = cur / part
+        try:
+            if cur.is_symlink():
+                # Resolve the full candidate (follows the ancestor link) and
+                # require it to stay inside the base.
+                _realpath_inside_base(candidate)
+                return
+        except OSError:
+            # Unreadable component: fail closed only if it exists as symlink?
+            # lstat failure on missing leaf is fine (new file creation).
+            continue
+
+
+def _verify_fd_matches_path(fd: int, candidate: Path) -> None:
+    """Verify an opened descriptor still refers to *candidate* (TOCTOU guard).
+
+    Uses fstat dev/ino comparison on POSIX (no /proc needed, so macOS and
+    Linux without procfs work — AH-004). Falls back to realpath containment
+    when stat info is unavailable (e.g. Windows).
+    """
+    try:
+        st_fd = os.fstat(fd)
+        st_path = os.lstat(candidate)
+        # If the path is a symlink, O_NOFOLLOW open would already have
+        # failed; a mismatch here means the file was swapped.
+        import stat as _stat
+
+        if _stat.S_ISLNK(st_path.st_mode):
+            raise ValueError(f"Path '{candidate}' is a symlink")
+        if (st_fd.st_ino, st_fd.st_dev) != (st_path.st_ino, st_path.st_dev):
+            raise ValueError(f"Path '{candidate}' changed during access (TOCTOU)")
+    except ValueError:
+        raise
+    except OSError:
+        pass
+    # Best-effort realpath containment (covers ancestor swaps that keep ino
+    # comparison blind on platforms without meaningful ino, e.g. Windows).
+    try:
+        _realpath_inside_base(candidate)
+    except ValueError:
+        raise
+
+
 def resolve_path(path: str) -> Path:
     """Resolve *path* relative to the base directory and verify it stays inside.
 
@@ -41,6 +108,9 @@ def resolve_path(path: str) -> Path:
     ):
         raise ValueError(f"Path '{path}' is private")
 
+    # Ancestor-symlink check (no /proc dependency — AH-004).
+    _reject_symlink_components(candidate)
+
     # Re-stat with O_NOFOLLOW semantics where possible to catch TOCTOU swaps.
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     if nofollow and candidate.exists() and not candidate.is_dir():
@@ -49,17 +119,43 @@ def resolve_path(path: str) -> Path:
         except OSError as e:
             raise ValueError(f"Path '{path}' is not accessible (symlink?)") from e
         try:
-            # Verify the opened file still resolves inside the base dir.
+            # Cross-platform verification: fstat dev/ino match + realpath
+            # containment. No /proc/self/fd assumption so macOS and
+            # procfs-less Linux keep working.
             try:
-                real = Path(f"/proc/self/fd/{fd}").resolve()
-                if not real.is_relative_to(_BASE_DIR):
-                    raise ValueError(f"Path '{path}' escapes the allowed base directory")
-            except OSError:
-                pass
+                _verify_fd_matches_path(fd, candidate)
+            except ValueError as ve:
+                raise ValueError(str(ve).replace(str(candidate), path)) from ve
         finally:
             os.close(fd)
 
     return candidate
+
+
+def _open_secure_read(candidate: Path):
+    """Open *candidate* for reading, returning (fd, real_verified_path).
+
+    Uses O_NOFOLLOW where available and verifies the descriptor matches the
+    path to close the check-then-open race (AH-003). Callers must os.close
+    the fd (or fdopen it, which takes ownership).
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY
+    if nofollow:
+        flags |= nofollow
+    try:
+        fd = os.open(candidate, flags)
+    except OSError as e:
+        raise ValueError(f"Path '{candidate}' is not accessible (symlink?)") from e
+    try:
+        _verify_fd_matches_path(fd, candidate)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+    return fd
 
 
 @registry.register(
@@ -113,13 +209,25 @@ async def read_file(
     # Check file size before reading
     file_size = file_path.stat().st_size
     if file_size > effective_max:
-        raise ToolError(f"File '{path}' is too large ({file_size} bytes, max {effective_max} bytes)")
+        raise ToolError(
+            f"File '{path}' is too large ({file_size} bytes, max {effective_max} bytes)"
+        )
 
     try:
 
         def _read():
-            with open(file_path, encoding="utf-8", errors="replace") as f:
-                data = f.read(effective_max + 1)
+            # Secure open via descriptor (AH-003): do not reopen the
+            # pathname after validation — read from the verified fd.
+            fd = _open_secure_read(file_path)
+            try:
+                with os.fdopen(fd, encoding="utf-8", errors="replace") as f:
+                    data = f.read(effective_max + 1)
+            except BaseException:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                raise
             if len(data.encode("utf-8", errors="replace")) > effective_max:
                 # Re-check by bytes to avoid over-read on multi-byte chars.
                 raw = data.encode("utf-8", errors="replace")[: effective_max + 1]
@@ -158,9 +266,33 @@ async def write_file(path: str, content: str) -> str:
     try:
 
         def _write():
+            # Verify ancestors (symlink-aware) before creating parents.
+            _reject_symlink_components(file_path)
             file_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(content)
+            # Re-check after mkdir (a component could have been swapped).
+            _reject_symlink_components(file_path)
+            nofollow = getattr(os, "O_NOFOLLOW", 0)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            if nofollow:
+                # If the target exists as a symlink, fail closed instead of
+                # truncating through the link (AH-003 truncating-write race).
+                # New files are created normally; the fd is verified below.
+                flags |= nofollow
+            try:
+                fd = os.open(file_path, flags, 0o600)
+            except OSError as e:
+                # ELOOP = symlink with O_NOFOLLOW; EEXIST races, etc.
+                raise ValueError(f"Path '{path}' is not accessible (symlink?)") from e
+            try:
+                _verify_fd_matches_path(fd, file_path)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except BaseException:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                raise
             return f"Successfully wrote {len(content)} characters to {path}"
 
         return await asyncio.to_thread(_write)

@@ -61,16 +61,19 @@ async def index_document(
     except ValueError:
         raise ValidationError(f"Invalid session_id '{session_id}'") from None
 
-    _, owned_session = await active_agent_scope()
+    agent_id, owned_session = await active_agent_scope()
     if sid != owned_session:
         raise ToolError("document session does not belong to the active agent session")
 
+    # AH-019: resolve the owning agent and pass it explicitly so documents
+    # are not mislabeled with the pipeline default ("harness").
     pipeline = await get_rag_pipeline()
 
     try:
         chunks = await pipeline.index_document(
             source=path,
             session_id=sid,
+            agent_id=agent_id,
             metadata=metadata,
         )
         audit_log(

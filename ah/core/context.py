@@ -150,6 +150,7 @@ class ContextManager:
         session_id: uuid.UUID,
         chunk_type: str | None = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[ContextChunk]:
         """Get context chunks for a session, newest first."""
         if chunk_type:
@@ -159,11 +160,12 @@ class ContextManager:
                 FROM context_chunks
                 WHERE session_id = $1 AND chunk_type = $2
                 ORDER BY created_at DESC
-                LIMIT $3
+                LIMIT $3 OFFSET $4
                 """,
                 session_id,
                 chunk_type,
                 limit,
+                offset,
             )
         else:
             rows = await db.fetch(
@@ -172,12 +174,31 @@ class ContextManager:
                 FROM context_chunks
                 WHERE session_id = $1
                 ORDER BY created_at DESC
-                LIMIT $2
+                LIMIT $2 OFFSET $3
                 """,
                 session_id,
                 limit,
+                offset,
             )
         return [self._row_to_chunk(r) for r in rows]
+
+    async def get_all_chunks(self, session_id: uuid.UUID) -> list[ContextChunk]:
+        """Fetch every active chunk for *session_id* (newest first).
+
+        Paginated (AH-008) so compression never silently drops rows beyond
+        the first 1000.
+        """
+        all_chunks: list[ContextChunk] = []
+        offset = 0
+        while True:
+            page = await self.get_chunks(session_id, limit=500, offset=offset)
+            if not page:
+                break
+            all_chunks.extend(page)
+            if len(page) < 500:
+                break
+            offset += len(page)
+        return all_chunks
 
     async def get_recent_context(
         self, session_id: uuid.UUID, limit: int = 10
@@ -246,10 +267,34 @@ class ContextManager:
     async def replace_chunks(self, session_id: uuid.UUID, chunks: list[ContextChunk]) -> int:
         """Atomically replace all chunks of a session with *chunks*.
 
-        Runs in a single transaction so a failure can never leave the session
-        with its context deleted, and preserves each chunk's ``created_at`` so
-        conversation order (and recency-based retrieval) survive compression.
-        Returns the number of chunks written.
+        Archives originals into context_archive before deletion (AH-009) so
+        replacement is reversible. Runs in a single transaction so a failure
+        can never leave the session with its context deleted, and preserves
+        each chunk's ``created_at`` so conversation order (and recency-based
+        retrieval) survive compression. Returns the number of chunks written.
+        """
+        # Fetch originals for archival (payload-exact).
+        originals = await self.get_all_chunks(session_id)
+        return await self.replace_chunks_by_ids(
+            session_id,
+            [c.id for c in originals],
+            chunks,
+            archive_reason="compressed",
+        )
+
+    async def replace_chunks_by_ids(
+        self,
+        session_id: uuid.UUID,
+        original_ids: list[uuid.UUID],
+        chunks: list[ContextChunk],
+        archive_reason: str = "compressed",
+    ) -> int:
+        """Replace only *original_ids* with *chunks* (AH-008).
+
+        Unlike :meth:`replace_chunks` (delete-all), concurrent inserts with
+        IDs outside *original_ids* survive. Originals are archived
+        transactionally before deletion (AH-009); a failure rolls back
+        archive+delete+insert together so originals remain recoverable.
         """
         records = []
         for c in chunks:
@@ -272,7 +317,58 @@ class ContextManager:
 
         async with db.acquire() as conn:
             async with conn.transaction():
-                await conn.execute("DELETE FROM context_chunks WHERE session_id = $1", session_id)
+                if original_ids:
+                    # Archive originals first (byte-exact payloads).
+                    orig_rows = await conn.fetch(
+                        """
+                        SELECT id, agent_id, chunk_type, payload_msgpack, token_count,
+                               embedding, created_at
+                        FROM context_chunks
+                        WHERE session_id = $1 AND id = ANY($2::uuid[])
+                        FOR UPDATE
+                        """,
+                        session_id,
+                        list(original_ids),
+                    )
+                    for r in orig_rows:
+                        raw_payload = r["payload_msgpack"]
+                        try:
+                            search_text = _search_text_for(msgpack.unpackb(raw_payload, raw=False))
+                        except Exception:
+                            search_text = None
+                        emb = r["embedding"]
+                        try:
+                            emb_str = embedding_to_str(str_to_embedding(emb)) if emb else None
+                        except Exception:
+                            emb_str = None
+                        await conn.execute(
+                            """
+                            INSERT INTO context_archive
+                                (session_id, chunk_id, payload_msgpack, embedding,
+                                 archive_reason, agent_id, chunk_type, token_count,
+                                 original_created_at, search_text)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                            """,
+                            session_id,
+                            r["id"],
+                            raw_payload,
+                            emb_str,
+                            archive_reason,
+                            r["agent_id"],
+                            r["chunk_type"],
+                            r["token_count"],
+                            r["created_at"],
+                            search_text,
+                        )
+                    await conn.execute(
+                        "DELETE FROM context_chunks WHERE session_id = $1 AND id = ANY($2::uuid[])",
+                        session_id,
+                        list(original_ids),
+                    )
+                else:
+                    # No originals captured: do not delete-all (would erase
+                    # concurrent inserts). Just insert the new chunks.
+                    pass
                 if records:
                     await conn.executemany(
                         """
@@ -576,13 +672,19 @@ class ContextManager:
                                         session_id,
                                         row["id"],
                                         row.get("payload_msgpack") or b"",
-                                        embedding_to_str(str_to_embedding(row["embedding"])) if row.get("embedding") else None,
+                                        embedding_to_str(str_to_embedding(row["embedding"]))
+                                        if row.get("embedding")
+                                        else None,
                                         "evicted",
                                         row["agent_id"],
                                         row["chunk_type"],
                                         row["token_count"],
                                         row["created_at"],
-                                        _search_text_for(msgpack.unpackb(row.get("payload_msgpack") or b"", raw=False)),
+                                        _search_text_for(
+                                            msgpack.unpackb(
+                                                row.get("payload_msgpack") or b"", raw=False
+                                            )
+                                        ),
                                     )
                                     for row in rows_to_archive
                                 ],
@@ -603,13 +705,16 @@ class ContextManager:
                         async with db.acquire() as conn:
                             async with conn.transaction():
                                 claimed = await conn.fetchval(
-                                    "SELECT id FROM context_chunks WHERE id = $1 FOR UPDATE", row["id"]
+                                    "SELECT id FROM context_chunks WHERE id = $1 FOR UPDATE",
+                                    row["id"],
                                 )
                                 if claimed is None:
                                     continue
                                 payload_msgpack = row.get("payload_msgpack") or b""
                                 embedding_raw = row.get("embedding")
-                                embedding = str_to_embedding(embedding_raw) if embedding_raw else None
+                                embedding = (
+                                    str_to_embedding(embedding_raw) if embedding_raw else None
+                                )
                                 archived = await self.archive_chunk(
                                     session_id=session_id,
                                     chunk_id=row["id"],
@@ -624,7 +729,9 @@ class ContextManager:
                                 )
                                 if archived is None:
                                     raise RuntimeError("archive insert returned no row")
-                                await conn.execute("DELETE FROM context_chunks WHERE id = $1", row["id"])
+                                await conn.execute(
+                                    "DELETE FROM context_chunks WHERE id = $1", row["id"]
+                                )
                                 successful.append(row)
                     except Exception as error:
                         logger.warning("Failed to archive chunk %s: %s", row["id"], error)

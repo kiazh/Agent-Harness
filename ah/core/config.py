@@ -36,11 +36,54 @@ SECRET_KEYS = frozenset(
     }
 )
 
-# Load the nearest .env before the config singleton below is built. With no
-# path, python-dotenv searches upward from this file's directory, so the
-# repository's .env is found no matter which directory `ah` is run from.
+
+# Load the nearest .env before the config singleton below is built. Uses the
+# shared resolver contract (AH-028): $AH_ENV_FILE override, else nearest
+# .env upward, else repo .env — the same path secret management writes to.
 # Real environment variables always win over .env values.
-load_dotenv(override=False)
+def _startup_env_path() -> str | None:
+    try:
+        import os as _os
+        from pathlib import Path as _Path
+
+        override = _os.environ.get("AH_ENV_FILE", "").strip()
+        if override:
+            p = _Path(override).expanduser()
+            if not p.is_absolute():
+                p = (_Path.cwd() / p).resolve()
+            # Shared contract with ah.security.env_file.find_env_file: the
+            # override must end with .env or be an existing file.
+            if p.name != ".env" and not p.name.endswith(".env") and not p.is_file():
+                return None
+            return str(p)
+        here = _Path.cwd().resolve()
+        for candidate in (here, *here.parents):
+            env = candidate / ".env"
+            try:
+                if env.is_file():
+                    return str(env)
+            except OSError:
+                continue
+        # Fall back to repo .env (two levels above this file).
+        repo_env = _Path(__file__).resolve().parents[2] / ".env"
+        return str(repo_env)
+    except Exception:
+        return None
+
+
+try:
+    _env_path = _startup_env_path()
+    if _env_path:
+        load_dotenv(_env_path, override=False)
+    else:
+        load_dotenv(override=False)
+except Exception:
+    # Startup must never crash because an override path is unreadable;
+    # secret lookup will surface a clear error later.
+    try:
+        load_dotenv(override=False)
+    except Exception:
+        pass
 
 __all__ = [
     "Config",

@@ -104,17 +104,30 @@ class Database:
 
     @asynccontextmanager
     async def acquire(self, timeout: float = 10) -> AsyncGenerator[asyncpg.Connection, None]:
-        """Acquire a connection from the pool (bounded wait to avoid indefinite block)."""
+        """Acquire a connection from the pool (bounded wait to avoid indefinite block).
+
+        AH-024: compatibility catching is limited to acquisition, never to
+        caller execution. A TypeError raised by caller code inside the
+        ``async with`` body must propagate unchanged instead of triggering
+        the legacy fallback path (which would mask the original error and
+        violate single-yield semantics).
+        """
+        # Fast path: modern asyncpg with timeout kwarg. Only the acquisition
+        # itself is inside the TypeError guard.
         try:
-            async with self.pool.acquire(timeout=timeout) as conn:
-                yield conn
+            acquire_cm = self.pool.acquire(timeout=timeout)
         except TypeError:
-            # Older asyncpg without timeout kwarg — enforce via wait_for.
-            conn = await asyncio.wait_for(self.pool.acquire(), timeout=timeout)
-            try:
+            acquire_cm = None
+        if acquire_cm is not None:
+            async with acquire_cm as conn:
                 yield conn
-            finally:
-                await self.pool.release(conn)
+            return
+        # Legacy fallback: older asyncpg without timeout kwarg.
+        conn = await asyncio.wait_for(self.pool.acquire(), timeout=timeout)
+        try:
+            yield conn
+        finally:
+            await self.pool.release(conn)
 
     async def execute(self, query: str, *args) -> str:
         """Execute a query."""

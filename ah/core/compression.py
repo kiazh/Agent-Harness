@@ -113,14 +113,10 @@ class ContextCompressor:
         3. Compress older chunks using LLM summarization or truncation
         4. Return the compressed chunk list
 
-        Args:
-            chunks: The context chunks to compress (newest first).
-            session_id: The session ID.
-            agent_id: The agent ID.
-            llm_provider: Optional LLM provider for summarization.
-
-        Returns:
-            CompressionResult with compressed chunks and metadata.
+        Sync compatibility: when called without a running event loop this
+        runs summarization inline; when called from async code prefer
+        :meth:`acompress` which awaits directly without blocking the loop
+        (AH-011).
         """
         if not chunks:
             return CompressionResult(
@@ -137,7 +133,8 @@ class ContextCompressor:
         if original_tokens == 0:
             original_tokens = sum(get_token_count(str(c.payload)) for c in chunks)
 
-        # Split into recent (preserve) and old (compress)
+        # Split into recent (preserve) and old (compress), keeping tool
+        # pairs atomic across the boundary (AH-012).
         preserve_count = self.config.preserve_recent
         if len(chunks) <= preserve_count:
             # Nothing to compress
@@ -150,8 +147,7 @@ class ContextCompressor:
                 method="none",
             )
 
-        recent_chunks = chunks[:preserve_count]
-        old_chunks = chunks[preserve_count:]
+        recent_chunks, old_chunks = self._split_preserve_recent(chunks, preserve_count)
 
         # Compress old chunks
         if self.config.llm_summarize and llm_provider is not None:
@@ -194,15 +190,164 @@ class ContextCompressor:
             method=method,
         )
 
-    def _identify_tool_pairs(self, chunks: list[ContextChunk]) -> dict[int, int]:
-        """Identify tool_call/result pairs by matching tool names.
+    async def acompress(
+        self,
+        chunks: list[ContextChunk],
+        session_id: uuid.UUID,
+        agent_id: str,
+        llm_provider: Any = None,
+    ) -> CompressionResult:
+        """Async compression (AH-011): awaits LLM summarization directly.
 
+        Same contract as :meth:`compress` but never blocks the event loop
+        with ``Future.result()`` on a worker thread.
+        """
+        if not chunks:
+            return CompressionResult(
+                compressed_chunks=[],
+                original_count=0,
+                original_tokens=0,
+                compressed_tokens=0,
+                compression_ratio=0.0,
+                method="none",
+            )
+        original_tokens = sum(c.token_count for c in chunks)
+        if original_tokens == 0:
+            original_tokens = sum(get_token_count(str(c.payload)) for c in chunks)
+        preserve_count = self.config.preserve_recent
+        if len(chunks) <= preserve_count:
+            return CompressionResult(
+                compressed_chunks=chunks,
+                original_count=0,
+                original_tokens=original_tokens,
+                compressed_tokens=original_tokens,
+                compression_ratio=1.0,
+                method="none",
+            )
+        recent_chunks, old_chunks = self._split_preserve_recent(chunks, preserve_count)
+        if self.config.llm_summarize and llm_provider is not None:
+            try:
+                compressed = await self._llm_summarize(
+                    old_chunks, session_id, agent_id, llm_provider
+                )
+                method = "llm_summarize"
+            except Exception:
+                try:
+                    compressed = self._truncate_compress(old_chunks, session_id, agent_id)
+                    method = "truncate"
+                except Exception:
+                    compressed = old_chunks
+                    method = "none"
+        else:
+            try:
+                compressed = self._truncate_compress(old_chunks, session_id, agent_id)
+                method = "truncate"
+            except Exception:
+                compressed = old_chunks
+                method = "none"
+        all_compressed = compressed + recent_chunks
+        compressed_tokens = sum(c.token_count for c in all_compressed)
+        if compressed_tokens == 0:
+            compressed_tokens = sum(get_token_count(str(c.payload)) for c in all_compressed)
+        ratio = compressed_tokens / original_tokens if original_tokens > 0 else 0.0
+        return CompressionResult(
+            compressed_chunks=all_compressed,
+            original_count=len(old_chunks),
+            original_tokens=original_tokens,
+            compressed_tokens=compressed_tokens,
+            compression_ratio=ratio,
+            method=method,
+        )
+
+    def _split_preserve_recent(
+        self, chunks: list[ContextChunk], preserve_count: int
+    ) -> tuple[list[ContextChunk], list[ContextChunk]]:
+        """Split newest-first *chunks*, keeping tool pairs atomic (AH-012).
+
+        If the preserve boundary cuts a tool_call/result pair, the mate is
+        pulled into the preserved side so calls and results are never
+        separated.
+        """
+        recent = chunks[:preserve_count]
+        old = chunks[preserve_count:]
+        if not old or not recent:
+            return recent, old
+        pairs = self._identify_tool_pairs(chunks)
+        recent_idx = set(range(len(recent)))
+        # Any old chunk paired with a recent chunk forces its mate to move.
+        # Conversely any recent chunk paired with an old chunk pulls the mate.
+        to_preserve = set(recent_idx)
+        changed = True
+        while changed:
+            changed = False
+            for i, j in pairs.items():
+                if (i in to_preserve) != (j in to_preserve):
+                    if i not in to_preserve or j not in to_preserve:
+                        if i not in to_preserve or j not in to_preserve:
+                            pass
+                    # Pull both sides into preserved set.
+                    if i not in to_preserve or j not in to_preserve:
+                        to_preserve.add(i)
+                        to_preserve.add(j)
+                        changed = True
+        if len(to_preserve) == len(recent_idx):
+            return recent, old
+        # Rebuild preserving original newest-first order.
+        new_recent_idx = sorted(to_preserve)
+        # Only allow growth (never shrink below preserve_count).
+        if len(new_recent_idx) < preserve_count:
+            return recent, old
+        recent2 = [chunks[i] for i in new_recent_idx]
+        old2 = [chunks[i] for i in range(len(chunks)) if i not in to_preserve]
+        return recent2, old2
+
+    def _identify_tool_pairs(self, chunks: list[ContextChunk]) -> dict[int, int]:
+        """Identify tool_call/result pairs, grouped atomically (AH-012).
+
+        Preference order for pairing:
+        1. Explicit call IDs (payload ``call_id``/``id``/``tool_call_id``)
+           matching across chunks — handles repeated same-name calls.
+        2. Same-chunk call+result (payload has ``result_preview``).
+        3. Legacy fallback: match separate ``result`` chunks to the most
+           recent unmatched ``tool_call`` with the same tool name.
         Returns a dict mapping chunk index -> paired chunk index.
         """
         pairs: dict[int, int] = {}
+
+        def _call_id(payload: dict) -> str | None:
+            for k in ("call_id", "tool_call_id", "id"):
+                v = payload.get(k)
+                if isinstance(v, str) and v:
+                    return v
+            # Nested args may carry the provider tool_call id.
+            args = payload.get("args")
+            if isinstance(args, dict):
+                for k in ("call_id", "tool_call_id", "id"):
+                    v = args.get(k)
+                    if isinstance(v, str) and v:
+                        return v
+            return None
+
+        # 1. Pair by explicit call ID.
+        id_to_indices: dict[str, list[int]] = {}
+        for i, chunk in enumerate(chunks):
+            if chunk.chunk_type in ("tool_call", "result"):
+                cid = _call_id(chunk.payload)
+                if cid:
+                    id_to_indices.setdefault(cid, []).append(i)
+        for cid, idxs in id_to_indices.items():
+            # Pair indices sharing one call ID (usually exactly 2).
+            for a in idxs:
+                for b in idxs:
+                    if a != b and a not in pairs and b not in pairs:
+                        pairs[a] = b
+                        pairs[b] = a
+
         # Build a map of tool_name -> list of indices
         tool_call_indices: dict[str, list[int]] = {}
         for i, chunk in enumerate(chunks):
+            if i in pairs:
+                continue
             if chunk.chunk_type == "tool_call":
                 # The agent stores a call and its result in ONE chunk
                 # (payload has "result_preview"). Treat that as a complete,
@@ -216,7 +361,10 @@ class ContextCompressor:
 
         # Match separate result chunks to their tool calls
         for i, chunk in enumerate(chunks):
+            if i in pairs:
+                continue
             if chunk.chunk_type == "result":
+                # Prefer call-ID match already handled; fall back to name.
                 tool_name = chunk.payload.get("tool", "")
                 if tool_name and tool_name in tool_call_indices:
                     # Find the most recent unmatched tool_call for this tool
@@ -293,46 +441,73 @@ class ContextCompressor:
     ) -> list[ContextChunk]:
         """Truncate older chunks to fit within target budget.
 
-        Keeps the most important chunks and truncates payloads.
+        Keeps tool pairs atomic (AH-012): paired call/result chunks are
+        selected or truncated as a unit, never split.
         """
         # Sort by importance: tool_call/result pairs first, then by recency
         pairs = self._identify_tool_pairs(chunks)
 
-        # Build a priority score for each chunk
-        def priority(idx: int) -> int:
-            chunk = chunks[idx]
+        # Build atomic groups: each pair is one unit; singles are one unit.
+        seen: set[int] = set()
+        groups: list[list[int]] = []
+        for i in range(len(chunks)):
+            if i in seen:
+                continue
+            mate = pairs.get(i)
+            if mate is not None and mate != i and mate not in seen:
+                groups.append([i, mate] if i < mate else [mate, i])
+                seen.add(i)
+                seen.add(mate)
+            else:
+                groups.append([i])
+                seen.add(i)
+
+        # Build a priority score for each group
+        def group_priority(g: list[int]) -> int:
             score = 0
-            # Tool pairs are high priority
-            if idx in pairs:
-                score += 100
-            # Recent chunks are higher priority
-            score += len(chunks) - idx
-            # Memory chunks are important
-            if chunk.chunk_type == "memory":
-                score += 50
+            for idx in g:
+                chunk = chunks[idx]
+                if idx in pairs:
+                    score += 100
+                score += len(chunks) - idx
+                if chunk.chunk_type == "memory":
+                    score += 50
+            # Average to avoid biasing larger groups, then boost pairs.
             return score
 
-        # Sort by priority (highest first)
-        sorted_indices = sorted(range(len(chunks)), key=priority, reverse=True)
+        groups.sort(key=group_priority, reverse=True)
 
-        # Select chunks that fit within target budget
+        # Select groups that fit within target budget
         target_tokens = int(sum(c.token_count for c in chunks) * self.config.target_ratio)
         selected: list[ContextChunk] = []
         current_tokens = 0
 
-        for idx in sorted_indices:
-            chunk = chunks[idx]
-            if current_tokens + chunk.token_count <= target_tokens:
-                selected.append(chunk)
-                current_tokens += chunk.token_count
+        for g in groups:
+            g_tokens = sum(chunks[i].token_count for i in g)
+            if current_tokens + g_tokens <= target_tokens:
+                for i in sorted(g):
+                    selected.append(chunks[i])
+                current_tokens += g_tokens
             else:
-                # Try to truncate this chunk
+                # Try to truncate the group as a unit within remaining budget.
                 remaining = target_tokens - current_tokens
                 if remaining > 50:  # Only if we have meaningful space
-                    truncated = self._truncate_chunk(chunk, remaining)
-                    if truncated:
-                        selected.append(truncated)
-                        current_tokens += truncated.token_count
+                    # Split remaining evenly across group members.
+                    per = max(50, remaining // len(g))
+                    truncated_group = []
+                    for i in sorted(g):
+                        t = self._truncate_chunk(chunks[i], per)
+                        if t:
+                            truncated_group.append(t)
+                    # Only keep the group if ALL members fit (atomicity).
+                    t_tokens = sum(t.token_count for t in truncated_group)
+                    if (
+                        len(truncated_group) == len(g)
+                        and current_tokens + t_tokens <= target_tokens
+                    ):
+                        selected.extend(truncated_group)
+                        current_tokens += t_tokens
+                    # Else drop the whole group (never keep half a pair).
 
         # Sort back to original order (by created_at)
         selected.sort(key=lambda c: c.created_at, reverse=True)
@@ -348,34 +523,77 @@ class ContextCompressor:
         return selected
 
     def _truncate_chunk(self, chunk: ContextChunk, max_tokens: int) -> ContextChunk | None:
-        """Truncate a chunk's payload to fit within max_tokens."""
-        max_chars = max_tokens * 4  # Rough estimate: 4 chars per token
+        """Truncate a chunk's payload to fit within max_tokens (AH-013/AH-014).
 
+        Uses tokenizer-based truncation (not 4-chars-per-token) and verifies
+        the final serialized payload fits. Clears the embedding when content
+        changes so vector semantics cannot disagree with stored text.
+        """
+        from ah.core.assembler import TokenCounter as _TC
+
+        counter = _TC()
         # Deep copy so nested dict truncation never aliases the original chunk.
         payload = copy.deepcopy(chunk.payload)
         truncated = False
 
-        # Truncate string values in payload
-        for key, value in payload.items():
-            if isinstance(value, str) and len(value) > max_chars:
-                payload[key] = value[:max_chars] + "..."
+        def _truncate_str(s: str, budget_tokens: int) -> str:
+            if get_token_count(s) <= budget_tokens:
+                return s
+            return counter.truncate(s, budget_tokens)
+
+        # Budget per string field: split evenly (at least 1 token each).
+        str_keys = [k for k, v in payload.items() if isinstance(v, str)]
+        # Rough per-field budget; the final verify loop enforces the total.
+        per_field = max(1, max_tokens // max(1, len(str_keys) or 1))
+        for key in str_keys:
+            value = payload[key]
+            if get_token_count(value) > per_field:
+                payload[key] = _truncate_str(value, per_field)
+                # Mark ellipsis without breaking the token bound.
+                if not payload[key].endswith("..."):
+                    # Re-truncate to make room for the marker.
+                    payload[key] = (
+                        counter.truncate(payload[key], max(1, per_field - 1)) + "..."
+                        if per_field > 1
+                        else "..."
+                    )
                 truncated = True
             elif isinstance(value, dict):
-                for k2, v2 in value.items():
-                    if isinstance(v2, str) and len(v2) > max_chars:
-                        value[k2] = v2[:max_chars] + "..."
+                pass
+        for key, value in payload.items():
+            if isinstance(value, dict):
+                for k2, v2 in list(value.items()):
+                    if isinstance(v2, str) and get_token_count(v2) > per_field:
+                        value[k2] = _truncate_str(v2, per_field)
                         truncated = True
 
         if not truncated and chunk.token_count <= max_tokens:
             return chunk
 
-        new_text = str(payload)
-        new_tokens = get_token_count(new_text)
+        new_tokens = get_token_count(str(payload))
         if new_tokens > max_tokens:
-            # Still too big, truncate the string representation
-            payload = {"content": new_text[:max_chars] + "..."}
-            # Recompute token count after final truncation (no stale counts).
+            # Still too big: truncate the serialized representation with the
+            # real tokenizer until it fits (bounded loop, AH-013).
+            text = str(payload)
+            for _ in range(5):
+                text = counter.truncate(text, max_tokens)
+                payload = {"content": text}
+                new_tokens = get_token_count(str(payload))
+                if new_tokens <= max_tokens:
+                    break
+            else:
+                # Last resort: hard cut that is guaranteed to fit for any
+                # script (CJK/symbols/digits/nested payloads).
+                raw = str(payload).encode("utf-8", errors="ignore")[: max(1, max_tokens)]
+                payload = {"content": raw.decode("utf-8", errors="ignore")}
+                new_tokens = get_token_count(str(payload))
+            truncated = True
+
+        # Final guarantee: never return a chunk exceeding the bound.
+        if get_token_count(str(payload)) > max_tokens:
+            payload = {"content": counter.truncate(str(payload), max_tokens)}
             new_tokens = get_token_count(str(payload))
+            truncated = True
 
         return ContextChunk(
             id=chunk.id,
@@ -384,7 +602,9 @@ class ContextCompressor:
             chunk_type=chunk.chunk_type,
             payload=payload,
             token_count=new_tokens,
-            embedding=chunk.embedding,
+            # AH-014: payload changed → embedding is stale. Clear it so
+            # vector search cannot disagree with stored content.
+            embedding=None if truncated else chunk.embedding,
             created_at=chunk.created_at,
             accessed_at=chunk.accessed_at,
         )

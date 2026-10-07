@@ -103,6 +103,10 @@ class StreamEvent:
     tool_result: str = ""
     tokens_used: int = 0
     response: Any = None  # LLMResponse or AgentResponse
+    # AH-020: stable call ID so UI can pair start→complete even when
+    # completions arrive out of order. Provider tc["id"] when present,
+    # else f"call-{index}".
+    tool_call_id: str = ""
 
 
 @dataclass

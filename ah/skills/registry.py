@@ -21,7 +21,41 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def default_skills_dir() -> Path:
-    return Path(os.environ.get("AGENT_HARNESS_SKILLS_DIR") or _PROJECT_ROOT / "skills")
+    # Explicit override wins.
+    override = os.environ.get("AGENT_HARNESS_SKILLS_DIR")
+    if override:
+        return Path(override)
+    # Editable checkout: sibling skills/ next to the repo root.
+    candidate = _PROJECT_ROOT / "skills"
+    try:
+        if candidate.is_dir():
+            return candidate
+    except OSError:
+        pass
+    # AH-030: non-editable wheel / runtime image — skills are shipped as
+    # package data (force-include). Resolve via importlib.resources when the
+    # checkout directory is absent.
+    try:
+        from importlib.resources import files as _files
+
+        pkg = _files("skills")
+        # files() may return a Traversable; convert file-system packages.
+        try:
+            p = Path(str(pkg))
+            if p.is_dir():
+                return p
+        except OSError:
+            pass
+    except Exception:
+        pass
+    # Docker runtime image copies ./skills next to /app.
+    for fallback in (Path("/app/skills"), Path.cwd() / "skills"):
+        try:
+            if fallback.is_dir():
+                return fallback
+        except OSError:
+            continue
+    return candidate
 
 
 def default_hub_dir() -> Path:

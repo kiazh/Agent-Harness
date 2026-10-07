@@ -26,11 +26,25 @@ async def session_fork(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def session_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Delete a session."""
+    """Delete a session (coordinated with REST turns, AH-017)."""
     gw.require_db()
     session = await gw.get_session(params)
     if gw.turn_running(session.id):
         raise RpcError(TURN_IN_PROGRESS, "stop the running reply before deleting this session")
+    try:
+        from ah.core.turns import mutation_lock, turn_locked
+    except Exception:
+        mutation_lock = None  # type: ignore[assignment]
+        turn_locked = None  # type: ignore[assignment]
+    if turn_locked is not None and turn_locked(session.id):
+        raise RpcError(TURN_IN_PROGRESS, "stop the running reply before deleting this session")
+    if mutation_lock is not None:
+        async with mutation_lock(session.id):
+            if gw.turn_running(session.id) or (turn_locked is not None and turn_locked(session.id)):
+                raise RpcError(
+                    TURN_IN_PROGRESS, "stop the running reply before deleting this session"
+                )
+            return {"deleted": await session_manager.delete(session.id)}
     return {"deleted": await session_manager.delete(session.id)}
 
 
@@ -111,13 +125,15 @@ async def session_recall_window(gw: Gateway, params: dict[str, Any]) -> dict[str
 
 
 async def session_export(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Export a session as markdown."""
+    """Export a session as markdown (redacted, AH-002)."""
     gw.require_db()
     return {"markdown": await services.export_markdown(await gw.get_session(params))}
 
 
 async def context_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Get context chunks for a session."""
+    """Get context chunks for a session (previews redacted, AH-002)."""
+    from ah.memory.redaction import redact_secrets as _redact
+
     gw.require_db()
     session = await gw.get_session(params)
     chunks = await context_manager.get_chunks(session.id, limit=_int(params, "limit", 20, 1, 1000))
@@ -128,7 +144,7 @@ async def context_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
                 "agent": c.agent_id,
                 "tokens": c.token_count,
                 "createdAt": c.created_at.isoformat() if c.created_at else None,
-                "preview": chunk_preview(c),
+                "preview": _redact(chunk_preview(c)).text,
             }
             for c in chunks
         ],
@@ -139,12 +155,29 @@ async def context_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def context_compress(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Compress context for a session."""
+    """Compress context for a session (coordinated, AH-010)."""
+    from ah.memory.redaction import redact_secrets as _redact  # noqa: F401 (policy symmetry)
+
     gw.require_db()
     session = await gw.get_session(params)
-    if gw.turn_running(session.id):
-        raise RpcError(TURN_IN_PROGRESS, "stop the running reply before compressing")
-    result = await services.compress_session(session, model=gw.model, provider=gw.provider)
+    # AH-010: the old check-then-act (turn_running → await read/summarize/
+    # replace) let a new turn start after the check and lose its context.
+    # Serialize compression against turn begin/end via the shared session
+    # mutation coordinator (same lock family as REST/jobs).
+    try:
+        from ah.core.turns import mutation_lock, turn_locked
+    except Exception:
+        mutation_lock = None  # type: ignore[assignment]
+        turn_locked = None  # type: ignore[assignment]
+    if mutation_lock is not None:
+        async with mutation_lock(session.id):
+            if gw.turn_running(session.id) or (turn_locked is not None and turn_locked(session.id)):
+                raise RpcError(TURN_IN_PROGRESS, "stop the running reply before compressing")
+            result = await services.compress_session(session, model=gw.model, provider=gw.provider)
+    else:
+        if gw.turn_running(session.id):
+            raise RpcError(TURN_IN_PROGRESS, "stop the running reply before compressing")
+        result = await services.compress_session(session, model=gw.model, provider=gw.provider)
     if result is None:
         return {"compressed": False}
     return {

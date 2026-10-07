@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install Python dependencies
 COPY pyproject.toml README.md ./
 COPY ah ./ah
+COPY skills ./skills
 
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir .
@@ -31,6 +32,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY --chown=appuser:appuser ah ./ah
+COPY --chown=appuser:appuser skills ./skills
 COPY --chown=appuser:appuser pyproject.toml README.md ./
 
 # Switch to non-root user

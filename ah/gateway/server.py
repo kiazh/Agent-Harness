@@ -53,6 +53,7 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
 # Gateway logging — file + console
 # ---------------------------------------------------------------------------
@@ -64,19 +65,18 @@ def _setup_gateway_logging() -> None:
 
     # File handler — rotating
     from logging.handlers import RotatingFileHandler
+
     file_handler = RotatingFileHandler(
         log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
     )
-    file_handler.setFormatter(logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    ))
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    )
     file_handler.setLevel(logging.DEBUG)
 
     # Console handler
     console_handler = logging.StreamHandler()
-    console_handler.setFormatter(logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(message)s"
-    ))
+    console_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
     console_handler.setLevel(logging.WARNING)
 
     # Root logger for ah.gateway
@@ -123,15 +123,21 @@ def _git_branch() -> str:
 def _default_agent_factory(model: str, provider: str) -> StreamingAgent:
     # Imported lazily: building a provider requires an API key, and importing
     # the agent pulls in the whole tool registry.
+    # NOTE (AH-021/AH-022): the gateway no longer builds directly from global
+    # model/provider in _run_turn — it resolves the session's stored
+    # definition via build_agent_for_session. This factory remains for tests
+    # and backwards compatibility.
     from ah.core.agent import ReActAgent
     from ah.core.provider import get_provider
 
     llm = get_provider(provider=provider, model=model)
-    return ReActAgent(
+    agent = ReActAgent(
         provider=llm,
         max_iterations=config.get("max_iterations"),
         agent_id=config.get("agent_id"),
     )
+    agent._owns_provider = True  # type: ignore[attr-defined]
+    return agent
 
 
 class Gateway:
@@ -501,14 +507,36 @@ class Gateway:
         tool_count = 0
         tokens = 0
         final = None
+        agent = None
         try:
-            agent = self._agent_factory(self.model, self.provider)
+            # AH-021/AH-022: resolve the session's stored model/provider and
+            # agent definition (allowed_tools/persona). Resumed sessions
+            # execute with their own settings, not the gateway globals;
+            # globals only apply to newly created sessions. Direct execution
+            # of a specialist child can no longer bypass its restrictions.
+            session = await session_manager.get(session_id)
+            if session is None:
+                emit("error", message="session not found")
+                complete()
+                return
+            try:
+                from ah.core.agent_factory import build_agent_for_session
+            except Exception:
+                build_agent_for_session = None  # type: ignore[assignment]
+            if build_agent_for_session is not None:
+                agent = await build_agent_for_session(session)
+            else:
+                agent = self._agent_factory(
+                    session.model or self.model, session.provider or self.provider
+                )
             async for event in agent.run_stream(session_id, text, verbose=False):
                 if event.type == "text":
                     emit("message.delta", text=event.content)
                 elif event.type == "tool_call":
                     tool_count += 1
-                    tool_id = f"{turn_id}-{tool_count}"
+                    # AH-020: prefer the agent's stable call ID so out-of-order
+                    # completions pair correctly; fall back to turn counter.
+                    tool_id = getattr(event, "tool_call_id", "") or f"{turn_id}-{tool_count}"
                     open_tools[tool_id] = event.tool_name
                     self._turn_progress[turn_id] = {
                         "tokens": tokens,
@@ -520,7 +548,11 @@ class Gateway:
                     # Pair by tool-call id when the event carries one;
                     # otherwise fall back to the oldest open call with the
                     # same name (FIFO).
-                    result_id = getattr(event, "tool_call_id", None) or getattr(event, "id", None)
+                    result_id = (
+                        getattr(event, "tool_call_id", None)
+                        or getattr(event, "tool_call_id", None)
+                        or getattr(event, "id", None)
+                    )
                     match_id: str | None = None
                     if result_id is not None and str(result_id) in open_tools:
                         match_id = str(result_id)
@@ -567,6 +599,27 @@ class Gateway:
             complete()
             return
         finally:
+            # AH-023: close only owned providers; shared/injected factories
+            # (tests) must not be closed here.
+            if agent is not None:
+                try:
+                    from ah.core.agent_factory import close_agent_provider
+
+                    await close_agent_provider(agent)
+                except Exception:
+                    # Fallback for legacy factories that set _owns_provider.
+                    try:
+                        if getattr(agent, "_owns_provider", False):
+                            prov = getattr(agent, "provider", None)
+                            close = getattr(prov, "close", None)
+                            if callable(close):
+                                import inspect as _inspect
+
+                                r = close()
+                                if _inspect.isawaitable(r):
+                                    await r
+                    except Exception:
+                        pass
             if self._turns.get(sid) is asyncio.current_task():
                 del self._turns[sid]
         complete(final)

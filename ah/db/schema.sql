@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT,
     agent_id TEXT NOT NULL DEFAULT 'harness',
     state_msgpack BYTEA,
-    status TEXT DEFAULT 'active' CHECK (status IN ('active', 'idle', 'archived')),
+    status TEXT DEFAULT 'active' CHECK (status IN ('active', 'idle', 'archived', 'running')),
     goal TEXT,
     model TEXT,
     provider TEXT,
@@ -19,6 +19,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TIMESTAMPTZ DEFAULT now(),
     last_activity TIMESTAMPTZ DEFAULT now()
 );
+
+-- Migration for existing databases: allow 'running' for cross-process turn fencing (AH-010/AH-017).
+ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_status_check;
+ALTER TABLE sessions ADD CONSTRAINT sessions_status_check CHECK (status IN ('active', 'idle', 'archived', 'running'));
 
 -- Composite index for list_sessions query: WHERE status = $1 ORDER BY last_activity DESC
 CREATE INDEX IF NOT EXISTS idx_sessions_status_last_activity ON sessions(status, last_activity DESC);
@@ -287,6 +291,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     run_count INT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- AH-026: unique claim token/generation fences stale owners. renew/finish
+-- must present the token from claim_due; a stale worker cannot mutate a
+-- newer claim.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS claim_token UUID;
 
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cron_expression TEXT;
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS model TEXT;

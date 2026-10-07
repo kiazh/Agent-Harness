@@ -84,6 +84,9 @@ class Orchestrator:
 
     def __init__(self, agent_factory=None) -> None:
         # Injectable so tests can supply a fake agent without an API key.
+        # AH-023: only the default factory creates owned providers that this
+        # scope must close; injected factories manage their own lifecycle.
+        self._owns_factory_agents = agent_factory is None
         self._agent_factory = agent_factory or self._build_agent
 
     def _build_agent(self, definition: AgentDef) -> ReActAgent:
@@ -164,6 +167,20 @@ class Orchestrator:
         finally:
             delegation_depth.reset(depth_token)
             delegation_deadline.reset(deadline_token)
+            # AH-023: close only factory-owned providers. Custom factories
+            # (tests) inject shared agents that must stay open.
+            if getattr(self, "_owns_factory_agents", False):
+                try:
+                    prov = getattr(agent, "provider", None)
+                    close = getattr(prov, "close", None)
+                    if callable(close):
+                        import inspect as _inspect
+
+                        r = close()
+                        if _inspect.isawaitable(r):
+                            await r
+                except Exception:
+                    pass
 
         await self._record_end(
             message_id, status="complete", response=response.content, tokens=response.tokens_used

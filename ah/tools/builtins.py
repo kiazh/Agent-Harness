@@ -55,13 +55,24 @@ def _parse_duckduckgo_results(html: str) -> list[tuple[str, str]]:
 
 
 def _getaddrinfo_timeout(hostname: str, timeout: float = 3.0):
-    """Resolve hostname with a bounded 3s timeout to avoid hanging the tool."""
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(socket.getaddrinfo, hostname, None)
-        try:
-            return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
-            raise socket.gaierror("DNS resolution timed out") from None
+    """Resolve hostname with a bounded timeout without blocking on shutdown.
+
+    AH-025: the old per-call ``ThreadPoolExecutor`` context waited for the
+    resolver thread on exit, so a timeout still blocked for the full DNS
+    duration. Use a shared executor and return on timeout without waiting
+    for the abandoned worker. The pool is bounded (4 workers) so slow DNS
+    cannot spawn unbounded threads; abandoned lookups finish in the
+    background and their sockets are closed by the OS.
+    """
+    future = _DNS_EXECUTOR.submit(socket.getaddrinfo, hostname, None)
+    try:
+        return future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        raise socket.gaierror("DNS resolution timed out") from None
+
+
+# Shared bounded executor for DNS (never shut down per call — see above).
+_DNS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="ah-dns")
 
 
 def _is_safe_url(url: str) -> bool:

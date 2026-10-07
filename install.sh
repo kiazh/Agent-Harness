@@ -235,11 +235,16 @@ else
 fi
 
 # --- .env: defaults + generated secrets, prompt only when safe -----------------
+# AH-007: generated API/provenance keys must not be world-readable. Use a
+# restrictive umask for creation and enforce mode 0600 on the file itself.
+umask 077
 if [ ! -f ".env" ]; then
   log "Creating .env from .env.example"
   cp .env.example .env
+  chmod 600 .env 2>/dev/null || true
 else
   log ".env already exists, keeping it (filling gaps only)"
+  chmod 600 .env 2>/dev/null || true
 fi
 
 # Ensure DATABASE_URL exists.
@@ -253,10 +258,13 @@ for KEY in AGENT_HARNESS_API_KEY AGENT_HARNESS_PROVENANCE_KEY; do
   case "$VAL" in
     ""|"replace-with-a-long-random-key"|"replace-with-a-separate-long-random-key"|"sk-or-..."|"sk-...")
       NEW_VAL="$(rand_hex)"
-      # Portable in-place replace: works on GNU + BSD sed via temp file.
-      grep -v -E "^${KEY}=" .env > .env.tmp || true
-      printf '%s=%s\n' "$KEY" "$NEW_VAL" >> .env.tmp
-      mv .env.tmp .env
+      # Portable in-place replace: works on GNU + BSD sed via secure temp file.
+      TMP_ENV="$(mktemp .env.tmp.XXXXXX 2>/dev/null || echo .env.tmp.$$)"
+      chmod 600 "$TMP_ENV" 2>/dev/null || true
+      grep -v -E "^${KEY}=" .env > "$TMP_ENV" || true
+      printf '%s=%s\n' "$KEY" "$NEW_VAL" >> "$TMP_ENV"
+      mv "$TMP_ENV" .env
+      chmod 600 .env 2>/dev/null || true
       log "Generated random $KEY"
       ;;
   esac
@@ -271,9 +279,12 @@ if [ "$ASSUME_YES" = "0" ] && { [ -t 0 ] || [ "$INTERACTIVE" = "1" ]; } && [ -e 
       printf 'OPENROUTER_API_KEY (Enter to skip, set later via /keys): ' > /dev/tty
       read -r ANSWER < /dev/tty || ANSWER=""
       if [ -n "$ANSWER" ]; then
-        grep -v -E '^OPENROUTER_API_KEY=' .env > .env.tmp || true
-        printf 'OPENROUTER_API_KEY=%s\n' "$ANSWER" >> .env.tmp
-        mv .env.tmp .env
+        TMP_ENV="$(mktemp .env.tmp.XXXXXX 2>/dev/null || echo .env.tmp.$$)"
+        chmod 600 "$TMP_ENV" 2>/dev/null || true
+        grep -v -E '^OPENROUTER_API_KEY=' .env > "$TMP_ENV" || true
+        printf 'OPENROUTER_API_KEY=%s\n' "$ANSWER" >> "$TMP_ENV"
+        mv "$TMP_ENV" .env
+        chmod 600 .env 2>/dev/null || true
         log "Saved OPENROUTER_API_KEY"
       else
         warn "Skipped OPENROUTER_API_KEY; set it later with: ah setup  (or /keys in the UI)"
@@ -293,16 +304,43 @@ try_init() { "$AH_BIN" init 2>&1; }
 
 start_docker_db() {
   command -v docker >/dev/null 2>&1 || return 1
+  # AH-029: `docker ps` lists running containers only — a stopped
+  # agentharness-db would be missed and `docker run --name` would fail with
+  # "already exists". Inspect all containers (-a) and reuse the named one.
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^agentharness-db$'; then
-    log "Starting existing agentharness-db container"
-    docker start agentharness-db >/dev/null
+    log "agentharness-db already running, reusing it"
     return 0
   fi
-  log "Starting local Postgres (pgvector/pgvector:pg16 on localhost:5432)"
+  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^agentharness-db$'; then
+    log "Starting existing stopped agentharness-db container"
+    docker start agentharness-db >/dev/null || return 1
+    return 0
+  fi
+  # AH-006: never publish Postgres beyond loopback with weak default
+  # credentials. Bind 127.0.0.1 only and generate a random password, keeping
+  # DATABASE_URL consistent. Existing custom DATABASE_URL values are left
+  # alone for compatibility.
+  DB_PASS="$(rand_hex | cut -c1-32)"
+  DB_URL="postgresql://postgres:${DB_PASS}@127.0.0.1:5432/agentharness"
+  log "Starting local Postgres (pgvector/pgvector:pg16 on 127.0.0.1:5432)"
   # shellcheck disable=SC2086
   docker run -d --name agentharness-db \
-    -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=agentharness \
-    -p 5432:5432 pgvector/pgvector:pg16 >/dev/null || return 1
+    -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$DB_PASS" -e POSTGRES_DB=agentharness \
+    -p 127.0.0.1:5432:5432 pgvector/pgvector:pg16 >/dev/null || return 1
+  # Point a default DATABASE_URL at the generated credentials. A user-set
+  # non-default URL is preserved.
+  if grep -q '^DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness$' .env 2>/dev/null \
+    || ! grep -q '^DATABASE_URL=' .env 2>/dev/null; then
+    TMP_ENV="$(mktemp .env.tmp.XXXXXX 2>/dev/null || echo .env.tmp.$$)"
+    chmod 600 "$TMP_ENV" 2>/dev/null || true
+    grep -v -E '^DATABASE_URL=' .env > "$TMP_ENV" || true
+    printf 'DATABASE_URL=%s\n' "$DB_URL" >> "$TMP_ENV"
+    mv "$TMP_ENV" .env
+    chmod 600 .env 2>/dev/null || true
+    log "Wrote generated Postgres credentials to .env DATABASE_URL (loopback only)"
+  else
+    warn "Reusing existing custom DATABASE_URL; ensure it matches the new container if init fails"
+  fi
   return 0
 }
 
@@ -404,7 +442,8 @@ else
     warn "\`ah init\` failed. Pick one, then re-run: ah init"
     case "$OS_FAMILY" in
       macos)
-        warn "  docker:  docker run -d --name agentharness-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=agentharness -p 5432:5432 pgvector/pgvector:pg16"
+        warn "  docker:  docker run -d --name agentharness-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=<generated> -e POSTGRES_DB=agentharness -p 127.0.0.1:5432:5432 pgvector/pgvector:pg16"
+        warn "           (then set DATABASE_URL=postgresql://postgres:<generated>@127.0.0.1:5432/agentharness in .env, mode 0600)"
         warn "  brew:    brew install postgresql@16 pgvector && brew services start postgresql@16"
         warn "           createuser -s postgres && createdb -O postgres agentharness && psql -U postgres -d agentharness -c 'CREATE EXTENSION vector;'"
         ;;
@@ -413,7 +452,7 @@ else
         warn "  native:  winget install -e --id PostgreSQL.16 (then add pgvector via StackBuilder), create the agentharness DB, set DATABASE_URL in .env"
         ;;
       *)
-        warn "  docker:  docker run -d --name agentharness-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=agentharness -p 5432:5432 pgvector/pgvector:pg16"
+        warn "  docker:  docker run -d --name agentharness-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=<generated> -e POSTGRES_DB=agentharness -p 127.0.0.1:5432:5432 pgvector/pgvector:pg16"
         warn "  apt:     sudo apt-get install -y postgresql postgresql-contrib (plus pgvector for your PG major), create the agentharness DB, set DATABASE_URL in .env"
         ;;
     esac

@@ -393,13 +393,15 @@ class BaseReActAgent:
 
         # Store user message in context
         if pending_chunks is not None:
-            pending_chunks.append({
-                "session_id": session_id,
-                "agent_id": self.agent_id,
-                "chunk_type": "user_message",
-                "payload": {"content": user_message},
-                "token_count": len(user_message) // 4,
-            })
+            pending_chunks.append(
+                {
+                    "session_id": session_id,
+                    "agent_id": self.agent_id,
+                    "chunk_type": "user_message",
+                    "payload": {"content": user_message},
+                    "token_count": len(user_message) // 4,
+                }
+            )
         else:
             await context_manager.add_chunk(
                 session_id=session_id,
@@ -556,9 +558,10 @@ class BaseReActAgent:
         """
         # ── Phase A: parse and validate the whole batch ─────────────────────
         planned: list[dict[str, Any]] = []
-        for tc in response.tool_calls:
+        for idx, tc in enumerate(response.tool_calls):
             function_data = tc.get("function", {})
             tool_name = function_data.get("name")
+            call_id = str(tc.get("id") or f"call-{idx}")
             if not tool_name:
                 logger.warning("Tool call missing 'name' field: %s", tc)
                 audit_log(
@@ -567,7 +570,13 @@ class BaseReActAgent:
                     error="missing_name",
                 )
                 planned.append(
-                    {"tc": tc, "name": None, "args": {}, "result": "Error: tool call missing 'name' field"}
+                    {
+                        "tc": tc,
+                        "name": None,
+                        "args": {},
+                        "result": "Error: tool call missing 'name' field",
+                        "call_id": call_id,
+                    }
                 )
                 continue
 
@@ -590,7 +599,13 @@ class BaseReActAgent:
                     error=str(e),
                 )
                 planned.append(
-                    {"tc": tc, "name": None, "args": {}, "result": f"Error: invalid tool arguments: {e}"}
+                    {
+                        "tc": tc,
+                        "name": None,
+                        "args": {},
+                        "result": f"Error: invalid tool arguments: {e}",
+                        "call_id": call_id,
+                    }
                 )
                 continue
 
@@ -603,47 +618,70 @@ class BaseReActAgent:
                     agent_id=self.agent_id,
                 )
                 planned.append(
-                    {"tc": tc, "name": tool_name, "args": tool_args, "result": result_str}
+                    {
+                        "tc": tc,
+                        "name": tool_name,
+                        "args": tool_args,
+                        "result": result_str,
+                        "call_id": call_id,
+                    }
                 )
                 continue
 
-            planned.append({"tc": tc, "name": tool_name, "args": tool_args, "result": None})
+            planned.append(
+                {"tc": tc, "name": tool_name, "args": tool_args, "result": None, "call_id": call_id}
+            )
 
-        # ── Phase B: execute the callable tools concurrently ────────────────
+        # ── Phase B: emit starts BEFORE execution (AH-020) ────────────────
+        # Long-running tools must appear as running while executing, not only
+        # after gather() finishes. Starts are emitted in request order with
+        # stable call IDs; completions follow as each finishes.
+        for item in planned:
+            if item["name"] is None:
+                continue
+            # Denied tools (result already set) still get start+complete for
+            # UI consistency — they complete immediately below.
+            yield StreamEvent(
+                type="tool_call",
+                tool_name=item["name"],
+                tool_args=item["args"],
+                tool_call_id=item["call_id"],
+            )
+
+        # ── Phase C: execute concurrently, yielding completions as they finish
         async def _run_one(item: dict[str, Any]) -> None:
             tool_name = item["name"]
             tool_args = item["args"]
+            # Denied/invalid already have results — skip execution.
+            if item["result"] is not None and item["name"] is not None and item.get("_denied"):
+                return
+            if item["result"] is not None and item["name"] is not None:
+                # Denied tools: result preset, no execution needed. Still
+                # record metrics below; skip provider call.
+                # Mark elapsed 0 so Phase D handles them uniformly.
+                item["elapsed_ms"] = 0.0
+                return
             audit_log("tool_call_start", session_id=str(session_id), tool_name=tool_name)
             start = time.monotonic()
             tool_timeout = _TOOL_TIMEOUTS.get(tool_name, _TOOL_TIMEOUT_DEFAULT)
             try:
                 with span("agent.tool", tool_name=tool_name, session_id=str(session_id)):
                     await plugin_registry.dispatch("on_tool_call", tool_name, tool_args)
-                    if tool_name in {
-                        "delegate",
-                        "remember",
-                        "recall",
-                        "share_memory",
-                        "session_recall",
-                        "session_recall_window",
-                    }:
-                        from ah.tools.agents import current_agent_id, current_session_id
+                    # AH-018: bind caller scope around EVERY tool (not just a
+                    # subset) so RAG tools and future tools see the active
+                    # session/agent. Tokens always reset in finally.
+                    from ah.tools.agents import current_agent_id, current_session_id
 
-                        token = current_session_id.set(session_id)
-                        agent_token = current_agent_id.set(self.agent_id)
-                        try:
-                            result = await asyncio.wait_for(
-                                registry.execute(tool_name, **tool_args),
-                                timeout=tool_timeout,
-                            )
-                        finally:
-                            current_agent_id.reset(agent_token)
-                            current_session_id.reset(token)
-                    else:
+                    token = current_session_id.set(session_id)
+                    agent_token = current_agent_id.set(self.agent_id)
+                    try:
                         result = await asyncio.wait_for(
                             registry.execute(tool_name, **tool_args),
                             timeout=tool_timeout,
                         )
+                    finally:
+                        current_agent_id.reset(agent_token)
+                        current_session_id.reset(token)
             except Exception as e:
                 logger.exception("Tool execution failed for '%s'", tool_name)
                 audit_log(
@@ -657,21 +695,58 @@ class BaseReActAgent:
             item["result"] = str(result)
             item["elapsed_ms"] = (time.monotonic() - start) * 1000
 
-        runnable = [item for item in planned if item["result"] is None]
+        # Mark denied items so _run_one skips execution but Phase D still emits.
+        for item in planned:
+            if item["name"] is not None and item["result"] is not None:
+                item["_denied"] = True
+
+        runnable = [
+            item for item in planned if item["name"] is not None and not item.get("_denied")
+        ]
+        completion_order: list[dict[str, Any]] = []
         if runnable:
             semaphore = asyncio.Semaphore(_MAX_PARALLEL_TOOLS)
 
-            async def _bounded(item: dict[str, Any]) -> None:
+            async def _bounded(item: dict[str, Any]) -> dict[str, Any]:
                 async with semaphore:
                     await _run_one(item)
+                return item
 
-            # A tool never raises out of _run_one (errors become results), so
-            # gather is safe; return_exceptions guards against a bug in that.
-            await asyncio.gather(
-                *(_bounded(item) for item in runnable), return_exceptions=True
-            )
+            tasks = [asyncio.create_task(_bounded(item)) for item in runnable]
+            try:
+                for coro in asyncio.as_completed(tasks):
+                    try:
+                        finished = await coro
+                    except Exception:
+                        continue
+                    completion_order.append(finished)
+                    # Yield completion immediately (out-of-order OK — call ID
+                    # pairs it with its start). Metrics + persistence happen
+                    # in Phase D in provider-required original order.
+                    tool_name = finished["name"]
+                    result_str = finished["result"]
+                    if "elapsed_ms" in finished:
+                        metrics.record_latency(f"tool.{tool_name}", finished["elapsed_ms"])
+                        metrics.increment_counter(f"tool.{tool_name}.calls")
+                        if result_str.startswith("Error:"):
+                            metrics.record_error(f"tool.{tool_name}")
+                    yield StreamEvent(
+                        type="tool_result",
+                        tool_name=tool_name,
+                        tool_result=result_str,
+                        tool_call_id=finished["call_id"],
+                    )
+            finally:
+                # Ensure no task leaks on cancellation.
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                # Do not await here (we are yielding); Phase D handles records.
 
-        # ── Phase C: replay results, metrics, and persistence in order ──────
+        # ── Phase D: metrics for denied + persistence in provider order ───
+        # Provider message order must follow the original tool_calls order
+        # (OpenAI requires tool replies in order), even though UI completions
+        # above may have arrived out of order.
         for item in planned:
             tool_name = item["name"]
             tool_args = item["args"]
@@ -683,35 +758,53 @@ class BaseReActAgent:
                 self._append_tool_messages(messages, response, tc, result_str)
                 continue
 
-            yield StreamEvent(type="tool_call", tool_name=tool_name, tool_args=tool_args)
-
-            if "elapsed_ms" in item:
-                metrics.record_latency(f"tool.{tool_name}", item["elapsed_ms"])
+            if item.get("_denied"):
                 metrics.increment_counter(f"tool.{tool_name}.calls")
-                if result_str.startswith("Error:"):
-                    metrics.record_error(f"tool.{tool_name}")
+                metrics.record_error(f"tool.{tool_name}")
                 await plugin_registry.dispatch("on_tool_result", tool_name, result_str)
                 audit_log(
                     "tool_call_complete",
                     session_id=str(session_id),
                     tool_name=tool_name,
-                    duration_ms=int(item["elapsed_ms"]),
+                    duration_ms=0,
                 )
-
-            yield StreamEvent(type="tool_result", tool_name=tool_name, tool_result=result_str)
+                # Denied completions were not yielded in Phase C (no
+                # execution); emit them now in order.
+                yield StreamEvent(
+                    type="tool_result",
+                    tool_name=tool_name,
+                    tool_result=result_str,
+                    tool_call_id=item["call_id"],
+                )
+            else:
+                # Executed tools: metrics already recorded at completion time;
+                # still dispatch result hooks + audit once (idempotent).
+                if "elapsed_ms" in item and not item.get("_hooked"):
+                    # Phase C recorded latency/counters; dispatch hooks here
+                    # once in original order for determinism.
+                    await plugin_registry.dispatch("on_tool_result", tool_name, result_str)
+                    audit_log(
+                        "tool_call_complete",
+                        session_id=str(session_id),
+                        tool_name=tool_name,
+                        duration_ms=int(item["elapsed_ms"]),
+                    )
+                    item["_hooked"] = True
 
             if pending_chunks is not None:
-                pending_chunks.append({
-                    "session_id": session_id,
-                    "agent_id": self.agent_id,
-                    "chunk_type": "tool_call",
-                    "payload": {
-                        "tool": tool_name,
-                        "args": tool_args,
-                        "result_preview": result_str[:500],
-                    },
-                    "token_count": len(result_str) // 4,
-                })
+                pending_chunks.append(
+                    {
+                        "session_id": session_id,
+                        "agent_id": self.agent_id,
+                        "chunk_type": "tool_call",
+                        "payload": {
+                            "tool": tool_name,
+                            "args": tool_args,
+                            "result_preview": result_str[:500],
+                        },
+                        "token_count": len(result_str) // 4,
+                    }
+                )
             else:
                 await context_manager.add_chunk(
                     session_id=session_id,
@@ -733,15 +826,54 @@ class BaseReActAgent:
             )
             self._append_tool_messages(messages, response, tc, result_str[:1000])
 
-    async def _flush_pending_chunks(
-        self, pending_chunks: list[dict[str, Any]]
-    ) -> None:
+    async def _flush_pending_chunks(self, pending_chunks: list[dict[str, Any]]) -> None:
         """Insert all pending chunks in a single batch operation."""
         if pending_chunks:
             result = context_manager.add_chunks_batch(pending_chunks)
             if inspect.isawaitable(result):
                 await result
             pending_chunks.clear()
+
+    async def _flush_pending_cancellation_safe(
+        self,
+        pending_chunks: list[dict[str, Any]],
+        session_id: uuid.UUID,
+        note: str = "interrupted",
+    ) -> None:
+        """Flush pending history on cancellation without losing writes (AH-015).
+
+        Uses a shielded, bounded flush so CancelledError during a turn does
+        not drop the user message or completed tool records. Appends an
+        explicit interruption marker instead of misrepresenting partial
+        effects as complete.
+        """
+        if pending_chunks:
+            try:
+                # Shield so the flush itself is not cancelled mid-write.
+                await asyncio.shield(
+                    asyncio.wait_for(self._flush_pending_chunks(list(pending_chunks)), timeout=10.0)
+                )
+                pending_chunks.clear()
+            except Exception as e:
+                logger.warning("Cancellation-safe flush failed: %s", e)
+        # Record the interruption explicitly (best-effort, bounded).
+        try:
+            await asyncio.shield(
+                asyncio.wait_for(
+                    context_manager.add_chunk(
+                        session_id=session_id,
+                        agent_id=self.agent_id,
+                        chunk_type="assistant_message",
+                        payload={
+                            "content": f"[{note}] Turn interrupted; partial effects above are retained."
+                        },
+                        token_count=20,
+                    ),
+                    timeout=10.0,
+                )
+            )
+        except Exception as e:
+            logger.warning("Could not record interruption marker: %s", e)
 
     def _schedule_memory_consolidation(self, session_id: uuid.UUID) -> None:
         """Schedule memory consolidation as a background task.
@@ -830,6 +962,9 @@ class ReActAgent(BaseReActAgent):
         session, messages = await self._prepare_context(
             session_id, user_message, include_memory=True, pending_chunks=pending_chunks
         )
+        # AH-015: persist the user message immediately so cancellation during
+        # the first LLM call cannot lose it.
+        await self._flush_pending_chunks(pending_chunks)
 
         total_tokens = 0
         tool_calls_made = []
@@ -911,13 +1046,15 @@ class ReActAgent(BaseReActAgent):
             if not response.tool_calls:
                 # No tool calls — final answer
                 content = response.content or ""
-                pending_chunks.append({
-                    "session_id": session_id,
-                    "agent_id": self.agent_id,
-                    "chunk_type": "assistant_message",
-                    "payload": {"content": content},
-                    "token_count": len(content) // 4,
-                })
+                pending_chunks.append(
+                    {
+                        "session_id": session_id,
+                        "agent_id": self.agent_id,
+                        "chunk_type": "assistant_message",
+                        "payload": {"content": content},
+                        "token_count": len(content) // 4,
+                    }
+                )
                 await self._flush_pending_chunks(pending_chunks)
                 await session_manager.update_activity(session_id)
                 audit_log(
@@ -939,7 +1076,18 @@ class ReActAgent(BaseReActAgent):
                 return completed
 
             # Execute tool calls
-            await self._execute_tool_calls(response, messages, tool_calls_made, session_id, verbose, pending_chunks)
+            try:
+                await self._execute_tool_calls(
+                    response, messages, tool_calls_made, session_id, verbose, pending_chunks
+                )
+            except asyncio.CancelledError:
+                # AH-015: preserve user/tool records accumulated so far;
+                # do not misrepresent partial effects as complete.
+                await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+                raise
+            # AH-015: incremental persistence — flush each batch so a later
+            # cancellation loses at most the in-flight batch, not all history.
+            await self._flush_pending_chunks(pending_chunks)
 
         # Max iterations reached
         audit_log(
@@ -983,6 +1131,15 @@ class ReActAgent(BaseReActAgent):
         session, messages = await self._prepare_context(
             session_id, user_message, include_memory=True, pending_chunks=pending_chunks
         )
+        # AH-015: persist the user message immediately; run_stream otherwise
+        # holds everything in pending until the final done event, so a
+        # CancelledError would drop the entire turn. Incremental flushing
+        # below preserves tool records as well.
+        try:
+            await self._flush_pending_chunks(pending_chunks)
+        except asyncio.CancelledError:
+            await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+            raise
 
         total_tokens = 0
         tool_calls_made = []
@@ -1085,13 +1242,15 @@ class ReActAgent(BaseReActAgent):
             if not response.tool_calls:
                 # No tool calls — final answer
                 content = response.content or ""
-                pending_chunks.append({
-                    "session_id": session_id,
-                    "agent_id": self.agent_id,
-                    "chunk_type": "assistant_message",
-                    "payload": {"content": content},
-                    "token_count": len(content) // 4,
-                })
+                pending_chunks.append(
+                    {
+                        "session_id": session_id,
+                        "agent_id": self.agent_id,
+                        "chunk_type": "assistant_message",
+                        "payload": {"content": content},
+                        "token_count": len(content) // 4,
+                    }
+                )
                 await self._flush_pending_chunks(pending_chunks)
                 await session_manager.update_activity(session_id)
                 audit_log(
@@ -1115,11 +1274,26 @@ class ReActAgent(BaseReActAgent):
                 )
                 return
 
-            # Execute tool calls with streaming events
-            async for event in self._execute_tool_calls_stream(
-                response, messages, tool_calls_made, session_id, pending_chunks
-            ):
-                yield event
+            # Execute tool calls with streaming events.
+            # AH-015: run_stream previously held ALL history in pending until
+            # the final done event — a CancelledError bypassed `except
+            # Exception` and dropped user/tool records. Flush incrementally
+            # and, on cancellation, persist what completed with an explicit
+            # interruption marker.
+            try:
+                async for event in self._execute_tool_calls_stream(
+                    response, messages, tool_calls_made, session_id, pending_chunks
+                ):
+                    yield event
+            except asyncio.CancelledError:
+                await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+                raise
+            # Incremental persistence: do not wait for done.
+            try:
+                await self._flush_pending_chunks(pending_chunks)
+            except asyncio.CancelledError:
+                await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+                raise
 
         # Max iterations reached
         audit_log(

@@ -186,9 +186,10 @@ test("cancel() does not set running=false while the turn is still in-flight", as
 	// Now cancel — the turn is still in-flight, so running should stay true
 	(app as unknown as { cancel: () => void }).cancel();
 
-	// The editor should still be disabled (running=true) because the turn hasn't completed
+	// AH-031: the composer stays enabled during turns so safe commands work;
+	// running/footer still reflect the in-flight turn.
 	const editor = widgetWith(tui, "disableSubmit");
-	assert.equal(editor.disableSubmit, true, "editor stays disabled after cancel while turn is in-flight");
+	assert.equal(editor.disableSubmit, false, "editor stays enabled for safe commands during turn");
 
 	// Footer status should still be "working"
 	const footer = widgetWith(tui, "status");
@@ -356,7 +357,7 @@ test("submit() does not clear editor when a turn is in-flight (lost input fix)",
 	await app.exit();
 });
 
-test("error event clears in-flight tracking", async () => {
+test("error event keeps in-flight until completion (AH-032)", async () => {
 	const { app, tui, client } = makeApp(SESSION_A);
 	await app.start();
 
@@ -364,24 +365,37 @@ test("error event clears in-flight tracking", async () => {
 	const submitPromise = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("hello");
 	await new Promise((r) => setTimeout(r, 10));
 
-	// Emit an error event for the current session
+	// Emit an error event for the current session — turn stays in-flight
+	// until the terminal message.complete (which carries final accounting
+	// and tool-card cleanup). Clearing early would drop that completion.
 	client.emit(ev({ type: "error", message: "something went wrong" }));
 
-	// running should be false now
+	// running stays true; composer stays enabled for safe commands (AH-031).
 	const editor = widgetWith(tui, "disableSubmit");
-	assert.equal(editor.disableSubmit, false, "editor re-enabled after error event");
+	assert.equal(editor.disableSubmit, false, "editor stays enabled after error event");
 
-	// A new prompt should be accepted
+	// A new prompt is still rejected while the turn is in-flight.
 	client.responses.set("prompt.submit", {});
 	await submitPromise;
 
 	const submitPromise2 = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("second");
 	await new Promise((r) => setTimeout(r, 10));
-	client.responses.set("prompt.submit", {});
+	// Still only one prompt.submit: the second was rejected as in-flight.
+	let submits = client.requests.filter((r) => r.method === "prompt.submit");
+	assert.equal(submits.length, 1, "second prompt blocked until terminal completion");
 	await submitPromise2;
 
-	const submits = client.requests.filter((r) => r.method === "prompt.submit");
-	assert.equal(submits.length, 2, "both prompts submitted after error cleared in-flight");
+	// Terminal completion clears the turn; a new prompt is accepted.
+	client.emit(
+		ev({ type: "message.complete", text: "", tokens: 0, iterations: 0, toolCalls: 0, cancelled: false }),
+	);
+	const submitPromise3 = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("third");
+	await new Promise((r) => setTimeout(r, 10));
+	client.responses.set("prompt.submit", {});
+	await submitPromise3;
+
+	submits = client.requests.filter((r) => r.method === "prompt.submit");
+	assert.equal(submits.length, 2, "prompt accepted after terminal completion");
 	await app.exit();
 });
 

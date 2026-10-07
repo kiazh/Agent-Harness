@@ -1,9 +1,10 @@
 """Regression tests for concurrent tool execution in the ReAct agent.
 
-Independent tool calls returned in a single assistant message used to run one
-after another, so a batch of N slow reads cost sum(latency). They now run
-concurrently (bounded), while results are still emitted in the original order
-so transcripts stay deterministic.
+Independent tool calls returned in a single assistant message run concurrently
+(bounded). AH-020: tool_call (start) events are emitted BEFORE execution so
+long-running tools appear as running; tool_result events follow as each
+finishes (completion order, paired by call ID). Provider message order still
+follows the original request order.
 """
 
 from __future__ import annotations
@@ -120,7 +121,7 @@ async def test_independent_tools_run_concurrently(slow_tool):
 
 
 async def test_result_order_is_preserved(slow_tool):
-    """Events replay in the model's original order despite concurrency."""
+    """Completions arrive in finish order; provider messages stay in request order (AH-020)."""
     agent = _StubAgent()
     # Make the FIRST tool the slowest so completion order != request order.
     response = LLMResponse(
@@ -135,19 +136,19 @@ async def test_result_order_is_preserved(slow_tool):
     events, messages, made = await _collect(agent, response, uuid.uuid4())
 
     results = [e for e in events if e.type == "tool_result"]
-    assert [e.tool_result for e in results] == ["done-first", "done-second"]
+    # Completion order: the fast second tool finishes first.
+    assert [e.tool_result for e in results] == ["done-second", "done-first"]
+    # Call IDs still pair each start with its own result.
+    starts = [e for e in events if e.type == "tool_call"]
+    assert {e.tool_call_id for e in starts} == {e.tool_call_id for e in results}
     assert [m["tool"] for m in made] == ["sleep_probe", "sleep_probe"]
-    # The assistant/tool message pairs must follow request order too.
+    # The assistant/tool message pairs must follow request order for the provider.
     tool_msgs = [m for m in messages if m.get("role") == "tool"]
     assert "done-first" in tool_msgs[0]["content"]
 
 
 async def test_events_pair_each_call_with_its_result(slow_tool):
-    """tool_call and tool_result alternate per tool, in request order.
-
-    Execution is concurrent, but the event stream keeps the original
-    per-tool pairing so a client's view stays coherent.
-    """
+    """Starts emit before execution; completions pair by call ID (AH-020)."""
     agent = _StubAgent()
     response = LLMResponse(
         content="",
@@ -161,10 +162,13 @@ async def test_events_pair_each_call_with_its_result(slow_tool):
     events, _, _ = await _collect(agent, response, uuid.uuid4())
     kinds = [e.type for e in events]
 
-    assert kinds == ["tool_call", "tool_result", "tool_call", "tool_result"]
-    # Results still follow the model's original request order.
-    results = [e.tool_result for e in events if e.type == "tool_result"]
-    assert results == ["done-a", "done-b"]
+    # All starts first (visible as running), then completions as they finish.
+    assert kinds == ["tool_call", "tool_call", "tool_result", "tool_result"]
+    # Results pair by call ID, not position.
+    starts = [e for e in events if e.type == "tool_call"]
+    results = [e for e in events if e.type == "tool_result"]
+    assert {e.tool_call_id for e in starts} == {e.tool_call_id for e in results}
+    assert sorted(e.tool_result for e in results) == ["done-a", "done-b"]
 
 
 async def test_concurrency_peak_proves_parallelism(slow_tool):
@@ -198,9 +202,7 @@ async def test_parallelism_is_bounded(monkeypatch, slow_tool):
     response = LLMResponse(
         content="",
         model="test-model",
-        tool_calls=[
-            _tool_call("sleep_probe", {"delay": 0.05, "tag": str(i)}, i) for i in range(n)
-        ],
+        tool_calls=[_tool_call("sleep_probe", {"delay": 0.05, "tag": str(i)}, i) for i in range(n)],
     )
 
     await _collect(agent, response, uuid.uuid4())
@@ -227,5 +229,9 @@ async def test_invalid_args_do_not_break_the_batch(slow_tool):
     results = [e.tool_result for e in events if e.type == "tool_result"]
     assert results == ["done-ok"]
     # The malformed call still gets a tool reply so the model can recover.
-    assert any("invalid tool arguments" in m.get("content", "") for m in messages if m.get("role") == "tool")
+    assert any(
+        "invalid tool arguments" in m.get("content", "")
+        for m in messages
+        if m.get("role") == "tool"
+    )
     assert len(made) == 1

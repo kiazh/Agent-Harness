@@ -29,8 +29,15 @@ class ServiceError(Exception):
 
 
 async def export_markdown(session: Session) -> str:
-    """Render a session's conversation as Markdown."""
-    chunks = await context_manager.get_chunks(session.id, limit=1000)
+    """Render a session's conversation as Markdown.
+
+    Policy (AH-002): exports are redacted — secret-looking strings are
+    replaced before rendering so raw transcripts never leak via
+    session.export / /rpc. The stored chunks are unchanged.
+    """
+    from ah.memory.redaction import redact_secrets as _redact
+
+    chunks = await context_manager.get_all_chunks(session.id)
     lines = [
         f"# Session: {session.title or '(untitled)'}",
         "",
@@ -47,16 +54,23 @@ async def export_markdown(session: Session) -> str:
     for chunk in reversed(chunks):
         payload = chunk.payload
         if chunk.chunk_type == "user_message":
-            lines += ["### User", "", str(payload.get("content", "")), ""]
+            lines += ["### User", "", _redact(str(payload.get("content", ""))).text, ""]
         elif chunk.chunk_type == "assistant_message":
-            lines += ["### Assistant", "", str(payload.get("content", "")), ""]
+            lines += ["### Assistant", "", _redact(str(payload.get("content", ""))).text, ""]
         elif chunk.chunk_type == "compression_summary":
-            lines += ["### Summary of earlier context", "", str(payload.get("content", "")), ""]
+            lines += [
+                "### Summary of earlier context",
+                "",
+                _redact(str(payload.get("content", ""))).text,
+                "",
+            ]
         elif chunk.chunk_type == "tool_call":
-            lines.append(f"**Tool:** `{payload.get('tool', 'unknown')}({payload.get('args', {})})`")
+            lines.append(
+                f"**Tool:** `{_redact(str(payload.get('tool', 'unknown'))).text}({_redact(str(payload.get('args', {}))).text})`"
+            )
             preview = payload.get("result_preview", "")
             if preview:
-                lines.append(f"**Result:** {str(preview)[:200]}")
+                lines.append(f"**Result:** {_redact(str(preview)[:200]).text}")
             lines.append("")
     return "\n".join(lines)
 
@@ -82,7 +96,9 @@ async def compress_session(
     Returns ``None`` when there is nothing to compress. Uses LLM summarization
     when enabled and a provider can be built, otherwise truncation.
     """
-    chunks = await context_manager.get_chunks(session.id, limit=1000)
+    # AH-008: fetch ALL chunks (paginated), not just the newest 1000, and
+    # replace only the captured input IDs so concurrent inserts survive.
+    chunks = await context_manager.get_all_chunks(session.id)
     if not chunks:
         return None
 
@@ -98,15 +114,48 @@ async def compress_session(
         except Exception:
             llm_provider = None  # no key / provider: fall back to truncation
 
-    result = ContextCompressor(config=comp_config).compress(
-        chunks=chunks,
-        session_id=session.id,
-        agent_id=session.agent_id,
-        llm_provider=llm_provider,
-    )
+    # AH-011: await summarization directly instead of blocking the event loop
+    # via Future.result() on a worker thread.
+    from ah.core.compression import ContextCompressor as _CC
+
+    compressor = _CC(config=comp_config)
+    if hasattr(compressor, "acompress"):
+        result = await compressor.acompress(
+            chunks=chunks,
+            session_id=session.id,
+            agent_id=session.agent_id,
+            llm_provider=llm_provider,
+        )
+    else:
+        result = ContextCompressor(config=comp_config).compress(
+            chunks=chunks,
+            session_id=session.id,
+            agent_id=session.agent_id,
+            llm_provider=llm_provider,
+        )
     if result.original_count == 0:
         return None
-    await context_manager.replace_chunks(session.id, result.compressed_chunks)
+    # AH-008/AH-009: replace only captured IDs; originals are archived
+    # transactionally inside replace_chunks_by_ids.
+    try:
+        await context_manager.replace_chunks_by_ids(
+            session.id,
+            [c.id for c in chunks],
+            result.compressed_chunks,
+            archive_reason="compressed",
+        )
+    finally:
+        # Do not leak a compression-only provider client.
+        close = getattr(llm_provider, "close", None)
+        if callable(close):
+            try:
+                import inspect as _inspect
+
+                r = close()
+                if _inspect.isawaitable(r):
+                    await r
+            except Exception:
+                pass
     return result
 
 
@@ -140,12 +189,32 @@ def learn_skill(
             )
         import httpx
 
+        # AH-005: DNS is validated before fetch, but httpx resolves
+        # independently — a rebinding between check and connect could steer
+        # the actual connection private. Mitigation: re-validate after fetch
+        # (including redirect chain) and bound size. Full pinning with TLS
+        # SNI preservation requires outbound network restrictions; the
+        # residual risk is documented and the fetch never follows redirects
+        # to private targets.
         try:
-            resp = httpx.get(source, timeout=30)
+            resp = httpx.get(source, timeout=30, follow_redirects=False)
+            # Reject redirects to non-safe targets instead of following them.
+            if resp.status_code in (301, 302, 303, 307, 308):
+                location = resp.headers.get("location", "")
+                raise ServiceError(f"Redirect target rejected by security policy: {location!r}")
             resp.raise_for_status()
+        except ServiceError:
+            raise
         except Exception as e:
             raise ServiceError(f"Failed to fetch URL: {e}") from None
+        # Post-fetch re-validation: DNS may have rebound during the fetch.
+        if not _is_safe_url(source):
+            raise ServiceError(
+                f"URL failed post-fetch security re-validation (possible DNS rebinding): {source}"
+            )
         content = resp.text
+        if len(content.encode("utf-8", errors="replace")) > 200_000:
+            raise ServiceError("Skill content from URL exceeds 200KB limit")
         default_name = source.rstrip("/").split("/")[-1].split(".")[0] or "web-skill"
         default_desc = f"Skill learned from {source}"
         default_triggers = []

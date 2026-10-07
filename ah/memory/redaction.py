@@ -23,6 +23,8 @@ __all__ = [
     "RedactionPattern",
     "RedactionResult",
     "SecretRedactor",
+    "StreamingSecretRedactor",
+    "STREAM_TAIL_CHARS",
     "redact_secrets",
 ]
 
@@ -330,3 +332,46 @@ _default_redactor = SecretRedactor()
 def redact_secrets(text: str) -> RedactionResult:
     """Convenience function to redact secrets using the default redactor."""
     return _default_redactor.redact(text)
+
+
+# Maximum tail to hold back for boundary-safe streaming redaction. Must cover
+# the longest supported secret format (github_pat up to 255 chars + PEM
+# blocks). 512 chars is a conservative bound; longer secrets (multi-KB PEM)
+# are handled by the final flush which redacts the whole buffered remainder.
+STREAM_TAIL_CHARS = 512
+
+
+class StreamingSecretRedactor:
+    """Boundary-safe redactor for streamed text deltas.
+
+    Each delta is NOT redacted independently (a secret split across two
+    deltas would leak). Instead we buffer, emit only the safe prefix
+    ``buffer[:-TAIL]`` redacted, and hold back the last TAIL chars which may
+    contain a partial secret. :meth:`flush` redacts and returns the remainder.
+
+    Honest limitation: regex redaction cannot guarantee perfect removal of
+    arbitrarily long secrets (e.g. multi-KB PEM blocks) split across many
+    deltas without unbounded buffering. The tail bound covers all bounded
+    formats; the flush step redacts whatever remains once the stream ends.
+    """
+
+    def __init__(self, tail: int = STREAM_TAIL_CHARS) -> None:
+        self._tail = max(1, tail)
+        self._buf = ""
+
+    def feed(self, delta: str) -> str:
+        """Add *delta*, return the newly-safe redacted prefix (may be empty)."""
+        if not delta:
+            return ""
+        self._buf += delta
+        if len(self._buf) <= self._tail:
+            return ""
+        safe = self._buf[: -self._tail]
+        self._buf = self._buf[-self._tail :]
+        return redact_secrets(safe).text
+
+    def flush(self) -> str:
+        """Redact and return any buffered remainder."""
+        out = redact_secrets(self._buf).text if self._buf else ""
+        self._buf = ""
+        return out

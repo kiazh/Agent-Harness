@@ -42,6 +42,15 @@ ah = "ah.cli:app"
 [tool.hatch.build.targets.wheel]
 packages = ["ah"]
 
+# AH-030: ship built-in skills inside the wheel so non-editable installs
+# still discover SKILL.md content. Falls back to AGENT_HARNESS_SKILLS_DIR
+# at runtime when overridden.
+[tool.hatch.build.targets.wheel.force-include]
+"skills" = "skills"
+
+[tool.hatch.build.targets.sdist.force-include]
+"skills" = "skills"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

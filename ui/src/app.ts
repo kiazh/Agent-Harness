@@ -305,17 +305,25 @@ export class App implements FeatureHost {
 		const text = raw.trim();
 		if (!text) return;
 
-		// Check in-flight before clearing the editor so we don't lose input
-		// if the previous turn is still running.
-		if (this.current && this.inFlight.has(this.current.id)) {
+		// AH-031: parse FIRST, then guard only conflicting operations.
+		// Read-only / navigation commands must work during a turn; only
+		// new prompts and session-mutating commands on the in-flight
+		// session are rejected.
+		const command = parseCommand(text);
+		const inFlight = this.current && this.inFlight.has(this.current.id);
+		if (inFlight && !command) {
 			this.transcript.addNotice("The previous turn is still finishing. Try again shortly.", "warning");
+			this.tui.requestRender();
+			return;
+		}
+		if (inFlight && command && CONFLICTING_COMMANDS.has(command.name)) {
+			this.transcript.addNotice("Stop the running reply before changing this session.", "warning");
 			this.tui.requestRender();
 			return;
 		}
 
 		this.editor.setText("");
 
-		const command = parseCommand(text);
 		// Never keep secrets in input history: /keys set carries a raw value.
 		const secret = command?.name === "keys" && command.args.startsWith("set");
 		if (!secret) this.editor.addToHistory(text);
@@ -405,7 +413,10 @@ export class App implements FeatureHost {
 
 	private setRunning(running: boolean): void {
 		this.running = running;
-		this.editor.disableSubmit = running;
+		// AH-031: do NOT disable the composer while a turn runs — safe
+		// slash commands (/sessions, /new, /exit, /help, …) must stay
+		// usable. Prompt submits are guarded in submit()/submitTurn().
+		this.editor.disableSubmit = false;
 		if (this.footer.status !== "offline") this.footer.status = running ? "working" : "ready";
 	}
 
@@ -415,9 +426,12 @@ export class App implements FeatureHost {
 		// against in-flight turns, not just the current session.
 		if (!this.inFlight.has(event.sessionId)) return;
 		if (event.sessionId !== this.current?.id) {
-			if (event.type === "message.complete" || event.type === "error") {
+			if (event.type === "message.complete") {
 				this.clearInFlight(event.sessionId);
 			}
+			// AH-032: never clear in-flight on "error" — the terminal
+			// message.complete still follows with final accounting and
+			// tool-card cleanup. Clearing early drops that completion.
 			this.setRunning(this.current ? this.inFlight.has(this.current.id) : false);
 			this.tui.requestRender();
 			return;
@@ -425,8 +439,10 @@ export class App implements FeatureHost {
 		const summary = this.transcript.apply(event);
 		if (event.type === "usage") this.footer.tokens = this.sessionTokens + event.tokens;
 		if (event.type === "error") {
-			this.clearInFlight(event.sessionId);
-			this.setRunning(this.current ? this.inFlight.has(this.current.id) : false);
+			// Keep turn state until terminal completion (AH-032). The error
+			// notice is already rendered by transcript.apply(); final
+			// accounting arrives with message.complete.
+			this.setRunning(true);
 		} else if (summary) {
 			this.clearInFlight(event.sessionId);
 			this.sessionTokens += summary.tokens;
@@ -456,3 +472,17 @@ export class App implements FeatureHost {
 function message(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
+
+/**
+ * Commands that mutate the in-flight session or start new work and must wait
+ * for the running turn (AH-031). Everything else (/sessions, /new, /exit,
+ * /help, /status, …) stays usable during a turn.
+ */
+const CONFLICTING_COMMANDS = new Set([
+	"compress",
+	"delete",
+	"fork",
+	"rename",
+	"goal",
+	"delegate",
+]);
