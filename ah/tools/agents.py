@@ -60,6 +60,14 @@ async def delegate(agent: str, task: str) -> str:
     from_agent = "delegate-tool"
     if parent_session_id is not None:
         from_agent, parent_session_id = await active_agent_scope()
+    # LP-08: propagate the executing parent's authority so the child cannot
+    # escalate through delegation, HTTP/RPC, jobs, or raw helper calls.
+    try:
+        from ah.core.agent_factory import parent_authority_var
+
+        parent_authority = parent_authority_var.get()
+    except Exception:
+        parent_authority = None
     try:
         result = await asyncio.wait_for(
             orchestrator.delegate(
@@ -68,6 +76,7 @@ async def delegate(agent: str, task: str) -> str:
                 from_agent=from_agent,
                 parent_session_id=parent_session_id,
                 _hop_count=delegation_depth.get() + 1,
+                authority=parent_authority,
             ),
             timeout=60,
         )
@@ -129,3 +138,12 @@ async def share_memory(memory_id: str, recipient_agent: str) -> str:
         f"receipt source={receipt.source_memory_id}; "
         f"target={receipt.target_memory_id or '-'}; {receipt.reason}"
     )
+
+
+registry.declare_effects(
+    {
+        "delegate": ("delegate",),
+        "list_agents": (),
+        "share_memory": ("memory",),
+    }
+)

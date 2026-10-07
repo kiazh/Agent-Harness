@@ -53,6 +53,12 @@ class ActionRequest:
     opaque_network: bool = False
     timeout: int = 60
     digest: str = ""
+    # Concrete tool name (when invoked through the agent tool loop). Lets the
+    # broker enforce inherited parent caps even when session grants exist.
+    tool: str = ""
+    # Filled by the broker when an approval is claimed for this execution;
+    # the agent loop marks it completed/failed/cancelled afterwards.
+    approval_id: str = ""
 
 
 @dataclass
@@ -137,25 +143,46 @@ def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
     if sens:
         # Sensitive exclusions remain explicit in EVERY mode, including full.
         for g in grants:
-            if g.get("digest") == req.digest and not g.get("revoked"):
-                if any(s in (g.get("capability") or "") for s in sens):
-                    return Decision("allowed", f"scoped grant covers {','.join(sens)}", req)
+            if not _grant_usable(g, req):
+                continue
+            if g.get("digest") == req.digest and any(
+                s in (g.get("capability") or "") for s in sens
+            ):
+                return Decision("allowed", f"scoped grant covers {','.join(sens)}", req)
         return Decision(
             "pending", f"sensitive capability requires explicit approval: {','.join(sens)}", req
         )
     # In-process, side-effect-free operations are always allowed: the broker
     # governs filesystem/process/network, not pure computation or reads.
-    if req.operation.startswith("tool.") or req.operation in (
-        "context.read",
-        "skill.read",
-        "memory",
-        "delegate",
+    # Unknown tools declaring mutating effects are NOT in-process work.
+    if "mutating-tool" not in (req.capabilities or []) and (
+        req.operation.startswith("tool.")
+        or req.operation
+        in (
+            "context.read",
+            "skill.read",
+            "memory",
+            "delegate",
+        )
     ):
         return Decision("allowed", "in-process operation", req)
     if req.mode == "full":
-        # Ordinary host ops covered by the disclosed full-mode grant proceed.
-        # Approval is bound at activation (session grant), not per action.
-        return Decision("allowed", "full-mode session grant", req)
+        # LP-07: full authority comes from a live full-mode grant bound to
+        # THIS session — never from the global config value alone. A global
+        # `full` default only auto-grants at session creation (disclosed
+        # persistent scope); activating session A never elevates session B.
+        for g in grants:
+            if not _grant_usable(g, req):
+                continue
+            if (
+                g.get("mode") == "full"
+                and g.get("capability") == "session"
+                and g.get("digest") == "full-mode-session"
+            ):
+                return Decision("allowed", "full-mode session grant", req)
+        return Decision(
+            "pending", "full mode requires explicit session activation (/mode full)", req
+        )
     if req.mode == "sandbox" and req.backend != "sandbox":
         return Decision(
             "pending",
@@ -172,16 +199,20 @@ def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
     ):
         # Opaque scripts still request approval even for project writes below.
         return Decision("allowed", "workspace project write", req)
-    # Scoped grant match (exact digest, unrevoked, unexpired).
+    # Scoped grants (LP-03/04/05): live + bound + exact scope; mutating ops
+    # additionally require the EXACT action digest, so changed content/cwd/
+    # argv/backend always re-approve even under a directory grant.
     for g in grants:
-        if g.get("revoked"):
+        if not _grant_usable(g, req):
             continue
-        if g.get("digest") == req.digest:
+        if not _scope_allows(g, req):
+            continue
+        if req.operation in ("file.write", "process.exec", "network.fetch"):
+            if g.get("digest") != req.digest:
+                continue
             return Decision("allowed", "matching scoped grant", req)
-        scope = g.get("scope_path")
-        if scope and req.targets and all(str(t).startswith(str(scope)) for t in req.targets):
-            if g.get("capability") in (req.operation, "session", "workspace"):
-                return Decision("allowed", "scope grant covers target", req)
+        if g.get("capability") in (req.operation, "session", "workspace"):
+            return Decision("allowed", "scope grant covers target", req)
     if (
         req.operation in ("file.write", "process.exec")
         or req.targets
@@ -189,6 +220,87 @@ def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
     ):
         return Decision("pending", "write/exec or out-of-scope access requires approval", req)
     return Decision("pending", "action requires approval", req)
+
+
+# Mutating operations always bind the exact action digest.
+MUTATING_OPS = frozenset({"file.write", "process.exec", "network.fetch"})
+
+
+def _grant_usable(grant: dict, req: ActionRequest) -> bool:
+    """Expiry + revocation + session/agent binding, enforced at decision time."""
+    if grant.get("revoked"):
+        return False
+    if grant.get("session_id") and grant.get("session_id") != str(req.session_id or ""):
+        return False
+    if grant.get("agent_id") and grant.get("agent_id") != str(req.agent_id or ""):
+        return False
+    exp = grant.get("expires_at")
+    if exp is not None:
+        try:
+            from datetime import UTC, datetime
+
+            now = datetime.now(UTC)
+            if isinstance(exp, str):
+                text = exp[:-1] + "+00:00" if exp.endswith("Z") else exp
+                exp = datetime.fromisoformat(text)
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=UTC)
+            if exp <= now:
+                return False
+        except Exception:
+            return False
+    return True
+
+
+def _norm_path(path: str) -> str:
+    """Normalized absolute identity (case-insensitive on Windows, UNC-aware).
+
+    Matches the execution-time normalization (Path.resolve): POSIX-style
+    "/proj/..." inputs on Windows resolve against the current drive, so
+    drive-relative roots are anchored to the workspace drive here too.
+    """
+    import os as _os
+
+    text = str(path or "")
+    text = text.replace("/", _os.sep)
+    if _os.path.isabs(text):
+        normed = _os.path.normpath(text)
+    else:
+        normed = _os.path.normpath(_os.path.join(str(workspace_root()), text))
+    if _os.name == "nt":
+        drive, _rest = _os.path.splitdrive(normed)
+        if not drive:
+            # Drive-relative ("\proj\x"): anchor to the workspace drive so
+            # stored scopes and resolved request targets compare identically.
+            wdrive, _ = _os.path.splitdrive(str(workspace_root()))
+            normed = wdrive + normed if wdrive else normed
+        normed = normed.lower()
+    return normed
+
+
+def _scope_allows(grant: dict, req: ActionRequest) -> bool:
+    """Exact file identity vs component-wise directory containment (LP-04)."""
+    import os as _os
+
+    scope = grant.get("scope_path")
+    stype = grant.get("scope_type") or "file"
+    if not scope:
+        # Digest-only grant (e.g. once-style exact action): digest checked by caller.
+        return True
+    if not req.targets:
+        return False
+    if stype == "dir":
+        root = _norm_path(scope)
+        prefix = root if root.endswith(_os.sep) else root + _os.sep
+        for t in req.targets:
+            normed = _norm_path(t)
+            if normed != root and not normed.startswith(prefix):
+                return False
+        return True
+    # File scope: exact normalized identity. report.txt never covers
+    # report.txt.backup; project never covers project-other.
+    wanted = _norm_path(scope)
+    return all(_norm_path(t) == wanted for t in req.targets)
 
 
 def build_request(
@@ -206,6 +318,7 @@ def build_request(
     turn_id: str = "",
     capabilities: list[str] | None = None,
     network: list[str] | None = None,
+    tool: str = "",
 ) -> ActionRequest:
     from ah.core.config import config
 
@@ -225,6 +338,7 @@ def build_request(
         else "",
         capabilities=list(capabilities or []),
         network=list(network or []),
+        tool=str(tool or ""),
     )
     if operation == "process.exec" and argv:
         base = Path(argv[0]).name.lower() if argv else ""

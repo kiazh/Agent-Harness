@@ -51,7 +51,7 @@ def main(
             raise typer.Exit(1)
         config.set("execution_mode", normalized)
     if ctx.invoked_subcommand is None:
-        raise typer.Exit(launch_ui())
+        raise typer.Exit(launch_ui(mode=mode))
 
 
 def _run(coro):
@@ -117,7 +117,9 @@ def chat(
             raise typer.Exit(1)
         config.set("execution_mode", normalized)
     if interactive:
-        raise typer.Exit(launch_ui(model=model, provider=provider, session_id=session_id))
+        raise typer.Exit(
+            launch_ui(model=model, provider=provider, session_id=session_id, mode=mode)
+        )
 
     # Guard before any I/O: message is required, and slicing it for the
     # session title (message[:50]) would raise TypeError on None.
@@ -213,9 +215,10 @@ def repl(
     model: str = typer.Option(None, "--model", "-m", help="Model to use"),
     provider: str = typer.Option(None, "--provider", "-p", help="LLM provider"),
     session_id: str | None = typer.Option(None, "--session", "-s", help="Resume specific session"),
+    mode: str = typer.Option(None, "--mode", help="Execution mode: ask|workspace|sandbox|full"),
 ):
     """Open the interactive UI (same as running `ah` with no arguments)."""
-    raise typer.Exit(launch_ui(model=model, provider=provider, session_id=session_id))
+    raise typer.Exit(launch_ui(model=model, provider=provider, session_id=session_id, mode=mode))
 
 
 @app.command()
@@ -292,42 +295,47 @@ def set_mode(
     """Show or set the execution mode."""
 
     async def _mode():
-        await db.connect()
-        try:
-            if revoke:
+        # Show/set of the persistent default needs no DB; revocation does.
+        if revoke:
+            await db.connect()
+            try:
                 from ah.permissions.broker import permission_broker
 
                 count = await permission_broker.revoke("*")
-                config.set("execution_mode", "ask")
+                config.set("execution_mode", "ask", persist=True)
                 output.status_line("Mode", f"ask ({count} grants revoked)", "success")
+            finally:
+                await db.close()
+            return
+        if not mode:
+            output.status_line("Mode", str(config.get("execution_mode")), "success")
+            console.print("ask: approval-based (default) | workspace: project operation")
+            console.print("sandbox: isolated container | full: explicit FULL HOST grant")
+            console.print("`ah mode X` sets the persistent default for new sessions.")
+            return
+        normalized = mode.strip().lower()
+        if normalized not in ("ask", "workspace", "sandbox", "full"):
+            output.error("Invalid mode. Use ask|workspace|sandbox|full.")
+            raise typer.Exit(1)
+        if normalized == "full":
+            confirm = typer.confirm(
+                "Set FULL HOST as the persistent default for new sessions? "
+                "Each session still activates explicitly; "
+                "credentials/elevation/destructive ops always ask.",
+                default=False,
+            )
+            if not confirm:
+                output.muted("Full mode not activated.")
                 return
-            if not mode:
-                output.status_line("Mode", str(config.get("execution_mode")), "success")
-                console.print("ask: approval-based (default) | workspace: project operation")
-                console.print("sandbox: isolated container | full: explicit FULL HOST grant")
-                return
-            normalized = mode.strip().lower()
-            if normalized not in ("ask", "workspace", "sandbox", "full"):
-                output.error("Invalid mode. Use ask|workspace|sandbox|full.")
-                raise typer.Exit(1)
-            if normalized == "full":
-                confirm = typer.confirm(
-                    "Grant FULL HOST access (your OS account, this session)? "
-                    "Credentials/elevation/destructive ops still ask.",
-                    default=False,
-                )
-                if not confirm:
-                    output.muted("Full mode not activated.")
-                    return
-            config.set("execution_mode", normalized)
-            output.status_line("Mode", normalized, "success")
-            if normalized == "full":
-                console.print(
-                    "[yellow]FULL HOST active. Sensitive actions still ask. "
-                    "Revoke with `ah mode --revoke`.[/yellow]"
-                )
-        finally:
-            await db.close()
+        # Persistent default (LP-13): per-session activation happens in the
+        # TUI (`/mode full`) and auto-grants only under this default.
+        config.set("execution_mode", normalized, persist=True)
+        output.status_line("Mode", f"{normalized} (saved)", "success")
+        if normalized == "full":
+            console.print(
+                "[yellow]FULL HOST default saved. Sessions activate explicitly. "
+                "Revoke everywhere with `ah mode --revoke`.[/yellow]"
+            )
 
     _run(_mode())
 

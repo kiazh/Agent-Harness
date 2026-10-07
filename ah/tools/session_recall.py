@@ -71,3 +71,11 @@ async def session_recall_window(session_id: str, chunk_id: str) -> str:
         f"{str(message.payload.get('content', message.payload.get('text', message.payload)))[:300]}"
         for message in messages
     )
+
+
+registry.declare_effects(
+    {
+        "session_recall": ("context.read",),
+        "session_recall_window": ("context.read",),
+    }
+)

@@ -350,3 +350,12 @@ async def search_files(pattern: str, path: str = ".", file_glob: str | None = No
         return f"No matches for '{pattern}' in {path}"
 
     return f"Found {len(matches)} matches:\n" + "\n".join(matches[:50])
+
+
+registry.declare_effects(
+    {
+        "web_search": ("net",),
+        "web_extract": ("net",),
+        "search_files": ("fs.read",),
+    }
+)

@@ -15,7 +15,15 @@ unavailable or disabled.
 
 from __future__ import annotations
 
+from contextvars import ContextVar as _ContextVar
+
 from ah.core.models import Session
+
+# Inherited authority for the currently executing (parent) agent, set by the
+# orchestrator around delegated child runs and read by the broker at the
+# execution boundary (LP-08). Tools/mode outside these caps are denied even
+# when a session grant would otherwise allow them.
+parent_authority_var: _ContextVar[dict | None] = _ContextVar("parent_authority", default=None)
 
 
 def _memory_enabled() -> bool:
@@ -36,14 +44,20 @@ def _rag_enabled() -> bool:
         return True
 
 
-def _shared_rag_pipeline():
-    """Shared RAG service (lazy; None when unavailable — keyword fallback)."""
+async def _shared_rag_pipeline():
+    """Shared RAG service, initialized lazily (LP-10).
+
+    Creates the pipeline on first use when enabled (so a cold restart still
+    retrieves already-indexed documents through ordinary prompts), or returns
+    None when disabled/unavailable — callers keep the keyword path and report
+    degraded status honestly instead of failing startup.
+    """
     if not _rag_enabled():
         return None
     try:
-        from ah.tools.rag import _rag_pipeline as _global
+        from ah.tools.rag import get_rag_pipeline
 
-        return _global
+        return await get_rag_pipeline()
     except Exception:
         return None
 
@@ -133,11 +147,18 @@ async def build_agent_for_session(
 
     rag_pipeline = _shared_rag_pipeline()
 
-    # Authority caps: intersect definition tools with parent caps.
-    if authority and authority.get("tools") and allowed_tools is not None:
-        allowed_tools = [t for t in allowed_tools if t in authority["tools"]]
-    elif authority and authority.get("tools") and allowed_tools is None:
-        allowed_tools = list(authority["tools"])
+    # Authority caps (LP-08): key presence/None semantics, never truthiness.
+    # tools absent/None = no parent restriction; [] = zero permitted tools.
+    # Intersect definition and parent tools; enforce the result at execution
+    # (allowed_tools is checked per tool call in the agent loop).
+    if authority is not None and "tools" in authority:
+        parent_tools = authority["tools"]
+        if parent_tools is None:
+            pass
+        elif allowed_tools is None:
+            allowed_tools = list(parent_tools)
+        else:
+            allowed_tools = [t for t in allowed_tools if t in parent_tools]
 
     llm = get_provider(provider=provider_name, model=model)
     agent = ReActAgent(
@@ -159,17 +180,33 @@ async def build_agent_for_session(
 def cap_child_authority(
     parent_authority: dict, definition_tools: list[str] | None
 ) -> list[str] | None:
-    """Child tools = definition ∩ parent caps (Phase 4.5/6).
+    """Child tools = definition ∩ parent caps (Phase 4.5/6, LP-08).
 
     A restricted parent cannot create an unrestricted child; broad parent
-    access never expands a child's restrictive definition.
+    access never expands a child's restrictive definition. Key presence/None
+    semantics: absent/None = unrestricted on that side; [] = no tools.
     """
-    parent_tools = (parent_authority or {}).get("tools")
-    if parent_tools is None:
+    parent_tools = (parent_authority or {}).get("tools", None)
+    if "tools" not in (parent_authority or {}) or parent_tools is None:
         return definition_tools
     if definition_tools is None:
         return list(parent_tools)
     return [t for t in definition_tools if t in parent_tools]
+
+
+_MODE_RANK = {"ask": 0, "workspace": 1, "sandbox": 2, "full": 3}
+
+
+def check_mode_cap(parent_authority: dict | None, requested_mode: str) -> None:
+    """Deny mode escalation above the parent's cap (LP-08, enforced at broker)."""
+    if not parent_authority or "max_mode" not in parent_authority:
+        return
+    cap = _MODE_RANK.get(str(parent_authority.get("max_mode") or "ask").lower(), 0)
+    want = _MODE_RANK.get(str(requested_mode or "ask").lower(), 0)
+    if want > cap:
+        from ah.permissions.broker import ApprovalDenied
+
+        raise ApprovalDenied(f"mode {requested_mode!r} exceeds parent cap")
 
 
 async def close_agent_provider(agent) -> None:

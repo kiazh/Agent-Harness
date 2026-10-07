@@ -36,6 +36,7 @@ export interface AppOptions {
 	model?: string;
 	provider?: string;
 	sessionId?: string;
+	mode?: string;
 }
 
 export class App implements FeatureHost {
@@ -129,7 +130,7 @@ export class App implements FeatureHost {
 		try {
 			const init = await this.client.request<InitializeResult>(
 				"initialize",
-				{ model: this.options.model, provider: this.options.provider },
+				{ model: this.options.model, provider: this.options.provider, mode: this.options.mode },
 				60_000,
 			);
 			this.version = init.version;
@@ -481,16 +482,24 @@ export class App implements FeatureHost {
 			`Approval needed [${short}]: ${event.operation} ${event.target} (cwd: ${event.cwd}, backend: ${event.backend})`,
 			"warning",
 		);
+		if (event.durable === false) {
+			this.transcript.addNotice(
+				"Approvals are local-only right now (database unavailable); cross-worker guarantees are degraded.",
+				"warning",
+			);
+		}
 		this.tui.requestRender();
 		const choice = await this.pick(`Allow ${event.operation}?`, [
-			{ label: "Allow once", value: "approved" },
-			{ label: "Deny", value: "denied" },
+			{ label: "Allow once", value: "approved:once" },
+			{ label: "Allow for this session", value: "approved:session" },
+			{ label: "Deny", value: "denied:once" },
 		]);
-		const verdict = choice?.value === "approved" ? "approved" : "denied";
+		const [verdict, grant] = (choice?.value ?? "denied:once").split(":");
 		try {
 			await this.client.request("approvals.resolve", {
 				requestId: event.requestId,
 				verdict,
+				grant,
 			});
 		} catch (error) {
 			this.transcript.addNotice(`Approval failed: ${error instanceof Error ? error.message : String(error)}`, "error");
@@ -498,7 +507,8 @@ export class App implements FeatureHost {
 		this.tui.requestRender();
 	}
 
-	private onGatewayExit(code: number | null, stderr: string[]): void {		if (this.exiting) return;
+	private onGatewayExit(code: number | null, stderr: string[]): void {
+		if (this.exiting) return;
 		// Clear all in-flight tracking so the session isn't permanently locked.
 		for (const sessionId of [...this.inFlight]) {
 			this.clearInFlight(sessionId);

@@ -91,16 +91,34 @@ async def compress_session(
     *,
     model: str | None = None,
     provider: str | None = None,
+    mutation_token: str | None = None,
 ) -> CompressionResult | None:
     """Compress a session's context in place.
 
     Returns ``None`` when there is nothing to compress. Uses LLM summarization
     when enabled and a provider can be built, otherwise truncation.
+
+    Ownership (LP-11): when *mutation_token* is None a claim is held for the
+    whole operation; when supplied (explicit /compress already holds one) it
+    is verified still current BEFORE the destructive replacement, and a stale
+    snapshot aborts instead of replacing under a newer owner.
     """
+    from ah.core.turns import begin_mutation, end_mutation
+
+    owned = mutation_token is None
+    if owned:
+        mutation_token = await begin_mutation(session.id)
+        if not mutation_token:
+            return None
     # AH-008: fetch ALL chunks (paginated), not just the newest 1000, and
     # replace only the captured input IDs so concurrent inserts survive.
     chunks = await context_manager.get_all_chunks(session.id)
     if not chunks:
+        if owned:
+            try:
+                await end_mutation(session.id, mutation_token)
+            except Exception:
+                pass
         return None
 
     comp_config = _compression_config()
@@ -137,6 +155,21 @@ async def compress_session(
             )
         if result.original_count == 0:
             return None
+        # Stale-snapshot guard: verify this owner still holds the claim BEFORE
+        # the destructive replacement (LP-11). An expired claim aborts.
+        # DB-less environments skip the check (the in-process mutex is the
+        # claim there).
+        try:
+            from ah.db.connection import db as _db
+
+            if _db.connected:
+                from ah.core.turns import _db_claim_state
+
+                current = await _db_claim_state(session.id)
+                if current is None or current.get("claim_owner") != mutation_token:
+                    return None
+        except Exception:
+            pass
         # AH-008/AH-009: replace only captured IDs; originals are archived
         # transactionally inside replace_chunks_by_ids.
         await context_manager.replace_chunks_by_ids(
@@ -162,14 +195,48 @@ async def compress_session(
                 import logging as _logging
 
                 _logging.getLogger(__name__).warning("compression provider close failed: %s", e)
+        if owned:
+            try:
+                await end_mutation(session.id, mutation_token)
+            except Exception:
+                pass
+
+
+async def _estimate_next_request(session_id, budget: int) -> int:
+    """Budget the ACTUAL next model request (LP-11), not just stored rows.
+
+    Stored tokens + tool schema tokens + reserved output + accumulated tool
+    message overhead. Tool schemas ride every request; ignoring them
+    under-budgets turns with large tool batches.
+    """
+    from ah.core.assembler import get_token_count
+
+    total = 0
+    try:
+        total += await context_manager.get_token_usage(session_id)
+    except Exception:
+        pass
+    try:
+        from ah.tools.base import registry
+
+        total += get_token_count(str(registry.get_tool_definitions()))
+    except Exception:
+        pass
+    try:
+        total += int(config.get("max_tokens") or 4096)
+    except Exception:
+        total += 4096
+    return total
 
 
 async def maybe_auto_compact(session_id) -> dict | None:
     """Threshold-triggered rolling compaction at a safe turn boundary.
 
-    Budgets stored rows; skips when disabled, under threshold, or when the
-    last run made no progress (loop guard). Returns a summary dict or None.
-    Call only after turn ownership is released.
+    Holds a durable MUTATION claim for the whole operation (LP-11): skips
+    when busy (deferred to a later boundary, never queued behind a turn),
+    verifies ownership is still ours before replacing, and budgets the next
+    rendered request including tool schemas and reserved output. Originals
+    archive transactionally; concurrent inserts survive via exact-ID replace.
     """
     try:
         if not config.get("auto_compaction_enabled"):
@@ -178,29 +245,49 @@ async def maybe_auto_compact(session_id) -> dict | None:
             return None
     except Exception:
         pass
+    from ah.core.turns import begin_mutation, end_mutation
+
+    token = await begin_mutation(session_id)
+    if not token:
+        return None  # busy: defer, do not queue behind live work
     try:
         from ah.core.session import session_manager as _sessions
 
         session = await _sessions.get(session_id)
         if session is None:
             return None
-        total = await context_manager.get_token_usage(session_id)
         budget = session.context_budget or 8000
         try:
             threshold = float(config.get("compression_threshold") or 0.8)
         except Exception:
             threshold = 0.8
-        if total < int(budget * threshold):
+        if await _estimate_next_request(session_id, budget) < int(budget * threshold):
             return None
         # No-progress guard: skip when a previous run already compacted at
         # nearly this size.
         state = session.state or {}
         last = state.get("last_auto_compact_tokens")
-        if isinstance(last, int) and total <= last + max(100, int(budget * 0.05)):
+        total_now = await context_manager.get_token_usage(session_id)
+        if isinstance(last, int) and total_now <= last + max(100, int(budget * 0.05)):
             return None
-        result = await compress_session(session)
+        # compress_session verifies this same token before replacing (shared
+        # ownership, no double claim).
+        result = await compress_session(session, mutation_token=token)
         if result is None:
             return None
+        # Ownership re-check: an expired claim means another worker may own
+        # the session now — record progress only when still ours.
+        try:
+            from ah.db.connection import db as _db
+
+            if _db.connected:
+                from ah.core.turns import _db_claim_state
+
+                current = await _db_claim_state(session_id)
+                if current is None or current.get("claim_owner") != token:
+                    return None
+        except Exception:
+            pass
         try:
             state = dict(session.state or {})
             state["last_auto_compact_tokens"] = result.compressed_tokens
@@ -228,6 +315,11 @@ async def maybe_auto_compact(session_id) -> dict | None:
         }
     except Exception:
         return None
+    finally:
+        try:
+            await end_mutation(session_id, token)
+        except Exception:
+            pass
 
 
 def learn_skill(
@@ -380,7 +472,11 @@ async def status_summary() -> dict[str, Any]:
             "memoryRetrieval": retrieval.get("mode", "keyword-only"),
             "memoryRetrievalReason": retrieval.get("reason", ""),
             "memoryExtraction": extraction,
-            "documentRag": f"ready; {rag_docs} indexed documents",
+            "documentRag": (
+                f"ready; {rag_docs} indexed documents"
+                if rag_docs
+                else "degraded; no indexed documents (index material to enable retrieval)"
+            ),
             "reranker": reranker,
             "autoCompaction": "enabled" if auto_compact else "disabled",
             "sandbox": runtime.get("sandbox", "unknown"),
@@ -389,4 +485,13 @@ async def status_summary() -> dict[str, Any]:
             "capabilities": runtime.get("capabilities", []),
         }
     )
+    try:
+        from ah.permissions import store as _perm_store
+
+        durable = _perm_store.is_durable()
+        base["permissionDurability"] = (
+            "durable" if durable else ("local-only" if durable is False else "unknown")
+        )
+    except Exception:
+        base["permissionDurability"] = "unknown"
     return base

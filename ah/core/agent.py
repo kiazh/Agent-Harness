@@ -99,6 +99,9 @@ Be concise. Don't over-explain. Get things done."""
 MAX_TOKEN_BUDGET = 50_000
 MAX_PENDING_LEARNING_REVIEWS = 16
 _pending_learning_reviews: set[asyncio.Task] = set()
+# Shared per-session consolidation single-flight (LP-14): concurrent agent
+# instances working one session never re-extract the same range.
+_consolidation_inflight: dict[str, asyncio.Task] = {}
 
 # Per-tool execution timeouts. Delegation-style tools fan out to sub-agents
 # and legitimately run long; everything else must answer quickly to keep
@@ -699,6 +702,14 @@ class BaseReActAgent:
 
                     token = current_session_id.set(session_id)
                     agent_token = current_agent_id.set(self.agent_id)
+                    # LP-08: publish this agent's authority for delegation
+                    # children (restored afterwards like all caller scope).
+                    try:
+                        from ah.core.agent_factory import parent_authority_var as _pav
+
+                        authority_token = _pav.set({"tools": self.allowed_tools})
+                    except Exception:
+                        authority_token = None
                     try:
                         # Phase D: permission broker gates every tool path.
                         # Validation errors stay distinct from authorization:
@@ -738,9 +749,11 @@ class BaseReActAgent:
                             session_id=str(session_id),
                             capabilities=_spec.get("capabilities"),
                             network=_spec.get("network"),
+                            tool=tool_name,
                         )
                         try:
                             await _broker.guard(_req)
+                            item["_approval_id"] = _req.approval_id or ""
                         except _Needs as _need:
                             _ap = _need.approval
                             result = (
@@ -759,11 +772,29 @@ class BaseReActAgent:
                             item["result"] = str(result)
                             item["elapsed_ms"] = (time.monotonic() - start) * 1000
                             return
-                        result = await asyncio.wait_for(
-                            registry.execute(tool_name, **tool_args),
-                            timeout=tool_timeout,
-                        )
+                        try:
+                            result = await asyncio.wait_for(
+                                registry.execute(tool_name, **tool_args),
+                                timeout=tool_timeout,
+                            )
+                        except asyncio.CancelledError:
+                            # LP-01 lifecycle: a claimed approval must not hang
+                            # in 'claimed' when its execution is cancelled.
+                            _aid = item.get("_approval_id", "")
+                            if _aid:
+                                try:
+                                    await asyncio.shield(_broker.complete(_aid, "cancelled"))
+                                except Exception:
+                                    pass
+                            raise
                     finally:
+                        try:
+                            if authority_token is not None:
+                                from ah.core.agent_factory import parent_authority_var as _pav2
+
+                                _pav2.reset(authority_token)
+                        except Exception:
+                            pass
                         current_agent_id.reset(agent_token)
                         current_session_id.reset(token)
             except Exception as e:
@@ -874,6 +905,17 @@ class BaseReActAgent:
                         duration_ms=int(item["elapsed_ms"]),
                     )
                     item["_hooked"] = True
+                # LP-01 lifecycle: claimed → completed/failed exactly once.
+                _aid = item.get("_approval_id", "")
+                if _aid and not item.get("_approval_done"):
+                    item["_approval_done"] = True
+                    try:
+                        from ah.permissions.broker import permission_broker as _broker2
+
+                        outcome = "failed" if result_str.startswith("Error:") else "completed"
+                        await _broker2.complete(_aid, outcome)
+                    except Exception:
+                        pass
 
             if pending_chunks is not None:
                 pending_chunks.append(
@@ -962,9 +1004,10 @@ class BaseReActAgent:
     def _schedule_memory_consolidation(self, session_id: uuid.UUID) -> None:
         """Schedule memory consolidation as a bounded background task.
 
-        Bounded: at most one consolidation per agent instance at a time;
-        skipped when memory or consolidation is disabled. Watermark cursor
-        (see _consolidate_memories) keeps repeated runs idempotent.
+        Bounded and shared: one consolidation per SESSION across all agent
+        instances (LP-14); skipped when memory or consolidation is disabled.
+        Watermark cursor (see _consolidate_memories) keeps repeated runs
+        idempotent.
         """
         if not self.memory_consolidator:
             return
@@ -973,35 +1016,80 @@ class BaseReActAgent:
                 return
         except Exception:
             pass
+        key = str(session_id)
+        running = _consolidation_inflight.get(key)
+        if running is not None and not running.done():
+            logger.debug("consolidation already running for session, skipping duplicate")
+            return
         if any(not t.done() for t in self._consolidation_tasks):
             logger.debug("consolidation already running, skipping duplicate")
             return
         task = asyncio.create_task(self._consolidate_memories(session_id))
+        _consolidation_inflight[key] = task
         self._consolidation_tasks.add(task)
         task.add_done_callback(self._consolidation_tasks.discard)
+
+        def _drop(_t: asyncio.Task) -> None:
+            if _consolidation_inflight.get(key) is _t:
+                _consolidation_inflight.pop(key, None)
+
+        task.add_done_callback(_drop)
 
     async def _consolidate_memories(self, session_id: uuid.UUID) -> None:
         """Consolidate new session context into long-term memories.
 
-        Idempotent watermark: stores ``mem_consolidated_up_to`` (newest
-        chunk id + created_at) in session state and skips when nothing new
-        arrived since the last run, so repeated turns don't re-extract the
-        entire history into duplicates. Runs after completed turns and
-        appropriate interrupted turns (callers flush history first).
+        Cursor-filtered (LP-14): only chunks newer than
+        ``mem_consolidated_up_to`` are extracted; the cursor advances past a
+        range only after its writes succeed, so failed ranges retry instead
+        of being skipped or duplicated.
         """
         try:
+            from datetime import UTC
+
             session = await session_manager.get(session_id)
             cursor = (session.state or {}).get("mem_consolidated_up_to") if session else None
+            since = None
+            if cursor and cursor.get("id"):
+                try:
+                    since_time = cursor.get("at")
+                    if isinstance(since_time, str):
+                        text = (
+                            since_time[:-1] + "+00:00" if since_time.endswith("Z") else since_time
+                        )
+                        from datetime import datetime as _dt
+
+                        since_time = _dt.fromisoformat(text)
+                        if since_time.tzinfo is None:
+                            since_time = since_time.replace(tzinfo=UTC)
+                    import uuid as _uuid
+
+                    since = (since_time, _uuid.UUID(str(cursor["id"])))
+                except Exception:
+                    since = None
             try:
                 newest = await context_manager.get_chunks(session_id, limit=1)
             except Exception:
                 newest = []
-            if cursor and newest and str(newest[0].id) == str(cursor.get("id")):
+            if since is not None:
+                try:
+                    pending = await context_manager.get_chunks_since(
+                        session_id,
+                        since_time=since[0],
+                        since_id=since[1],
+                        limit=1,
+                    )
+                    if not pending:
+                        logger.debug("consolidation cursor unchanged, skipping")
+                        return
+                except Exception:
+                    pass
+            elif cursor and newest and str(newest[0].id) == str(cursor.get("id")):
                 logger.debug("consolidation cursor unchanged, skipping")
                 return
             new_memories = await self.memory_consolidator.consolidate_session(
                 session_id=session_id,
                 agent_id=self.agent_id,
+                since=since,
             )
             if newest and session is not None:
                 try:

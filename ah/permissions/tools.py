@@ -51,13 +51,38 @@ def action_for_tool(name: str, args: dict) -> dict:
         return {"operation": "skill.read", "targets": [str(args.get("skill_name", ""))]}
     if name in ("session_recall", "session_recall_window", "list_agents"):
         return {"operation": "context.read", "targets": []}
+    # Unknown/extensible tools: declared mutating effects become approval
+    # capabilities instead of silent in-process execution. Effect-free tools
+    # stay in-process work.
+    effects = _declared_effects(name)
+    if _MUTATING_EFFECTS.intersection(effects):
+        return {
+            "operation": f"tool.{name}",
+            "targets": [],
+            "capabilities": ["mutating-tool", *(f"fx:{e}" for e in effects)],
+        }
     return {"operation": f"tool.{name}", "targets": []}
 
 
+def _declared_effects(name: str) -> tuple[str, ...]:
+    try:
+        from ah.tools.base import registry
+
+        tool = registry._tools.get(name)
+        return tuple(getattr(tool, "effects", None) or ())
+    except Exception:
+        return ()
+
+
+_MUTATING_EFFECTS = frozenset({"fs.write", "exec", "net", "delegate"})
+
+
 def _split(cmd: str) -> list[str]:
+    # Agreement with the terminal backend (terminal.py uses plain shlex.split):
+    # the approval card shows exactly the argv that will execute.
     try:
         import shlex
 
-        return shlex.split(cmd, posix=False)
+        return shlex.split(cmd)
     except Exception:
         return [cmd]

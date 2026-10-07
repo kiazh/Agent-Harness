@@ -106,6 +106,7 @@ class CreateDocumentRequest(BaseModel):
 class ResolveApprovalRequest(BaseModel):
     verdict: str = Field(..., min_length=1, max_length=16)
     sessionId: uuid.UUID | None = None
+    grant: str = Field(default="once", min_length=1, max_length=16)
 
 
 class RpcRequest(BaseModel):
@@ -205,32 +206,34 @@ class _RpcGateway:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Connect to the database on startup and close on shutdown."""
-    from ah.observability.audit import audit_persistence
+    """Single shared lifecycle: the runtime graph owns DB/audit/scheduler."""
+    from ah.core.runtime import runtime_services
     from ah.plugins.loader import load_plugins
 
     load_plugins()
     runner = None
     rpc_gw = None
     try:
-        await db.connect()
-        audit_persistence.start()
-        from ah.core.scheduler import JobRunner
+        report = await runtime_services.startup()
+        if report.get("db") == "ready":
+            from ah.core.scheduler import JobRunner
 
-        runner = JobRunner()
-        runner.start()
+            runner = JobRunner()
+            runner.start()
         # Create a single _RpcGateway for all RPC dispatches
         rpc_gw = _RpcGateway()
         app.state._rpc_gateway = rpc_gw
     except Exception as e:
-        logger.warning("Database not available: %s", e)
+        logger.warning("Runtime startup degraded: %s", e)
     yield
     if runner is not None:
         await runner.stop()
     if rpc_gw is not None:
         await rpc_gw.close()
-    await audit_persistence.stop()
-    await db.close()
+    try:
+        await runtime_services.shutdown()
+    except Exception:
+        pass
 
 
 # ─── app factory ───────────────────────────────────────────────────────────
@@ -450,6 +453,12 @@ def create_app() -> FastAPI:
             context_budget=config.get("context_budget"),
             state={"emotion": req.emotion} if req.emotion else None,
         )
+        try:
+            from ah.gateway.features.mode import grant_full_default
+
+            await grant_full_default(session)
+        except Exception:
+            pass
         return {"session": session_to_dict(session)}
 
     @app.get("/api/v1/sessions", dependencies=[Depends(require_api_key)])
@@ -799,10 +808,27 @@ def create_app() -> FastAPI:
         verdict = req.verdict.lower()
         if verdict not in ("approved", "denied"):
             raise HTTPException(400, "verdict must be approved|denied")
+        grant = (req.grant or "once").lower()
+        if grant not in ("once", "session"):
+            raise HTTPException(400, "grant must be once|session")
         # Authenticated API principal (never agent: prefix).
-        resolved = await _store.resolve_approval(request_id, verdict, principal="http")
+        resolved = await _store.resolve_decision(request_id, verdict, principal="http")
         if resolved is None:
             raise HTTPException(409, "approval already consumed or not permitted")
+        if verdict == "approved" and grant == "session":
+            targets = [t for t in str(rec.get("target", "")).split("|") if t]
+            await _store.save_grant(
+                {
+                    "session_id": rec.get("session_id", ""),
+                    "agent_id": rec.get("agent_id", ""),
+                    "mode": "ask",
+                    "capability": rec.get("operation", ""),
+                    "scope_path": targets[0] if targets else None,
+                    "scope_type": "file",
+                    "grant_kind": "session",
+                    "digest": rec.get("digest", ""),
+                }
+            )
         return {"approval": {"requestId": request_id, "status": verdict}}
 
     # ── agents ──────────────────────────────────────────────────────────────

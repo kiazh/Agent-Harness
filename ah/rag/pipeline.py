@@ -173,7 +173,7 @@ class RAGPipeline:
             INSERT INTO context_chunks
                 (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
             SELECT t.session_id, t.agent_id, t.chunk_type, t.payload_msgpack, t.token_count, t.embedding, t.search_text
-            FROM unnest($1::uuid[], $2::text[], $3::text[], $4::bytea[], $5::int[], $6::text[], $7::text[])
+            FROM unnest($1::uuid[], $2::text[], $3::text[], $4::bytea[], $5::int[], $6::text[]::vector[], $7::text[])
                 AS t(session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
             RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
             """,
@@ -245,8 +245,24 @@ class RAGPipeline:
                 # Expired
                 del self._search_cache[cache_key]
 
-        # Embed query
-        query_embedding = await self._embedder.embed(query)
+        # Embed query, or fall back to keyword-only search when no embedding
+        # provider is available (LP-10: basic operation needs no second paid
+        # key). The fallback mode is recorded for honest status reporting.
+        self._last_search_mode = "hybrid"
+        try:
+            query_embedding = await self._embedder.embed(query)
+        except Exception as e:
+            logger.warning("query embedding unavailable, keyword-only fallback: %s", e)
+            results = await self._search.search_text(
+                session_id=session_id,
+                query_text=query,
+                db=db,
+                top_k=k * 2,
+            )
+            self._last_search_mode = "keyword-only"
+            return await self._finish_search(
+                results, query, session_id, k, rerank, cache_key, now, embed_model
+            )
         # Dimension guard: stored vectors are 1536-d. Mixing models without
         # migration silently corrupts similarity — fail loudly instead.
         try:
@@ -281,7 +297,14 @@ class RAGPipeline:
                 db=db,
                 top_k=k * 2,
             )
+        return await self._finish_search(
+            results, query, session_id, k, rerank, cache_key, now, embed_model
+        )
 
+    async def _finish_search(
+        self, results: list[SearchResult], query: str, session_id: uuid.UUID,
+        k: int, rerank: bool, cache_key: tuple, now: float, embed_model: str,
+    ) -> list[SearchResult]:
         # Rerank
         if rerank and self._config.enable_reranking and len(results) > k:
             documents = [r.chunk.payload.get("text", "") for r in results]

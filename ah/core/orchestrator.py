@@ -90,7 +90,6 @@ class Orchestrator:
         # (same pipeline, permission broker, accounting, cancellation).
         self._owns_factory_agents = agent_factory is None
         self._agent_factory = agent_factory
-        self._parent_authority: dict | None = None
 
     async def _default_agent(self, definition: AgentDef, authority: dict | None = None):
         from ah.core.agent_factory import build_agent_for_session, cap_child_authority
@@ -134,6 +133,7 @@ class Orchestrator:
         from_agent: str = "orchestrator",
         parent_session_id: uuid.UUID | None = None,
         _hop_count: int = 0,
+        authority: dict | None = None,
     ) -> DelegationResult:
         """Run *task* on *agent_name* in a fresh child session.
 
@@ -143,6 +143,8 @@ class Orchestrator:
             from_agent: The agent making this delegation.
             parent_session_id: Optional parent session for context.
             _hop_count: Internal hop counter to prevent circular delegation.
+            authority: Explicit parent authority caps. When omitted, the
+                ambient delegation authority (LP-08) applies.
 
         Raises:
             ValueError: If hop count exceeds MAX_HOP_COUNT (deadlock guard).
@@ -151,9 +153,20 @@ class Orchestrator:
             raise ValueError(
                 f"Invalid hop count {_hop_count} — must be between 0 and {self.MAX_HOP_COUNT}"
             )
-        definition = await agent_registry.get(agent_name)
+        try:
+            definition = await agent_registry.get(agent_name)
+        except Exception as e:
+            # Fail closed like the shared factory: an unresolvable specialist
+            # is a controlled error, never an unrestricted agent.
+            from ah.core.agent_factory import AgentDefinitionError
+
+            raise AgentDefinitionError(f"agent definition {agent_name!r} unavailable: {e}") from e
         if definition is None:
-            raise AgentNotFoundError(f"no agent named {agent_name!r}")
+            from ah.core.agent_def import BUILTIN_AGENTS
+
+            if agent_name not in BUILTIN_AGENTS:
+                raise AgentNotFoundError(f"no agent named {agent_name!r}")
+            definition = BUILTIN_AGENTS[agent_name]
 
         handoff = await self._parent_context(parent_session_id) if parent_session_id else ""
 
@@ -166,20 +179,32 @@ class Orchestrator:
         )
         message_id = await self._record_start(parent_session_id, from_agent, agent_name, task)
 
-        # Phase 4.5/6: same factory/accounting/cancellation pipeline as normal
-        # turns. Custom test factories bypass (sync call); default path is
-        # async shared-factory with parent authority caps. Child authority
-        # never exceeds parent caps nor its own definition.
-        parent_authority = dict(self._parent_authority or {})
+        # Phase 4.5/6 + LP-08: same factory/accounting/cancellation pipeline
+        # as normal turns. Child authority = definition ∩ parent caps, and the
+        # broker enforces it at execution (not just on the stored agent).
+        from ah.core.agent_factory import cap_child_authority, parent_authority_var
+
+        ambient = parent_authority_var.get() or {}
+        parent = dict(ambient)
+        if authority:
+            parent.update(authority)
+        from ah.core.agent_factory import check_mode_cap
+
+        check_mode_cap(parent or None, "ask")  # delegation itself stays ask-level
+        capped_tools = cap_child_authority(parent, definition.tools or None)
+        child_authority: dict = {"tools": capped_tools}
+        if parent.get("max_mode") is not None:
+            child_authority["max_mode"] = parent["max_mode"]
         if self._agent_factory is not None:
             agent = self._agent_factory(definition)
         else:
-            agent = await self._default_agent(definition, authority=parent_authority)
+            agent = await self._default_agent(definition, authority=child_authority)
         depth_token = delegation_depth.set(_hop_count)
         loop = asyncio.get_running_loop()
         deadline_token = delegation_deadline.set(
             delegation_deadline.get() or loop.time() + self.DELEGATION_TIMEOUT_SECONDS
         )
+        authority_token = parent_authority_var.set(child_authority)
         try:
             child_task = self._build_delegation_prompt(agent_name, task, handoff)
             response = await asyncio.wait_for(
@@ -199,6 +224,12 @@ class Orchestrator:
         finally:
             delegation_depth.reset(depth_token)
             delegation_deadline.reset(deadline_token)
+            try:
+                from ah.core.agent_factory import parent_authority_var as _pav
+
+                _pav.reset(authority_token)
+            except Exception:
+                pass
             # AH-023: close only factory-owned providers. Custom factories
             # (tests) inject shared agents that must stay open.
             if getattr(self, "_owns_factory_agents", False):

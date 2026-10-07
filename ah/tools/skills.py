@@ -54,3 +54,11 @@ def skill_read(skill_name: str, offset: int = 0) -> str:
     end = min(len(content), offset + 800)
     skills.record_use(skill_name)
     return f"Skill {skill_name[:80]} [{offset}:{end}/{len(content)}]:\n{content[offset:end]}"
+
+
+registry.declare_effects(
+    {
+        "skill_list": ("skill.read",),
+        "skill_read": ("skill.read",),
+    }
+)

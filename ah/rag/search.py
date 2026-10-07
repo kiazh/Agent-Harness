@@ -129,6 +129,22 @@ class HybridSearch:
             SearchResult(chunk=chunk, score=score, dense_score=score) for chunk, score in matches
         ]
 
+    async def search_text(
+        self,
+        session_id: uuid.UUID,
+        query_text: str,
+        db: Any,
+        top_k: int | None = None,
+    ) -> list[SearchResult]:
+        """Keyword-only matches for embedder-less operation (LP-10 fallback).
+
+        No paid provider key needed; BM25 over stored search_text.
+        """
+        matches = await self._bm25_search(session_id, query_text, top_k or self._final_top_k, db)
+        return [
+            SearchResult(chunk=chunk, score=score, sparse_score=score) for chunk, score in matches
+        ]
+
     async def _dense_search(
         self,
         session_id: uuid.UUID,

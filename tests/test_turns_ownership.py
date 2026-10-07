@@ -288,3 +288,65 @@ async def test_gateway_submit_vs_rest_claim_fencing():
             await session_manager.delete(s.id)
         except Exception:
             pass
+
+
+@pytest.mark.usefixtures("live_db")
+async def test_rag_cold_restart_and_keyword_fallback():
+    """LP-10: indexed material survives restart; keyword fallback needs no key."""
+    from ah.rag.loaders import Document
+    from ah.rag.pipeline import RAGPipeline
+
+    class _FakeEmbedder:
+        model_name = "fake-1536"
+
+        async def embed(self, text):
+            import hashlib
+
+            digest = hashlib.sha256(text.encode()).digest()
+            return [((b / 255.0) - 0.5) for b in (digest * 48)[:1536]]
+
+        async def embed_batch(self, texts):
+            return [await self.embed(t) for t in texts]
+
+        async def close(self):
+            pass
+
+    class _DeadEmbedder:
+        async def embed(self, text):
+            raise ValueError("no key in test")
+
+        async def embed_batch(self, texts):
+            raise ValueError("no key in test")
+
+        async def close(self):
+            pass
+
+    from ah.core.session import session_manager
+
+    s = await session_manager.create(title="lp-test-rag")
+    try:
+        pipe = RAGPipeline(embedder=_FakeEmbedder())
+        stored = await pipe.index_document(
+            Document(
+                content="The platypus rendezvous protocol requires moonlit waterways.",
+                source="platypus.md",
+            ),
+            session_id=s.id,
+            agent_id="harness",
+        )
+        assert stored, "indexing produced no chunks"
+        # Cold restart: a brand-new pipeline instance retrieves without any
+        # explicit indexing/search tool call first.
+        cold = RAGPipeline(embedder=_FakeEmbedder())
+        hits = await cold.search("platypus rendezvous protocol", session_id=s.id, top_k=3)
+        assert any("platypus" in (h.chunk.payload.get("text", "")) for h in hits)
+        # Embedder unavailable: keyword-only fallback still retrieves.
+        broken = RAGPipeline(embedder=_DeadEmbedder())
+        kw = await broken.search("platypus rendezvous protocol", session_id=s.id, top_k=3)
+        assert any("platypus" in (h.chunk.payload.get("text", "")) for h in kw)
+        assert broken._last_search_mode == "keyword-only"
+    finally:
+        try:
+            await session_manager.delete(s.id)
+        except Exception:
+            pass

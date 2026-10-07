@@ -23,21 +23,50 @@ def _assert_no_trace(secret: str, output: str) -> None:
         assert secret[i : i + 10] not in output
 
 
-def test_streaming_redactor_split_secret_never_leaks():
+def test_streaming_equals_whole_recognition_all_formats_all_splits():
+    """LP-09: streamed output must equal whole-string redaction at every split."""
     from ah.memory.redaction import StreamingSecretRedactor, redact_secrets
 
-    secret = "sk-" + "A" * 24
-    assert redact_secrets(secret).text != secret  # whole-key baseline
-    # Every split position: feed both halves, then flush. The full key must
-    # never appear in the combined redacted output.
-    for i in range(1, len(secret)):
-        r = StreamingSecretRedactor()
-        first = r.feed(secret[:i])
-        second = r.feed(secret[i:])
-        tail = r.flush()
-        combined = first + second + tail
-        _assert_no_trace(secret, combined)
-        assert "[REDACTED" in combined
+    secrets = [
+        "sk-" + "A" * 24,
+        "sk-ant-abc123DEF456ghi789JKL0",
+        "sk-or-xyz123ABC456def789GHI0jkl",
+        "Bearer abcdef1234567890XYZ",
+        "password=hunter2hunter2hunter2",
+        "postgresql://bob:s3cret-pass_9@db:5432/app",
+        "AKIAIOSFODNN7EXAMPLE",
+        "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "aB3dE5fG7hI9jK1lM2nO4pQ6rS8tU0vWxYz01234",
+        "ghp_" + "c" * 36,
+        "gho_" + "d" * 36,
+        "ghs_" + "e" * 36,
+        "ghu_" + "f" * 36,
+        "github_pat_" + "g" * 30,
+        "xoxb-123456789012-abcDEF123",
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIBnozM\n-----END RSA PRIVATE KEY-----",
+        "4111111111111111",
+        "4111 1111 1111 1111",
+        "123-45-6789",
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c",
+        "api_key=ABCDEFGHIJKLMNOP123456",
+        "cohere_api_key=COHERE1234567890abcdef",
+    ]
+    contexts = ["{s}", "pre {s} post", "X{s}", "{s}!", ">{s}<", '{"k": "{s}"}']
+    for secret in secrets:
+        whole = redact_secrets(secret).text
+        assert secret not in whole, f"whole-string miss for {secret[:12]}"
+        for ctx in contexts:
+            text = ctx.replace("{s}", secret)
+            expected = redact_secrets(text).text
+            # All split positions (bounded sizes keep this fast).
+            for i in range(len(text) + 1):
+                r = StreamingSecretRedactor()
+                out = r.feed(text[:i]) + r.feed(text[i:]) + r.flush()
+                assert out == expected, f"split {i} of {secret[:12]} in {ctx}"
+            # One-character feeds.
+            r = StreamingSecretRedactor()
+            out = "".join(r.feed(ch) for ch in text) + r.flush()
+            assert out == expected, f"char feeds of {secret[:12]} in {ctx}"
 
 
 def test_streaming_redactor_huge_delta_prefix_emission():

@@ -96,13 +96,27 @@ class MemoryConsolidator:
         self,
         session_id: uuid.UUID,
         agent_id: str,
+        since: tuple | None = None,
     ) -> list[MemoryEntry]:
         """Consolidate a session's context chunks into long-term memories.
 
-        Returns list of newly created MemoryEntry objects.
+        With *since*=(created_at, id) only newer chunks are extracted
+        (LP-14 cursor); without it the recent window is processed once and the
+        caller records the watermark. Returns newly created entries.
         """
-        # Step 0: Get context chunks
-        chunks = await context_manager.get_chunks(session_id, limit=MAX_CHUNKS_PER_CONSOLIDATION)
+        # Step 0: Get context chunks (cursor-filtered when resuming).
+        if since is not None:
+            since_time, since_id = since
+            chunks = await context_manager.get_chunks_since(
+                session_id,
+                since_time=since_time,
+                since_id=since_id,
+                limit=MAX_CHUNKS_PER_CONSOLIDATION,
+            )
+        else:
+            chunks = await context_manager.get_chunks(
+                session_id, limit=MAX_CHUNKS_PER_CONSOLIDATION
+            )
         if not chunks:
             logger.debug("No chunks to consolidate for session %s", session_id)
             return []
@@ -162,7 +176,10 @@ class MemoryConsolidator:
                 else:
                     # Intra-batch embedding similarity against already-accepted batch items
                     for prev_emb in seen_embeddings:
-                        if _cosine_similarity(candidate.embedding, prev_emb) >= self.dedup_threshold:
+                        if (
+                            _cosine_similarity(candidate.embedding, prev_emb)
+                            >= self.dedup_threshold
+                        ):
                             is_duplicate = True
                             break
                 if is_duplicate:
@@ -273,9 +290,7 @@ class MemoryConsolidator:
                 logger.warning("Skipping empty normalized memory content (from_text)")
                 continue
             if key in seen:
-                match = next(
-                    (m for m in existing_memories if _normalize(m.content) == key), None
-                )
+                match = next((m for m in existing_memories if _normalize(m.content) == key), None)
                 if match is not None and getattr(match, "id", None) is not None:
                     try:
                         await self.store.update_access(match.id)

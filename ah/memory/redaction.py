@@ -356,16 +356,20 @@ MAX_BUFFERED_PEM = 32 * 1024
 
 # End-anchored partial patterns: each matches a PREFIX of a valid secret that
 # reaches the buffer end. Leftmost start across all patterns = frontier.
+# LP-09: recognition here must align with COMPLETE patterns (which have no
+# preceding-character assumptions), so partials carry no lookbehinds either:
+# a secret glued to preceding text ("Xsk-...") withholds and redacts exactly
+# like whole-string recognition does.
 _PARTIAL_RES: tuple[re.Pattern[str], ...] = (
-    re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9]{0,200}$"),
-    re.compile(r"(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9\-_]{0,200}$"),
-    re.compile(r"(?<![A-Za-z0-9])sk-or-[A-Za-z0-9\-_]{0,200}$"),
-    re.compile(r"(?<![A-Za-z0-9])ghp_[A-Za-z0-9]{0,36}$"),
-    re.compile(r"(?<![A-Za-z0-9])gho_[A-Za-z0-9]{0,36}$"),
-    re.compile(r"(?<![A-Za-z0-9])ghs_[A-Za-z0-9]{0,36}$"),
-    re.compile(r"(?<![A-Za-z0-9])ghu_[A-Za-z0-9]{0,36}$"),
+    re.compile(r"sk-[A-Za-z0-9]{0,200}$"),
+    re.compile(r"sk-ant-[A-Za-z0-9\-_]{0,200}$"),
+    re.compile(r"sk-or-[A-Za-z0-9\-_]{0,200}$"),
+    re.compile(r"ghp_[A-Za-z0-9]{0,36}$"),
+    re.compile(r"gho_[A-Za-z0-9]{0,36}$"),
+    re.compile(r"ghs_[A-Za-z0-9]{0,36}$"),
+    re.compile(r"ghu_[A-Za-z0-9]{0,36}$"),
     re.compile(r"github_pat_[A-Za-z0-9_]{0,255}$"),
-    re.compile(r"(?<![A-Z0-9])AKIA[0-9A-Z]{0,16}$"),
+    re.compile(r"AKIA[0-9A-Z]{0,16}$"),
     re.compile(r"xox[baprs]-[A-Za-z0-9\-]{0,200}$"),
     re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]{0,500}$", re.IGNORECASE),
     re.compile(r"(?:password|passwd|pwd)\s*[=:]\s*['\"]?[^\s'\"]{0,200}$", re.IGNORECASE),
@@ -375,16 +379,39 @@ _PARTIAL_RES: tuple[re.Pattern[str], ...] = (
         re.IGNORECASE,
     ),
     re.compile(r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^@\s]{0,300}$"),
+    re.compile(r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):?/{0,2}$"),
+    re.compile(r"//[^@\s]{1,300}$"),
+    # Assignment name with trailing spaces but no "=" yet: the "=" may arrive
+    # in the next delta, and complete patterns normalize spacing on match, so
+    # emitting the spaced name now would desynchronize streamed output.
+    re.compile(
+        r"(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|cohere_api_key"
+        r"|aws_secret_access_key|aws_secret_key)\s{1,10}$",
+        re.IGNORECASE,
+    ),
     re.compile(r"eyJ[A-Za-z0-9_.\-/+=]{0,1200}$"),
-    # Bare base64 / digit runs have no lead: the frontier scan handles them
-    # below with content checks (digit/symbol presence) so ordinary trailing
-    # words flush immediately while secret-like runs are withheld.
-    re.compile(r"(?:(?<=[^A-Za-z0-9/+=])|^)[A-Za-z0-9/+=]{8,39}$"),
 )
+
+# PEM marker-fragment partials, applied ONLY while a block is open (see
+# _stream_frontier): a split can land inside the dashes or the BEGIN/END
+# words themselves. On complete input the whole-pattern redaction applies.
+_PEM_DASH_RE = re.compile(r"-{1,5}$")
+_PEM_WORD_RE = re.compile(r"\b(?:BEGIN|END)[ A-Z-]{0,40}$")
 
 _PEM_BEGIN_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 _PEM_END_RE = re.compile(r"-----END [A-Z ]*PRIVATE KEY-----")
-_CC_RUN_RE = re.compile(r"[\d -]{6,40}$")
+# Leadless formats (bare base64, card/SSN digit runs): withhold a trailing
+# run that could grow into one. One trailing word/number of lag mid-stream;
+# flush always completes. This is the honest cost of the invariant for
+# formats with no distinctive lead.
+_BARE_RUN_RE = re.compile(r"(?:(?<=[^A-Za-z0-9/+=])|^)[A-Za-z0-9/+=]{1,39}$")
+_DIGIT_RUN_RE = re.compile(r"\d[\d -]{0,39}$")
+# Unanchored twins of the lead partials: a hold placed by a run rule can land
+# inside a longer secret (e.g. digit hold on the last char of "sk-ant-...0").
+# Any such match overlapping the cut pulls the frontier back to its start.
+_UNANCHORED: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p.pattern[:-1], p.flags) for p in _PARTIAL_RES
+)
 
 
 # Short-tail rule: a tiny trailing fragment ("s", "sk", "ghu") is not yet
@@ -425,9 +452,14 @@ _LEADS = (
     "mysql",
     "mongodb",
     "redis",
+    "-----BEGIN",
+    "BEGIN",
+    "END",
 )
-_LEAD_PREFIXES = frozenset(p[:i] for p in _LEADS for i in range(1, len(p) + 1))
-_SHORT_TAIL_RE = re.compile(r"[A-Za-z0-9/+=]{1,64}$")
+_LEAD_PREFIXES = frozenset(p[:i] for p in _LEADS for i in range(1, len(p) + 1)) | frozenset(
+    p[:i].lower() for p in _LEADS for i in range(1, len(p) + 1)
+)
+_SHORT_TAIL_RE = re.compile(r"[A-Za-z0-9/+=._-]{1,64}$")
 
 
 def _short_tail_hold(buf: str) -> int:
@@ -439,9 +471,18 @@ def _short_tail_hold(buf: str) -> int:
     # by the partial table above.
     if m.start() > 0 and buf[m.start() - 1].isalnum():
         return len(buf)
-    low = run.lower()
-    if low in _LEAD_PREFIXES:
+    core = run.strip("_-.").lower()
+    if run.lower() in _LEAD_PREFIXES or core in _LEAD_PREFIXES:
         return m.start()
+    # A marker may start mid-token ("X-----BE", "github_"): any suffix of the
+    # token that is a lead prefix withholds from the suffix start — but a
+    # bare dash run alone ("KEY-----") is not a marker start, only a marker
+    # prefix containing lead text is.
+    token = run.lower()
+    for i in range(1, min(len(token), 13)):
+        suffix = token[i:]
+        if suffix in _LEAD_PREFIXES and any(c.isalpha() for c in suffix):
+            return m.start() + i
     if any(c.isdigit() or c in "+/=" for c in run):
         return m.start()
     return len(buf)
@@ -450,49 +491,100 @@ def _short_tail_hold(buf: str) -> int:
 def _stream_frontier(buf: str) -> int:
     """Return the earliest index that must be withheld (len(buf) if none)."""
     frontier = len(buf)
-    for rx in _PARTIAL_RES[:-1]:
+    for rx in _PARTIAL_RES:
         m = rx.search(buf)
         if m and m.start() < frontier:
             frontier = m.start()
             if frontier == 0:
                 return 0
-    # Bare base64 runs: withhold only secret-like trailing runs (contain a
-    # digit or +/=, or all-caps); ordinary lowercase words flush at once.
-    m = _PARTIAL_RES[-1].search(buf)
-    if m:
-        run = m.group(0)
-        if (
-            any(c.isdigit() or c in "+/=" for c in run) or (run.isupper() and len(run) >= 8)
-        ) and m.start() < frontier:
-            frontier = m.start()
-            if frontier == 0:
-                return 0
-    # Credit-card / SSN digit runs: only when the trailing run holds digits
-    # that could reach a valid length.
-    m = _CC_RUN_RE.search(buf)
-    if m:
-        digits = sum(c.isdigit() for c in m.group(0))
-        if digits >= 4 and m.start() < frontier:
-            frontier = m.start()
-    # PEM: withhold an open block until its END (capped; line fallback).
-    for b in _PEM_BEGIN_RE.finditer(buf):
-        tail = buf[b.start() :]
-        if not _PEM_END_RE.search(tail):
-            if b.start() < frontier:
-                frontier = b.start()
-            break
+    # Leadless trailing runs (LP-09): a bare-base64 fragment or digit run at
+    # the buffer end could complete into a recognized secret with the next
+    # delta, so withhold from the run start. Ordinary interior text is
+    # unaffected; only the trailing run lags mid-stream.
+    m = _BARE_RUN_RE.search(buf)
+    if m and m.start() < frontier:
+        frontier = m.start()
+        if frontier == 0:
+            return 0
+    m = _DIGIT_RUN_RE.search(buf)
+    if m and m.start() < frontier:
+        frontier = m.start()
+        if frontier == 0:
+            return 0
     # Short ambiguous tail (single-char fragments that later deltas could
-    # complete into a secret).
+    # complete into a secret lead).
     short = _short_tail_hold(buf)
     if short < frontier:
         frontier = short
-    if frontier < len(buf) - MAX_BUFFERED_PEM:
+    # Never cut between two word characters: whole-string \b recognition
+    # would differ on either side alone (e.g. "X4111..." is not a CC number,
+    # but cutting after X makes the withheld run look like one). Pull back
+    # over preceding word characters; the overlap loop below then aligns to
+    # any enclosing signature.
+    while (
+        0 < frontier < len(buf)
+        and (buf[frontier - 1].isalnum() or buf[frontier - 1] == "_")
+        and (buf[frontier].isalnum() or buf[frontier] == "_")
+    ):
+        frontier -= 1
+    # Overlap expansion: a run-rule hold must not cut inside a longer secret
+    # that started earlier. Pull back over any overlapping lead match.
+    for _ in range(4):
+        moved = False
+        for rx in _UNANCHORED:
+            for m in rx.finditer(buf):
+                if m.start() < frontier <= m.end() and m.end() > m.start():
+                    frontier = m.start()
+                    moved = True
+                    break
+            if moved:
+                break
+        if not moved:
+            break
+    # PEM: withhold an open block until its END (capped; line fallback).
+    # Marker detection is substring-based ("BEGIN" present with no END after
+    # the last one), so splits inside the dashes or the marker words still
+    # withhold. The hold starts at the marker including preceding dashes.
+    # Trailing dash runs / bare BEGIN/END words are always withheld for the
+    # same reason; a cut inside an already-COMPLETE block is repaired below.
+    pem_open = False
+    for b in _PEM_BEGIN_RE.finditer(buf):
+        tail = buf[b.start() :]
+        if not _PEM_END_RE.search(tail):
+            pem_open = True
+            if b.start() < frontier:
+                frontier = b.start()
+            break
+    if not pem_open:
+        frag = buf.rfind("BEGIN")
+        if frag != -1 and not _PEM_END_RE.search(buf, frag):
+            pem_open = True
+            s = frag
+            while s > 0 and buf[s - 1] == "-":
+                s -= 1
+            if s < frontier:
+                frontier = s
+    for rx in (_PEM_DASH_RE, _PEM_WORD_RE):
+        m = rx.search(buf)
+        if m and m.start() < frontier:
+            frontier = m.start()
+            if frontier == 0:
+                return 0
+    if pem_open and frontier < len(buf) - MAX_BUFFERED_PEM:
         # Pathological open block: emit redacted complete lines only. A PEM
         # body line is base64; full lines are removed by the bare-secret
         # pattern, so a line frontier cannot leak a complete line.
         cut = buf.rfind("\n", 0, len(buf) - MAX_BUFFERED_PEM)
         if cut > frontier:
             frontier = cut + 1
+    # Complete-block repair: a hold that lands inside an already-COMPLETE
+    # PEM block would break its END marker and desynchronize output. Extend
+    # to the block end so it emits whole (and redacted).
+    for b in _PEM_BEGIN_RE.finditer(buf):
+        e = _PEM_END_RE.search(buf, b.end())
+        if e and b.start() < frontier <= e.end():
+            frontier = e.end()
+            break
     return frontier
 
 

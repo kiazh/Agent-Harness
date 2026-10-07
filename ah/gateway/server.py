@@ -164,7 +164,9 @@ class Gateway:
         # Pending human approvals by request_id (Phase E). The broker's
         # approval handler emits permission.required and awaits the future;
         # approvals.resolve completes it. Reconnect-safe via durable DB rows.
-        self._pending_approvals: dict[str, asyncio.Future[str]] = {}
+        # Entries are (future, turn_id, session_id): turn cleanup cancels
+        # ONLY its own turn's waits, never another session's (addendum check).
+        self._pending_approvals: dict[str, tuple[asyncio.Future[str], str, str]] = {}
         self._config_lock = asyncio.Lock()
         # Token-based auth for the stdio channel. Local UIs set
         # AH_GATEWAY_TOKEN; None means "open" (stdio local use) with a warning.
@@ -195,6 +197,20 @@ class Gateway:
     def turn_running(self, session_id: uuid.UUID) -> bool:
         task = self._turns.get(str(session_id))
         return task is not None and not task.done()
+
+    def cancel_turn_approvals(self, turn_id: str) -> int:
+        """Cancel pending approval waits for ONE turn (LP additional check).
+
+        A turn finishing in session A never cancels session B's approval:
+        entries are partitioned by turn id.
+        """
+        n = 0
+        for _rid, _entry in list(self._pending_approvals.items()):
+            _fut, _tid, _sid = _entry
+            if _tid == turn_id and not _fut.done():
+                _fut.cancel()
+                n += 1
+        return n
 
     # ─── dispatch ──────────────────────────────────────────────────────────
     async def handle_line(self, line: str) -> None:
@@ -324,6 +340,14 @@ class Gateway:
                 self._set_model(params["model"])
             if params.get("provider"):
                 self._set_provider(params["provider"])
+            # LP-13: CLI --mode reaches the gateway (previously dropped at the
+            # Node boundary). Applied to this gateway process only
+            # (non-persistent); new sessions auto-grant under a full default.
+            if params.get("mode"):
+                mode = str(params["mode"]).strip().lower()
+                if mode not in ("ask", "workspace", "sandbox", "full"):
+                    raise RpcError(INVALID_PARAMS, "mode must be ask|workspace|sandbox|full")
+                config.set("execution_mode", mode)
         if not self._db_ready:
             try:
                 await db.connect()
@@ -358,6 +382,12 @@ class Gateway:
             provider=provider,
             context_budget=config.get("context_budget"),
         )
+        try:
+            from ah.gateway.features.mode import grant_full_default
+
+            await grant_full_default(session)
+        except Exception:
+            pass
         return {"session": session_to_dict(session)}
 
     async def _session_list(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -553,7 +583,7 @@ class Gateway:
         async def _turn_approver(card: dict) -> str:
             loop = asyncio.get_running_loop()
             fut: asyncio.Future[str] = loop.create_future()
-            self._pending_approvals[card["request_id"]] = fut
+            self._pending_approvals[card["request_id"]] = (fut, turn_id, sid)
             emit(
                 "permission.required",
                 requestId=card["request_id"],
@@ -562,6 +592,7 @@ class Gateway:
                 cwd=card.get("cwd", ""),
                 backend=card.get("backend", ""),
                 capabilities=card.get("capabilities", []),
+                durable=card.get("durable"),
             )
             try:
                 return await fut
@@ -670,9 +701,7 @@ class Gateway:
                 _clear(None)
             except Exception:
                 pass
-            for _rid, _fut in list(self._pending_approvals.items()):
-                if not _fut.done():
-                    _fut.cancel()
+            self.cancel_turn_approvals(turn_id)
             # Join background learning reviews BEFORE closing the owned
             # provider they read through; then close owned providers only.
             if agent is not None:

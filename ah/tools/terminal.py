@@ -311,3 +311,6 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
         raise ToolError(f"Command not found: {args[0]}") from None
     except Exception as e:
         raise ToolError(f"Error executing command: {e}") from e
+
+
+registry.declare_effects({"terminal": ("exec",)})

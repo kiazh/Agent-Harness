@@ -163,3 +163,11 @@ async def search_documents(
             error=str(e),
         )
         raise ToolError(f"Error searching documents: {e}") from e
+
+
+registry.declare_effects(
+    {
+        "index_document": ("fs.read",),
+        "search_documents": ("rag.read",),
+    }
+)

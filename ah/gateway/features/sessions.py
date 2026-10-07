@@ -165,7 +165,9 @@ async def context_compress(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
     try:
         if await turn_active(session.id):
             raise RpcError(TURN_IN_PROGRESS, "stop the running reply before compressing")
-        result = await services.compress_session(session, model=gw.model, provider=gw.provider)
+        result = await services.compress_session(
+            session, model=gw.model, provider=gw.provider, mutation_token=token
+        )
     finally:
         await end_mutation(session.id, token)
     if result is None:

@@ -42,6 +42,7 @@ def launch_ui(
     model: str | None = None,
     provider: str | None = None,
     session_id: str | None = None,
+    mode: str | None = None,
 ) -> int:
     """Run the UI in the foreground and return its exit code."""
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -87,6 +88,11 @@ def launch_ui(
         args += ["--provider", provider]
     if session_id:
         args += ["--session", session_id]
+    if mode:
+        # LP-13: propagate the chosen mode to the gateway (previously dropped:
+        # process-local config never reached the Node child). The gateway
+        # applies it to its own process config (non-persistent).
+        args += ["--mode", mode]
 
     # Generate a random auth token for the gateway. The UI client reads this
     # from AH_GATEWAY_TOKEN and includes it in the initialize call.

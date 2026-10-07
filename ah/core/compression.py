@@ -399,11 +399,33 @@ class ContextCompressor:
                 "Keep it under 200 words.\n\n" + "\n".join(text_parts)
             )
 
-            response = await llm_provider.complete(
-                messages=[{"role": "user", "content": summary_prompt}],
-                temperature=0.3,
-                max_tokens=500,
-            )
+            # LP-14: budgeted like every other secondary LLM call — an
+            # exhausted session/agent budget skips summarization (truncation
+            # fallback) instead of sending another paid call.
+            from ah.core.usage import UsageBudgetExceededError, usage_store
+
+            try:
+                response = await usage_store.complete_call(
+                    llm_provider,
+                    session_id,
+                    agent_id,
+                    messages=[{"role": "user", "content": summary_prompt}],
+                    tools=[],
+                    max_tokens=500,
+                    temperature=0.3,
+                )
+            except UsageBudgetExceededError:
+                logger.warning("Summarization skipped: budget exhausted, using truncation")
+                raise
+            except TypeError:
+                # Legacy stub providers exposing only complete(messages,
+                # temperature, max_tokens): direct call, still counted when
+                # the provider reports usage.
+                response = await llm_provider.complete(
+                    messages=[{"role": "user", "content": summary_prompt}],
+                    temperature=0.3,
+                    max_tokens=500,
+                )
 
             summary_text = response.content
 

@@ -39,7 +39,11 @@ class RuntimeServices:
     capabilities: list[Capability] = field(default_factory=list)
 
     async def startup(self) -> dict[str, Any]:
-        """Connect DB, load skills, detect providers/sandbox. Never raises."""
+        """Connect DB, start audit, load skills, detect providers/sandbox.
+
+        Never raises: every failure becomes a degraded/unavailable capability
+        with a reason and next action.
+        """
         async with self._lock:
             if self._started:
                 return self.status()
@@ -52,6 +56,13 @@ class RuntimeServices:
             except Exception as e:
                 report["db"] = f"unavailable: {e}"
             try:
+                from ah.observability.audit import audit_persistence
+
+                audit_persistence.start()
+                report["audit"] = "ready"
+            except Exception as e:
+                report["audit"] = f"unavailable: {e}"
+            try:
                 from ah.skills.registry import skill_registry
 
                 skill_registry.load_all()
@@ -60,8 +71,26 @@ class RuntimeServices:
                 report["skills_error"] = str(e)
             report.update(_detect_providers())
             report.update(_detect_sandbox())
+            report.update(_detect_toggles())
             self.capabilities = _capabilities_from_report(report)
             self._started = True
+            self._last_report = report
+            return self.status()
+
+    async def refresh(self) -> dict[str, Any]:
+        """Recompute capabilities after configuration changes."""
+        async with self._lock:
+            report = dict(getattr(self, "_last_report", {}))
+            try:
+                from ah.db.connection import db
+
+                report["db"] = "ready" if db.connected else "unavailable"
+            except Exception:
+                report["db"] = "unavailable"
+            report.update(_detect_providers())
+            report.update(_detect_sandbox())
+            report.update(_detect_toggles())
+            self.capabilities = _capabilities_from_report(report)
             self._last_report = report
             return self.status()
 
@@ -101,42 +130,102 @@ class RuntimeServices:
 
 
 def _detect_providers() -> dict[str, Any]:
+    """Per-selected-provider readiness (LP-12): the SELECTED provider's key.
+
+    A wrong-family key (e.g. only an OpenAI key while provider=openrouter)
+    reports unavailable for the selected route instead of healthy-by-any-key.
+    """
     from ah.core.config import config
 
-    chat_ready = False
+    try:
+        selected = (config.get("provider") or "openrouter").lower()
+    except Exception:
+        selected = "openrouter"
+    key_ok = False
+    reason = ""
     try:
         from ah.core.provider import PROVIDER_SPECS
 
-        # Do NOT instantiate: presence of any configured key == ready.
-        keys = [config.get("openrouter_api_key")]
-        for spec in PROVIDER_SPECS.values():
-            try:
-                keys.append(config.get(spec.config_key))
-            except Exception:
-                pass
-        try:
-            import os
-
-            if os.environ.get("OLLAMA_HOST"):
-                keys.append("ollama-host-set")
-        except Exception:
-            pass
-        chat_ready = any(bool(k) for k in keys)
-    except Exception:
-        pass
+        if selected == "openrouter":
+            key_ok = bool(config.get("openrouter_api_key"))
+            reason = "" if key_ok else "OPENROUTER_API_KEY not set"
+        elif selected == "ollama":
+            key_ok = _ollama_reachable()
+            reason = "" if key_ok else "Ollama daemon unreachable"
+        elif selected in PROVIDER_SPECS:
+            env_name = PROVIDER_SPECS[selected].api_key_env
+            key_ok = bool(config.get(PROVIDER_SPECS[selected].config_key))
+            reason = "" if key_ok else f"{env_name} not set"
+        else:
+            reason = f"unknown provider {selected!r}"
+    except Exception as e:
+        reason = str(e)
     embedding_ready = bool(config.get("openai_api_key") or config.get("openrouter_api_key"))
     return {
-        "chat_provider": "ready" if chat_ready else "unavailable",
+        "chat_provider": "ready" if key_ok else "unavailable",
+        "chat_provider_reason": reason,
+        "chat_provider_selected": selected,
         "embedding": "ready" if embedding_ready else "keyword-only",
     }
 
 
+def _ollama_reachable(timeout: float = 1.5) -> bool:
+    """Cheap TCP probe of the Ollama daemon (never a model call)."""
+    import os
+    import socket
+    from urllib.parse import urlparse
+
+    raw = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    try:
+        parsed = urlparse(raw if "://" in raw else f"http://{raw}")
+        host, port = parsed.hostname or "localhost", parsed.port or 11434
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
 def _detect_sandbox() -> dict[str, Any]:
+    """Binary presence is not readiness: probe the daemon (LP-12)."""
     import shutil
+    import subprocess
 
     if shutil.which("docker") is None:
         return {"sandbox": "unavailable", "sandbox_reason": "docker not found"}
-    return {"sandbox": "ready", "sandbox_reason": ""}
+    try:
+        proc = subprocess.run(
+            ["docker", "info", "--format", "{{.ServerVersion}}"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        if proc.returncode == 0:
+            return {"sandbox": "ready", "sandbox_reason": ""}
+        return {"sandbox": "degraded", "sandbox_reason": "docker daemon unreachable"}
+    except Exception:
+        return {"sandbox": "degraded", "sandbox_reason": "docker daemon check failed"}
+
+
+def _detect_toggles() -> dict[str, Any]:
+    """Configured vs enforced states for flag-gated features."""
+    from ah.core.config import config
+
+    def _flag(name: str) -> bool:
+        try:
+            return bool(config.get(name))
+        except Exception:
+            return False
+
+    return {
+        "rag_config": "enabled" if _flag("rag_enabled") else "disabled",
+        "compaction_config": "enabled"
+        if (_flag("auto_compaction_enabled") and _flag("compression_enabled"))
+        else "disabled",
+        "memory_config": "enabled" if _flag("memory_enabled") else "disabled",
+        "extraction_config": "enabled"
+        if (_flag("memory_consolidation_enabled") and _flag("memory_enabled"))
+        else "disabled",
+    }
 
 
 def _capabilities_from_report(report: dict[str, Any]) -> list[Capability]:
@@ -151,12 +240,18 @@ def _capabilities_from_report(report: dict[str, Any]) -> list[Capability]:
         )
     )
     chat = report.get("chat_provider", "unavailable")
+    chat_reason = report.get("chat_provider_reason") or (
+        "" if chat == "ready" else "no provider key configured"
+    )
+    selected = report.get("chat_provider_selected", "")
     caps.append(
         Capability(
             "chat_provider",
             "available" if chat == "ready" else "unavailable",
-            "" if chat == "ready" else "no provider key configured",
-            "" if chat == "ready" else "run ah setup or set OPENROUTER_API_KEY",
+            f"{chat_reason} (selected: {selected})".strip()
+            if chat != "ready"
+            else f"selected: {selected}",
+            "" if chat == "ready" else "run ah setup or set the selected provider key",
         )
     )
     emb = report.get("embedding", "keyword-only")
@@ -171,8 +266,10 @@ def _capabilities_from_report(report: dict[str, Any]) -> list[Capability]:
     caps.append(
         Capability(
             "document_rag",
-            "available",
-            "",
+            "enabled" if report.get("rag_config", "enabled") == "enabled" else "disabled",
+            ""
+            if report.get("rag_config", "enabled") == "enabled"
+            else "rag_enabled is off (explicit tools still available)",
             "",
         )
     )
@@ -184,9 +281,16 @@ def _capabilities_from_report(report: dict[str, Any]) -> list[Capability]:
             "reranker", "available", "passthrough (IdentityReranker) unless Cohere key set", ""
         )
     )
-    caps.append(Capability("compaction", "available", "", ""))
+    caps.append(Capability("compaction", report.get("compaction_config", "enabled"), "", ""))
     caps.append(Capability("skills", "available", "", ""))
-    caps.append(Capability("jobs", "available", "", ""))
+    caps.append(
+        Capability(
+            "jobs",
+            "available" if db == "ready" else "unavailable",
+            "" if db == "ready" else "scheduler needs the database",
+            "",
+        )
+    )
     caps.append(Capability("research_training", "research-only", "offline workflow", ""))
     return caps
 

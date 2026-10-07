@@ -1,4 +1,4 @@
-// Entry point: `node ui/src/main.ts [--model M] [--provider P] [--session ID]`.
+// Entry point: `node ui/src/main.ts [--model M] [--provider P] [--session ID] [--mode MODE]`.
 // Normally started by `ah` (ah/cli/launcher.py), which sets AH_PYTHON.
 
 import { parseArgs } from "node:util";
@@ -9,7 +9,7 @@ import { ProcessTerminal, TuiAltScreen } from "@earendil-works/pi-tui";
 import { App } from "./app.ts";
 import { GatewayClient } from "./gateway.ts";
 
-const USAGE = `Usage: ah [--model MODEL] [--provider PROVIDER] [--session ID] [--no-clear]
+const USAGE = `Usage: ah [--model MODEL] [--provider PROVIDER] [--session ID] [--mode MODE] [--no-clear]
 
 Interactive AgentHarness terminal UI. Set AH_PYTHON to the Python interpreter
 that has AgentHarness installed (the \`ah\` command does this for you).
@@ -22,6 +22,7 @@ const { values } = parseArgs({
 		model: { type: "string" },
 		provider: { type: "string" },
 		session: { type: "string" },
+		mode: { type: "string" },
 		"no-clear": { type: "boolean" },
 		help: { type: "boolean", short: "h" },
 	},
@@ -51,7 +52,7 @@ const gatewayToken = crypto.randomBytes(32).toString("hex");
 // composer docks to the bottom (see App's layout root). Restored on exit.
 const tui = new TuiAltScreen(new ProcessTerminal());
 const client = new GatewayClient({ python, token: gatewayToken, env: { AH_GATEWAY_TOKEN: gatewayToken } });
-const app = new App(tui, client, { model: values.model, provider: values.provider, sessionId: values.session });
+const app = new App(tui, client, { model: values.model, provider: values.provider, sessionId: values.session, mode: values.mode });
 
 // Never leave the terminal in raw mode, whatever happens.
 const crash = (error: unknown) => {

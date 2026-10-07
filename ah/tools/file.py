@@ -468,3 +468,15 @@ async def list_files(path: str = ".", pattern: str = "*") -> str:
         raise
     except Exception as e:
         raise ToolError(f"Error listing files: {e}") from e
+
+
+# Declared side-effect capabilities for the permission broker (addendum:
+# extensible tools need explicit effect declarations; trusted in-process
+# plugins run inside the host process and are NOT a sandbox).
+registry.declare_effects(
+    {
+        "read_file": ("fs.read",),
+        "write_file": ("fs.write",),
+        "list_files": ("fs.read",),
+    }
+)

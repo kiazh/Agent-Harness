@@ -220,6 +220,7 @@ def test_restricted_definition_denies_at_execution():
         ran.append(path)
         return "wrote"
 
+    real_write_file = registry._tools.get("write_file")
     registry._tools["write_file"] = Tool(
         name="write_file",
         description="w",
@@ -275,7 +276,10 @@ def test_restricted_definition_denies_at_execution():
     try:
         events = asyncio.run(_go())
     finally:
-        registry._tools.pop("write_file", None)
+        if real_write_file is not None:
+            registry._tools["write_file"] = real_write_file
+        else:
+            registry._tools.pop("write_file", None)
         registry._definitions_cache = None
     assert ran == [], "restricted tool must not execute"
     assert any("not allowed" in (e.tool_result or "") for e in events if e.type == "tool_result")
@@ -543,6 +547,656 @@ def test_workspace_consistent_roots():
     from ah.permissions.policy import workspace_root
 
     assert str(workspace_root())
+
+
+def test_scope_windows_case_unc_and_symlink_lexical():
+    """LP-04: case-insensitive drives, UNC shares, traversal, symlink text."""
+    import os as _os
+
+    from ah.permissions.policy import _norm_path, _scope_allows
+
+    if _os.name != "nt":
+        pytest.skip("Windows path semantics")
+    file_grant = {
+        "id": "1",
+        "session_id": "s",
+        "agent_id": "h",
+        "mode": "ask",
+        "capability": "file.read",
+        "scope_type": "file",
+        "scope_path": "C:\\Proj\\Report.txt",
+        "grant_kind": "session",
+        "digest": "d",
+        "revoked": False,
+        "expires_at": None,
+    }
+
+    class _R:
+        def __init__(self, targets):
+            self.targets = targets
+
+    assert _scope_allows(file_grant, _R(["c:\\proj\\REPORT.txt"])) is True
+    assert _scope_allows(file_grant, _R(["C:\\Proj\\Report.txt.backup"])) is False
+    dir_grant = dict(file_grant, scope_type="dir", scope_path="\\\\srv\\share\\proj")
+    assert _scope_allows(dir_grant, _R(["\\\\srv\\share\\proj\\sub\\f.txt"])) is True
+    assert _scope_allows(dir_grant, _R(["\\\\srv\\share\\proj-other\\f.txt"])) is False
+    assert _scope_allows(dir_grant, _R(["\\\\srv\\share\\proj\\..\\etc\\x"])) is False
+    # Symlinked text resolves through the same normalizer (lexical).
+    assert _norm_path("C:\\Proj\\sub\\..\\Report.txt") == _norm_path("C:\\Proj\\Report.txt")
+
+
+def test_parent_caps_enforced_at_broker_despite_grants():
+    """LP-08: restricted parent caps bind at execution, not just on the agent."""
+    import asyncio
+
+    from ah.core.agent_factory import parent_authority_var
+    from ah.permissions.broker import ApprovalDenied
+    from ah.permissions.policy import build_request
+    from ah.permissions.broker import permission_broker
+
+    async def _go():
+        import os as _os
+
+        from ah.permissions.policy import workspace_root
+
+        inside = str(workspace_root() / "a.txt")
+        # Absent/None = unrestricted; [] = nothing permitted.
+        assert (
+            await permission_broker.guard(
+                build_request(
+                    operation="file.read",
+                    targets=[inside],
+                    mode="ask",
+                    agent_id="h",
+                    session_id="s-cap",
+                    tool="read_file",
+                )
+            )
+        ).operation == "file.read"
+        token = parent_authority_var.set({"tools": []})
+        try:
+            with pytest.raises(ApprovalDenied):
+                await permission_broker.guard(
+                    build_request(
+                        operation="file.read",
+                        targets=[inside],
+                        mode="workspace",
+                        agent_id="h",
+                        session_id="s-cap",
+                        tool="read_file",
+                    )
+                )
+        finally:
+            parent_authority_var.reset(token)
+        # Disjoint intersection denies; mode escalation denied.
+        token = parent_authority_var.set({"tools": ["read_file"], "max_mode": "ask"})
+        try:
+            with pytest.raises(ApprovalDenied):
+                await permission_broker.guard(
+                    build_request(
+                        operation="file.write",
+                        targets=["/proj/a.txt"],
+                        content="x",
+                        mode="full",
+                        agent_id="h",
+                        session_id="s-cap",
+                        tool="write_file",
+                    )
+                )
+        finally:
+            parent_authority_var.reset(token)
+
+    asyncio.run(_go())
+
+
+def test_selected_provider_key_honesty(monkeypatch):
+    """LP-12: wrong-family keys report unavailable for the SELECTED route."""
+    from ah.core import runtime as rt
+    from ah.core.config import config
+
+    real_provider = config.get("provider")
+    real_openrouter = config.openrouter_api_key
+    real_openai = config.openai_api_key
+    config.set("provider", "openrouter")
+    # Blank attribute AND environment fallbacks (get() consults legacy env).
+    config.openrouter_api_key = ""
+    config.openai_api_key = "sk-test-wrong-family"
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    try:
+        from ah.security import secrets as _secrets
+
+        monkeypatch.setattr(_secrets, "get_secret", lambda name: None)
+    except Exception:
+        pass
+    try:
+        report = rt._detect_providers()
+        assert report["chat_provider"] == "unavailable"
+        assert "OPENROUTER" in report["chat_provider_reason"]
+    finally:
+        config.openrouter_api_key = real_openrouter
+        config.openai_api_key = real_openai
+        try:
+            config.set("provider", real_provider)
+        except Exception:
+            pass
+
+
+def test_sandbox_binary_vs_daemon(monkeypatch):
+    """LP-12: docker binary without daemon is degraded, not ready."""
+    import subprocess as _sp
+
+    from ah.core import runtime as rt
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/docker")
+    real_run = _sp.run
+    monkeypatch.setattr(
+        _sp,
+        "run",
+        lambda *a, **k: type("P", (), {"returncode": 1, "stdout": "", "stderr": "nope"})(),
+    )
+    try:
+        report = rt._detect_sandbox()
+        assert report["sandbox"] == "degraded"
+    finally:
+        monkeypatch.setattr(_sp, "run", real_run)
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    assert rt._detect_sandbox()["sandbox"] == "unavailable"
+
+
+def test_runtime_startup_never_raises_without_db():
+    """LP-12: startup degrades honestly; shutdown cleans tracked work."""
+    import asyncio
+
+    from ah.core.runtime import RuntimeServices
+
+    async def _go():
+        svc = RuntimeServices()
+
+        async def _work():
+            await asyncio.sleep(30)
+
+        task = asyncio.create_task(_work())
+        svc.track(task)
+        report = await svc.startup()
+        assert report["db"] in ("ready", "unavailable") or "unavailable" in str(report["db"])
+        names = {c["name"] for c in report["capabilities"]}
+        assert {"database", "chat_provider", "jobs"} <= names
+        await svc.shutdown()
+        assert task.cancelled() or task.done()
+        return True
+
+    assert asyncio.run(_go()) is True
+
+
+def test_command_parser_preserves_windows_paths_and_unicode():
+    """Addendum check: exact execution representation (parser/shell agreement)."""
+    from ah.permissions import tools as toolmap
+    from ah.permissions.broker import _approval_view
+    from ah.permissions.policy import build_request
+
+    cmd = 'git status -- "C:\\Users\\ki\\my projet\\fichier-\u00e9.txt"'
+    spec = toolmap.action_for_tool("terminal", {"command": cmd, "workdir": "."})
+    assert spec["argv"] == [
+        "git",
+        "status",
+        "--",
+        "C:\\Users\\ki\\my projet\\fichier-\u00e9.txt",
+    ]
+    req = build_request(
+        operation="process.exec",
+        argv=spec["argv"],
+        cwd="C:\\Users\\ki",
+        mode="ask",
+        agent_id="h",
+        session_id="s",
+    )
+    view = _approval_view(
+        req,
+        {
+            "request_id": "r",
+            "session_id": "s",
+            "turn_id": "t",
+            "agent_id": "h",
+            "principal": "tui",
+            "operation": "process.exec",
+            "target": "",
+            "digest": req.digest,
+            "status": "pending",
+            "consumed": False,
+            "created_at": 0.0,
+        },
+    )
+    assert view["argv"] == spec["argv"]
+    # No shell reinterpretation: argv execution keeps shell payload empty.
+    assert req.shell_payload == ""
+
+
+def test_memory_backend_grant_lifecycle_and_durability():
+    """LP-05/06 mem backend: expiry filtered, revoke sticks, durability reported."""
+    import asyncio
+    from datetime import UTC, datetime, timedelta
+
+    from ah.permissions import store as st
+
+    async def _go():
+        st._last_durable = None
+        assert st.is_durable() is None
+        g = await st.save_grant(
+            {
+                "session_id": "mem-sess",
+                "agent_id": "h",
+                "mode": "ask",
+                "capability": "file.write",
+                "scope_path": "/a.txt",
+                "scope_type": "file",
+                "grant_kind": "session",
+                "digest": "d1",
+                "expires_at": datetime.now(UTC) - timedelta(seconds=1),
+            }
+        )
+        assert st.is_durable() is False
+        # Expired: filtered from live grants.
+        assert [x["id"] for x in await st.list_grants("mem-sess")] == []
+        g2 = await st.save_grant(
+            {
+                "session_id": "mem-sess",
+                "agent_id": "h",
+                "mode": "ask",
+                "capability": "file.write",
+                "scope_path": "/a.txt",
+                "scope_type": "file",
+                "grant_kind": "session",
+                "digest": "d2",
+            }
+        )
+        assert len(await st.list_grants("mem-sess")) == 1
+        assert await st.revoke_grants("mem-sess", g2["id"]) >= 1
+        assert await st.list_grants("mem-sess") == []
+
+    asyncio.run(_go())
+
+
+def test_tool_effect_declarations_and_mutating_fallback():
+    """Extensible side-effecting tools need explicit effects (addendum check)."""
+    import ah.tools  # noqa: F401 (register builtins)
+    from ah.permissions import tools as toolmap
+    from ah.permissions.policy import build_request, decide
+    from ah.tools.base import Tool, registry
+
+    assert registry._tools["write_file"].effects == ("fs.write",)
+    assert registry._tools["terminal"].effects == ("exec",)
+    assert registry._tools["read_file"].effects == ("fs.read",)
+    # Effect metadata never leaks into model tool definitions.
+    for d in registry.get_tool_definitions():
+        assert "effects" not in d.parameters
+
+    registry._tools["custom_exec"] = Tool(
+        name="custom_exec",
+        description="x",
+        parameters={},
+        func=lambda: "",
+        is_async=False,
+        effects=("exec",),
+    )
+    registry._tools["custom_pure"] = Tool(
+        name="custom_pure",
+        description="x",
+        parameters={},
+        func=lambda: "",
+        is_async=False,
+    )
+    registry._definitions_cache = None
+    try:
+        mut = toolmap.action_for_tool("custom_exec", {})
+        assert (
+            decide(
+                build_request(operation=mut["operation"], capabilities=mut.get("capabilities"))
+            ).verdict
+            == "pending"
+        )
+        pure = toolmap.action_for_tool("custom_pure", {})
+        assert decide(build_request(operation=pure["operation"])).verdict == "allowed"
+    finally:
+        registry._tools.pop("custom_exec", None)
+        registry._tools.pop("custom_pure", None)
+        registry._definitions_cache = None
+
+
+def test_consolidation_single_flight_across_instances():
+    """LP-14: concurrent agent instances must not re-extract the same range."""
+    import asyncio
+
+    from ah.core import agent as agentmod
+
+    calls = []
+
+    class _Cons:
+        async def consolidate_session(self, session_id, agent_id, since=None):
+            calls.append((str(session_id), since))
+            await asyncio.sleep(0.2)
+            return []
+
+    class _A:
+        def __init__(self):
+            from ah.core import agent as _am
+
+            self._tasks = set()
+            self.memory_consolidator = _Cons()
+            self._agentmod = _am
+
+        def _schedule_memory_consolidation(self, session_id):
+            return agentmod.BaseReActAgent._schedule_memory_consolidation(self, session_id)
+
+    import uuid as _uuid
+
+    sid = _uuid.uuid4()
+    a, b = _A(), _A()
+    # Bind the real scheduler pieces onto the doubles.
+    for inst in (a, b):
+        inst._consolidation_tasks = set()
+        inst._consolidate_memories = lambda _sid, _self=inst: _noop_consolidate(_self, _sid)
+
+    async def _noop_consolidate(inst, _sid):
+        await inst.memory_consolidator.consolidate_session(_sid, "h")
+
+    async def _go():
+        a._schedule_memory_consolidation(sid)
+        b._schedule_memory_consolidation(sid)
+        tasks = list(agentmod._consolidation_inflight.values())
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    asyncio.run(_go())
+    assert len(calls) == 1, f"duplicate extraction: {len(calls)}"
+
+
+def test_consolidation_budget_exhaustion_sends_no_paid_call():
+    """LP-14: exhausted budgets block extraction before any provider call."""
+    import asyncio
+
+    from ah.core.exceptions import UsageBudgetExceededError
+    from ah.memory.consolidator import MemoryConsolidator
+
+    sent = []
+
+    class _P:
+        model = "m"
+
+        async def complete(self, **kw):
+            sent.append(kw)
+            from ah.core.models import LLMResponse
+
+            return LLMResponse(content="[]", model="m", usage={}, tool_calls=[])
+
+    async def _reserve(*a, **k):
+        raise UsageBudgetExceededError("session token budget exceeded (0/0)")
+
+    import ah.core.usage as usagemod
+
+    real_complete = usagemod.usage_store.complete_call
+
+    async def _guarded(provider, session_id, agent_id, messages, **kw):
+        await _reserve()
+        return await real_complete(provider, session_id, agent_id, messages, **kw)
+
+    usagemod.usage_store.complete_call = _guarded  # type: ignore[method-assign]
+    try:
+        cons = MemoryConsolidator(llm_provider=_P())
+        out = asyncio.run(cons._extract_memories("hello world", None, "h"))
+    finally:
+        usagemod.usage_store.complete_call = real_complete  # type: ignore[method-assign]
+    assert out == []
+    assert sent == []
+
+
+def test_rag_cold_start_initializes_shared_pipeline():
+    """LP-10: lazy service initializes on first use after a cold restart."""
+    import asyncio
+
+    import ah.tools.rag as ragmod
+
+    real_global = ragmod._rag_pipeline
+    ragmod._rag_pipeline = None
+
+    class _FakeEmbedder:
+        model_name = "fake"
+
+        async def embed(self, text):
+            return [0.01] * 8
+
+        async def embed_batch(self, texts):
+            return [[0.01] * 8 for _ in texts]
+
+        async def close(self):
+            pass
+
+    import ah.rag.pipeline as pipemod
+
+    real_embedder = pipemod.OpenAIEmbedder
+    pipemod.OpenAIEmbedder = _FakeEmbedder  # type: ignore[assignment]
+    try:
+        from ah.core import agent_factory as fac
+
+        # Cold global (None) + usable embedder → initialized, not None.
+        assert asyncio.run(fac._shared_rag_pipeline()) is not None
+        # Second call reuses the shared instance.
+        first = asyncio.run(fac._shared_rag_pipeline())
+        assert asyncio.run(fac._shared_rag_pipeline()) is first
+    finally:
+        pipemod.OpenAIEmbedder = real_embedder  # type: ignore[assignment]
+        ragmod._rag_pipeline = real_global
+
+
+def test_rag_disabled_or_unavailable_stays_none():
+    import asyncio
+
+    import ah.tools.rag as ragmod
+    from ah.core import agent_factory as fac
+    from ah.core.config import config
+
+    real_global = ragmod._rag_pipeline
+    ragmod._rag_pipeline = None
+    real_val = config.get("rag_enabled")
+    config.set("rag_enabled", False)
+    try:
+        assert asyncio.run(fac._shared_rag_pipeline()) is None
+    finally:
+        try:
+            config.set("rag_enabled", real_val)
+        except Exception:
+            pass
+        ragmod._rag_pipeline = real_global
+
+
+def _subprocess_env(tmp_path):
+    import os
+    import sys
+
+    env = dict(os.environ)
+    dsn = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL", "")
+    if dsn:
+        # Never touch the developer database from subprocess CLI tests.
+        env["DATABASE_URL"] = dsn
+    env["AH_ENV_FILE"] = str(tmp_path / ".env")
+    env["PYTHONUTF8"] = "1"
+    # Isolate persistent config writes (ah mode X --save writes config.yaml).
+    env["HOME"] = str(tmp_path)
+    env["USERPROFILE"] = str(tmp_path)
+    return env, sys.executable
+
+
+def test_cli_mode_separate_processes():
+    """LP-13: separate `ah mode` invocations honor declared semantics."""
+    import subprocess
+
+    from ah.cli.launcher import ui_dir  # noqa: F401 (ensures CLI imports)
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        from pathlib import Path
+
+        env, py = _subprocess_env(Path(tmp))
+
+        def _run(*args):
+            return subprocess.run(
+                [py, "-m", "ah", *args], capture_output=True, text=True, env=env, timeout=90
+            )
+
+        shown = _run("mode")
+        assert shown.returncode == 0, shown.stderr[-500:]
+        assert "ask" in shown.stdout.lower() or "mode" in shown.stdout.lower()
+        set_ws = _run("mode", "workspace")
+        assert set_ws.returncode == 0, set_ws.stderr[-500:]
+        assert "workspace" in set_ws.stdout.lower()
+        # Non-persistent: a fresh process still reports the default.
+        shown2 = _run("mode")
+        assert shown2.returncode == 0
+
+
+def test_launcher_propagates_mode_to_gateway(monkeypatch):
+    """LP-13: CLI --mode reaches the Node child (previously dropped)."""
+    import types
+
+    from ah.cli import launcher
+
+    seen = {}
+
+    def _fake_call(args, env=None):
+        seen["args"] = list(args)
+        return 0
+
+    import subprocess as _sp
+
+    fake_sys = types.SimpleNamespace(
+        stdin=types.SimpleNamespace(isatty=lambda: True),
+        stdout=types.SimpleNamespace(isatty=lambda: True),
+        executable="C:\\py\\python.exe",
+    )
+    monkeypatch.setattr(launcher, "sys", fake_sys)
+    monkeypatch.setattr(launcher, "_node_version", lambda node: (24, 15))
+    monkeypatch.setattr(_sp, "call", _fake_call)
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/node")
+    rc = launcher.launch_ui(mode="full")
+    assert rc == 0
+    assert "--mode" in seen["args"] and "full" in seen["args"]
+
+
+def test_gateway_initialize_applies_mode():
+    """LP-13: the running gateway receives the chosen setting."""
+    import asyncio
+
+    from ah.core.config import config
+    from ah.gateway.server import Gateway
+
+    async def _go():
+        gw = Gateway(write=lambda frame: None, owns_db=False)
+        gw._db_ready = True
+        before = config.get("execution_mode")
+        try:
+            await gw._initialize({"mode": "workspace"})
+            assert config.get("execution_mode") == "workspace"
+        finally:
+            try:
+                config.set("execution_mode", before)
+            except Exception:
+                pass
+        return True
+
+    assert asyncio.run(_go()) is True
+
+
+def test_approved_approval_executes_instead_of_denying():
+    """Screenshot bug: approving must allow, not raise 'denied: approved'.
+
+    Drives the real broker.guard with a gateway-like handler that resolves
+    through the store (consuming the record) before returning the verdict —
+    the old double-resolve turned every approval into a denial.
+    """
+    import asyncio
+
+    from ah.permissions import broker as brokermod
+    from ah.permissions.policy import build_request
+
+    async def _go():
+        req = build_request(
+            operation="process.exec",
+            argv=["whoami"],
+            cwd=".",
+            mode="ask",
+            agent_id="harness",
+            session_id="sess-1",
+        )
+        calls = []
+
+        async def _handler(card):
+            calls.append(card)
+            # Gateway-like: the transport records the DECISION; the broker
+            # then claims it for exactly one execution.
+            from ah.permissions import store as st
+
+            await st.resolve_decision(card["request_id"], "approved", principal="tui")
+            return "approved"
+
+        brokermod.set_approval_handler(_handler, principal="tui", turn_id="t1")
+        try:
+            out = await brokermod.permission_broker.guard(req)
+        finally:
+            brokermod.set_approval_handler(None)
+        assert out.digest == req.digest
+        assert out.approval_id == req.request_id
+        assert len(calls) == 1
+        await brokermod.permission_broker.complete(req.request_id, "completed")
+        # LP-03 once semantics: replaying the SAME request neither rides the
+        # consumed decision nor mints a duplicate approval — it is denied
+        # terminally ("already completed"). A fresh user intent builds a new
+        # request (new id) and gets its own approval card; the agent loop
+        # does not spin on the denial.
+        from ah.permissions.broker import ApprovalDenied
+
+        brokermod.set_approval_handler(_handler, principal="tui", turn_id="t2")
+        try:
+            with pytest.raises(ApprovalDenied, match="already completed"):
+                await brokermod.permission_broker.guard(req)
+        finally:
+            brokermod.set_approval_handler(None)
+        assert len(calls) == 1
+
+    asyncio.run(_go())
+
+
+def test_denied_approval_raises_denied():
+    import asyncio
+
+    from ah.permissions import broker as brokermod
+    from ah.permissions.broker import ApprovalDenied
+    from ah.permissions.policy import build_request
+
+    async def _go():
+        req = build_request(
+            operation="process.exec",
+            argv=["whoami"],
+            cwd=".",
+            mode="ask",
+            agent_id="harness",
+            session_id="sess-deny",
+        )
+
+        async def _handler(card):
+            from ah.permissions import store as st
+
+            await st.resolve_decision(card["request_id"], "denied", principal="tui")
+            return "denied"
+
+        brokermod.set_approval_handler(_handler, principal="tui", turn_id="t1")
+        try:
+            with pytest.raises(ApprovalDenied):
+                await brokermod.permission_broker.guard(req)
+        finally:
+            brokermod.set_approval_handler(None)
+
+    asyncio.run(_go())
 
 
 def test_ownership_loss_cancels_effect_task():

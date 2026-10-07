@@ -310,6 +310,7 @@ export type GatewayEvent = EventBase &
 				cwd: string;
 				backend: string;
 				capabilities: string[];
+				durable?: boolean | null;
 			}
 		| { type: "permission.resolved"; requestId: string; status: string }
 	);

@@ -187,3 +187,11 @@ async def recall(
     except Exception as e:
         logger.error("Failed to recall memories: %s", e)
         raise ToolError(f"Error recalling memories: {e}") from e
+
+
+registry.declare_effects(
+    {
+        "remember": ("memory",),
+        "recall": ("memory",),
+    }
+)

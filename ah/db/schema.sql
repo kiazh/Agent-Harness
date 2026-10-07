@@ -494,3 +494,13 @@ CREATE TABLE IF NOT EXISTS permission_approvals (
     resolved_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_permission_approvals_session ON permission_approvals(session_id, status);
+
+-- LP-01/02 corrective: separate human decision from atomic execution
+-- consumption. approved → claimed → completed/failed/cancelled. Decision
+-- resolution and execution claiming are distinct conditional transitions.
+ALTER TABLE permission_approvals DROP CONSTRAINT IF EXISTS permission_approvals_status_check;
+ALTER TABLE permission_approvals ADD CONSTRAINT permission_approvals_status_check CHECK (
+    status IN ('pending', 'approved', 'denied', 'expired', 'cancelled', 'claimed', 'completed', 'failed')
+);
+ALTER TABLE permission_grants ADD COLUMN IF NOT EXISTS scope_type TEXT NOT NULL DEFAULT 'file';
+ALTER TABLE permission_grants ADD COLUMN IF NOT EXISTS grant_kind TEXT NOT NULL DEFAULT 'session';

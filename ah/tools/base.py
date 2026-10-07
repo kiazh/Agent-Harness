@@ -38,13 +38,22 @@ _UNCACHEABLE_TOOLS = frozenset(
 
 @dataclass
 class Tool:
-    """A registered tool."""
+    """A registered tool.
+
+    ``effects`` declares side-effect capabilities for the permission broker
+    (e.g. ``fs.read``, ``fs.write``, ``exec``, ``net``, ``memory``,
+    ``delegate``). It is broker metadata only — never sent to the model
+    (see get_tool_definitions). Tools without mutating effects stay
+    in-process work; extensible side-effecting tools must declare effects or
+    they fall through to approval as unknown mutating operations.
+    """
 
     name: str
     description: str
     parameters: dict  # JSON Schema
     func: Callable
     is_async: bool = False
+    effects: tuple[str, ...] = ()
 
 
 class ToolRegistry:
@@ -67,6 +76,7 @@ class ToolRegistry:
         name: str | None = None,
         description: str | None = None,
         parameters: dict | None = None,
+        effects: tuple[str, ...] | list[str] | None = None,
     ) -> Callable:
         """Decorator to register a function as a tool.
 
@@ -75,6 +85,7 @@ class ToolRegistry:
             def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
                 ...
         """
+        declared = tuple(effects or ())
 
         def decorator(func: Callable) -> Callable:
             tool_name = name or func.__name__
@@ -89,12 +100,26 @@ class ToolRegistry:
                 parameters=tool_params,
                 func=func,
                 is_async=is_async,
+                effects=declared,
             )
             # Invalidate definitions cache when a new tool is registered
             self._definitions_cache = None
             return func
 
         return decorator
+
+    def declare_effects(self, effects: dict[str, tuple[str, ...] | list[str]]) -> None:
+        """Attach broker effect metadata to already-registered tools.
+
+        Explicit declarations live next to each tool module (LP additional
+        check); unknown side-effecting tools without declarations fall
+        through to approval instead of silent in-process execution.
+        """
+        for name, eff in effects.items():
+            tool = self._tools.get(name)
+            if tool is not None:
+                tool.effects = tuple(eff)
+        self._definitions_cache = None
 
     def _infer_schema(self, func: Callable) -> dict:
         """Infer JSON Schema from function signature."""

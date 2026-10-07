@@ -237,6 +237,36 @@ class ContextManager:
             )
         return [self._row_to_chunk(r) for r in rows]
 
+    async def get_chunks_since(
+        self,
+        session_id: uuid.UUID,
+        *,
+        since_time=None,
+        since_id: uuid.UUID | None = None,
+        limit: int = 200,
+    ) -> list[ContextChunk]:
+        """Chunks strictly newer than the (time, id) consolidation cursor.
+
+        Lets extraction process only new input; failed ranges retry because
+        the cursor advances only after successful writes.
+        """
+        rows = await db.fetch(
+            """
+            SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
+            FROM context_chunks
+            WHERE session_id = $1
+              AND ($2::timestamptz IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
+                   > ($2, $3::uuid))
+            ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) ASC, id ASC
+            LIMIT $4
+            """,
+            session_id,
+            since_time,
+            since_id,
+            limit,
+        )
+        return [self._row_to_chunk(r) for r in rows]
+
     async def get_all_chunks(self, session_id: uuid.UUID) -> list[ContextChunk]:
         """Fetch every active chunk for *session_id* (newest first).
 
