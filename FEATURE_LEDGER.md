@@ -50,3 +50,18 @@ First run: detect workspace/config/providers/DB/sandbox; ask only missing essent
 ## Status
 
 `ah status` + gateway `status` derive: mode/backend/workspace, chat, memory retrieval mode+reason, extraction, RAG doc count, reranker label, compaction, sandbox, jobs awaiting approval, research=offline.
+
+## Entry-point matrix (addendum §6)
+
+Same shared factory/coordinator/broker/scope/ownership on every path. Evidence = code + test IDs.
+
+| Feature | CLI (`ah chat`) | TUI/gateway | HTTP | Jobs | Delegation | Disabled/fallback proof |
+|---|---|---|---|---|---|---|
+| Agent factory/definition/authority | `cli/__init__.py::_chat` → `build_agent_for_session` | `server.py::_run_turn` → same factory (fail-closed, no weak fallback) | `app.py::prompt_session` → same factory | `scheduler.py::_build_agent` + orchestrator `_default_agent` + `cap_child_authority` | same factory; child tools = definition ∩ parent | unknown specialist → `AgentDefinitionError` (`test_unknown_specialist_is_not_general_agent`) |
+| Turn/mutation ownership | n/a (single turn) | `_prompt_submit` token claim; cancel releases; `_run_turn` finally releases | pre-header `try_begin_turn`, SSE finally `end_turn` | `_execute` claims session turn; busy → reschedule error | child sessions claim independently; parent recording claim-free | crash → expiry reclaim (`test_crash_expiry_recovery_and_stale_release`); stale release rejected |
+| Memory retrieval/extraction | factory injects retriever/consolidator; `memory_enabled` gate; watermark | same (shared factory) | same (shared factory) | jobs run `agent.run` (same `_prepare_context`) | child agents via factory | disabled → skipped; keyword-only reported (`embedding_status`) |
+| Embeddings + fallback | `embed_query` (None → keyword) | same | same | same | same | `test_embedding_fallback_reported` |
+| RAG + scope | shared singleton; scope vars in agent loop | same | same + explicit `agent_id` | same | same | disabled → `[]`; empty index → `empty-index` |
+| Compaction/archive | `maybe_auto_compact` (CLI single-shot n/a) | post-turn auto + `/compress` (mutation claim) | post-stream auto + RPC compress | n/a (jobs are short) | n/a | disabled → skipped; no-progress guard; keyset snapshot + exact-ID replace |
+| Broker + modes | `--mode`/`ah mode`; headless → structured pause | `/mode`, approval card, `/approvals` | approval endpoints + ownership checks | pause as `needs_approval`, fresh claim resume | capped authority; agent principals never approve | sandbox absent → explicit refusal, never silent host |
+| Usage/lifecycle/cancel | `close_agent_provider` in finally | join learning tasks, then close owned | same + auto-compact post-release | owned close + turn release; loss cancels task | deadline/hop inheritance; cancel propagates | shared/injected never closed (`test_shared_provider_not_closed_by_non_owner`) |

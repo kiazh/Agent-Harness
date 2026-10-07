@@ -1,26 +1,26 @@
-"""Session execution/mutation coordinator (AH-010, AH-017; Phase B/6).
+"""Session execution/mutation coordinator (AH-010, AH-017; Phase B/6; 5.3).
 
 Single shared coordinator for gateway submit/compress/delete, REST prompt/
-delete, scheduler jobs and compression. Per-process asyncio locks close the
-check-then-act race within one process; cross-process safety comes from an
-atomic DB status claim (sessions.status running) so two workers (gateway
-stdio child vs uvicorn workers) cannot run concurrent turns on one session.
+delete, scheduler jobs and compression.
 
-Phase 6 additions: logical turn ownership that survives permission waits
-without holding SQL transactions/pool connections; approval-wait vs compute
-timeouts distinguished; fork-safe child tokens via owner-authorized internal
-mutation; durable fencing for multi-process runners.
+Design (5.3 corrective):
+- Business ``sessions.status`` (active/idle/archived) NEVER carries execution
+  state. Live ownership lives in ``claim_owner / claim_kind / claim_expires_at``.
+- Local mutexes (per-process asyncio locks) are NOT ownership: they only
+  serialize same-process claim attempts. Cross-process truth is the claim row:
+  ``claim_owner IS NULL OR claim_expires_at <= now()`` means free.
+- Owner tokens: ``try_begin_turn`` / ``begin_mutation`` return an opaque
+  token; ``end_turn`` / ``end_mutation`` release ONLY on token equality. A
+  stale owner can never release a newer owner's claim.
+- Crash recovery: claims expire (turn TTL covers the turn timeout + margin).
+  A dead worker's claim becomes reclaimable without manual repair.
+- No SQL transaction/connection is held across a model stream or a human
+  approval wait — claims are single-statement UPDATEs; waits hold only the
+  in-process task + logical ownership.
+- Nested delegation never deadlocks: children run on their own sessions;
+  parent-context recording uses direct inserts, never the parent's claim.
 
-Contract:
-- ``try_begin_turn`` atomically claims a session for execution. Returns
-  True on success, False when a turn is already running.
-- ``end_turn`` releases the claim (idempotent).
-- ``mutation_lock`` serializes compress/delete against turn begin/end within
-  this process. REST checks the DB claim BEFORE sending SSE headers so
-  conflicts surface as 409, not mid-stream.
-- Multi-process note: in-process locks alone are insufficient; the DB claim
-  is the fencing mechanism. If the DB is unavailable, fall back to
-  in-process locks only (documented degradation).
+Backwards-compatible module functions delegate to SessionTurnCoordinator.
 """
 
 from __future__ import annotations
@@ -29,6 +29,9 @@ import asyncio
 import threading as _threading
 import uuid
 from contextlib import asynccontextmanager
+
+TURN_TTL_SECONDS = 360
+MUTATION_TTL_SECONDS = 120
 
 _locks: dict[str, asyncio.Lock] = {}
 _mutation_locks: dict[str, asyncio.Lock] = {}
@@ -47,13 +50,7 @@ def _session_lock(session_id: uuid.UUID) -> asyncio.Lock:
 
 
 def _mutation_session_lock(session_id: uuid.UUID) -> asyncio.Lock:
-    """Separate lock for compress/delete/fork (Phase 6).
-
-    Mutations must NOT share the turn lock: auto-compaction at the turn
-    boundary and explicit /compress must be able to check turn state without
-    deadlocking on their own claim. They serialize among themselves and
-    check ``turn_locked`` / gateway ``turn_running`` inside.
-    """
+    """Separate in-process mutex for mutations (never confused with ownership)."""
     key = str(session_id)
     with _guard:
         lock = _mutation_locks.get(key)
@@ -63,80 +60,244 @@ def _mutation_session_lock(session_id: uuid.UUID) -> asyncio.Lock:
         return lock
 
 
-async def try_begin_turn(session_id: uuid.UUID) -> bool:
-    """Atomically claim *session_id* for a turn.
+def _live_claim_where() -> str:
+    return "(claim_owner IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= now())"
 
-    Tries the DB status claim first (cross-process); falls back to in-process
-    lock state when the DB is unreachable. Returns True if this caller owns
-    the turn.
-    """
-    lock = _session_lock(session_id)
-    # In-process fast path: if locked, someone in this process owns it.
-    if lock.locked():
-        return False
-    # Cross-process fence via atomic status transition.
+
+async def _db_claim(session_id: uuid.UUID, owner: str, kind: str, ttl_s: int) -> bool:
+    """Atomic single-statement claim. True iff this owner now holds it."""
+    from ah.db.connection import db
+
+    row = await db.fetchrow(
+        f"""
+        UPDATE sessions SET claim_owner = $2, claim_kind = $3,
+            claim_expires_at = now() + ($4 * interval '1 second')
+        WHERE id = $1 AND {_live_claim_where()}
+        RETURNING id
+        """,
+        session_id,
+        owner,
+        kind,
+        ttl_s,
+    )
+    return row is not None
+
+
+async def _db_release(session_id: uuid.UUID, owner: str) -> bool:
+    """Owner-matched release. False for stale/foreign owners (no effect)."""
+    from ah.db.connection import db
+
+    result = await db.execute(
+        "UPDATE sessions SET claim_owner = NULL, claim_kind = NULL, claim_expires_at = NULL "
+        "WHERE id = $1 AND claim_owner = $2",
+        session_id,
+        owner,
+    )
+    from ah.db.connection import parse_command_count
+
+    return parse_command_count(result) > 0
+
+
+async def _db_claim_state(session_id: uuid.UUID) -> dict | None:
+    from ah.db.connection import db
+
     try:
-        from ah.db.connection import db
-
-        if db.connected:
-            row = await db.fetchrow(
-                """
-                UPDATE sessions SET status = 'running'
-                WHERE id = $1 AND status = 'active'
-                RETURNING id
-                """,
-                session_id,
-            )
-            if row is None:
-                return False
-            await lock.acquire()
-            return True
+        row = await db.fetchrow(
+            "SELECT claim_owner, claim_kind, claim_expires_at FROM sessions WHERE id = $1",
+            session_id,
+        )
     except Exception:
-        pass
-    # DB unavailable or sessions table without running state: use in-process
-    # lock only (documented degradation).
-    if lock.locked():
+        return None
+    if row is None:
+        return None
+    return dict(row)
+
+
+async def _live_claim(session_id: uuid.UUID, kinds: tuple[str, ...]) -> bool:
+    """True when a live (unexpired) claim of any of *kinds* exists (any process)."""
+    from ah.db.connection import db
+
+    if not db.connected:
         return False
+    state = await _db_claim_state(session_id)
+    if not state or not state.get("claim_owner"):
+        return False
+    if kinds and state.get("claim_kind") not in kinds:
+        return False
+    exp = state.get("claim_expires_at")
+    if exp is None:
+        return True
+    try:
+        from datetime import UTC, datetime
+
+        now = datetime.now(UTC)
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=UTC)
+        if exp <= now:
+            return False
+    except Exception:
+        return True
+    return True
+
+
+async def _acquire_or_steal(
+    lock: asyncio.Lock, session_id: uuid.UUID, kinds: tuple[str, ...]
+) -> bool:
+    """Acquire *lock*, stealing it when no live blocking claim backs it.
+
+    A locked mutex with no live DB claim is stale (holder dead or expired):
+    release and take it. A locked mutex WITH a live claim means a real owner
+    holds the session — return False. DB-unavailable degrades to plain mutex
+    semantics (fail closed: locked means busy).
+    """
+    from ah.db.connection import db
+
+    if not lock.locked():
+        await lock.acquire()
+        return True
+    if not db.connected:
+        return False
+    try:
+        if await _live_claim(session_id, kinds):
+            return False
+    except Exception:
+        return False
+    try:
+        lock.release()
+    except RuntimeError:
+        pass
     await lock.acquire()
     return True
 
 
-async def end_turn(session_id: uuid.UUID) -> None:
-    """Release a turn claim (idempotent)."""
+async def try_begin_turn(
+    session_id: uuid.UUID, *, turn_id: str | None = None, ttl_s: int = TURN_TTL_SECONDS
+) -> str | None:
+    """Claim a turn; returns the owner token, or None when busy.
+
+    Fails closed: DB errors (other than provable unavailability) propagate
+    instead of degrading into concurrent execution. A new turn is blocked by
+    any live claim (turn or mutation).
+    """
+    from ah.db.connection import db
+
+    lock = _session_lock(session_id)
+    if not await _acquire_or_steal(lock, session_id, ("turn", "mutation")):
+        return None
+    owner = f"turn:{turn_id or uuid.uuid4().hex}:{uuid.uuid4().hex}"
+    try:
+        if db.connected:
+            claimed = await _db_claim(session_id, owner, "turn", ttl_s)
+            if not claimed:
+                try:
+                    lock.release()
+                except RuntimeError:
+                    pass
+                return None
+            return owner
+        return owner  # DB-less (tests): in-process lock is the claim.
+    except Exception:
+        try:
+            lock.release()
+        except RuntimeError:
+            pass
+        raise
+
+
+async def end_turn(session_id: uuid.UUID, token: str | None) -> bool:
+    """Release a turn claim; only the exact owner succeeds (stale-safe)."""
+    from ah.db.connection import db
+
+    if not token:
+        return False
+    ok = True
+    if db.connected:
+        try:
+            ok = await _db_release(session_id, token)
+        except Exception:
+            ok = False
     lock = _session_lock(session_id)
     if lock.locked():
         try:
             lock.release()
         except RuntimeError:
             pass
-    try:
-        from ah.db.connection import db
-
-        if db.connected:
-            await db.execute(
-                """
-                UPDATE sessions SET status = 'active'
-                WHERE id = $1 AND status = 'running'
-                """,
-                session_id,
-            )
-    except Exception:
-        pass
+    return ok
 
 
 def turn_locked(session_id: uuid.UUID) -> bool:
-    """Best-effort in-process check (use try_begin_turn for fencing)."""
+    """Best-effort in-process check (fast path only, not ownership proof)."""
     lock = _locks.get(str(session_id))
     return bool(lock and lock.locked())
 
 
+async def turn_active(session_id: uuid.UUID, kinds: tuple[str, ...] = ("turn",)) -> bool:
+    """True when a live (unexpired) claim of *kinds* exists (any process).
+
+    Defaults to turn claims only, so a caller holding its own mutation slot
+    never rejects itself (Pattern D). In-process locks are not consulted:
+    mutex occupancy is not ownership evidence.
+    """
+    from ah.db.connection import db
+
+    if db.connected:
+        try:
+            return await _live_claim(session_id, kinds)
+        except Exception:
+            return turn_locked(session_id)
+    return turn_locked(session_id)
+
+
+async def begin_mutation(session_id: uuid.UUID, *, ttl_s: int = MUTATION_TTL_SECONDS) -> str | None:
+    """Claim a mutation slot; fails when a live turn owns the session."""
+    from ah.db.connection import db
+
+    lock = _mutation_session_lock(session_id)
+    if not await _acquire_or_steal(lock, session_id, ("turn", "mutation")):
+        return None
+    owner = f"mutation:{uuid.uuid4().hex}"
+    try:
+        if db.connected:
+            claimed = await _db_claim(session_id, owner, "mutation", ttl_s)
+            if not claimed:
+                try:
+                    lock.release()
+                except RuntimeError:
+                    pass
+                return None
+            return owner
+        return owner
+    except Exception:
+        try:
+            lock.release()
+        except RuntimeError:
+            pass
+        raise
+
+
+async def end_mutation(session_id: uuid.UUID, token: str | None) -> bool:
+    from ah.db.connection import db
+
+    if not token:
+        return False
+    ok = True
+    if db.connected:
+        try:
+            ok = await _db_release(session_id, token)
+        except Exception:
+            ok = False
+    lock = _mutation_session_lock(session_id)
+    if lock.locked():
+        try:
+            lock.release()
+        except RuntimeError:
+            pass
+    return ok
+
+
 @asynccontextmanager
 async def mutation_lock(session_id: uuid.UUID):
-    """Serialize compress/delete/fork against each other (Phase 6).
-
-    Uses a dedicated mutation lock, then callers check turn state inside.
-    Never blocks on the caller's own turn claim.
-    """
+    """Serialize same-process mutations (mutex only; ownership via begin_mutation)."""
     lock = _mutation_session_lock(session_id)
     async with lock:
         yield
@@ -145,15 +306,15 @@ async def mutation_lock(session_id: uuid.UUID):
 class TurnOwnership:
     """Logical turn slot with approval-aware waiting (Phase 6).
 
-    Holds the in-process lock + DB ``running`` claim for the whole turn,
-    including permission waits. Never holds a DB transaction or pool
-    connection across the turn or across human approval waits — only the
-    lightweight status row + in-process lock.
+    Holds the owner token + in-process slot for the whole turn, including
+    permission waits. Never holds a DB transaction or pool connection across
+    the turn or across human approval waits.
     """
 
-    def __init__(self, session_id: uuid.UUID, turn_id: str) -> None:
+    def __init__(self, session_id: uuid.UUID, turn_id: str, token: str | None = None) -> None:
         self.session_id = session_id
         self.turn_id = turn_id
+        self.token = token
         self._approval_event = asyncio.Event()
         self._approval_event.set()  # no wait by default
 
@@ -190,14 +351,17 @@ class TurnOwnership:
 class SessionTurnCoordinator:
     """Shared coordinator object (Phase B/6). Module functions delegate here."""
 
-    async def begin_turn(self, session_id: uuid.UUID) -> bool:
-        return await try_begin_turn(session_id)
+    async def begin_turn(self, session_id: uuid.UUID, **kw) -> str | None:
+        return await try_begin_turn(session_id, **kw)
 
-    async def finish_turn(self, session_id: uuid.UUID) -> None:
-        await end_turn(session_id)
+    async def finish_turn(self, session_id: uuid.UUID, token: str | None) -> bool:
+        return await end_turn(session_id, token)
 
     def locked(self, session_id: uuid.UUID) -> bool:
         return turn_locked(session_id)
+
+    async def active(self, session_id: uuid.UUID) -> bool:
+        return await turn_active(session_id)
 
     def mutation(self, session_id: uuid.UUID):
         return mutation_lock(session_id)

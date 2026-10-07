@@ -36,6 +36,8 @@ async def skills_show(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 async def skills_learn(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """Learn a new skill from a file, URL, or existing skill."""
+    import asyncio
+
     gw.require_db()
     triggers = params.get("triggers")
     if triggers is not None and (
@@ -43,7 +45,10 @@ async def skills_learn(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     ):
         raise RpcError(INVALID_PARAMS, "triggers must be a list of strings")
     try:
-        skill = services.learn_skill(
+        # 5.8: the sync fetch/parse path runs off-loop so URL retrieval never
+        # blocks the gateway event loop.
+        skill = await asyncio.to_thread(
+            services.learn_skill,
             _str(params, "source", max_len=2000),
             name=_str(params, "name", required=False, max_len=100) or None,
             description=_str(params, "description", required=False, max_len=500) or None,

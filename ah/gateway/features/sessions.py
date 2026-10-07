@@ -26,25 +26,22 @@ async def session_fork(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def session_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Delete a session (coordinated with REST turns, AH-017)."""
+    """Delete a session (mutation claim; live turns reject first)."""
+    from ah.core.turns import begin_mutation, end_mutation, turn_active
+
     gw.require_db()
     session = await gw.get_session(params)
-    if gw.turn_running(session.id):
+    if await turn_active(session.id):
+        raise RpcError(TURN_IN_PROGRESS, "stop the running reply before deleting this session")
+    token = await begin_mutation(session.id)
+    if not token:
         raise RpcError(TURN_IN_PROGRESS, "stop the running reply before deleting this session")
     try:
-        from ah.core.turns import mutation_lock, turn_locked
-    except Exception:
-        mutation_lock = None  # type: ignore[assignment]
-        turn_locked = None  # type: ignore[assignment]
-    if turn_locked is not None and turn_locked(session.id):
-        raise RpcError(TURN_IN_PROGRESS, "stop the running reply before deleting this session")
-    if mutation_lock is not None:
-        async with mutation_lock(session.id):
-            if gw.turn_running(session.id) or (turn_locked is not None and turn_locked(session.id)):
-                raise RpcError(
-                    TURN_IN_PROGRESS, "stop the running reply before deleting this session"
-                )
-            return {"deleted": await session_manager.delete(session.id)}
+        if await turn_active(session.id):
+            raise RpcError(TURN_IN_PROGRESS, "stop the running reply before deleting this session")
+        return {"deleted": await session_manager.delete(session.id)}
+    finally:
+        await end_mutation(session.id, token)
     return {"deleted": await session_manager.delete(session.id)}
 
 
@@ -155,29 +152,22 @@ async def context_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def context_compress(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Compress context for a session (coordinated, AH-010)."""
-    from ah.memory.redaction import redact_secrets as _redact  # noqa: F401 (policy symmetry)
+    """Compress context (mutation claim; live turns reject, idle compresses)."""
+    from ah.core.turns import begin_mutation, end_mutation, turn_active
 
     gw.require_db()
     session = await gw.get_session(params)
-    # AH-010: the old check-then-act (turn_running → await read/summarize/
-    # replace) let a new turn start after the check and lose its context.
-    # Serialize compression against turn begin/end via the shared session
-    # mutation coordinator (same lock family as REST/jobs).
+    if await turn_active(session.id):
+        raise RpcError(TURN_IN_PROGRESS, "stop the running reply before compressing")
+    token = await begin_mutation(session.id)
+    if not token:
+        raise RpcError(TURN_IN_PROGRESS, "stop the running reply before compressing")
     try:
-        from ah.core.turns import mutation_lock, turn_locked
-    except Exception:
-        mutation_lock = None  # type: ignore[assignment]
-        turn_locked = None  # type: ignore[assignment]
-    if mutation_lock is not None:
-        async with mutation_lock(session.id):
-            if gw.turn_running(session.id) or (turn_locked is not None and turn_locked(session.id)):
-                raise RpcError(TURN_IN_PROGRESS, "stop the running reply before compressing")
-            result = await services.compress_session(session, model=gw.model, provider=gw.provider)
-    else:
-        if gw.turn_running(session.id):
+        if await turn_active(session.id):
             raise RpcError(TURN_IN_PROGRESS, "stop the running reply before compressing")
         result = await services.compress_session(session, model=gw.model, provider=gw.provider)
+    finally:
+        await end_mutation(session.id, token)
     if result is None:
         return {"compressed": False}
     return {

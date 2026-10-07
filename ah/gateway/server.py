@@ -159,6 +159,7 @@ class Gateway:
         self._job_runner = None
         self._turns: dict[str, asyncio.Task[None]] = {}
         self._turn_locks: dict[str, asyncio.Lock] = {}
+        self._turn_tokens: dict[str, str] = {}
         self._turn_progress: dict[str, dict[str, int]] = {}
         # Pending human approvals by request_id (Phase E). The broker's
         # approval handler emits permission.required and awaits the future;
@@ -407,20 +408,27 @@ class Gateway:
         if len(text) > 20_000:
             raise RpcError(INVALID_PARAMS, "text is too long (max 20000 characters)")
         key = str(session.id)
-        # Per-session lock: closes the check-then-act race between the
-        # running-turn check and task creation for concurrent submitters.
-        # setdefault is synchronous, so both racers share the same lock.
-        lock = self._turn_locks.setdefault(key, asyncio.Lock())
-        async with lock:
-            running = self._turns.get(key)
-            if running is not None and not running.done():
-                raise RpcError(TURN_IN_PROGRESS, "a turn is already running for this session")
-            turn_id = uuid.uuid4().hex[:12]
-            logger.info("Turn %s started for session %s", turn_id, session.id)
-            self._turns[key] = asyncio.create_task(
-                self._run_turn_with_timeout(session.id, turn_id, text)
-            )
-            return {"turnId": turn_id}
+        # Shared coordinator claim (cross-transport owner token). The
+        # in-process lock serializes same-process racers; the DB claim fences
+        # REST/scheduler workers. Fails closed on claim errors.
+        from ah.core.turns import try_begin_turn
+
+        turn_id = uuid.uuid4().hex[:12]
+        token = await try_begin_turn(session.id, turn_id=turn_id)
+        if not token:
+            raise RpcError(TURN_IN_PROGRESS, "a turn is already running for this session")
+        running = self._turns.get(key)
+        if running is not None and not running.done():
+            from ah.core.turns import end_turn as _end
+
+            await _end(session.id, token)
+            raise RpcError(TURN_IN_PROGRESS, "a turn is already running for this session")
+        logger.info("Turn %s started for session %s", turn_id, session.id)
+        self._turn_tokens[key] = token
+        self._turns[key] = asyncio.create_task(
+            self._run_turn_with_timeout(session.id, turn_id, text)
+        )
+        return {"turnId": turn_id}
 
     async def _prompt_cancel(self, params: dict[str, Any]) -> dict[str, Any]:
         key = str(_parse_session_id(params))
@@ -495,9 +503,28 @@ class Gateway:
             )
 
         def complete(final: Any = None, cancelled: bool = False) -> None:
+            try:
+                from ah.memory.redaction import redact_secrets as _redact
+
+                text = _redact(final.content).text if final is not None else ""
+            except Exception:
+                text = final.content if final is not None else ""
+            # Flush any withheld stream tail first so no fragment is lost.
+            try:
+                tail = _turn_redactor.flush()
+            except Exception:
+                tail = ""
+            if tail:
+                try:
+                    from ah.memory.redaction import redact_secrets as _redact2
+
+                    tail = _redact2(tail).text
+                except Exception:
+                    pass
+                text = tail + text if text else tail
             emit(
                 "message.complete",
-                text=final.content if final is not None else "",
+                text=text,
                 # Prefer the agent's final accounting; fall back to the tokens
                 # accumulated from token_usage events along the way.
                 tokens=(final.tokens_used or tokens) if final is not None else tokens,
@@ -512,6 +539,12 @@ class Gateway:
         tokens = 0
         final = None
         agent = None
+        # Streaming redaction per turn (5.1): text deltas pass the frontier
+        # redactor; the withheld tail flushes at completion. A safe helper
+        # unused by this transport would not be a fix.
+        from ah.memory.redaction import StreamingSecretRedactor as _SSR
+
+        _turn_redactor = _SSR()
         # Phase E: human approval handler for this turn. Emits
         # permission.required and awaits the UI/HTTP resolve without holding
         # DB transactions — logical turn ownership is retained.
@@ -550,16 +583,18 @@ class Gateway:
             try:
                 from ah.core.agent_factory import build_agent_for_session
             except Exception:
-                build_agent_for_session = None  # type: ignore[assignment]
-            if build_agent_for_session is not None:
-                agent = await build_agent_for_session(session)
-            else:
-                agent = self._agent_factory(
-                    session.model or self.model, session.provider or self.provider
-                )
+                # Fail closed (Pattern C/5.4): no silent fallback to a weaker
+                # global factory. Surface the error; the turn cannot run.
+                logger.exception("Agent factory unavailable")
+                emit("error", message="agent factory unavailable; turn aborted")
+                complete()
+                return
+            agent = await build_agent_for_session(session)
             async for event in agent.run_stream(session_id, text, verbose=False):
                 if event.type == "text":
-                    emit("message.delta", text=event.content)
+                    safe = _turn_redactor.feed(event.content or "")
+                    if safe:
+                        emit("message.delta", text=safe)
                 elif event.type == "tool_call":
                     tool_count += 1
                     # AH-020: prefer the agent's stable call ID so out-of-order
@@ -638,6 +673,15 @@ class Gateway:
             for _rid, _fut in list(self._pending_approvals.items()):
                 if not _fut.done():
                     _fut.cancel()
+            # Join background learning reviews BEFORE closing the owned
+            # provider they read through; then close owned providers only.
+            if agent is not None:
+                try:
+                    await asyncio.gather(
+                        *getattr(agent, "_learning_tasks", ()), return_exceptions=True
+                    )
+                except Exception:
+                    pass
             # AH-023: close only owned providers; shared/injected factories
             # (tests) must not be closed here.
             if agent is not None:
@@ -661,6 +705,16 @@ class Gateway:
                         pass
             if self._turns.get(sid) is asyncio.current_task():
                 del self._turns[sid]
+            # Owner-token release on EVERY exit (success/failure/cancel/timeout).
+            # Stale-safe: only this turn's token clears its own claim.
+            try:
+                from ah.core.turns import end_turn as _end_turn
+
+                token = self._turn_tokens.pop(sid, None)
+                if token:
+                    await _end_turn(session_id, token)
+            except Exception:
+                pass
         complete(final)
         # Phase C: threshold-triggered auto-compaction at the safe turn
         # boundary (ownership released above). Bounded fire-and-forget.

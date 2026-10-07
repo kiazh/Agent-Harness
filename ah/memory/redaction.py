@@ -334,40 +334,190 @@ def redact_secrets(text: str) -> RedactionResult:
     return _default_redactor.redact(text)
 
 
-# Maximum tail to hold back for boundary-safe streaming redaction. Must cover
-# the longest supported secret format (github_pat up to 255 chars + PEM
-# blocks). 512 chars is a conservative bound; longer secrets (multi-KB PEM)
-# are handled by the final flush which redacts the whole buffered remainder.
-STREAM_TAIL_CHARS = 512
+# Streaming redaction policy (5.1 corrective rewrite).
+#
+# Invariant: no bytes belonging to a recognized secret are emitted. The old
+# implementation split RAW text at len-TAIL before matching, so a secret
+# crossing the cut was redacted as two non-matching fragments and leaked in
+# full (reproduced: "sk-" + 24 chars + 486 padding emitted the whole key).
+#
+# New design: never split before matching. Each feed computes the safe
+# frontier — the earliest buffer index where a *partial* secret could begin
+# and extend past the current end — using end-anchored prefix patterns for
+# every supported format. Only text before the frontier is emitted (fully
+# redacted; complete matches inside it are removed). Everything from the
+# frontier on is withheld until more deltas arrive or flush() redacts it
+# whole. Bounded by construction: every partial pattern has an explicit max
+# length except PEM blocks, which are capped separately (line-frontier
+# fallback). Formats and bounds are documented below, not "perfect".
+STREAM_TAIL_CHARS = 512  # kept for backwards compat; see MAX_PARTIAL_HOLD
+MAX_PARTIAL_HOLD = 1024
+MAX_BUFFERED_PEM = 32 * 1024
+
+# End-anchored partial patterns: each matches a PREFIX of a valid secret that
+# reaches the buffer end. Leftmost start across all patterns = frontier.
+_PARTIAL_RES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9]{0,200}$"),
+    re.compile(r"(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9\-_]{0,200}$"),
+    re.compile(r"(?<![A-Za-z0-9])sk-or-[A-Za-z0-9\-_]{0,200}$"),
+    re.compile(r"(?<![A-Za-z0-9])ghp_[A-Za-z0-9]{0,36}$"),
+    re.compile(r"(?<![A-Za-z0-9])gho_[A-Za-z0-9]{0,36}$"),
+    re.compile(r"(?<![A-Za-z0-9])ghs_[A-Za-z0-9]{0,36}$"),
+    re.compile(r"(?<![A-Za-z0-9])ghu_[A-Za-z0-9]{0,36}$"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{0,255}$"),
+    re.compile(r"(?<![A-Z0-9])AKIA[0-9A-Z]{0,16}$"),
+    re.compile(r"xox[baprs]-[A-Za-z0-9\-]{0,200}$"),
+    re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]{0,500}$", re.IGNORECASE),
+    re.compile(r"(?:password|passwd|pwd)\s*[=:]\s*['\"]?[^\s'\"]{0,200}$", re.IGNORECASE),
+    re.compile(
+        r"(?:secret|token|api_key|apikey|access_key|cohere_api_key|aws_secret_access_key|aws_secret_key)"
+        r"\s*[=:]\s*['\"]?[A-Za-z0-9\-_/+=]{0,300}$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^@\s]{0,300}$"),
+    re.compile(r"eyJ[A-Za-z0-9_.\-/+=]{0,1200}$"),
+    # Bare base64 / digit runs have no lead: the frontier scan handles them
+    # below with content checks (digit/symbol presence) so ordinary trailing
+    # words flush immediately while secret-like runs are withheld.
+    re.compile(r"(?:(?<=[^A-Za-z0-9/+=])|^)[A-Za-z0-9/+=]{8,39}$"),
+)
+
+_PEM_BEGIN_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+_PEM_END_RE = re.compile(r"-----END [A-Z ]*PRIVATE KEY-----")
+_CC_RUN_RE = re.compile(r"[\d -]{6,40}$")
+
+
+# Short-tail rule: a tiny trailing fragment ("s", "sk", "ghu") is not yet
+# recognizable as a partial secret but could combine with the next delta to
+# rebuild one. Withhold a trailing run (bounded 64 chars) when it is an exact
+# prefix of a known secret lead or contains a digit/symbol that could grow
+# into a bare secret. Ordinary words flush immediately.
+_LEADS = (
+    "sk-",
+    "sk-ant-",
+    "sk-or-",
+    "ghp_",
+    "gho_",
+    "ghs_",
+    "ghu_",
+    "github_pat_",
+    "akia",
+    "xoxb-",
+    "xoxa-",
+    "xoxp-",
+    "xoxr-",
+    "xoxs-",
+    "bearer",
+    "eyj",
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "access_key",
+    "cohere_api_key",
+    "aws_secret_access_key",
+    "aws_secret_key",
+    "postgres",
+    "postgresql",
+    "mysql",
+    "mongodb",
+    "redis",
+)
+_LEAD_PREFIXES = frozenset(p[:i] for p in _LEADS for i in range(1, len(p) + 1))
+_SHORT_TAIL_RE = re.compile(r"[A-Za-z0-9/+=]{1,64}$")
+
+
+def _short_tail_hold(buf: str) -> int:
+    m = _SHORT_TAIL_RE.search(buf)
+    if not m:
+        return len(buf)
+    run = m.group(0)
+    # Only a run that starts at a boundary; mid-run cuts are already covered
+    # by the partial table above.
+    if m.start() > 0 and buf[m.start() - 1].isalnum():
+        return len(buf)
+    low = run.lower()
+    if low in _LEAD_PREFIXES:
+        return m.start()
+    if any(c.isdigit() or c in "+/=" for c in run):
+        return m.start()
+    return len(buf)
+
+
+def _stream_frontier(buf: str) -> int:
+    """Return the earliest index that must be withheld (len(buf) if none)."""
+    frontier = len(buf)
+    for rx in _PARTIAL_RES[:-1]:
+        m = rx.search(buf)
+        if m and m.start() < frontier:
+            frontier = m.start()
+            if frontier == 0:
+                return 0
+    # Bare base64 runs: withhold only secret-like trailing runs (contain a
+    # digit or +/=, or all-caps); ordinary lowercase words flush at once.
+    m = _PARTIAL_RES[-1].search(buf)
+    if m:
+        run = m.group(0)
+        if (
+            any(c.isdigit() or c in "+/=" for c in run) or (run.isupper() and len(run) >= 8)
+        ) and m.start() < frontier:
+            frontier = m.start()
+            if frontier == 0:
+                return 0
+    # Credit-card / SSN digit runs: only when the trailing run holds digits
+    # that could reach a valid length.
+    m = _CC_RUN_RE.search(buf)
+    if m:
+        digits = sum(c.isdigit() for c in m.group(0))
+        if digits >= 4 and m.start() < frontier:
+            frontier = m.start()
+    # PEM: withhold an open block until its END (capped; line fallback).
+    for b in _PEM_BEGIN_RE.finditer(buf):
+        tail = buf[b.start() :]
+        if not _PEM_END_RE.search(tail):
+            if b.start() < frontier:
+                frontier = b.start()
+            break
+    # Short ambiguous tail (single-char fragments that later deltas could
+    # complete into a secret).
+    short = _short_tail_hold(buf)
+    if short < frontier:
+        frontier = short
+    if frontier < len(buf) - MAX_BUFFERED_PEM:
+        # Pathological open block: emit redacted complete lines only. A PEM
+        # body line is base64; full lines are removed by the bare-secret
+        # pattern, so a line frontier cannot leak a complete line.
+        cut = buf.rfind("\n", 0, len(buf) - MAX_BUFFERED_PEM)
+        if cut > frontier:
+            frontier = cut + 1
+    return frontier
 
 
 class StreamingSecretRedactor:
-    """Boundary-safe redactor for streamed text deltas.
+    """Boundary-safe redactor for streamed text deltas (rewritten 5.1).
 
-    Each delta is NOT redacted independently (a secret split across two
-    deltas would leak). Instead we buffer, emit only the safe prefix
-    ``buffer[:-TAIL]`` redacted, and hold back the last TAIL chars which may
-    contain a partial secret. :meth:`flush` redacts and returns the remainder.
-
-    Honest limitation: regex redaction cannot guarantee perfect removal of
-    arbitrarily long secrets (e.g. multi-KB PEM blocks) split across many
-    deltas without unbounded buffering. The tail bound covers all bounded
-    formats; the flush step redacts whatever remains once the stream ends.
+    Feed deltas; only the safe frontier (no partial secret crosses it) is
+    emitted, fully redacted. The withheld suffix is retained until further
+    deltas resolve it or :meth:`flush` redacts it whole. Byte-bounded
+    buffering; see policy table above for per-format bounds.
     """
 
     def __init__(self, tail: int = STREAM_TAIL_CHARS) -> None:
-        self._tail = max(1, tail)
+        self._max_hold = max(64, tail)
         self._buf = ""
 
     def feed(self, delta: str) -> str:
-        """Add *delta*, return the newly-safe redacted prefix (may be empty)."""
+        """Add *delta*, return newly-safe redacted output (may be empty)."""
         if not delta:
             return ""
         self._buf += delta
-        if len(self._buf) <= self._tail:
+        frontier = _stream_frontier(self._buf)
+        if frontier <= 0:
             return ""
-        safe = self._buf[: -self._tail]
-        self._buf = self._buf[-self._tail :]
+        safe, self._buf = self._buf[:frontier], self._buf[frontier:]
         return redact_secrets(safe).text
 
     def flush(self) -> str:

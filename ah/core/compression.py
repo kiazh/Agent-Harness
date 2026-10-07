@@ -477,13 +477,24 @@ class ContextCompressor:
 
         groups.sort(key=group_priority, reverse=True)
 
-        # Select groups that fit within target budget
-        target_tokens = int(sum(c.token_count for c in chunks) * self.config.target_ratio)
+        # Select groups that fit within target budget. Budgets count the FINAL
+        # serialized representation (5.7): effective tokens fall back to the
+        # real tokenizer when stored counts are 0/underestimated, and per-field
+        # minima keep tool protocol structure intact.
+        def _effective(c: ContextChunk) -> int:
+            if c.token_count and c.token_count > 0:
+                return c.token_count
+            try:
+                return max(1, get_token_count(str(c.payload)))
+            except Exception:
+                return 1
+
+        target_tokens = int(sum(_effective(c) for c in chunks) * self.config.target_ratio)
         selected: list[ContextChunk] = []
         current_tokens = 0
 
         for g in groups:
-            g_tokens = sum(chunks[i].token_count for i in g)
+            g_tokens = sum(_effective(chunks[i]) for i in g)
             if current_tokens + g_tokens <= target_tokens:
                 for i in sorted(g):
                     selected.append(chunks[i])
@@ -491,13 +502,13 @@ class ContextCompressor:
             else:
                 # Try to truncate the group as a unit within remaining budget.
                 remaining = target_tokens - current_tokens
-                if remaining > 50:  # Only if we have meaningful space
+                if remaining > 0:
                     # Split remaining evenly across group members.
-                    per = max(50, remaining // len(g))
+                    per = max(1, remaining // len(g))
                     truncated_group = []
                     for i in sorted(g):
                         t = self._truncate_chunk(chunks[i], per)
-                        if t:
+                        if t is not None:
                             truncated_group.append(t)
                     # Only keep the group if ALL members fit (atomicity).
                     t_tokens = sum(t.token_count for t in truncated_group)
@@ -523,20 +534,31 @@ class ContextCompressor:
         return selected
 
     def _truncate_chunk(self, chunk: ContextChunk, max_tokens: int) -> ContextChunk | None:
-        """Truncate a chunk's payload to fit within max_tokens (AH-013/AH-014).
+        """Truncate a chunk's payload to fit within max_tokens (AH-013/AH-014, 5.7).
 
         Uses tokenizer-based truncation (not 4-chars-per-token) and verifies
-        the final serialized payload fits. Clears the embedding when content
-        changes so vector semantics cannot disagree with stored text.
+        the FINAL serialized representation fits, wrapper overhead included.
+        Tool protocol fields (tool/call identity, result keys) are preserved —
+        truncation shrinks values in place and never rewrites a call into an
+        arbitrary ``{"content": ...}`` blob. Impossible budgets (<= 0, or
+        smaller than the empty-payload overhead) return None: a defined
+        no-fit result, never an oversized payload labeled guaranteed. Clears
+        the embedding when content changes (AH-014).
         """
         from ah.core.assembler import TokenCounter as _TC
 
+        if max_tokens <= 0:
+            return None
         counter = _TC()
+        # Tool protocol chunks keep their shape: truncate values, keep keys.
+        is_tool = chunk.chunk_type in ("tool_call", "result")
         # Deep copy so nested dict truncation never aliases the original chunk.
         payload = copy.deepcopy(chunk.payload)
         truncated = False
 
         def _truncate_str(s: str, budget_tokens: int) -> str:
+            if budget_tokens <= 0:
+                return ""
             if get_token_count(s) <= budget_tokens:
                 return s
             return counter.truncate(s, budget_tokens)
@@ -549,51 +571,78 @@ class ContextCompressor:
             value = payload[key]
             if get_token_count(value) > per_field:
                 payload[key] = _truncate_str(value, per_field)
-                # Mark ellipsis without breaking the token bound.
-                if not payload[key].endswith("..."):
-                    # Re-truncate to make room for the marker.
-                    payload[key] = (
-                        counter.truncate(payload[key], max(1, per_field - 1)) + "..."
-                        if per_field > 1
-                        else "..."
-                    )
                 truncated = True
-            elif isinstance(value, dict):
-                pass
         for key, value in payload.items():
             if isinstance(value, dict):
                 for k2, v2 in list(value.items()):
                     if isinstance(v2, str) and get_token_count(v2) > per_field:
                         value[k2] = _truncate_str(v2, per_field)
                         truncated = True
+            elif isinstance(value, list):
+                # Nested lists/maps: truncate string leaves in place.
+                for item in value:
+                    if isinstance(item, dict):
+                        for k3, v3 in list(item.items()):
+                            if isinstance(v3, str) and get_token_count(v3) > per_field:
+                                item[k3] = _truncate_str(v3, per_field)
+                                truncated = True
 
-        if not truncated and chunk.token_count <= max_tokens:
-            return chunk
+        if not truncated:
+            try:
+                current = get_token_count(str(payload))
+            except Exception:
+                current = max_tokens + 1
+            if current <= max_tokens:
+                return chunk
+            truncated = True  # needs shrinking below
 
         new_tokens = get_token_count(str(payload))
         if new_tokens > max_tokens:
-            # Still too big: truncate the serialized representation with the
-            # real tokenizer until it fits (bounded loop, AH-013).
-            text = str(payload)
-            for _ in range(5):
-                text = counter.truncate(text, max_tokens)
-                payload = {"content": text}
-                new_tokens = get_token_count(str(payload))
-                if new_tokens <= max_tokens:
-                    break
+            if is_tool:
+                # Preserve protocol: drop bulky previews first, keep identity.
+                slim = copy.deepcopy(payload)
+                for drop_key in ("result_preview", "result", "content"):
+                    if drop_key in slim and isinstance(slim[drop_key], str):
+                        slim[drop_key] = ""
+                        if get_token_count(str(slim)) <= max_tokens:
+                            payload = slim
+                            new_tokens = get_token_count(str(payload))
+                            truncated = True
+                            break
+                if new_tokens > max_tokens:
+                    return None  # no-fit: identity would not survive
             else:
-                # Last resort: hard cut that is guaranteed to fit for any
-                # script (CJK/symbols/digits/nested payloads).
-                raw = str(payload).encode("utf-8", errors="ignore")[: max(1, max_tokens)]
-                payload = {"content": raw.decode("utf-8", errors="ignore")}
+                # Reserve wrapper overhead first, then budget content fields
+                # against the remainder (5.7: count the final serialized
+                # representation, not just field values).
+                try:
+                    skeleton = {k: ("" if isinstance(v, str) else v) for k, v in payload.items()}
+                    overhead = get_token_count(str(skeleton))
+                except Exception:
+                    overhead = 5
+                content_budget = max_tokens - overhead
+                if content_budget < 1:
+                    return None  # defined no-fit: overhead alone exceeds budget
+                fields = [k for k, v in payload.items() if isinstance(v, str) and v]
+                if not fields:
+                    return None
+                per = max(1, content_budget // len(fields))
+                for k in fields:
+                    payload[k] = _truncate_str(payload[k], per)
+                truncated = True
                 new_tokens = get_token_count(str(payload))
-            truncated = True
+                if new_tokens > max_tokens:
+                    # One last proportional squeeze; else admit no-fit.
+                    per2 = max(1, per - (new_tokens - max_tokens) // len(fields) - 1)
+                    for k in fields:
+                        payload[k] = _truncate_str(payload[k], per2)
+                    new_tokens = get_token_count(str(payload))
+                    if new_tokens > max_tokens:
+                        return None
 
         # Final guarantee: never return a chunk exceeding the bound.
         if get_token_count(str(payload)) > max_tokens:
-            payload = {"content": counter.truncate(str(payload), max_tokens)}
-            new_tokens = get_token_count(str(payload))
-            truncated = True
+            return None
 
         return ContextChunk(
             id=chunk.id,

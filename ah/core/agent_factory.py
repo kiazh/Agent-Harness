@@ -48,6 +48,10 @@ def _shared_rag_pipeline():
         return None
 
 
+class AgentDefinitionError(Exception):
+    """Raised when a requested specialist definition cannot be resolved."""
+
+
 async def build_agent_for_session(
     session: Session,
     *,
@@ -61,17 +65,34 @@ async def build_agent_for_session(
     (``{"max_mode": ..., "tools": [...]}``). Child effective
     authority never exceeds parent caps nor its own definition (enforced by
     callers via :func:`cap_child_authority`).
+
+    Fail-closed (5.4): a requested NON-default specialist whose definition
+    cannot be resolved (lookup error, unknown/deleted name, malformed row)
+    raises AgentDefinitionError — never broad all-tool access. Only the
+    general-purpose default (``harness``) falls back to unrestricted tools.
+    Full-host user grants never widen a restrictive child definition.
     """
     from ah.core.agent import ReActAgent
     from ah.core.agent_def import agent_registry
     from ah.core.config import config
     from ah.core.provider import get_provider
 
-    definition = None
+    requested = session.agent_id or "harness"
     try:
-        definition = await agent_registry.get(session.agent_id)
-    except Exception:
+        definition = await agent_registry.get(requested)
+    except Exception as e:
+        if requested != "harness":
+            raise AgentDefinitionError(f"agent definition {requested!r} unavailable: {e}") from e
         definition = None
+    if definition is None and requested != "harness":
+        # Unknown/deleted specialist: controlled failure, not general access.
+        # Built-ins are resolved deliberately (no blind all-tool default).
+        from ah.core.agent_def import BUILTIN_AGENTS
+
+        builtin = BUILTIN_AGENTS.get(requested)
+        if builtin is None:
+            raise AgentDefinitionError(f"unknown agent {requested!r}")
+        definition = builtin
 
     if definition is not None:
         provider_name = (

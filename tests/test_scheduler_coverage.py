@@ -1,4 +1,5 @@
 """Additional scheduler tests to reach 90%+ coverage (Gate 3)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -247,13 +248,13 @@ async def test_run_due_once_handles_cancelled_error(monkeypatch):
     store.finish = AsyncMock()
     runner = JobRunner(store=store)
 
-    async def cancel_execute(j):
+    async def cancel_execute(j, ownership_lost=None):
         raise asyncio.CancelledError()
 
     runner._execute = cancel_execute
     with pytest.raises(asyncio.CancelledError):
         await runner.run_due_once()
-    store.finish.assert_awaited_with(job.id, error="cancelled")
+    store.finish.assert_awaited_with(job.id, error="cancelled", claim_token=None)
 
 
 async def test_keep_lease_renews_periodically(monkeypatch):

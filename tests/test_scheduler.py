@@ -149,7 +149,9 @@ class TestJobStore:
         # Already running: our job cannot be claimed again.
         assert await _claim_specific(job.id) is None
 
-        await job_store.finish(job.id)
+        # Strict fencing: the exact claim token is required to finish claimed work.
+        assert await job_store.finish(job.id) is False
+        assert await job_store.finish(job.id, claim_token=claimed.claim_token) is True
         done = await job_store.get(job.id)
         # finish() reschedules from the real wall clock (now + interval).
         assert done.status == "idle" and done.run_count == 1

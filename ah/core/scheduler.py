@@ -284,11 +284,12 @@ class JobStore:
     async def renew_lease(self, job_id: uuid.UUID, claim_token: uuid.UUID | None = None) -> bool:
         """Keep an active run from being reclaimed while it is executing.
 
-        Fencing (AH-026): single transaction — SELECT ... FOR UPDATE, return
-        False unless status is still 'running' AND the claim token matches
-        (when tokens are in use). The enabled flag is intentionally not
-        checked: a job disabled mid-run keeps its lease until finish() so two
-        runners cannot both own it.
+        Strict fencing (5.5): a token-owned running row requires the EXACT
+        claim token. A missing token is never compatibility authorization for
+        claimed work — it is rejected. Unclaimed idle rows (legacy/admin,
+        token NULL) still accept token-less renewal. The enabled flag is
+        intentionally not checked: a job disabled mid-run keeps its lease
+        until finish() so two runners cannot both own it.
         """
         async with db.acquire() as conn:
             async with conn.transaction():
@@ -298,21 +299,19 @@ class JobStore:
                 )
                 if row is None or row["status"] != "running":
                     return False
-                if claim_token is not None:
-                    try:
-                        current = row["claim_token"]
-                    except Exception:
-                        current = None
-                    # Tokens in use: a mismatch means a newer claim owns the
-                    # job — the stale owner must stop.
-                    if current is not None and current != claim_token:
-                        return False
+                try:
+                    current = row["claim_token"]
+                except Exception:
+                    current = None
+                if current is not None and claim_token != current:
+                    # Stale owner or missing token on claimed work → reject.
+                    return False
                 result = await conn.execute(
                     """
                     UPDATE jobs
                     SET next_run_at = now() + ($2 * interval '1 second')
                     WHERE id = $1 AND status = 'running'
-                    AND (claim_token IS NULL OR claim_token = $3 OR $3 IS NULL)
+                    AND (claim_token = $3 OR (claim_token IS NULL AND $3 IS NULL))
                     """,
                     job_id,
                     RUN_LEASE_SECONDS,
@@ -387,18 +386,19 @@ class JobStore:
                 )
                 if job_row is None or job_row["status"] not in ("idle", "running"):
                     return False
-                # AH-026: stale owners cannot finish a newer claim.
-                if claim_token is not None:
-                    try:
-                        current = job_row["claim_token"]
-                    except Exception:
-                        current = None
-                    if (
-                        job_row["status"] == "running"
-                        and current is not None
-                        and current != claim_token
-                    ):
-                        return False
+                # Strict fencing (5.5): a token-owned running row requires the
+                # exact token. Missing token on claimed work is rejected;
+                # unclaimed idle rows accept the token-less admin path.
+                try:
+                    current = job_row["claim_token"]
+                except Exception:
+                    current = None
+                if (
+                    job_row["status"] == "running"
+                    and current is not None
+                    and claim_token != current
+                ):
+                    return False
                 job = _row_to_job(job_row)
                 db_now = await conn.fetchval("SELECT now()")
                 next_run = (
@@ -416,7 +416,7 @@ class JobStore:
                         next_run_at = CASE WHEN kind = 'cron' THEN $4
                             ELSE now() + (interval_seconds || ' seconds')::interval END
                     WHERE id = $1 AND status IN ('idle', 'running')
-                    AND (claim_token IS NULL OR claim_token = $5 OR $5 IS NULL)
+                    AND (claim_token = $5 OR (claim_token IS NULL AND $5 IS NULL))
                     """,
                     job_id,
                     "error" if error else "idle",
@@ -477,43 +477,71 @@ class JobRunner:
         if job is None:
             return False
         error: str | None = None
-        # AH-026: carry the claim token; a lost lease aborts the execution.
+        # Carry the claim token; loss of ownership cancels the effect task.
         claim_token = getattr(job, "claim_token", None)
         ownership_lost = asyncio.Event()
         lease_task = asyncio.create_task(self._keep_lease(job.id, claim_token, ownership_lost))
+        exec_task: asyncio.Task | None = None
         try:
-            # AH-027: whole-job timeout so a hung provider cannot monopolize
-            # the serial runner indefinitely. Bounded at RUN_LEASE_SECONDS
-            # (default 300s); at-least-once effects must be idempotent.
-            try:
-                await asyncio.wait_for(
-                    self._execute(job, ownership_lost),
-                    timeout=float(RUN_LEASE_SECONDS),
-                )
-            except TimeoutError:
+            # Whole-job timeout so a hung provider cannot monopolize the
+            # serial runner. At-least-once effects must be idempotent; the
+            # token fence (not the timeout) decides whose outcome commits.
+            exec_task = asyncio.create_task(self._execute(job, ownership_lost))
+            loss_wait = asyncio.create_task(ownership_lost.wait())
+            done, _ = await asyncio.wait(
+                {exec_task, loss_wait},
+                timeout=float(RUN_LEASE_SECONDS),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                exec_task.cancel()
+                try:
+                    await exec_task
+                except (asyncio.CancelledError, Exception):
+                    pass
                 error = f"job timed out after {RUN_LEASE_SECONDS}s"
                 logger.warning("Job %s (%s) timed out", job.name, job.id)
+            elif loss_wait in done and not exec_task.done():
+                # Ownership lost while effects were active: cancel and join.
+                exec_task.cancel()
+                try:
+                    await exec_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                error = "ownership lost; execution cancelled"
+                logger.warning("Job %s (%s) lost ownership; cancelled", job.name, job.id)
+            else:
+                loss_wait.cancel()
+                try:
+                    await exec_task
+                except asyncio.CancelledError:
+                    error = "cancelled"
+                    raise
+                except Exception as e:
+                    logger.exception("Job %s (%s) failed", job.name, job.id)
+                    error = f"{type(e).__name__}: {e}"
         except asyncio.CancelledError:
+            if exec_task is not None and not exec_task.done():
+                exec_task.cancel()
+                try:
+                    await exec_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             error = "cancelled"
             raise
-        except Exception as e:
-            logger.exception("Job %s (%s) failed", job.name, job.id)
-            error = f"{type(e).__name__}: {e}"
         finally:
             lease_task.cancel()
             await asyncio.gather(lease_task, return_exceptions=True)
-            # Cancellation-aware cleanup (AH-026): pass the token so a stale
-            # worker cannot finish a newer claim. If ownership was lost, do
-            # not overwrite the newer owner's outcome.
-            if ownership_lost.is_set():
-                logger.warning("Job %s (%s) lost ownership; skipping finish", job.name, job.id)
-            else:
-                try:
-                    await self._store.finish(job.id, error=error, claim_token=claim_token)
-                except TypeError:
-                    # Backwards compat with test doubles whose finish() lacks
-                    # claim_token.
-                    await self._store.finish(job.id, error=error)
+            # Stale workers never overwrite a newer owner's outcome: finish
+            # with the exact token (rejected when fencing moved on).
+            try:
+                await self._store.finish(job.id, error=error, claim_token=claim_token)
+            except TypeError:
+                # Narrow compat: only non-JobStore test doubles lack the token
+                # parameter. Production errors must surface, not bypass fencing.
+                if isinstance(self._store, JobStore):
+                    raise
+                await self._store.finish(job.id, error=error)
         return True
 
     async def _keep_lease(
@@ -522,18 +550,27 @@ class JobRunner:
         claim_token: uuid.UUID | None = None,
         ownership_lost: asyncio.Event | None = None,
     ) -> None:
+        failures = 0
         while True:
             await asyncio.sleep(RUN_LEASE_SECONDS / 3)
             try:
                 try:
                     renewed = await self._store.renew_lease(job_id, claim_token)
                 except TypeError:
+                    if isinstance(self._store, JobStore):
+                        raise
                     renewed = await self._store.renew_lease(job_id)
             except Exception:
-                logger.exception("Could not renew lease for job %s", job_id)
+                # Uncertain lease state: do NOT keep issuing effects
+                # indefinitely. Two consecutive failures end ownership.
+                failures += 1
+                logger.exception("Could not renew lease for job %s (%d/2)", job_id, failures)
+                if failures >= 2:
+                    if ownership_lost is not None:
+                        ownership_lost.set()
+                    return
                 continue
-            # AH-026: abort execution on ownership loss instead of ignoring
-            # False from renewal.
+            failures = 0
             if not renewed:
                 logger.warning("Lost lease for job %s; aborting execution", job_id)
                 if ownership_lost is not None:
@@ -545,66 +582,81 @@ class JobRunner:
             raise RuntimeError("job has no session")
         if ownership_lost is not None and ownership_lost.is_set():
             raise RuntimeError("job ownership lost before execution")
-        if getattr(job, "no_agent", False):
-            from ah.core.assembler import get_token_count
-            from ah.core.context import context_manager
-            from ah.core.job_scripts import run_job_script
-            from ah.memory.redaction import redact_secrets
+        # Coordinate with user turns: claim the session turn so a scheduled
+        # run never interleaves with an active user turn (fresh fenced claim;
+        # busy sessions reschedule via finish()).
+        from ah.core.turns import end_turn as _end_job_turn
+        from ah.core.turns import try_begin_turn as _begin_job_turn
 
-            output = redact_secrets(await run_job_script(job.script_path or "")).text
-            if output:
-                await context_manager.add_chunk(
-                    session_id=job.session_id,
-                    agent_id=job.agent_name,
-                    chunk_type="result",
-                    payload={"content": output, "job_id": str(job.id)},
-                    token_count=get_token_count(output),
-                )
-            return
-        prompt = job.prompt or DEFAULT_HEARTBEAT_PROMPT
-        agent = await self._build_agent(
-            job.agent_name,
-            model=getattr(job, "model", None),
-            provider=getattr(job, "provider", None),
-        )
-        # AH-023: close owned providers in finally; injected test factories
-        # manage their own lifecycle.
-        owns_provider = self._agent_factory is None
+        job_turn = await _begin_job_turn(job.session_id)
+        if not job_turn:
+            raise RuntimeError("session turn busy; job rescheduled")
         try:
-            # Check ownership loss before the (potentially long) agent run.
-            if ownership_lost is not None and ownership_lost.is_set():
-                raise RuntimeError("job ownership lost")
-            response = await agent.run(job.session_id, prompt, verbose=False)
-            # Headless jobs never hang on hidden prompts (Phase E): a tool
-            # awaiting human approval surfaces as a structured needs_approval
-            # result. Pause durably with a resumable status and free the
-            # worker/lease instead of renewing indefinitely.
-            try:
-                blob = (response.content or "") + str(
-                    [t.get("result_preview", "") for t in response.tool_calls]
-                )
-                if "Needs approval" in blob or "needs_approval" in blob:
-                    raise PermissionError(
-                        "needs_approval: job paused awaiting human approval; "
-                        "resolve via approvals then resume (fresh claim revalidates)."
-                    )
-            except PermissionError:
-                raise
-            except Exception:
-                pass
-        finally:
-            if owns_provider:
-                try:
-                    prov = getattr(agent, "provider", None)
-                    close = getattr(prov, "close", None)
-                    if callable(close):
-                        import inspect as _inspect
+            if getattr(job, "no_agent", False):
+                from ah.core.assembler import get_token_count
+                from ah.core.context import context_manager
+                from ah.core.job_scripts import run_job_script
+                from ah.memory.redaction import redact_secrets
 
-                        r = close()
-                        if _inspect.isawaitable(r):
-                            await r
+                output = redact_secrets(await run_job_script(job.script_path or "")).text
+                if output:
+                    await context_manager.add_chunk(
+                        session_id=job.session_id,
+                        agent_id=job.agent_name,
+                        chunk_type="result",
+                        payload={"content": output, "job_id": str(job.id)},
+                        token_count=get_token_count(output),
+                    )
+                return
+            prompt = job.prompt or DEFAULT_HEARTBEAT_PROMPT
+            agent = await self._build_agent(
+                job.agent_name,
+                model=getattr(job, "model", None),
+                provider=getattr(job, "provider", None),
+            )
+            # AH-023: close owned providers in finally; injected test factories
+            # manage their own lifecycle.
+            owns_provider = self._agent_factory is None
+            try:
+                # Check ownership loss before the (potentially long) agent run.
+                if ownership_lost is not None and ownership_lost.is_set():
+                    raise RuntimeError("job ownership lost")
+                response = await agent.run(job.session_id, prompt, verbose=False)
+                # Headless jobs never hang on hidden prompts (Phase E): a tool
+                # awaiting human approval surfaces as a structured needs_approval
+                # result. Pause durably with a resumable status and free the
+                # worker/lease instead of renewing indefinitely.
+                try:
+                    blob = (response.content or "") + str(
+                        [t.get("result_preview", "") for t in response.tool_calls]
+                    )
+                    if "Needs approval" in blob or "needs_approval" in blob:
+                        raise PermissionError(
+                            "needs_approval: job paused awaiting human approval; "
+                            "resolve via approvals then resume (fresh claim revalidates)."
+                        )
+                except PermissionError:
+                    raise
                 except Exception:
                     pass
+            finally:
+                if owns_provider:
+                    try:
+                        prov = getattr(agent, "provider", None)
+                        close = getattr(prov, "close", None)
+                        if callable(close):
+                            import inspect as _inspect
+
+                            r = close()
+                            if _inspect.isawaitable(r):
+                                await r
+                    except Exception:
+                        pass
+        finally:
+            try:
+                await _end_job_turn(job.session_id, job_turn)
+            except Exception:
+                pass
 
     async def _build_agent(
         self, agent_name: str, *, model: str | None = None, provider: str | None = None

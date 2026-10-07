@@ -152,14 +152,18 @@ class ContextManager:
         limit: int = 50,
         offset: int = 0,
     ) -> list[ContextChunk]:
-        """Get context chunks for a session, newest first."""
+        """Get context chunks for a session, newest first.
+
+        Deterministic tie order (created_at DESC, id DESC) so timestamp ties
+        never scramble conversations or pagination.
+        """
         if chunk_type:
             rows = await db.fetch(
                 """
                 SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
                 FROM context_chunks
                 WHERE session_id = $1 AND chunk_type = $2
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT $3 OFFSET $4
                 """,
                 session_id,
@@ -173,7 +177,7 @@ class ContextManager:
                 SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
                 FROM context_chunks
                 WHERE session_id = $1
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT $2 OFFSET $3
                 """,
                 session_id,
@@ -182,22 +186,89 @@ class ContextManager:
             )
         return [self._row_to_chunk(r) for r in rows]
 
+    async def get_chunks_before(
+        self,
+        session_id: uuid.UUID,
+        *,
+        limit: int = 500,
+        before_time=None,
+        before_id: uuid.UUID | None = None,
+        chunk_type: str | None = None,
+    ) -> list[ContextChunk]:
+        """Keyset page: rows strictly older than (before_time, before_id).
+
+        Cursor-based pagination is stable under concurrent inserts/deletes:
+        new rows sort before the cursor and never duplicate into later pages;
+        deleted rows are simply absent. NULL created_at sorts with the epoch
+        floor, matching the eviction index.
+        """
+        if chunk_type:
+            rows = await db.fetch(
+                """
+                SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
+                FROM context_chunks
+                WHERE session_id = $1 AND chunk_type = $2
+                  AND ($3::timestamptz IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
+                       < ($3, $4::uuid))
+                ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) DESC, id DESC
+                LIMIT $5
+                """,
+                session_id,
+                chunk_type,
+                before_time,
+                before_id,
+                limit,
+            )
+        else:
+            rows = await db.fetch(
+                """
+                SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
+                FROM context_chunks
+                WHERE session_id = $1
+                  AND ($2::timestamptz IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
+                       < ($2, $3::uuid))
+                ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) DESC, id DESC
+                LIMIT $4
+                """,
+                session_id,
+                before_time,
+                before_id,
+                limit,
+            )
+        return [self._row_to_chunk(r) for r in rows]
+
     async def get_all_chunks(self, session_id: uuid.UUID) -> list[ContextChunk]:
         """Fetch every active chunk for *session_id* (newest first).
 
-        Paginated (AH-008) so compression never silently drops rows beyond
-        the first 1000.
+        Keyset snapshot (5.7): pages by (created_at, id) cursor, dedupes by
+        id, and returns exactly the validated input snapshot. Callers replace
+        only these IDs, so concurrent inserts survive and competing
+        compression cannot insert a stale summary twice for the same rows
+        without detection (id-set comparison at the caller).
         """
         all_chunks: list[ContextChunk] = []
-        offset = 0
+        seen: set[uuid.UUID] = set()
+        before_time = None
+        before_id: uuid.UUID | None = None
         while True:
-            page = await self.get_chunks(session_id, limit=500, offset=offset)
+            page = await self.get_chunks_before(
+                session_id, limit=500, before_time=before_time, before_id=before_id
+            )
             if not page:
                 break
-            all_chunks.extend(page)
+            fresh = [c for c in page if c.id not in seen]
+            # Duplicate/missing-page detection: a page made only of seen ids
+            # signals churn; stop rather than looping forever.
+            if not fresh:
+                break
+            for c in fresh:
+                seen.add(c.id)
+            all_chunks.extend(fresh)
             if len(page) < 500:
                 break
-            offset += len(page)
+            last = page[-1]
+            before_time = last.created_at
+            before_id = last.id
         return all_chunks
 
     async def get_recent_context(

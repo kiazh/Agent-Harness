@@ -162,6 +162,125 @@ def test_child_authority_capped():
     assert cap_child_authority({}, ["a"]) == ["a"]
 
 
+def test_unresolvable_specialist_fails_closed():
+    """5.4 failure fixture: lookup raise → controlled error, never all-tools."""
+    import asyncio
+
+    from ah.core import agent_factory as fac
+    from ah.core.agent_def import agent_registry
+    from ah.core.models import Session
+
+    async def _boom(name):
+        raise RuntimeError("db down")
+
+    real = agent_registry.get
+    agent_registry.get = _boom  # type: ignore[method-assign]
+    try:
+        with pytest.raises(Exception):
+            asyncio.run(
+                fac.build_agent_for_session(Session(id=uuid.uuid4(), agent_id="researcher"))
+            )
+    finally:
+        agent_registry.get = real  # type: ignore[method-assign]
+
+
+def test_unknown_specialist_is_not_general_agent():
+    import asyncio
+
+    from ah.core import agent_factory as fac
+    from ah.core.agent_def import agent_registry
+    from ah.core.models import Session
+
+    async def _none(name):
+        return None
+
+    real = agent_registry.get
+    agent_registry.get = _none  # type: ignore[method-assign]
+    try:
+        with pytest.raises(Exception):
+            asyncio.run(
+                fac.build_agent_for_session(Session(id=uuid.uuid4(), agent_id="no-such-agent"))
+            )
+    finally:
+        agent_registry.get = real  # type: ignore[method-assign]
+
+
+def test_restricted_definition_denies_at_execution():
+    """Permissions enforced at execution, not just advertised tool lists."""
+    import asyncio
+    import json as _json
+
+    from ah.core.agent import BaseReActAgent
+    from ah.core.models import LLMResponse
+    from ah.tools.base import Tool, registry
+
+    ran = []
+
+    async def _writer(path: str, content: str) -> str:
+        ran.append(path)
+        return "wrote"
+
+    registry._tools["write_file"] = Tool(
+        name="write_file",
+        description="w",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        },
+        func=_writer,
+        is_async=True,
+    )
+    registry._definitions_cache = None
+
+    class _A(BaseReActAgent):
+        def __init__(self):
+            self.agent_id = "researcher"
+            # Researcher definition: no write_file.
+            self.allowed_tools = ["read_file"]
+            self.max_iterations = 1
+
+    async def _go():
+        from ah.core import context as context_module
+
+        orig = context_module.context_manager.add_chunk
+
+        async def _noop(*a, **k):
+            return None
+
+        context_module.context_manager.add_chunk = _noop  # type: ignore[method-assign]
+        try:
+            agent = _A()
+            resp = LLMResponse(
+                content="",
+                model="m",
+                tool_calls=[
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {
+                            "name": "write_file",
+                            "arguments": _json.dumps({"path": "x", "content": "y"}),
+                        },
+                    }
+                ],
+            )
+            events = []
+            async for e in agent._execute_tool_calls_stream(resp, [], [], uuid.uuid4()):
+                events.append(e)
+            return events
+        finally:
+            context_module.context_manager.add_chunk = orig  # type: ignore[method-assign]
+
+    try:
+        events = asyncio.run(_go())
+    finally:
+        registry._tools.pop("write_file", None)
+        registry._definitions_cache = None
+    assert ran == [], "restricted tool must not execute"
+    assert any("not allowed" in (e.tool_result or "") for e in events if e.type == "tool_result")
+
+
 def test_sandbox_never_silent_downgrade():
     import inspect
 
@@ -239,6 +358,144 @@ def test_stale_claimant_fenced():
     assert "claim_token" in inspect.getsource(JobStore.finish)
 
 
+def test_scheduler_adverse_fencing_sequence():
+    """5.5: A claims, B claims, A's renew/finish (token + none) rejected, only B commits."""
+    import asyncio
+    import uuid as _uuid
+
+    from ah.core.scheduler import JobStore
+
+    rows = {}
+
+    class _Conn:
+        def __init__(self, db):
+            self.db = db
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def transaction(self):
+            from contextlib import asynccontextmanager
+
+            @asynccontextmanager
+            async def _t():
+                yield self
+
+            return _t()
+
+        async def fetchrow(self, q, *a):
+            jid = a[0]
+            row = self.db.jobs.get(jid)
+            if "FOR UPDATE" in q and "status, claim_token" in q:
+                return dict(row) if row else None
+            if "status IN" in q or "_COLUMNS" in q or "SELECT" in q:
+                return dict(row) if row else None
+            return dict(row) if row else None
+
+        async def fetchval(self, q, *a):
+            import datetime
+
+            return datetime.datetime.now(datetime.UTC)
+
+        async def execute(self, q, *a):
+            # renew path
+            if "next_run_at = now()" in q and "run_count" not in q:
+                jid, _, tok = a[0], a[1], a[2]
+                row = self.db.jobs.get(jid)
+                if row is None or row["status"] != "running":
+                    return "UPDATE 0"
+                cur = row.get("claim_token")
+                if cur is None:
+                    if tok is not None:
+                        return "UPDATE 0"
+                elif tok != cur:
+                    return "UPDATE 0"
+                return "UPDATE 1"
+            # finish path
+            jid = a[0]
+            row = self.db.jobs.get(jid)
+            if row is None or row["status"] not in ("idle", "running"):
+                return "UPDATE 0"
+            tok = a[4]
+            cur = row.get("claim_token")
+            if row["status"] == "running" and cur is not None and tok != cur:
+                return "UPDATE 0"
+            if not (cur == tok or (cur is None and tok is None)):
+                return "UPDATE 0"
+            row["status"] = "error" if a[1] == "error" else "idle"
+            row["claim_token"] = None
+            row["run_count"] = row.get("run_count", 0) + 1
+            return "UPDATE 1"
+
+    class _DB:
+        def __init__(self):
+            self.jobs = {}
+            self.connected = True
+
+        def acquire(self):
+            return _Conn(self)
+
+        async def fetchrow(self, q, *a):
+            return None
+
+        async def fetchval(self, q, *a):
+            import datetime
+
+            return datetime.datetime.now(datetime.UTC)
+
+    import ah.core.scheduler as sched
+
+    store = JobStore()
+    fake = _DB()
+    jid = _uuid.uuid4()
+    token_a, token_b = _uuid.uuid4(), _uuid.uuid4()
+
+    def _full_row(status, token, run_count=0):
+        import datetime
+
+        now = datetime.datetime.now(datetime.UTC)
+        return {
+            "id": jid,
+            "name": "j",
+            "kind": "interval",
+            "session_id": None,
+            "agent_name": "harness",
+            "prompt": "p",
+            "interval_seconds": 60,
+            "enabled": True,
+            "status": status,
+            "last_run_at": None,
+            "next_run_at": now,
+            "last_error": None,
+            "run_count": run_count,
+            "cron_expression": None,
+            "model": None,
+            "provider": None,
+            "no_agent": False,
+            "script_path": None,
+            "claim_token": token,
+        }
+
+    fake.jobs[jid] = _full_row("running", token_a)
+    real_db = sched.db
+    sched.db = fake  # type: ignore[assignment]
+    try:
+        # B takes over (simulated), then A's operations are rejected.
+        fake.jobs[jid]["claim_token"] = token_b
+        assert asyncio.run(store.renew_lease(jid, token_a)) is False
+        assert asyncio.run(store.renew_lease(jid, None)) is False
+        assert asyncio.run(store.finish(jid, error=None, claim_token=token_a)) is False
+        assert asyncio.run(store.finish(jid, error=None, claim_token=None)) is False
+        # Only B commits.
+        assert asyncio.run(store.finish(jid, error=None, claim_token=token_b)) is True
+        assert fake.jobs[jid]["run_count"] == 1
+    finally:
+        sched.db = real_db
+
+
 def test_tool_start_ids_stable():
     from ah.core.models import StreamEvent
 
@@ -286,3 +543,65 @@ def test_workspace_consistent_roots():
     from ah.permissions.policy import workspace_root
 
     assert str(workspace_root())
+
+
+def test_ownership_loss_cancels_effect_task():
+    """5.5: loss notification mid-run cancels/joins the effectful task."""
+    import asyncio
+    import uuid as _uuid
+
+    from ah.core.scheduler import Job, JobRunner
+
+    cancelled = {"seen": False}
+    started = asyncio.Event()
+    finish_calls = []
+
+    class _Store:
+        async def claim_due(self, now=None):
+            import datetime
+
+            return Job(
+                id=_uuid.uuid4(),
+                name="j",
+                kind="interval",
+                session_id=_uuid.uuid4(),
+                agent_name="harness",
+                prompt="p",
+                interval_seconds=60,
+                enabled=True,
+                status="running",
+                last_run_at=None,
+                next_run_at=datetime.datetime.now(datetime.UTC),
+                last_error=None,
+                run_count=0,
+                claim_token=_uuid.uuid4(),
+            )
+
+        async def renew_lease(self, job_id, claim_token=None):
+            return False  # immediate loss
+
+        async def finish(self, job_id, *, error=None, claim_token=None):
+            finish_calls.append((error, claim_token))
+            return True
+
+    runner = JobRunner(store=_Store(), poll_seconds=60)
+
+    async def _effect(job, ownership_lost=None):
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled["seen"] = True
+            raise
+
+    runner._execute = _effect  # type: ignore[method-assign]
+    import ah.core.scheduler as sched
+
+    real_lease = sched.RUN_LEASE_SECONDS
+    sched.RUN_LEASE_SECONDS = 0.2
+    try:
+        assert asyncio.run(runner.run_due_once()) is True
+    finally:
+        sched.RUN_LEASE_SECONDS = real_lease
+    assert cancelled["seen"] is True
+    assert finish_calls and finish_calls[0][1] is not None

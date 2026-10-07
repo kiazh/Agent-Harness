@@ -169,7 +169,7 @@ def _open_secure_read(candidate: Path, *, check_base: bool = True):
     if nofollow:
         flags |= nofollow
     try:
-        fd = os.open(candidate, flags)
+        fd = _os_open(candidate, flags)
     except OSError as e:
         raise ValueError(f"Path '{candidate}' is not accessible (symlink?)") from e
     try:
@@ -181,6 +181,50 @@ def _open_secure_read(candidate: Path, *, check_base: bool = True):
             pass
         raise
     return fd
+
+
+# Indirection for deterministic race tests (swap hooks monkeypatch these,
+# never real user files).
+_os_open = os.open
+
+
+def _secure_mkdir_parents(file_path: Path, *, inside_base: bool) -> None:
+    """Create missing parents one level at a time without following symlinks.
+
+    os.mkdir fails on symlink-to-dir with FileExistsError; every level is
+    lstat-verified afterwards. Raises ValueError on any symlink component.
+    """
+    root = _BASE_DIR if inside_base else Path(file_path.anchor)
+    try:
+        rel = file_path.parent.relative_to(root)
+    except ValueError:
+        rel = None
+    cur = root
+    parts = list(rel.parts) if rel is not None else []
+    for part in parts:
+        cur = cur / part
+        try:
+            st = os.lstat(cur)
+            import stat as _stat
+
+            if _stat.S_ISLNK(st.st_mode):
+                raise ValueError(f"Path '{file_path}' traverses a symlink")
+            if not _stat.S_ISDIR(st.st_mode):
+                raise ValueError(f"Path '{file_path}' traverses a non-directory")
+        except FileNotFoundError:
+            try:
+                os.mkdir(cur)
+            except FileExistsError:
+                # Raced creation: re-verify rather than assuming success.
+                st2 = os.lstat(cur)
+                import stat as _stat2
+
+                if _stat2.S_ISLNK(st2.st_mode):
+                    raise ValueError(f"Path '{file_path}' traverses a symlink") from None
+            except OSError as e:
+                raise ValueError(f"Cannot create directory '{cur}': {e}") from e
+        except OSError as e:
+            raise ValueError(f"Cannot access '{cur}': {e}") from e
 
 
 @registry.register(
@@ -297,24 +341,45 @@ async def write_file(path: str, content: str) -> str:
             if inside:
                 # Verify ancestors (symlink-aware) before creating parents.
                 _reject_symlink_components(file_path)
-            file_path.parent.mkdir(parents=True, exist_ok=True)
+            # Secure parent creation: level-by-level, never through symlinks.
+            _secure_mkdir_parents(file_path, inside_base=inside)
             if inside:
                 # Re-check after mkdir (a component could have been swapped).
                 _reject_symlink_components(file_path)
             nofollow = getattr(os, "O_NOFOLLOW", 0)
-            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            # NO O_TRUNC here: open first, validate the object, truncate only
+            # after the descriptor is proven to be the authorized target
+            # (5.2 — a rejected action must have no effects).
+            flags = os.O_WRONLY | os.O_CREAT
             if nofollow:
                 # If the target exists as a symlink, fail closed instead of
-                # truncating through the link (AH-003 truncating-write race).
-                # New files are created normally; the fd is verified below.
+                # following the link (AH-003 truncating-write race).
                 flags |= nofollow
+            # Existence probe BEFORE O_CREAT: if validation below rejects the
+            # open, a newly created empty file is removed so rejection has no
+            # residual effects (best effort; content is never written first).
             try:
-                fd = os.open(file_path, flags, 0o600)
+                os.lstat(file_path)
+                existed_before = True
+            except OSError:
+                existed_before = False
+            try:
+                fd = _os_open(file_path, flags, 0o600)
             except OSError as e:
                 # ELOOP = symlink with O_NOFOLLOW; EEXIST races, etc.
                 raise ValueError(f"Path '{path}' is not accessible (symlink?)") from e
             try:
                 _verify_fd_matches_path(fd, file_path, check_base=inside)
+                # Hard-link escape: an inside name with nlink > 1 may point at
+                # outside content via another name; refuse agent writes.
+                try:
+                    if os.fstat(fd).st_nlink > 1:
+                        raise ValueError(f"Path '{path}' has multiple hard links; refusing write")
+                except ValueError:
+                    raise
+                except OSError:
+                    pass
+                os.ftruncate(fd, 0)
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(content)
             except BaseException:
@@ -322,6 +387,14 @@ async def write_file(path: str, content: str) -> str:
                     os.close(fd)
                 except OSError:
                     pass
+                if not existed_before:
+                    # Best-effort removal of an empty file O_CREAT may have
+                    # created at a rejected target; never touches content.
+                    try:
+                        if os.lstat(file_path).st_size == 0:
+                            os.unlink(file_path)
+                    except OSError:
+                        pass
                 raise
             return f"Successfully wrote {len(content)} characters to {path}"
 

@@ -105,48 +105,51 @@ async def compress_session(
 
     comp_config = _compression_config()
     llm_provider = None
-    if comp_config.llm_summarize:
-        from ah.core.provider import get_provider
-
-        try:
-            llm_provider = get_provider(
-                provider=provider or config.get("provider"), model=model or config.get("model")
-            )
-        except Exception:
-            llm_provider = None  # no key / provider: fall back to truncation
-
-    # AH-011: await summarization directly instead of blocking the event loop
-    # via Future.result() on a worker thread.
-    from ah.core.compression import ContextCompressor as _CC
-
-    compressor = _CC(config=comp_config)
-    if hasattr(compressor, "acompress"):
-        result = await compressor.acompress(
-            chunks=chunks,
-            session_id=session.id,
-            agent_id=session.agent_id,
-            llm_provider=llm_provider,
-        )
-    else:
-        result = ContextCompressor(config=comp_config).compress(
-            chunks=chunks,
-            session_id=session.id,
-            agent_id=session.agent_id,
-            llm_provider=llm_provider,
-        )
-    if result.original_count == 0:
-        return None
-    # AH-008/AH-009: replace only captured IDs; originals are archived
-    # transactionally inside replace_chunks_by_ids.
     try:
+        if comp_config.llm_summarize:
+            from ah.core.provider import get_provider
+
+            try:
+                llm_provider = get_provider(
+                    provider=provider or config.get("provider"), model=model or config.get("model")
+                )
+            except Exception:
+                llm_provider = None  # no key / provider: fall back to truncation
+
+        # AH-011: await summarization directly instead of blocking the event loop
+        # via Future.result() on a worker thread.
+        from ah.core.compression import ContextCompressor as _CC
+
+        compressor = _CC(config=comp_config)
+        if hasattr(compressor, "acompress"):
+            result = await compressor.acompress(
+                chunks=chunks,
+                session_id=session.id,
+                agent_id=session.agent_id,
+                llm_provider=llm_provider,
+            )
+        else:
+            result = ContextCompressor(config=comp_config).compress(
+                chunks=chunks,
+                session_id=session.id,
+                agent_id=session.agent_id,
+                llm_provider=llm_provider,
+            )
+        if result.original_count == 0:
+            return None
+        # AH-008/AH-009: replace only captured IDs; originals are archived
+        # transactionally inside replace_chunks_by_ids.
         await context_manager.replace_chunks_by_ids(
             session.id,
             [c.id for c in chunks],
             result.compressed_chunks,
             archive_reason="compressed",
         )
+        return result
     finally:
-        # Do not leak a compression-only provider client.
+        # Owned compression provider closes on EVERY exit: success, no-op,
+        # summarization/persistence failure, cancellation, or timeout.
+        # Cleanup failures are recorded, never silently swallowed.
         close = getattr(llm_provider, "close", None)
         if callable(close):
             try:
@@ -155,9 +158,10 @@ async def compress_session(
                 r = close()
                 if _inspect.isawaitable(r):
                     await r
-            except Exception:
-                pass
-    return result
+            except Exception as e:
+                import logging as _logging
+
+                _logging.getLogger(__name__).warning("compression provider close failed: %s", e)
 
 
 async def maybe_auto_compact(session_id) -> dict | None:
@@ -235,7 +239,6 @@ def learn_skill(
 ):
     """Create a skill from a file path, an http(s) URL, or an existing skill name."""
     from ah.skills.registry import skill_registry
-    from ah.tools.builtins import _is_safe_url
 
     skill_registry.load_all()
     path = Path(source).expanduser()
@@ -250,38 +253,22 @@ def learn_skill(
         default_name, default_desc = path.stem, f"Skill learned from {path.name}"
         default_triggers: list[str] = []
     elif source.startswith(("http://", "https://")):
-        if not _is_safe_url(source):
-            raise ServiceError(
-                f"URL rejected by security policy (private/internal address or invalid protocol): {source}"
-            )
-        import httpx
+        # 5.8: destination enforced AT the pinned connection
+        # (ah/security/fetch.py): single bounded resolution, every address
+        # checked, TCP opened to the validated IP (no re-resolution for
+        # rebinding to steer), TLS SNI/hostname preserved, redirects
+        # re-validated hop-by-hop, body capped DURING streaming. A pre-check
+        # alone (or post-fetch revalidation) is detection, not prevention.
+        # Network initiation here is human transport (CLI/gateway token), and
+        # full-host mode never relaxes SSRF policy.
+        from ah.security.fetch import FetchError, pinned_fetch
 
-        # AH-005: DNS is validated before fetch, but httpx resolves
-        # independently — a rebinding between check and connect could steer
-        # the actual connection private. Mitigation: re-validate after fetch
-        # (including redirect chain) and bound size. Full pinning with TLS
-        # SNI preservation requires outbound network restrictions; the
-        # residual risk is documented and the fetch never follows redirects
-        # to private targets.
         try:
-            resp = httpx.get(source, timeout=30, follow_redirects=False)
-            # Reject redirects to non-safe targets instead of following them.
-            if resp.status_code in (301, 302, 303, 307, 308):
-                location = resp.headers.get("location", "")
-                raise ServiceError(f"Redirect target rejected by security policy: {location!r}")
-            resp.raise_for_status()
-        except ServiceError:
-            raise
+            content = pinned_fetch(source)
+        except FetchError as e:
+            raise ServiceError(f"URL rejected by security policy: {e}") from None
         except Exception as e:
             raise ServiceError(f"Failed to fetch URL: {e}") from None
-        # Post-fetch re-validation: DNS may have rebound during the fetch.
-        if not _is_safe_url(source):
-            raise ServiceError(
-                f"URL failed post-fetch security re-validation (possible DNS rebinding): {source}"
-            )
-        content = resp.text
-        if len(content.encode("utf-8", errors="replace")) > 200_000:
-            raise ServiceError("Skill content from URL exceeds 200KB limit")
         default_name = source.rstrip("/").split("/")[-1].split(".")[0] or "web-skill"
         default_desc = f"Skill learned from {source}"
         default_triggers = []

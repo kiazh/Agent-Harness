@@ -332,26 +332,22 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])
     async def delete_session(session_id: uuid.UUID) -> dict[str, bool]:
-        """Delete a session by ID."""
-        # AH-017: coordinate with active turns; deletion must not race
-        # persistence. The shared coordinator fences across gateway/REST.
-        try:
-            from ah.core.turns import mutation_lock, turn_locked
-        except Exception:
-            mutation_lock = None  # type: ignore[assignment]
-            turn_locked = None  # type: ignore[assignment]
-        if turn_locked is not None and turn_locked(session_id):
+        """Delete a session by ID (mutation claim; live turns reject first)."""
+        from ah.core.turns import begin_mutation, end_mutation, turn_active
+
+        if await turn_active(session_id):
             raise HTTPException(409, "a turn is already running for this session")
-        if mutation_lock is not None:
-            async with mutation_lock(session_id):
-                if turn_locked is not None and turn_locked(session_id):
-                    raise HTTPException(409, "a turn is already running for this session")
-                if not await session_manager.delete(session_id):
-                    raise HTTPException(404, "session not found")
-                return {"deleted": True}
-        if not await session_manager.delete(session_id):
-            raise HTTPException(404, "session not found")
-        return {"deleted": True}
+        token = await begin_mutation(session_id)
+        if not token:
+            raise HTTPException(409, "a turn is already running for this session")
+        try:
+            if await turn_active(session_id):
+                raise HTTPException(409, "a turn is already running for this session")
+            if not await session_manager.delete(session_id):
+                raise HTTPException(404, "session not found")
+            return {"deleted": True}
+        finally:
+            await end_mutation(session_id, token)
 
     @app.post("/api/v1/memory", dependencies=[Depends(require_api_key)])
     async def create_memory(req: CreateMemoryRequest) -> dict[str, Any]:
@@ -492,21 +488,15 @@ def create_app() -> FastAPI:
         session = await session_manager.get(sid)
         if session is None:
             raise HTTPException(404, "session not found")
-        # AH-017: coordinate with gateway turns via the shared coordinator.
-        # Reject conflicts BEFORE SSE headers so concurrent HTTP turns get a
-        # clean 409 instead of interleaved streams.
-        try:
-            from ah.core.turns import end_turn as _end_turn
-            from ah.core.turns import try_begin_turn as _try_begin
-        except Exception:
-            _try_begin = None  # type: ignore[assignment]
-            _end_turn = None  # type: ignore[assignment]
-        if _try_begin is not None:
-            claimed = await _try_begin(sid)
-            if not claimed:
-                raise HTTPException(409, "a turn is already running for this session")
-        else:
-            claimed = False
+        # Shared coordinator: owner-token claim BEFORE SSE headers so a
+        # conflicting turn gets a clean 409 instead of an interleaved stream.
+        # Fails closed: claim errors propagate, never concurrent execution.
+        from ah.core.turns import end_turn as _end_turn
+        from ah.core.turns import try_begin_turn as _try_begin
+
+        turn_token = await _try_begin(sid)
+        if not turn_token:
+            raise HTTPException(409, "a turn is already running for this session")
 
         async def event_stream() -> AsyncGenerator[str, None]:
             agent = None
@@ -585,9 +575,9 @@ def create_app() -> FastAPI:
                             logger.exception(
                                 "Could not close prompt provider for session %s", session_id
                             )
-                    if _end_turn is not None and claimed:
+                    if turn_token:
                         try:
-                            await _end_turn(sid)
+                            await _end_turn(sid, turn_token)
                         except Exception:
                             pass
                     # Phase C: auto-compaction at the safe turn boundary.
