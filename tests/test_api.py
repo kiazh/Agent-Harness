@@ -200,6 +200,10 @@ class TestPromptSSE:
                 self.closed = True
 
         class FakeAgent:
+            # Models a factory-built agent: carries its owned provider.
+            provider = None
+            _owns_provider = True
+
             def __init__(self):
                 self._learning_tasks = set()
 
@@ -209,6 +213,7 @@ class TestPromptSSE:
                 yield StreamEvent(type="text", content="Hello")
 
         provider = FakeProvider()
+        FakeAgent.provider = provider
         with patch("ah.api.app.session_manager.get", new_callable=AsyncMock, return_value=session):
             with patch("ah.core.provider.get_provider", return_value=provider):
                 with patch("ah.core.agent.ReActAgent", return_value=FakeAgent()):
@@ -238,6 +243,9 @@ class TestPromptSSE:
                 self.closed = True
 
         class FakeAgent:
+            provider = None
+            _owns_provider = True
+
             def __init__(self):
                 self._learning_tasks = set()
 
@@ -250,6 +258,7 @@ class TestPromptSSE:
                 yield StreamEvent(type="text", content="Hello")
 
         provider = FakeProvider()
+        FakeAgent.provider = provider
         with patch("ah.api.app.session_manager.get", new_callable=AsyncMock, return_value=session):
             with patch("ah.core.provider.get_provider", return_value=provider):
                 with patch("ah.core.agent.ReActAgent", return_value=FakeAgent()):
@@ -276,6 +285,9 @@ class TestPromptSSE:
                 self.closed = True
 
         class FakeAgent:
+            provider = None
+            _owns_provider = True
+
             def __init__(self):
                 self._learning_tasks = set()
 
@@ -292,6 +304,7 @@ class TestPromptSSE:
             route.endpoint for route in app.routes if route.path == "/sessions/{session_id}/prompt"
         )
         provider = FakeProvider()
+        FakeAgent.provider = provider
         with patch("ah.api.app.session_manager.get", new_callable=AsyncMock, return_value=session):
             with patch("ah.core.provider.get_provider", return_value=provider):
                 with patch("ah.core.agent.ReActAgent", return_value=FakeAgent()):

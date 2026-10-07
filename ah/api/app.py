@@ -509,6 +509,7 @@ def create_app() -> FastAPI:
 
         async def event_stream() -> AsyncGenerator[str, None]:
             agent = None
+            _stream_cancelled = False
             # Boundary-safe streaming redaction: hold back a tail across
             # deltas so a secret split at any boundary never leaks (AH-001).
             # Final flush redacts the remainder; the done event carries the
@@ -567,12 +568,35 @@ def create_app() -> FastAPI:
                 logger.exception("Prompt stream failed for session %s", session_id)
                 error_data = {"type": "error", "message": "prompt failed; check server logs"}
                 yield f"data: {json.dumps(error_data)}\n\n"
+            except asyncio.CancelledError:
+                # Client disconnect / server shutdown: bounded cleanup below,
+                # then propagate (never yield DONE here — the consumer is gone
+                # and swallowing cancellation would strand the task).
+                _stream_cancelled = True
+                raise
             finally:
                 try:
-                    if agent is not None:
-                        await asyncio.gather(
-                            *getattr(agent, "_learning_tasks", ()), return_exceptions=True
-                        )
+                    _learning = tuple(getattr(agent, "_learning_tasks", ())) if agent is not None else ()
+                    if _learning:
+                        if _stream_cancelled:
+                            # Consumer gone: bounded join, then cancel
+                            # leftovers so nothing hangs the shutdown.
+                            try:
+                                await asyncio.wait_for(
+                                    asyncio.gather(*_learning, return_exceptions=True),
+                                    timeout=5,
+                                )
+                            except (TimeoutError, asyncio.CancelledError, Exception):
+                                for _t in _learning:
+                                    try:
+                                        if not _t.done():
+                                            _t.cancel()
+                                    except Exception:
+                                        pass
+                        else:
+                            # Normal completion: reviews finish before the
+                            # provider closes beneath them.
+                            await asyncio.gather(*_learning, return_exceptions=True)
                 finally:
                     # AH-023: close only owned providers.
                     if agent is not None:
@@ -589,14 +613,17 @@ def create_app() -> FastAPI:
                             await _end_turn(sid, turn_token)
                         except Exception:
                             pass
-                    # Phase C: auto-compaction at the safe turn boundary.
-                    try:
-                        from ah import services as _services
+                    # Phase C: auto-compaction at the safe turn boundary
+                    # (skipped for cancelled turns; the next boundary handles it).
+                    if not _stream_cancelled:
+                        try:
+                            from ah import services as _services
 
-                        await _services.maybe_auto_compact(sid)
-                    except Exception:
-                        pass
-                yield "data: [DONE]\n\n"
+                            await _services.maybe_auto_compact(sid)
+                        except Exception:
+                            pass
+                if not _stream_cancelled:
+                    yield "data: [DONE]\n\n"
 
         return StreamingResponse(
             event_stream(),
