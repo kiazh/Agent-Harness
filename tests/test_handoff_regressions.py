@@ -937,7 +937,7 @@ def _compress_session_with(chunks, provider, monkeypatch, **kw):
     replace_calls = kw.get("replace_calls")
     if replace_calls is not None:
 
-        async def _replace(sid, ids, new_chunks, archive_reason="compressed"):
+        async def _replace(sid, ids, new_chunks, archive_reason="compressed", **kwargs):
             replace_calls.append((list(ids), list(new_chunks)))
             assert len(ids) == len(chunks)
             return len(new_chunks)
@@ -1009,7 +1009,7 @@ def test_compress_session_closes_provider_on_persistence_failure(monkeypatch):
     async def _all_chunks(session_id):
         return list(chunks)
 
-    async def _boom_replace(sid, ids, new_chunks, archive_reason="compressed"):
+    async def _boom_replace(sid, ids, new_chunks, archive_reason="compressed", **kwargs):
         raise RuntimeError("db down")
 
     monkeypatch.setattr(ctxmod.context_manager, "get_all_chunks", _all_chunks)
@@ -1053,7 +1053,7 @@ def test_compress_session_closes_provider_on_cancel(monkeypatch):
     async def _all_chunks(session_id):
         return list(chunks)
 
-    async def _cancel_replace(sid, ids, new_chunks, archive_reason="compressed"):
+    async def _cancel_replace(sid, ids, new_chunks, archive_reason="compressed", **kwargs):
         raise asyncio.CancelledError()
 
     monkeypatch.setattr(ctxmod.context_manager, "get_all_chunks", _all_chunks)

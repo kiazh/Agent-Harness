@@ -914,7 +914,7 @@ class TestMemoryConsolidator:
         with patch("ah.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[])
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
-            assert results == []
+            assert results.status == "empty" and results.entries == []
 
 
 # ===========================================================================

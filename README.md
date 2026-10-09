@@ -213,7 +213,7 @@ YAML / DB / Soul Spec v0.5 definitions with tool allowlists and model overrides.
 
 ### Execution modes & permissions
 
-`ask` (default) · `workspace` · `sandbox` · `full` — via `/mode`, `ah --mode ...`, or `ah mode`. Writes, opaque execution, and out-of-scope access pause for scoped approval instead of hard-rejecting; FULL HOST is an explicit session grant (still asks for credentials/elevation/destructive ops). Approvals: `/approvals`, TUI card, `GET/POST /api/v1/approvals`. Headless jobs pause durably as `needs_approval` and resume on a fresh claim.
+`ask` (default) · `workspace` · `sandbox` · `full` — via `/mode`, `ah --mode ...`, or `ah mode`. Session activation (`scope=session`, the default) never changes the global default future sessions inherit; only explicit `scope=global` does. Writes, opaque execution, and out-of-scope access pause for scoped approval instead of hard-rejecting; FULL HOST is an explicit session grant (still asks for credentials/elevation/destructive ops). Approval cards show the exact command (argv), cwd, backend, timeout, and file-write diffs. Approvals: `/approvals`, TUI card, `GET/POST /api/v1/approvals`. Headless jobs pause durably as `needs_approval` (resumable via `jobs.resume`) and resume on a fresh claim.
 
 ### What runs when
 

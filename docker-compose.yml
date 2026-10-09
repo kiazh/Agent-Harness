@@ -22,10 +22,24 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/agentharness
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # AH-AUDIT-039b: provider selection + per-provider keys forwarded
+      # explicitly from host configuration (empty default = unset; secrets
+      # never baked into image layers — .env stays excluded via .dockerignore).
+      AGENT_HARNESS_PROVIDER: ${AGENT_HARNESS_PROVIDER:-openrouter}
       AGENT_HARNESS_MODEL: ${AGENT_HARNESS_MODEL:-openrouter/free}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      TOGETHER_API_KEY: ${TOGETHER_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
       AGENT_HARNESS_API_KEY: ${AGENT_HARNESS_API_KEY:?Set AGENT_HARNESS_API_KEY in .env}
       AGENT_HARNESS_PROVENANCE_KEY: ${AGENT_HARNESS_PROVENANCE_KEY:-}
+      AGENT_HARNESS_HOME: /home/appuser/.agent-harness
       AGENT_HARNESS_SCRIPTS_DIR: /app/scripts
       AGENT_HARNESS_USAGE_SESSION_TOKEN_LIMIT: ${AGENT_HARNESS_USAGE_SESSION_TOKEN_LIMIT:-0}
       AGENT_HARNESS_USAGE_SESSION_REQUEST_LIMIT: ${AGENT_HARNESS_USAGE_SESSION_REQUEST_LIMIT:-0}
@@ -43,6 +57,11 @@ services:
     volumes:
       - ./ah:/app/ah:ro
       - ./scripts:/app/scripts:ro
+      # AH-AUDIT-039a: explicit writable application home/state path with
+      # correct non-root ownership (seeded from the image dir, see
+      # Dockerfile) while code/root stay read-only. Persistent config and
+      # learned state survive restart/recreate; the DB volume is untouched.
+      - ahhome:/home/appuser/.agent-harness:rw
     entrypoint: ["/bin/sh", "-c"]
     command: ["ah init && exec ah serve --host 0.0.0.0 --port 8000"]
     healthcheck:
@@ -53,3 +72,4 @@ services:
 
 volumes:
   pgdata:
+  ahhome:

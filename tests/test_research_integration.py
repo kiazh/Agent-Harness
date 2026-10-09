@@ -256,9 +256,20 @@ def test_relative_rag_loader_root(tmp_path, monkeypatch):
 
 
 async def test_terminal_requires_explicit_sandbox(monkeypatch):
+    # Sandbox mode without a Docker backend fails closed (never a silent
+    # downgrade to host execution). Plain disabled-sandbox host execution
+    # proceeds once broker-authorized — the old hard-reject is gone by
+    # design (Phase D broker); this test pins the enforced contract.
+    from ah.core.config import config as _cfg
+
     monkeypatch.delenv("AGENT_HARNESS_TERMINAL_SANDBOX", raising=False)
-    with pytest.raises(ValidationError, match="disabled"):
-        await terminal("git status")
+    saved = _cfg.get("execution_mode")
+    _cfg.set("execution_mode", "sandbox")
+    try:
+        with pytest.raises(ValidationError, match="Docker backend"):
+            await terminal("git status")
+    finally:
+        _cfg.set("execution_mode", saved)
 
 
 async def test_file_tools_refuse_environment_secrets(tmp_path, monkeypatch):

@@ -29,6 +29,37 @@ from ah.rag.search import HybridSearch, SearchResult
 logger = logging.getLogger(__name__)
 
 
+def _redact_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """Apply structured redaction to metadata values (AH-AUDIT-012).
+
+    Provenance identifiers (source/chunk_index/embedding_*) are set by the
+    pipeline itself after this runs, so they stay intact. Secret-bearing
+    values — including nested dicts/lists — are scrubbed before storage.
+    Keys are preserved as-is to keep index management stable.
+    """
+    if not metadata:
+        return {}
+    redacted: dict[str, Any] = {}
+    for key, value in metadata.items():
+        try:
+            if isinstance(value, str):
+                redacted[str(key)] = redact_secrets(value).text
+            elif isinstance(value, (list, tuple)):
+                redacted[str(key)] = [
+                    redact_secrets(v).text if isinstance(v, str) else v for v in value
+                ]
+            elif isinstance(value, dict):
+                redacted[str(key)] = {
+                    str(k): redact_secrets(v).text if isinstance(v, str) else v
+                    for k, v in value.items()
+                }
+            else:
+                redacted[str(key)] = value
+        except Exception:
+            redacted[str(key)] = value
+    return redacted
+
+
 @dataclass
 class RAGConfig:
     """Configuration for the RAG pipeline."""
@@ -67,7 +98,18 @@ class RAGPipeline:
     ) -> None:
         self._config = config or RAGConfig()
         self._search_cache: dict[tuple, tuple[float, list[SearchResult]]] = {}
-        self._embedder = embedder or OpenAIEmbedder()
+        # AH-AUDIT-032: keyword-capable pipeline with no embedder. Dense
+        # clients initialize lazily: absent keys yield an explicit
+        # keyword-only pipeline (NULL embeddings, honest mode reporting),
+        # never a construction crash before the keyword fallback.
+        if embedder is not None:
+            self._embedder: Embedder | None = embedder
+        else:
+            try:
+                self._embedder = OpenAIEmbedder()
+            except Exception as e:
+                logger.warning("embedder unavailable, keyword-only pipeline: %s", e)
+                self._embedder = None
         self._chunker = chunker or RecursiveCharacterTextSplitter(
             chunk_size=self._config.chunk_size,
             chunk_overlap=self._config.chunk_overlap,
@@ -83,6 +125,21 @@ class RAGPipeline:
     @property
     def config(self) -> RAGConfig:
         return self._config
+
+    def reranker_identity(self) -> dict[str, str]:
+        """Actual reranker identity for honest status (AH-AUDIT-036).
+
+        Derived from the instantiated component, never from key presence
+        alone. A present credential is not evidence the component is
+        selected or functioning.
+        """
+        try:
+            name = type(self._reranker).__name__
+            if "Cohere" in name:
+                return {"reranker": "cohere", "detail": getattr(self._reranker, "_model", "")}
+            return {"reranker": "passthrough", "detail": name}
+        except Exception:
+            return {"reranker": "unknown", "detail": ""}
 
     async def index_document(
         self,
@@ -118,39 +175,58 @@ class RAGPipeline:
         # Chunk
         chunks = self._chunk_document(doc, metadata)
 
-        # Embed in batch
+        # Embed in batch (keyword-only when no embedder: NULL embeddings,
+        # honest mode reporting — AH-AUDIT-032). Never fabricate zero-vector
+        # embeddings for unavailable providers.
         texts = [redact_secrets(c.text).text for c in chunks]
         # Keep redacted text for storage so secrets never reach the DB.
         for chunk, redacted_text in zip(chunks, texts, strict=True):
             chunk.text = redacted_text
-        embeddings = await self._embedder.embed_batch(texts)
+        if self._embedder is None:
+            embeddings: list = [None] * len(texts)
+            embed_model_name = "keyword-only"
+        else:
+            try:
+                embeddings = await self._embedder.embed_batch(texts)
+            except Exception as e:
+                logger.warning("batch embedding failed, storing keyword-only rows: %s", e)
+                embeddings = [None] * len(texts)
+                embed_model_name = "keyword-only"
+            else:
+                embed_model_name = getattr(
+                    self._embedder,
+                    "model_name",
+                    getattr(self._embedder, "_model", "unknown"),
+                )
 
         # Store in database (batch)
         stored_chunks: list[ContextChunk] = []
         records = []
-        embed_model_name = getattr(
-            self._embedder, "model_name", getattr(self._embedder, "_model", "unknown")
-        )
         for chunk, embedding in zip(chunks, embeddings, strict=True):
+            # AH-AUDIT-012/035: caller metadata applies FIRST so reserved
+            # embedding/source fields cannot be overwritten by malicious or
+            # mistaken keys; all outward-facing metadata values pass
+            # structured redaction while provenance identifiers stay intact.
             chunk_meta = {
-                **chunk.metadata,
-                "source": doc.source,
+                **_redact_metadata(metadata),
+                **_redact_metadata(chunk.metadata),
+                "source": redact_secrets(str(doc.source)).text,
                 "doc_type": doc.doc_type,
                 "chunk_index": chunk.index,
                 "embedding_model": str(embed_model_name),
                 "embedding_dims": len(embedding) if embedding else 0,
             }
-            if metadata:
-                chunk_meta.update(metadata)
 
             search_text = chunk.text
             payload = {
                 "text": chunk.text,
                 "metadata": chunk_meta,
-                "source": doc.source,
+                # AH-AUDIT-012: stored payload source follows the same
+                # redaction policy as chunk text and metadata.
+                "source": redact_secrets(str(doc.source)).text,
             }
             payload_msgpack = payload_to_msgpack(payload)
-            embedding_str = embedding_to_str(embedding)
+            embedding_str = embedding_to_str(embedding) if embedding else None
             records.append(
                 (
                     session_id,
@@ -203,6 +279,7 @@ class RAGPipeline:
         session_id: uuid.UUID,
         top_k: int | None = None,
         rerank: bool = True,
+        chunk_types: tuple[str, ...] | None = None,
     ) -> list[SearchResult]:
         """Search the RAG index: query → retrieve → rerank → top-k.
 
@@ -211,10 +288,16 @@ class RAGPipeline:
             session_id: Session to search within.
             top_k: Number of results to return (default: config.top_k).
             rerank: Whether to apply cross-encoder reranking.
+            chunk_types: Retrieval scope (document-only by default,
+                AH-AUDIT-033). Pass an explicit tuple for a documented
+                combined scope.
 
         Returns:
             List of SearchResult objects sorted by relevance.
         """
+        from ah.rag.search import DOCUMENT_TYPES as _DOC_TYPES
+
+        scope = tuple(chunk_types) if chunk_types else _DOC_TYPES
         k = top_k or self._config.top_k
 
         audit_log(
@@ -225,7 +308,12 @@ class RAGPipeline:
         )
 
         # Check TTL cache (namespaced by embedder model + retrieval flags).
-        embed_model = getattr(self._embedder, "model_name", getattr(self._embedder, "_model", ""))
+        if self._embedder is None:
+            embed_model = "keyword-only"
+        else:
+            embed_model = getattr(
+                self._embedder, "model_name", getattr(self._embedder, "_model", "")
+            )
         cache_key = (
             session_id,
             hashlib.sha256(query.encode()).hexdigest(),
@@ -249,22 +337,32 @@ class RAGPipeline:
         # provider is available (LP-10: basic operation needs no second paid
         # key). The fallback mode is recorded for honest status reporting.
         self._last_search_mode = "hybrid"
-        try:
-            query_embedding = await self._embedder.embed(query)
-        except Exception as e:
-            logger.warning("query embedding unavailable, keyword-only fallback: %s", e)
+        query_embedding = None
+        if self._embedder is None:
+            logger.warning("no embedder configured, keyword-only search")
+        else:
+            try:
+                query_embedding = await self._embedder.embed(query)
+            except Exception as e:
+                logger.warning("query embedding unavailable, keyword-only fallback: %s", e)
+                query_embedding = None
+        if query_embedding is None:
             results = await self._search.search_text(
                 session_id=session_id,
                 query_text=query,
                 db=db,
                 top_k=k * 2,
+                chunk_types=scope,
             )
             self._last_search_mode = "keyword-only"
             return await self._finish_search(
                 results, query, session_id, k, rerank, cache_key, now, embed_model
             )
-        # Dimension guard: stored vectors are 1536-d. Mixing models without
-        # migration silently corrupts similarity — fail loudly instead.
+        # Embedding-space identity (AH-AUDIT-035): dimension AND model must
+        # match the stored dense space. Different same-dimension models
+        # compare incorrectly — fail explicitly with migration guidance
+        # instead of returning corrupt similarity. Mixed keyword-only rows
+        # (NULL embeddings) are unaffected.
         try:
             from ah.core.serialization import embedding_to_str as _e2s
 
@@ -279,6 +377,7 @@ class RAGPipeline:
             raise
         except Exception:
             pass
+        await self._enforce_embedding_space(session_id, str(embed_model))
 
         # Hybrid search (BM25 + dense + RRF)
         if self._config.enable_hybrid_search:
@@ -288,6 +387,7 @@ class RAGPipeline:
                 query_text=query,
                 db=db,
                 top_k=k * 2,  # Retrieve more for reranking
+                chunk_types=scope,
             )
         else:
             # Dense-only search
@@ -296,14 +396,56 @@ class RAGPipeline:
                 query_embedding=query_embedding,
                 db=db,
                 top_k=k * 2,
+                chunk_types=scope,
             )
         return await self._finish_search(
             results, query, session_id, k, rerank, cache_key, now, embed_model
         )
 
+    async def _enforce_embedding_space(self, session_id: uuid.UUID, query_model: str) -> None:
+        """Reject cross-model dense comparison (AH-AUDIT-035).
+
+        Compares the query embedding model against distinct stored models
+        for document chunks with non-NULL embeddings in this session. A
+        mismatch raises an explicit error (reindex/migrate); matching or
+        keyword-only indexes proceed. Legacy rows without model metadata
+        are treated as the default model only when dimensions agree.
+        """
+        try:
+            rows = await db.fetch(
+                """SELECT DISTINCT payload_msgpack FROM context_chunks
+                   WHERE session_id = $1 AND chunk_type = 'document'
+                     AND embedding IS NOT NULL LIMIT 25""",
+                session_id,
+            )
+        except Exception:
+            return
+        stored: set[str] = set()
+        for row in rows:
+            try:
+                payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
+                model = str((payload.get("metadata") or {}).get("embedding_model", ""))
+                if model and model != "keyword-only":
+                    stored.add(model)
+            except Exception:
+                continue
+        if stored and query_model not in stored:
+            raise ValueError(
+                f"embedding space mismatch: query model {query_model!r} vs stored "
+                f"{sorted(stored)!r}. Reindex (or migrate/backfill) so candidate "
+                "and query embeddings share one enforced space."
+            )
+
     async def _finish_search(
-        self, results: list[SearchResult], query: str, session_id: uuid.UUID,
-        k: int, rerank: bool, cache_key: tuple, now: float, embed_model: str,
+        self,
+        results: list[SearchResult],
+        query: str,
+        session_id: uuid.UUID,
+        k: int,
+        rerank: bool,
+        cache_key: tuple,
+        now: float,
+        embed_model: str,
     ) -> list[SearchResult]:
         # Rerank
         if rerank and self._config.enable_reranking and len(results) > k:
@@ -372,14 +514,22 @@ class RAGPipeline:
             text = payload.get("text", payload.get("content", str(payload)))
             chunks_to_embed.append((row, str(text)))
 
-        # Embed in batch
+        # Embed in batch (keyword-only rows keep NULL embeddings when the
+        # embedder is unavailable — AH-AUDIT-032; search_text still indexed).
         texts = [t for _, t in chunks_to_embed]
-        embeddings = await self._embedder.embed_batch(texts)
+        if self._embedder is None:
+            embeddings = [None] * len(texts)
+        else:
+            try:
+                embeddings = await self._embedder.embed_batch(texts)
+            except Exception as e:
+                logger.warning("batch embedding failed, keyword-only backfill: %s", e)
+                embeddings = [None] * len(texts)
 
         # Update rows with embeddings and FTS text (batch)
         updated = []
         for (row, text), embedding in zip(chunks_to_embed, embeddings, strict=True):
-            updated.append((embedding_to_str(embedding), text, row["id"]))
+            updated.append((embedding_to_str(embedding) if embedding else None, text, row["id"]))
 
         await db.executemany(
             """

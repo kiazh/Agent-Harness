@@ -156,7 +156,9 @@ class MemoryStore:
         )
         return memory
 
-    async def get(self, memory_id: uuid.UUID, include_quarantined: bool = False) -> MemoryEntry | None:
+    async def get(
+        self, memory_id: uuid.UUID, include_quarantined: bool = False
+    ) -> MemoryEntry | None:
         """Get a memory by ID."""
         if include_quarantined:
             row = await db.fetchrow(
@@ -279,6 +281,45 @@ class MemoryStore:
             similarity = row["similarity"]
             results.append((entry, similarity))
         return results
+
+    async def backfill_embeddings(self, limit: int = 50) -> dict[str, int]:
+        """Embed stored memories missing dense vectors (AH-AUDIT-038).
+
+        Durable idempotent backfill queue worker: takes up to *limit* rows
+        with NULL embeddings, embeds their redacted content through the
+        shared query embedder (same enforced space as retrieval), and
+        updates them. Provider failures/unavailability skip rows without
+        dropping memories. Returns {embedded, skipped}.
+        """
+        from ah.core.serialization import embedding_to_str as _e2s
+        from ah.memory.embeddings import embed_query as _embed_query
+        from ah.memory.redaction import redact_secrets as _redact
+
+        rows = await db.fetch(
+            "SELECT id, content FROM memories WHERE embedding IS NULL LIMIT $1",
+            limit,
+        )
+        embedded = 0
+        skipped = 0
+        for row in rows:
+            try:
+                content = _redact(str(row["content"] or "")).text
+                if not content.strip():
+                    skipped += 1
+                    continue
+                vector = await _embed_query(content[:2000])
+                if not vector:
+                    skipped += 1
+                    continue
+                await db.execute(
+                    "UPDATE memories SET embedding = $2 WHERE id = $1 AND embedding IS NULL",
+                    row["id"],
+                    _e2s(vector),
+                )
+                embedded += 1
+            except Exception:
+                skipped += 1
+        return {"embedded": embedded, "skipped": skipped}
 
     async def delete(self, memory_id: uuid.UUID) -> bool:
         """Delete a memory by ID. Returns True if deleted."""

@@ -23,8 +23,11 @@ FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
-# Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+# Create non-root user + seed the writable application home so a named
+# volume mounted there (AH-AUDIT-039a) inherits correct ownership.
+RUN groupadd -r appuser && useradd -r -g appuser appuser \
+    && mkdir -p /home/appuser/.agent-harness \
+    && chown -R appuser:appuser /home/appuser
 
 # Copy installed packages from builder
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages

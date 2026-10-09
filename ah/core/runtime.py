@@ -21,6 +21,32 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+async def _bounded_join(
+    tasks: list[asyncio.Task], timeout: float, label: str
+) -> list[asyncio.Task]:
+    """Cancel tasks and join them within *timeout* (AH-AUDIT-024).
+
+    Returns leftover tasks that did not terminate (quarantined by the
+    caller, never awaited indefinitely). Genuine cancellations propagate;
+    a cancellation-resistant task cannot exceed the outer deadline.
+    """
+    if not tasks:
+        return []
+    for t in tasks:
+        try:
+            if not t.done():
+                t.cancel()
+        except Exception:
+            pass
+    try:
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout)
+    except (TimeoutError, asyncio.CancelledError):
+        pass
+    except Exception:
+        pass
+    return [t for t in tasks if not t.done()]
+
+
 @dataclass
 class Capability:
     name: str
@@ -36,6 +62,7 @@ class RuntimeServices:
     _started: bool = False
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _background: set[asyncio.Task] = field(default_factory=set)
+    _shutting_down: bool = False
     capabilities: list[Capability] = field(default_factory=list)
 
     async def startup(self) -> dict[str, Any]:
@@ -102,28 +129,50 @@ class RuntimeServices:
         ]
         return report
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, timeout: float = 10.0) -> None:
+        """Bounded shutdown (AH-AUDIT-024/025).
+
+        Requested cancellation is distinguished from confirmed termination:
+        background tasks get a bounded join, then leftovers are quarantined
+        (logged + dropped from tracking) instead of awaited forever — a
+        cancellation-resistant task cannot exceed the outer deadline. DB
+        closure runs after the join with its own bound. New tasks created
+        during shutdown are rejected.
+        """
         async with self._lock:
-            for t in list(self._background):
-                t.cancel()
-            if self._background:
-                await asyncio.gather(*self._background, return_exceptions=True)
+            self._shutting_down = True
+            try:
+                leftovers = await _bounded_join(
+                    list(self._background), timeout=timeout, label="runtime background"
+                )
+                if leftovers:
+                    logger.warning(
+                        "runtime shutdown: %d task(s) quarantined after %ss",
+                        len(leftovers),
+                        timeout,
+                    )
+            finally:
                 self._background.clear()
             try:
                 from ah.observability.audit import audit_persistence
 
-                await audit_persistence.stop()
-            except Exception:
+                await asyncio.wait_for(audit_persistence.stop(), timeout=min(5, timeout))
+            except (TimeoutError, asyncio.CancelledError, Exception):
                 pass
             try:
                 from ah.db.connection import db
 
-                await db.close()
-            except Exception:
+                await asyncio.wait_for(db.close(), timeout=min(5, timeout))
+            except (TimeoutError, asyncio.CancelledError, Exception):
                 pass
             self._started = False
+            self._shutting_down = False
 
     def track(self, task: asyncio.Task) -> asyncio.Task:
+        """Register a maintenance task for bounded shutdown joining."""
+        if getattr(self, "_shutting_down", False):
+            task.cancel()
+            return task
         self._background.add(task)
         task.add_done_callback(self._background.discard)
         return task

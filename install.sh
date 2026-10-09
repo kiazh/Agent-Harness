@@ -277,7 +277,20 @@ if [ "$ASSUME_YES" = "0" ] && { [ -t 0 ] || [ "$INTERACTIVE" = "1" ]; } && [ -e 
   case "$CUR" in
     ""|"sk-or-...")
       printf 'OPENROUTER_API_KEY (Enter to skip, set later via /keys): ' > /dev/tty
-      read -r ANSWER < /dev/tty || ANSWER=""
+      # AH-AUDIT-040b: typed secrets must not echo. Disable terminal echo
+      # around the read and reliably restore it on success, error,
+      # interruption, or signals (no-echo as documented).
+      ANSWER=""
+      if STTY_SAVE="$(stty -g < /dev/tty 2>/dev/null)"; then
+        stty -echo < /dev/tty 2>/dev/null || true
+        trap 'stty "$STTY_SAVE" < /dev/tty 2>/dev/null || true' INT TERM HUP
+        read -r ANSWER < /dev/tty || ANSWER=""
+        stty "$STTY_SAVE" < /dev/tty 2>/dev/null || true
+        trap - INT TERM HUP
+        printf '\n' > /dev/tty
+      else
+        read -r ANSWER < /dev/tty || ANSWER=""
+      fi
       if [ -n "$ANSWER" ]; then
         TMP_ENV="$(mktemp .env.tmp.XXXXXX 2>/dev/null || echo .env.tmp.$$)"
         chmod 600 "$TMP_ENV" 2>/dev/null || true
@@ -372,21 +385,40 @@ start_brew_db() {
     sleep 2
   done
   pg_user="${USER:-$(whoami 2>/dev/null || echo postgres)}"
+  # AH-AUDIT-040a: never reset an existing role's password as an automatic
+  # repair — that would weaken credentials and break unrelated apps. Only a
+  # role created here gets a generated password; pre-existing roles and
+  # custom DATABASE_URL values are preserved untouched.
+  CREATED_POSTGRES=0
   if ! "$pg_bin/psql" -h localhost -U "$pg_user" -d postgres -tc \
-    "SELECT 1 FROM pg_roles WHERE rolname='postgres'" 2>/dev/null | grep -q 1; then
-    "$pg_bin/createuser" -h localhost -U "$pg_user" -s postgres < /dev/null || return 1
+    "SELECT 1 FROM pg_roles WHERE rolname='agentharness'" 2>/dev/null | grep -q 1; then
+    "$pg_bin/createuser" -h localhost -U "$pg_user" -s agentharness < /dev/null || return 1
+    CREATED_POSTGRES=1
   fi
-  "$pg_bin/psql" -h localhost -U "$pg_user" -d postgres \
-    -c "ALTER USER postgres PASSWORD 'postgres';" >/dev/null 2>&1
+  if [ "$CREATED_POSTGRES" = "1" ]; then
+    BREW_DB_PASS="$(rand_hex | cut -c1-32)"
+    "$pg_bin/psql" -h localhost -U "$pg_user" -d postgres \
+      -c "ALTER USER agentharness PASSWORD '${BREW_DB_PASS}';" >/dev/null 2>&1 || return 1
+    TMP_ENV="$(mktemp .env.tmp.XXXXXX 2>/dev/null || echo .env.tmp.$$)"
+    chmod 600 "$TMP_ENV" 2>/dev/null || true
+    grep -v -E '^DATABASE_URL=' .env > "$TMP_ENV" || true
+    printf 'DATABASE_URL=postgresql://agentharness:%s@localhost:5432/agentharness\n' \
+      "$BREW_DB_PASS" >> "$TMP_ENV"
+    mv "$TMP_ENV" .env
+    chmod 600 .env 2>/dev/null || true
+    log "Wrote generated agentharness role credentials to .env DATABASE_URL (mode 0600)"
+  else
+    warn "Reusing existing agentharness role; existing credentials preserved (set DATABASE_URL if init fails)"
+  fi
   if ! "$pg_bin/psql" -h localhost -U "$pg_user" -d postgres -tc \
     "SELECT 1 FROM pg_database WHERE datname='agentharness'" 2>/dev/null | grep -q 1; then
-    "$pg_bin/createdb" -h localhost -U "$pg_user" -O postgres agentharness < /dev/null || return 1
+    "$pg_bin/createdb" -h localhost -U "$pg_user" -O agentharness agentharness < /dev/null || return 1
   fi
-  if ! "$pg_bin/psql" -h localhost -U postgres -d agentharness \
+  if ! "$pg_bin/psql" -h localhost -U agentharness -d agentharness \
     -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>&1; then
     warn "Brew pgvector doesn't fit postgresql@16; building pgvector from source"
     brew_vector_from_source "$pg_bin" || return 1
-    "$pg_bin/psql" -h localhost -U postgres -d agentharness \
+    "$pg_bin/psql" -h localhost -U agentharness -d agentharness \
       -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>&1 || return 1
   fi
   return 0
@@ -445,7 +477,7 @@ else
         warn "  docker:  docker run -d --name agentharness-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=<generated> -e POSTGRES_DB=agentharness -p 127.0.0.1:5432:5432 pgvector/pgvector:pg16"
         warn "           (then set DATABASE_URL=postgresql://postgres:<generated>@127.0.0.1:5432/agentharness in .env, mode 0600)"
         warn "  brew:    brew install postgresql@16 pgvector && brew services start postgresql@16"
-        warn "           createuser -s postgres && createdb -O postgres agentharness && psql -U postgres -d agentharness -c 'CREATE EXTENSION vector;'"
+        warn "           createuser -s agentharness && createdb -O agentharness agentharness && psql -U agentharness -d agentharness -c 'CREATE EXTENSION vector;'"
         ;;
       windows)
         warn "  docker (Docker Desktop): same docker run line as above"

@@ -41,6 +41,18 @@ async def test_script_job_persists_and_delivers_stdout_without_an_agent(
             raise AssertionError("LLM agent was built")
 
         monkeypatch.setattr(runner, "_build_agent", no_agent)
+        # AH-AUDIT-009: broker-governed scripts pause first; drive the real
+        # pause → human resolve → execute flow.
+        from ah.permissions import store as perm_store
+
+        with pytest.raises(PermissionError, match="needs_approval"):
+            await runner._execute(job)
+        pending = await perm_store.list_pending(str(session.id))
+        assert len(pending) == 1
+        resolved = await perm_store.resolve_decision(
+            pending[0]["request_id"], "approved", principal="tui"
+        )
+        assert resolved is not None
         await runner._execute(job)
         assert chunks[0]["session_id"] == session.id
         assert chunks[0]["payload"]["content"] == "disk alert"
@@ -178,7 +190,9 @@ async def test_script_children_do_not_outlive_successful_parent(
     child_code = (
         f"import time, pathlib; time.sleep(1.5); pathlib.Path({str(marker)!r}).write_text('late')"
     )
-    output_args = ", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL" if detached_output else ""
+    output_args = (
+        ", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL" if detached_output else ""
+    )
     (tmp_path / "parent.py").write_text(
         "import subprocess, sys\n"
         f"subprocess.Popen([sys.executable, '-c', {child_code!r}]{output_args})\n"

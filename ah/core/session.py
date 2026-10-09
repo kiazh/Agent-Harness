@@ -81,10 +81,40 @@ class SessionManager:
         return session
 
     async def get(self, session_id: uuid.UUID) -> Session | None:
-        """Get a session by ID (cached for 60 seconds)."""
+        """Get a session by ID (cached for 60 seconds).
+
+        AH-AUDIT-019: the cached object is never shared mutably — hits
+        return a copy, so callers cannot mutate the authority source.
+        Execution-critical reads must use get_fresh() instead.
+        """
+        import copy as _copy
+
         cached = await self._cache_get(session_id)
         if cached is not None:
-            return cached
+            return _copy.copy(cached)
+        row = await db.fetchrow(
+            """
+            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, created_at, last_activity
+            FROM sessions WHERE id = $1
+            """,
+            session_id,
+        )
+        if row is None:
+            return None
+        session = self._row_to_session(row)
+        await self._cache_put(session)
+        import copy as _copy2
+
+        return _copy2.copy(session)
+
+    async def get_fresh(self, session_id: uuid.UUID) -> Session | None:
+        """Bypass the cache for execution-critical reads (AH-AUDIT-019).
+
+        Session execution, resume, provider/model resolution, and state
+        updates must observe current durable state, not a up-to-60s-old
+        cache entry written by another worker. The fresh row refreshes the
+        cache for presentational readers.
+        """
         row = await db.fetchrow(
             """
             SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, created_at, last_activity
@@ -128,6 +158,44 @@ class SessionManager:
             state_msgpack,
         )
         await self._cache_invalidate(session_id)
+
+    async def update_state_fields(self, session_id: uuid.UUID, fields: dict) -> dict:
+        """Transactionally merge *fields* into session state (AH-AUDIT-018).
+
+        The row is locked (SELECT ... FOR UPDATE) so concurrent writers
+        updating independent fields serialize instead of clobbering each
+        other — emotion, watermark, and compaction-state writes all survive.
+        Unrelated existing keys are preserved; legacy non-dict state is
+        treated as empty. Returns the merged state. Never relies on a
+        cached snapshot for the write.
+        """
+        if not isinstance(fields, dict):
+            raise ValueError("fields must be a dict")
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT state_msgpack FROM sessions WHERE id = $1 FOR UPDATE",
+                    session_id,
+                )
+                if row is None:
+                    raise ValueError(f"Session {session_id} not found")
+                current: dict = {}
+                raw = row.get("state_msgpack") if hasattr(row, "get") else row["state_msgpack"]
+                if raw:
+                    try:
+                        unpacked = msgpack.unpackb(raw, raw=False)
+                        if isinstance(unpacked, dict):
+                            current = unpacked
+                    except Exception:
+                        current = {}
+                merged = {**current, **fields}
+                await conn.execute(
+                    "UPDATE sessions SET state_msgpack = $2, last_activity = now() WHERE id = $1",
+                    session_id,
+                    msgpack.packb(merged, use_bin_type=True),
+                )
+        await self._cache_invalidate(session_id)
+        return merged
 
     async def update_activity(self, session_id: uuid.UUID) -> None:
         """Touch last_activity timestamp."""

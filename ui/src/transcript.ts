@@ -20,6 +20,8 @@ export class Transcript {
 	private spinnerTimer: ReturnType<typeof setInterval> | undefined;
 	private current: AssistantMessage | undefined;
 	private wroteText = false;
+	/** Text rendered via deltas this turn; reconciled with canonical final. */
+	private displayed = "";
 	private readonly tools = new Map<string, ToolCard>();
 
 	constructor(container: Container, spinner: Component & { start(): void; stop(): void }) {
@@ -43,6 +45,7 @@ export class Transcript {
 		this.hideSpinner();
 		this.container.clear();
 		this.current = undefined;
+		this.displayed = "";
 		this.tools.clear();
 	}
 
@@ -65,6 +68,7 @@ export class Transcript {
 			case "message.start":
 				this.current = undefined;
 				this.wroteText = false;
+				this.displayed = "";
 				this.showSpinner();
 				return undefined;
 			case "message.delta":
@@ -74,6 +78,7 @@ export class Transcript {
 					this.container.addChild(this.current);
 				}
 				this.current.append(event.text);
+				this.displayed += event.text;
 				this.wroteText = true;
 				return undefined;
 			case "tool.start": {
@@ -95,10 +100,30 @@ export class Transcript {
 				this.hideSpinner();
 				this.addNotice(event.message, "error");
 				return undefined;
+			case "message.stopping":
+				// AH-AUDIT-028: cleanup state — the turn is stopping but
+				// ownership is not yet released. Stay blocked; the terminal
+				// message.complete still follows exactly once.
+				this.addNotice("Stopping…", "warning");
+				return undefined;
 			case "message.complete":
 				this.hideSpinner();
+				// AH-AUDIT-027: reconcile with the canonical final content.
+				// Deltas alone may omit a withheld redaction tail: when the
+				// canonical text extends what was displayed, append exactly
+				// the missing suffix (never a duplicate). With no deltas,
+				// render the canonical text once.
 				if (!this.wroteText && event.text) {
 					this.container.addChild(new AssistantMessage(event.text));
+					this.displayed = event.text;
+				} else if (event.text && event.text !== this.displayed) {
+					if (event.text.startsWith(this.displayed)) {
+						const missing = event.text.slice(this.displayed.length);
+						if (missing) {
+							this.current?.append(missing);
+							this.displayed = event.text;
+						}
+					}
 				}
 				if (event.cancelled) {
 					this.addNotice("Stopped.", "warning");

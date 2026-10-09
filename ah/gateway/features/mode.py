@@ -15,16 +15,42 @@ from ah.gateway.features._common import _str
 
 async def mode_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     gw.require_db()
+    from ah.core.session_mode import get_effective_mode, get_session_mode
+
+    session_id = params.get("sessionId")
+    if session_id:
+        return {
+            "mode": get_effective_mode(str(session_id)),
+            "session_mode": get_session_mode(str(session_id)),
+            "default": config.get("execution_mode"),
+            "backend": _backend(str(session_id)),
+        }
     return {"mode": config.get("execution_mode"), "backend": _backend()}
 
 
 async def mode_set(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Explicit mode activation. Full mode records a session-scoped grant."""
+    """Explicit mode activation (AH-AUDIT-001).
+
+    scope=session (default): session-local only — never mutates the global
+    default, so future sessions are unaffected. Full activation records a
+    session-scoped grant AFTER the session override is staged; a grant-write
+    failure leaves no partial elevation (override is rolled back).
+    scope=global: explicit persistent-default change affecting subsequently
+    created sessions only.
+    """
     gw.require_db()
+    from ah.core.session_mode import (
+        clear_session_mode,
+        get_effective_mode,
+        set_session_mode,
+    )
+
     mode = _str(params, "mode", max_len=20).lower()
     if mode not in ("ask", "workspace", "sandbox", "full"):
         raise RpcError(INVALID_PARAMS, "mode must be ask|workspace|sandbox|full")
-    scope = str(params.get("scope") or "session")
+    scope = str(params.get("scope") or "session").lower()
+    if scope not in ("session", "global"):
+        raise RpcError(INVALID_PARAMS, "scope must be session|global")
     if mode == "sandbox":
         from ah.core.runtime import runtime_services
 
@@ -35,17 +61,29 @@ async def mode_set(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
                 "sandbox isolation unavailable (no Docker); staying in ask mode. "
                 "Approve host ask mode instead — never a silent downgrade.",
             )
-    config.set("execution_mode", mode, persist=bool(params.get("persist", False)))
-    if mode == "full":
-        # Explicit activation with disclosed SESSION grant. The global config
-        # value alone never authorizes (LP-07): only this live grant does.
-        from ah.permissions import store as _store
+    if scope == "global":
+        # Explicit future-session default: global mutation is the point.
+        # Existing sessions keep their explicit session overrides.
+        config.set("execution_mode", mode, persist=bool(params.get("persist", False)))
+        return {"mode": mode, "scope": scope, "backend": _backend()}
 
-        session = await gw.get_session(params) if params.get("sessionId") else None
-        if session is not None:
+    # Session-local activation: never touch the global default.
+    from ah.permissions import store as _store
+
+    session = await gw.get_session(params) if params.get("sessionId") else None
+    if session is None:
+        raise RpcError(INVALID_PARAMS, "sessionId is required for session-scoped mode")
+    sid = str(session.id)
+    previous = get_effective_mode(sid)
+    if mode == "full":
+        # Stage the override first so policy sees the intended mode, then
+        # persist the grant that actually authorizes it. Roll back the
+        # override when the grant write fails: no partial elevation.
+        set_session_mode(sid, mode)
+        try:
             await _store.save_grant(
                 {
-                    "session_id": str(session.id),
+                    "session_id": sid,
                     "agent_id": session.agent_id,
                     "mode": "full",
                     "capability": "session",
@@ -55,15 +93,41 @@ async def mode_set(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
                     "digest": "full-mode-session",
                 }
             )
-    return {"mode": mode, "scope": scope, "backend": _backend()}
+        except Exception:
+            # Atomicity: failure leaves no elevation behind.
+            try:
+                if previous == config.get("execution_mode"):
+                    clear_session_mode(sid)
+                else:
+                    set_session_mode(sid, previous)
+            except Exception:
+                clear_session_mode(sid)
+            raise
+    else:
+        # Leaving full (or switching ask/workspace/sandbox): revoke the
+        # session's full-mode grant, then record the session override.
+        # Revocation failure must not leave full authority active under a
+        # non-full label: keep the full override and surface the error.
+        from ah.permissions.broker import permission_broker
+
+        try:
+            await permission_broker.revoke(sid)
+        except Exception:
+            set_session_mode(sid, "full")
+            raise
+        set_session_mode(sid, mode)
+    return {"mode": mode, "scope": scope, "backend": _backend(sid)}
 
 
 async def mode_revoke(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """Revoke SESSION grants only (LP-07); the global default is untouched.
 
     Pass scope=global (CLI durable reset) to also reset the persistent default.
+    Session scope clears the session override so the session falls back to
+    the global default (well-defined switch-back-to-ask behavior).
     """
     gw.require_db()
+    from ah.core.session_mode import clear_session_mode, get_effective_mode
     from ah.permissions.broker import permission_broker
 
     session = await gw.get_session(params)
@@ -71,7 +135,8 @@ async def mode_revoke(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     if str(params.get("scope") or "session") == "global":
         config.set("execution_mode", "ask")
         return {"revoked": n, "mode": "ask", "scope": "global"}
-    return {"revoked": n, "mode": config.get("execution_mode"), "scope": "session"}
+    clear_session_mode(str(session.id))
+    return {"revoked": n, "mode": get_effective_mode(str(session.id)), "scope": "session"}
 
 
 async def approvals_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
@@ -148,9 +213,11 @@ async def approvals_resolve(gw: Gateway, params: dict[str, Any]) -> dict[str, An
     return {"approval": {"requestId": request_id, "status": verdict}}
 
 
-def _backend() -> str:
+def _backend(session_id: str | None = None) -> str:
     try:
-        if (config.get("execution_mode") or "ask") == "sandbox":
+        from ah.core.session_mode import get_effective_mode
+
+        if get_effective_mode(session_id) == "sandbox":
             return "sandbox"
         return "host"
     except Exception:

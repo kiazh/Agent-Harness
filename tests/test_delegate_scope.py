@@ -59,5 +59,12 @@ async def test_delegate_records_the_actual_parent_agent(monkeypatch):
         current_agent_id.reset(agent_token)
         current_session_id.reset(session_token)
     assert calls == [
-        {"from_agent": "researcher", "parent_session_id": session_id, "_hop_count": 1}
+        {
+            "from_agent": "researcher",
+            "parent_session_id": session_id,
+            "_hop_count": 1,
+            # LP-08: the executing parent's authority propagates (None when
+            # unrestricted) so the child cannot exceed it.
+            "authority": None,
+        }
     ]

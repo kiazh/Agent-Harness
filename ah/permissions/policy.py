@@ -56,6 +56,12 @@ class ActionRequest:
     # Concrete tool name (when invoked through the agent tool loop). Lets the
     # broker enforce inherited parent caps even when session grants exist.
     tool: str = ""
+    # Redacted display-only preview of proposed content (AH-AUDIT-004): shown
+    # on approval cards, never executed. Execution binds to content_digest
+    # via the canonical digest; the preview is truncated with its full
+    # length disclosed. Secrets are redacted at build time.
+    content_preview: str = ""
+    content_length: int = 0
     # Filled by the broker when an approval is claimed for this execution;
     # the agent loop marks it completed/failed/cancelled afterwards.
     approval_id: str = ""
@@ -68,10 +74,35 @@ class Decision:
     request: ActionRequest | None = None
 
 
+DIGEST_VERSION = "v1"
+
+
 def _digest_of(*parts: str) -> str:
+    """Versioned canonical digest (AH-AUDIT-008).
+
+    Each part is length-prefixed (not separator-joined), so distinct arrays
+    such as ['echo', 'a|b'] and ['echo', 'a', 'b'] never collide. Callers
+    must pass every material authorization field; see normalize_request.
+    """
     h = hashlib.sha256()
+    h.update(b"ah-action-digest-v1\x00")
     for p in parts:
-        h.update(str(p).encode("utf-8", errors="replace"))
+        encoded = str(p).encode("utf-8", errors="replace")
+        h.update(str(len(encoded)).encode("ascii"))
+        h.update(b":")
+        h.update(encoded)
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
+def _canonical_list(values: list[str] | tuple[str, ...] | None) -> str:
+    """Length-prefixed encoding preserving array boundaries and order."""
+    h = hashlib.sha256()
+    for v in values or []:
+        encoded = str(v).encode("utf-8", errors="replace")
+        h.update(str(len(encoded)).encode("ascii"))
+        h.update(b":")
+        h.update(encoded)
         h.update(b"\x00")
     return h.hexdigest()
 
@@ -87,44 +118,149 @@ def workspace_root() -> Path:
 
 
 def _sensitive_capabilities(req: ActionRequest) -> list[str]:
-    found = [c for c in req.capabilities if c in CONFLICTING_CAPABILITIES]
-    # Heuristic tripwires (explicit approval, never silent):
+    """Exact capability identity plus heuristic tripwires (AH-AUDIT-006/007).
+
+    Structured capabilities in CONFLICTING_CAPABILITIES match exactly.
+    Heuristic substring tripwires are a backstop for opaque execution (which
+    can never be fully classified by substrings): they force explicit
+    approval but never silently authorize.
+    """
+    found = [c for c in (req.capabilities or []) if c in CONFLICTING_CAPABILITIES]
+    # Opaque executables (npm/pip/python/...) can run arbitrary code: their
+    # full effects are unknowable statically, so they always need explicit
+    # review for mutating operations.
+    if "opaque_execution" in (req.capabilities or []) and req.operation in (
+        "process.exec",
+        "file.write",
+        "network.fetch",
+    ):
+        # Unclassifiable power bucket: the approval card shows the
+        # opaque_execution capability itself so reviewers see the real
+        # reason. Destructive commands below map to destructive_system.
+        found.append("opaque_execution_review")
     blob = " ".join([req.shell_payload, *req.argv, *req.targets]).lower()
-    if any(k in blob for k in (".ssh", ".aws", "id_rsa", ".gnupg", "secrets", "credential")):
+    if any(
+        k in blob
+        for k in (
+            ".ssh",
+            ".aws",
+            "id_rsa",
+            "id_ed25519",
+            ".gnupg",
+            "secrets",
+            "credential",
+            ".env",
+            ".npmrc",
+            ".pypirc",
+            "passwd",
+            "shadow",
+        )
+    ):
         found.append("credential_access")
     if any(
         k in blob
-        for k in ("sudo", "runas", "set-mppreference", "iptables", "format ", "mkfs", "diskpart")
+        for k in (
+            "sudo",
+            "runas",
+            "set-mppreference",
+            "iptables",
+            "set-executionpolicy",
+            "chmod 777",
+            "chown ",
+            "passwd ",
+            "net user",
+        )
     ):
         found.append("privilege_escalation")
+    if any(
+        k in blob
+        for k in (
+            "rm -rf",
+            "rm --no-preserve",
+            "mkfs",
+            "diskpart",
+            "format ",
+            "shutdown",
+            "reboot",
+            "halt",
+            ":(){:|:&};:",
+            "dd if=",
+            "del /f",
+            "del /s",
+            "rd /s",
+            "remove-item",
+        )
+    ):
+        found.append("destructive_system")
+    # Bare destructive verbs as argv[0] (rm/del/dd/shutdown/...) — argv
+    # boundaries are exact here, not substrings.
+    if req.argv:
+        first = req.argv[0].lower().rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        if first in ("rm", "rmdir", "dd", "mkfs", "fdisk", "shutdown", "reboot", "halt"):
+            found.append("destructive_system")
     return sorted(set(found))
 
 
+# Capabilities that force explicit approval even when named (never implied by
+# a generic session/full grant). opaque_execution_review is the review bucket
+# for unclassifiable opaque execution.
+REVIEW_CAPABILITIES = frozenset(
+    {
+        "credential_access",
+        "privilege_escalation",
+        "security_settings",
+        "destructive_system",
+        "opaque_execution_review",
+    }
+)
+
+
 def normalize_request(req: ActionRequest) -> ActionRequest:
-    """Canonicalize paths/cwd/digest; separate validation from authorization."""
+    """Canonicalize paths/cwd/digest; separate validation from authorization.
+
+    AH-AUDIT-011: relative paths resolve against the shared workspace root
+    (the same root the file backend executes against), never the process
+    CWD. The approved object and the accessed object therefore share one
+    identity; runtime configuration changes revalidate at execution.
+    """
     if not req.request_id:
         req.request_id = uuid.uuid4().hex
+    root = workspace_root()
     try:
-        req.cwd = str(Path(req.cwd or ".").resolve())
+        cwd_path = Path(req.cwd or ".")
+        if not cwd_path.is_absolute():
+            cwd_path = root / cwd_path
+        req.cwd = str(cwd_path.resolve())
     except Exception:
         pass
     canon_targets = []
     for t in req.targets:
         try:
-            canon_targets.append(str(Path(t).resolve()))
+            target_path = Path(t)
+            if not target_path.is_absolute():
+                target_path = root / target_path
+            canon_targets.append(str(target_path.resolve()))
         except Exception:
             canon_targets.append(str(t))
     req.targets = canon_targets
+    # AH-AUDIT-008: every material authorization field is bound with
+    # array-boundary-preserving encoding (no separator joins). Tool
+    # identity, sorted capabilities, and timeout are included: changing any
+    # of them invalidates prior approval.
     req.digest = _digest_of(
         req.mode,
         req.backend,
         req.operation,
-        "|".join(req.argv),
+        req.tool,
+        _canonical_list(sorted(req.capabilities or [])),
+        _canonical_list(req.argv),
         req.shell_payload,
         req.cwd,
-        "|".join(req.targets),
+        _canonical_list(req.targets),
         req.content_digest,
-        "|".join(req.network),
+        _canonical_list(req.network),
+        str(req.timeout),
+        str(req.opaque_network),
     )
     return req
 
@@ -141,14 +277,28 @@ def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
     grants = grants or []
     sens = _sensitive_capabilities(req)
     if sens:
-        # Sensitive exclusions remain explicit in EVERY mode, including full.
+        # AH-AUDIT-007: sensitive exclusions remain explicit in EVERY mode,
+        # including full. EVERY required sensitive capability must be covered
+        # by exact capability identity on a live, digest-bound grant for this
+        # exact action. One matching grant never authorizes the others, and
+        # substring matching is never used. Ordinary operation/session grants
+        # and full-mode grants are not sensitive consent.
+        needed = set(sens)
+        covered: set[str] = set()
         for g in grants:
             if not _grant_usable(g, req):
                 continue
-            if g.get("digest") == req.digest and any(
-                s in (g.get("capability") or "") for s in sens
-            ):
-                return Decision("allowed", f"scoped grant covers {','.join(sens)}", req)
+            if g.get("digest") != req.digest:
+                continue
+            cap = str(g.get("capability") or "")
+            # Exact identity: the grant capability must equal the required
+            # sensitive capability (or be an explicit multi-capability grant
+            # recorded as a comma-separated exact set — each element matched
+            # exactly, never by substring).
+            granted_caps = {c.strip() for c in cap.split(",") if c.strip()}
+            covered |= needed.intersection(granted_caps)
+        if needed.issubset(covered):
+            return Decision("allowed", f"scoped grant covers {','.join(sorted(needed))}", req)
         return Decision(
             "pending", f"sensitive capability requires explicit approval: {','.join(sens)}", req
         )
@@ -319,9 +469,32 @@ def build_request(
     capabilities: list[str] | None = None,
     network: list[str] | None = None,
     tool: str = "",
+    timeout: int = 60,
 ) -> ActionRequest:
     from ah.core.config import config
 
+    # AH-AUDIT-004: redacted display preview bound to the same identity as
+    # the executable digest. Truncated with full length disclosed. Attached
+    # ONLY where content is the proposal (file.write): for other operations
+    # the card shows argv/targets, never raw secret-bearing blobs.
+    preview = ""
+    preview_len = 0
+    if content:
+        preview_len = len(content)
+    if content and operation == "file.write":
+        try:
+            from ah.memory.redaction import redact_secrets as _redact
+
+            preview = _redact(content[:4000]).text
+            if preview_len > 4000:
+                preview += f"\n… [truncated: showing 4000 of {preview_len} chars]"
+        except Exception:
+            preview = ""
+            preview_len = len(content)
+    try:
+        timeout = int(timeout)
+    except (TypeError, ValueError):
+        timeout = 60
     req = ActionRequest(
         session_id=str(session_id or ""),
         turn_id=str(turn_id or ""),
@@ -332,10 +505,13 @@ def build_request(
         argv=list(argv or []),
         shell_payload=shell_payload,
         cwd=cwd or str(workspace_root()),
+        timeout=timeout,
         targets=list(targets or []),
         content_digest=hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
         if content
         else "",
+        content_preview=preview,
+        content_length=preview_len,
         capabilities=list(capabilities or []),
         network=list(network or []),
         tool=str(tool or ""),

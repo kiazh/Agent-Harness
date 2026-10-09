@@ -108,23 +108,15 @@ def _config_snapshot() -> dict[str, Any]:
 
 
 def coerce_config_value(key: str, value: Any) -> Any:
-    """Convert *value* to the type of ``DEFAULTS[key]``; raise RpcError if impossible."""
-    default = DEFAULTS[key]
+    """Validate *value* via the shared typed contract; raise RpcError if invalid.
+
+    AH-AUDIT-042: transport APIs enforce the same type + domain bounds as
+    Config.set (no divergent lenient contract). Nothing is mutated here —
+    callers persist only after this returns.
+    """
+    from ah.core.config import validate_value
+
     try:
-        if isinstance(default, bool):
-            if isinstance(value, bool):
-                return value
-            text = str(value).strip().lower()
-            if text in ("true", "1", "yes", "on"):
-                return True
-            if text in ("false", "0", "no", "off"):
-                return False
-            raise ValueError
-        if isinstance(default, int):
-            return int(value)
-        if isinstance(default, float):
-            return float(value)
-        return str(value)
-    except (ValueError, TypeError):
-        expected = type(default).__name__
-        raise RpcError(INVALID_PARAMS, f"{key} must be a {expected}") from None
+        return validate_value(key, value)
+    except ValueError as e:
+        raise RpcError(INVALID_PARAMS, str(e)) from None

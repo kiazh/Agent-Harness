@@ -16,17 +16,42 @@ logger = logging.getLogger(__name__)
 # Base directory for all file operations. Defaults to the current working
 # directory; override via the agent_harness_home config key.
 _BASE_DIR = Path(config.get("agent_harness_home") or os.getcwd()).resolve()
+_IMPORT_BASE_DIR = _BASE_DIR
 _PRIVATE_PARTS = {".git", ".aws", ".ssh", ".agent-harness", "__pycache__"}
 _PRIVATE_FILES = {".env", ".env.local", ".npmrc", ".pypirc", "id_rsa", "id_ed25519"}
 
 
+def _base_dir() -> Path:
+    """Shared execution root (AH-AUDIT-011).
+
+    Follows the same workspace_root() contract the permission policy uses
+    for proposal identity, so approval and access name the same file even
+    when process CWD, workspace_root, and agent_harness_home differ.
+    An explicitly monkeypatched _BASE_DIR (tests) is honored.
+    """
+    try:
+        import ah.tools.file as _self
+
+        if Path(_self._BASE_DIR) != _IMPORT_BASE_DIR:
+            return Path(_self._BASE_DIR)
+    except Exception:
+        pass
+    try:
+        from ah.permissions.policy import workspace_root as _ws_root
+
+        return _ws_root()
+    except Exception:
+        return _BASE_DIR
+
+
 def _realpath_inside_base(path: Path) -> Path:
     """Return realpath of *path* or raise if it escapes the base."""
+    base = _base_dir()
     try:
         real = Path(os.path.realpath(path)).resolve()
     except OSError:
         real = path.resolve()
-    if not real.is_relative_to(_BASE_DIR):
+    if not real.is_relative_to(base):
         raise ValueError(f"Path '{path}' escapes the allowed base directory")
     return real
 
@@ -35,14 +60,15 @@ def _reject_symlink_components(candidate: Path) -> None:
     """Reject paths whose ancestor chain contains a symlink escaping the base.
 
     Handles ancestor symlinks, not only the final component (AH-003). Each
-    component from _BASE_DIR to the candidate is lstat-checked; if any is a
+    component from the base to the candidate is lstat-checked; if any is a
     symlink, the fully-resolved realpath must still stay inside the base.
     """
+    base = _base_dir()
     try:
-        rel = candidate.relative_to(_BASE_DIR)
+        rel = candidate.relative_to(base)
     except ValueError:
         raise ValueError(f"Path '{candidate}' escapes the allowed base directory") from None
-    cur = _BASE_DIR
+    cur = base
     for part in rel.parts:
         cur = cur / part
         try:
@@ -90,6 +116,32 @@ def _verify_fd_matches_path(fd: int, candidate: Path, *, check_base: bool = True
 
 
 def _full_mode() -> bool:
+    """Session-aware full-mode check (AH-AUDIT-001/002).
+
+    The broker-stamped snapshot wins; otherwise the session-effective mode
+    (via caller scope) is used. The raw global alone never decides.
+    """
+    try:
+        from ah.permissions.broker import get_execution_context
+
+        snap = get_execution_context()
+        if snap and snap.get("mode"):
+            return str(snap["mode"]).lower() == "full"
+    except Exception:
+        pass
+    try:
+        sid = None
+        try:
+            from ah.tools.agents import current_session_id as _sid_var
+
+            sid = _sid_var.get()
+        except Exception:
+            sid = None
+        from ah.core.session_mode import get_effective_mode
+
+        return get_effective_mode(str(sid) if sid else None) == "full"
+    except Exception:
+        pass
     try:
         from ah.core.config import config as _cfg
 
@@ -106,22 +158,23 @@ def resolve_path(path: str, *, allow_outside: bool = False) -> Path:
     (.ssh/.aws/.env/credentials) stay blocked everywhere. Returns the
     resolved :class:`~pathlib.Path` on success.
     """
+    base = _base_dir()
     raw = Path(path)
     if allow_outside and _full_mode() and raw.is_absolute():
         candidate = raw.resolve()
     else:
         # Resolve the candidate path (handles .., symlinks, etc.)
-        candidate = (_BASE_DIR / path).resolve()
+        candidate = (base / path).resolve()
 
         # Ensure the resolved path is within the allowed root
-        if not candidate.is_relative_to(_BASE_DIR):
-            raise ValueError(f"Path '{path}' escapes the allowed base directory '{_BASE_DIR}'")
+        if not candidate.is_relative_to(base):
+            raise ValueError(f"Path '{path}' escapes the allowed base directory '{base}'")
 
     if not allow_outside or not _full_mode():
-        parts = candidate.relative_to(_BASE_DIR).parts
+        parts = candidate.relative_to(base).parts
     else:
         try:
-            parts = candidate.relative_to(_BASE_DIR).parts
+            parts = candidate.relative_to(base).parts
         except ValueError:
             parts = candidate.parts
     if any(part.lower() in _PRIVATE_PARTS for part in parts) or any(
@@ -131,7 +184,7 @@ def resolve_path(path: str, *, allow_outside: bool = False) -> Path:
     ):
         raise ValueError(f"Path '{path}' is private")
 
-    outside = not candidate.is_relative_to(_BASE_DIR)
+    outside = not candidate.is_relative_to(base)
     if not outside:
         # Ancestor-symlink check (no /proc dependency — AH-004).
         _reject_symlink_components(candidate)
@@ -194,7 +247,7 @@ def _secure_mkdir_parents(file_path: Path, *, inside_base: bool) -> None:
     os.mkdir fails on symlink-to-dir with FileExistsError; every level is
     lstat-verified afterwards. Raises ValueError on any symlink component.
     """
-    root = _BASE_DIR if inside_base else Path(file_path.anchor)
+    root = _base_dir() if inside_base else Path(file_path.anchor)
     try:
         rel = file_path.parent.relative_to(root)
     except ValueError:
@@ -288,7 +341,7 @@ async def read_file(
         def _read():
             # Secure open via descriptor (AH-003): do not reopen the
             # pathname after validation — read from the verified fd.
-            outside = not file_path.is_relative_to(_BASE_DIR)
+            outside = not file_path.is_relative_to(_base_dir())
             fd = _open_secure_read(file_path, check_base=not outside)
             try:
                 with os.fdopen(fd, encoding="utf-8", errors="replace") as f:
@@ -337,7 +390,7 @@ async def write_file(path: str, content: str) -> str:
     try:
 
         def _write():
-            inside = file_path.is_relative_to(_BASE_DIR)
+            inside = file_path.is_relative_to(_base_dir())
             if inside:
                 # Verify ancestors (symlink-aware) before creating parents.
                 _reject_symlink_components(file_path)

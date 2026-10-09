@@ -84,6 +84,7 @@ class TestProviderMalformedJSON:
     async def test_missing_choices_key_does_not_crash(self):
         """Provider response missing 'choices' key should raise ProviderError, not KeyError."""
         from ah.core.exceptions import ProviderError
+
         provider = self._make_provider({"model": "test-model"})  # no choices
         with pytest.raises(ProviderError):
             await provider.complete(
@@ -93,6 +94,7 @@ class TestProviderMalformedJSON:
     async def test_choices_empty_list_raises(self):
         """Provider response with empty choices list should raise ProviderError, not IndexError."""
         from ah.core.exceptions import ProviderError
+
         provider = self._make_provider({"choices": [], "usage": {}})
         with pytest.raises(ProviderError):
             await provider.complete(
@@ -101,10 +103,12 @@ class TestProviderMalformedJSON:
 
     async def test_message_missing_content_uses_empty_string(self):
         """Provider response with message missing 'content' should default to empty string."""
-        provider = self._make_provider({
-            "choices": [{"message": {"role": "assistant"}}],  # no content
-            "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
-        })
+        provider = self._make_provider(
+            {
+                "choices": [{"message": {"role": "assistant"}}],  # no content
+                "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+            }
+        )
         result = await provider.complete(
             messages=[{"role": "user", "content": "hello"}],
         )
@@ -113,10 +117,12 @@ class TestProviderMalformedJSON:
 
     async def test_usage_missing_fields_defaults_to_zero(self):
         """Provider response with missing usage fields should default to 0."""
-        provider = self._make_provider({
-            "choices": [{"message": {"content": "OK", "tool_calls": []}}],
-            "usage": {},  # empty usage
-        })
+        provider = self._make_provider(
+            {
+                "choices": [{"message": {"content": "OK", "tool_calls": []}}],
+                "usage": {},  # empty usage
+            }
+        )
         result = await provider.complete(
             messages=[{"role": "user", "content": "hello"}],
         )
@@ -126,10 +132,12 @@ class TestProviderMalformedJSON:
 
     async def test_usage_with_string_values_does_not_crash(self):
         """Provider response with string usage values should not crash."""
-        provider = self._make_provider({
-            "choices": [{"message": {"content": "OK"}}],
-            "usage": {"prompt_tokens": "5", "completion_tokens": "3", "total_tokens": "8"},
-        })
+        provider = self._make_provider(
+            {
+                "choices": [{"message": {"content": "OK"}}],
+                "usage": {"prompt_tokens": "5", "completion_tokens": "3", "total_tokens": "8"},
+            }
+        )
         result = await provider.complete(
             messages=[{"role": "user", "content": "hello"}],
         )
@@ -138,15 +146,19 @@ class TestProviderMalformedJSON:
 
     async def test_tool_calls_with_missing_function_key(self):
         """Provider response with tool_call missing 'function' key should not crash."""
-        provider = self._make_provider({
-            "choices": [{
-                "message": {
-                    "content": "",
-                    "tool_calls": [{"id": "call_1"}],  # missing function
-                }
-            }],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
-        })
+        provider = self._make_provider(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [{"id": "call_1"}],  # missing function
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+            }
+        )
         result = await provider.complete(
             messages=[{"role": "user", "content": "hello"}],
         )
@@ -156,18 +168,24 @@ class TestProviderMalformedJSON:
 
     async def test_tool_calls_with_null_arguments(self):
         """Provider response with tool_call having null arguments should not crash."""
-        provider = self._make_provider({
-            "choices": [{
-                "message": {
-                    "content": "",
-                    "tool_calls": [{
-                        "id": "call_1",
-                        "function": {"name": "read_file", "arguments": None},
-                    }],
-                }
-            }],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
-        })
+        provider = self._make_provider(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "function": {"name": "read_file", "arguments": None},
+                                }
+                            ],
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+            }
+        )
         result = await provider.complete(
             messages=[{"role": "user", "content": "hello"}],
         )
@@ -205,6 +223,7 @@ class TestProviderMidStreamFailure:
         class MockStreamContext:
             async def __aenter__(self):
                 return mock_response
+
             async def __aexit__(self, *args):
                 pass
 
@@ -356,7 +375,9 @@ class TestProviderUsageMissing:
         )
         assert execute.await_args.args[5] == 15
 
-    async def test_usage_store_finish_with_zero_usage_and_failed_uses_reservation(self, monkeypatch):
+    async def test_usage_store_finish_with_zero_usage_and_failed_uses_reservation(
+        self, monkeypatch
+    ):
         """When failed=True, finish should use reservation regardless of usage."""
         store = UsageStore()
         call_id = uuid.uuid4()
@@ -389,6 +410,7 @@ class TestEmbedderOutage:
         embedder._timeout = 30.0
         embedder._cache_size = 1024
         from collections import OrderedDict
+
         embedder._cache: OrderedDict[str, list[float]] = OrderedDict()
         embedder._client = MagicMock()
         return embedder
@@ -440,9 +462,7 @@ class TestEmbedderOutage:
         """Embedder should cache successful embedding."""
         embedder = self._make_embedder()
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "data": [{"index": 0, "embedding": [0.1, 0.2, 0.3]}]
-        }
+        mock_response.json.return_value = {"data": [{"index": 0, "embedding": [0.1, 0.2, 0.3]}]}
         mock_response.raise_for_status = MagicMock()
         embedder._client.post = AsyncMock(return_value=mock_response)
 
@@ -457,13 +477,12 @@ class TestEmbedderOutage:
         embedder = self._make_embedder()
         # Pre-populate cache
         from ah.rag.embedder import OpenAIEmbedder as OE
+
         cache_key = embedder._cache_key("cached_text")
         embedder._cache[cache_key] = [0.1] * 1536
 
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "data": [{"index": 0, "embedding": [0.2] * 1536}]
-        }
+        mock_response.json.return_value = {"data": [{"index": 0, "embedding": [0.2] * 1536}]}
         mock_response.raise_for_status = MagicMock()
         embedder._client.post = AsyncMock(return_value=mock_response)
 
@@ -490,6 +509,7 @@ class TestOrchestratorTimeout:
         class SlowAgent:
             def __init__(self, definition):
                 pass
+
             async def run(self, session_id, user_message, verbose=True):
                 await asyncio.sleep(100)  # Will be cancelled
                 return MagicMock(content="should not reach", tokens_used=0, iterations=0)
@@ -503,10 +523,12 @@ class TestOrchestratorTimeout:
         mock_agent_def.system_prompt = None
         mock_agent_def.tools = None
 
-        with patch("ah.core.orchestrator.agent_registry") as mock_registry, \
-             patch("ah.core.orchestrator.session_manager") as mock_session_mgr, \
-             patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr, \
-             patch("ah.core.orchestrator.db") as mock_db:
+        with (
+            patch("ah.core.orchestrator.agent_registry") as mock_registry,
+            patch("ah.core.orchestrator.session_manager") as mock_session_mgr,
+            patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr,
+            patch("ah.core.orchestrator.db") as mock_db,
+        ):
             mock_registry.get = AsyncMock(return_value=mock_agent_def)
             mock_session = MagicMock()
             mock_session.id = uuid.uuid4()
@@ -517,6 +539,7 @@ class TestOrchestratorTimeout:
             mock_session.goal = None
             mock_session_mgr.create = AsyncMock(return_value=mock_session)
             mock_session_mgr.get = AsyncMock(return_value=mock_session)
+            mock_session_mgr.get_fresh = AsyncMock(return_value=mock_session)
             mock_db.execute = AsyncMock(return_value="INSERT 0 1")
             mock_ctx_mgr.get_recent_context = AsyncMock(return_value=[])
             mock_ctx_mgr.add_chunk = AsyncMock()
@@ -541,6 +564,7 @@ class TestOrchestratorTimeout:
         class CancellingAgent:
             def __init__(self, definition):
                 pass
+
             async def run(self, session_id, user_message, verbose=True):
                 raise asyncio.CancelledError()
 
@@ -553,10 +577,12 @@ class TestOrchestratorTimeout:
         mock_agent_def.system_prompt = None
         mock_agent_def.tools = None
 
-        with patch("ah.core.orchestrator.agent_registry") as mock_registry, \
-             patch("ah.core.orchestrator.session_manager") as mock_session_mgr, \
-             patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr, \
-             patch("ah.core.orchestrator.db") as mock_db:
+        with (
+            patch("ah.core.orchestrator.agent_registry") as mock_registry,
+            patch("ah.core.orchestrator.session_manager") as mock_session_mgr,
+            patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr,
+            patch("ah.core.orchestrator.db") as mock_db,
+        ):
             mock_registry.get = AsyncMock(return_value=mock_agent_def)
             mock_session = MagicMock()
             mock_session.id = uuid.uuid4()
@@ -567,6 +593,7 @@ class TestOrchestratorTimeout:
             mock_session.goal = None
             mock_session_mgr.create = AsyncMock(return_value=mock_session)
             mock_session_mgr.get = AsyncMock(return_value=mock_session)
+            mock_session_mgr.get_fresh = AsyncMock(return_value=mock_session)
             mock_db.execute = AsyncMock(return_value="INSERT 0 1")
             mock_ctx_mgr.get_recent_context = AsyncMock(return_value=[])
             mock_ctx_mgr.add_chunk = AsyncMock()
@@ -578,8 +605,7 @@ class TestOrchestratorTimeout:
 
             # Verify _record_end was called with status='cancelled'
             update_calls = [
-                c for c in mock_db.execute.call_args_list
-                if "UPDATE agent_messages" in str(c)
+                c for c in mock_db.execute.call_args_list if "UPDATE agent_messages" in str(c)
             ]
             assert len(update_calls) == 1
             assert "cancelled" in str(update_calls[0])
@@ -603,6 +629,7 @@ class TestSchedulerWorkerCrash:
         class CrashingAgent:
             def __init__(self, name):
                 pass
+
             async def run(self, *a, **k):
                 raise RuntimeError("worker crashed")
 
@@ -633,12 +660,14 @@ class TestSchedulerWorkerCrash:
         original_claim = store.claim_due
         store.claim_due = AsyncMock(return_value=mock_job)
 
-        # Mock finish to capture the error
+        # Mock finish to capture the error (real fenced interface).
         finish_calls = []
         original_finish = store.finish
-        async def mock_finish(job_id, error=None):
+
+        async def mock_finish(job_id, *, error=None, claim_token=None, paused_for=None):
             finish_calls.append((job_id, error))
             return None
+
         store.finish = mock_finish
 
         try:
@@ -663,6 +692,7 @@ class TestSchedulerWorkerCrash:
         class SlowAgent:
             def __init__(self, name):
                 pass
+
             async def run(self, *a, **k):
                 await asyncio.sleep(0.05)
                 return MagicMock(content="done", tokens_used=0, iterations=0)
@@ -747,12 +777,14 @@ class TestContextEvictionInterrupted:
         connection = AsyncMock()
         connection.transaction = MagicMock()
         call_count = 0
+
         async def mock_fetch(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count <= 12:  # Batch calls fail
                 raise Exception("batch archive failed")
             return [{"id": uuid.uuid4()}]  # Individual calls succeed
+
         connection.fetch = mock_fetch
         connection.fetchrow = AsyncMock(return_value={"id": uuid.uuid4()})
         connection.execute = AsyncMock(return_value="DELETE 1")
@@ -871,17 +903,19 @@ class TestConcurrentSessionWrites:
 
         database = MagicMock()
         database.fetch = AsyncMock(return_value=[])
-        database.fetchrow = AsyncMock(return_value={
-            "id": uuid.uuid4(),
-            "session_id": uuid.uuid4(),
-            "agent_id": "test-agent",
-            "chunk_type": "user_message",
-            "payload_msgpack": b"\x81\xa7content\xa5hello",
-            "token_count": 10,
-            "embedding": None,
-            "created_at": datetime.now(UTC),
-            "accessed_at": None,
-        })
+        database.fetchrow = AsyncMock(
+            return_value={
+                "id": uuid.uuid4(),
+                "session_id": uuid.uuid4(),
+                "agent_id": "test-agent",
+                "chunk_type": "user_message",
+                "payload_msgpack": b"\x81\xa7content\xa5hello",
+                "token_count": 10,
+                "embedding": None,
+                "created_at": datetime.now(UTC),
+                "accessed_at": None,
+            }
+        )
         database.fetchval = AsyncMock(return_value=0)
         database.execute = AsyncMock(return_value="INSERT 0 1")
         monkeypatch.setattr(ctx_mod, "db", database)
@@ -899,10 +933,7 @@ class TestConcurrentSessionWrites:
                 )
 
         # Run concurrent tasks for different sessions
-        tasks = [
-            add_chunk_task(uuid.uuid4())
-            for _ in range(5)
-        ]
+        tasks = [add_chunk_task(uuid.uuid4()) for _ in range(5)]
         # Should complete without deadlock
         await asyncio.wait_for(
             asyncio.gather(*tasks),
@@ -915,17 +946,19 @@ class TestConcurrentSessionWrites:
 
         database = MagicMock()
         database.fetch = AsyncMock(return_value=[])
-        database.fetchrow = AsyncMock(return_value={
-            "id": uuid.uuid4(),
-            "session_id": uuid.uuid4(),
-            "agent_id": "test-agent",
-            "chunk_type": "user_message",
-            "payload_msgpack": b"\x81\xa7content\xa5hello",
-            "token_count": 10,
-            "embedding": None,
-            "created_at": datetime.now(UTC),
-            "accessed_at": None,
-        })
+        database.fetchrow = AsyncMock(
+            return_value={
+                "id": uuid.uuid4(),
+                "session_id": uuid.uuid4(),
+                "agent_id": "test-agent",
+                "chunk_type": "user_message",
+                "payload_msgpack": b"\x81\xa7content\xa5hello",
+                "token_count": 10,
+                "embedding": None,
+                "created_at": datetime.now(UTC),
+                "accessed_at": None,
+            }
+        )
         database.fetchval = AsyncMock(return_value=0)
         database.execute = AsyncMock(return_value="INSERT 0 1")
         monkeypatch.setattr(ctx_mod, "db", database)
@@ -1078,11 +1111,13 @@ class TestMemoryRetrieverChaos:
 
         # LLM that returns malformed JSON
         llm = AsyncMock()
-        llm.complete = AsyncMock(return_value=LLMResponse(
-            content="not valid json{{{",
-            model="test",
-            usage={},
-        ))
+        llm.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="not valid json{{{",
+                model="test",
+                usage={},
+            )
+        )
 
         retriever = MemoryRetriever(store=store, llm_provider=llm, rerank=True)
         mock_db = AsyncMock()
@@ -1108,11 +1143,13 @@ class TestMemoryRetrieverChaos:
 
         # LLM that returns non-list JSON
         llm = AsyncMock()
-        llm.complete = AsyncMock(return_value=LLMResponse(
-            content='{"not": "a list"}',
-            model="test",
-            usage={},
-        ))
+        llm.complete = AsyncMock(
+            return_value=LLMResponse(
+                content='{"not": "a list"}',
+                model="test",
+                usage={},
+            )
+        )
 
         retriever = MemoryRetriever(store=store, llm_provider=llm, rerank=True)
         mock_db = AsyncMock()
@@ -1141,40 +1178,48 @@ class TestMemoryConsolidatorChaos:
         with patch("ah.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[])
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
-        assert results == []
+        # Typed empty (AH-AUDIT-037): no input, nothing processed.
+        assert results.status == "empty" and results.entries == []
 
     async def test_consolidate_with_store_failure_on_write_continues(self):
         """When writing one memory fails, consolidator should continue with others."""
         llm = AsyncMock()
-        llm.complete = AsyncMock(return_value=LLMResponse(
-            content=json.dumps([
-                {"content": "memory 1", "category": "fact", "importance": 0.8},
-                {"content": "memory 2", "category": "fact", "importance": 0.9},
-            ]),
-            model="test",
-            usage={},
-        ))
+        llm.complete = AsyncMock(
+            return_value=LLMResponse(
+                content=json.dumps(
+                    [
+                        {"content": "memory 1", "category": "fact", "importance": 0.8},
+                        {"content": "memory 2", "category": "fact", "importance": 0.9},
+                    ]
+                ),
+                model="test",
+                usage={},
+            )
+        )
 
         consolidator = MemoryConsolidator(llm_provider=llm)
         mock_store = AsyncMock()
         mock_store.search = AsyncMock(return_value=[])
         mock_store.search_by_embedding = AsyncMock(return_value=[])
         # First add fails, second succeeds
-        mock_store.add = AsyncMock(side_effect=[
-            Exception("write failed"),
-            MemoryEntry(
-                id=uuid.uuid4(),
-                session_id=None,
-                agent_id="harness",
-                content="memory 2",
-                category="fact",
-                importance=0.9,
-            ),
-        ])
+        mock_store.add = AsyncMock(
+            side_effect=[
+                Exception("write failed"),
+                MemoryEntry(
+                    id=uuid.uuid4(),
+                    session_id=None,
+                    agent_id="harness",
+                    content="memory 2",
+                    category="fact",
+                    importance=0.9,
+                ),
+            ]
+        )
         consolidator.store = mock_store
 
         # Create a mock chunk for the consolidator to process
         from ah.core.models import ContextChunk
+
         mock_chunk = ContextChunk(
             id=uuid.uuid4(),
             session_id=uuid.uuid4(),
@@ -1187,18 +1232,23 @@ class TestMemoryConsolidatorChaos:
         with patch("ah.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[mock_chunk])
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
-        # Should have 1 result (second memory succeeded)
+        # Should have 1 result (second memory succeeded); partial writes
+        # carry no checkpoint so the range stays retryable (AH-AUDIT-037).
+        assert results.status == "partial"
+        assert results.checkpoint is None
         assert len(results) == 1
-        assert results[0].content == "memory 2"
+        assert results.entries[0].content == "memory 2"
 
     async def test_consolidate_with_invalid_json_returns_empty(self):
         """When LLM returns invalid JSON, consolidator should return empty list."""
         llm = AsyncMock()
-        llm.complete = AsyncMock(return_value=LLMResponse(
-            content="not valid json{{{",
-            model="test",
-            usage={},
-        ))
+        llm.complete = AsyncMock(
+            return_value=LLMResponse(
+                content="not valid json{{{",
+                model="test",
+                usage={},
+            )
+        )
 
         consolidator = MemoryConsolidator(llm_provider=llm)
         mock_store = AsyncMock()
@@ -1207,16 +1257,18 @@ class TestMemoryConsolidatorChaos:
         with patch("ah.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[])
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
-        assert results == []
+        assert results.status == "empty" and results.entries == []
 
     async def test_consolidate_with_non_list_json_returns_empty(self):
         """When LLM returns non-list JSON, consolidator should return empty list."""
         llm = AsyncMock()
-        llm.complete = AsyncMock(return_value=LLMResponse(
-            content='{"not": "a list"}',
-            model="test",
-            usage={},
-        ))
+        llm.complete = AsyncMock(
+            return_value=LLMResponse(
+                content='{"not": "a list"}',
+                model="test",
+                usage={},
+            )
+        )
 
         consolidator = MemoryConsolidator(llm_provider=llm)
         mock_store = AsyncMock()
@@ -1225,19 +1277,23 @@ class TestMemoryConsolidatorChaos:
         with patch("ah.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[])
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
-        assert results == []
+        assert results.status == "empty" and results.entries == []
 
     async def test_consolidate_with_missing_fields_in_memory_item_skips_it(self):
         """When LLM returns memory item missing required fields, should skip it."""
         llm = AsyncMock()
-        llm.complete = AsyncMock(return_value=LLMResponse(
-            content=json.dumps([
-                {"category": "fact", "importance": 0.8},  # missing content
-                {"content": "valid memory", "category": "fact", "importance": 0.9},
-            ]),
-            model="test",
-            usage={},
-        ))
+        llm.complete = AsyncMock(
+            return_value=LLMResponse(
+                content=json.dumps(
+                    [
+                        {"category": "fact", "importance": 0.8},  # missing content
+                        {"content": "valid memory", "category": "fact", "importance": 0.9},
+                    ]
+                ),
+                model="test",
+                usage={},
+            )
+        )
 
         consolidator = MemoryConsolidator(llm_provider=llm)
         # Spec'd mock: only the real MemoryStore surface, with the correct
@@ -1245,14 +1301,16 @@ class TestMemoryConsolidatorChaos:
         mock_store = MagicMock(spec=MemoryStore)
         mock_store.search = AsyncMock(return_value=[])
         mock_store.search_by_embedding = AsyncMock(return_value=[])
-        mock_store.add = AsyncMock(return_value=MemoryEntry(
-            id=uuid.uuid4(),
-            session_id=None,
-            agent_id="harness",
-            content="valid memory",
-            category="fact",
-            importance=0.9,
-        ))
+        mock_store.add = AsyncMock(
+            return_value=MemoryEntry(
+                id=uuid.uuid4(),
+                session_id=None,
+                agent_id="harness",
+                content="valid memory",
+                category="fact",
+                importance=0.9,
+            )
+        )
         consolidator.store = mock_store
 
         with patch("ah.memory.consolidator.context_manager") as mock_cm:
@@ -1260,7 +1318,7 @@ class TestMemoryConsolidatorChaos:
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
         # Should have 1 result (invalid item skipped)
         assert len(results) == 1
-        assert results[0].content == "valid memory"
+        assert results.entries[0].content == "valid memory"
 
 
 # ===========================================================================
@@ -1371,8 +1429,8 @@ class TestAgentProviderEdgeCases:
                 response = await agent.run(mock_session.id, "test", verbose=False)
 
                 assert response is not None
-                assert hasattr(response, 'content')
-                assert hasattr(response, 'iterations')
+                assert hasattr(response, "content")
+                assert hasattr(response, "iterations")
 
     async def test_agent_handles_provider_returning_none_tool_calls(self, mock_session):
         """Agent should handle provider returning None tool_calls."""
@@ -1401,7 +1459,9 @@ class TestAgentProviderEdgeCases:
                 assert response is not None
                 assert response.content == "test"
 
-    async def test_agent_handles_provider_returning_malformed_tool_call_missing_id(self, mock_session):
+    async def test_agent_handles_provider_returning_malformed_tool_call_missing_id(
+        self, mock_session
+    ):
         """Agent should handle tool call missing 'id' field."""
         provider = AsyncMock()
         provider.complete = AsyncMock(
@@ -1501,8 +1561,10 @@ class TestUsageStoreConcurrent:
         # Should not deadlock
         results = await asyncio.wait_for(
             asyncio.gather(
-                *(store.reserve(session_id, agent_id, "fake", "fake", messages, [], 8)
-                  for _ in range(5)),
+                *(
+                    store.reserve(session_id, agent_id, "fake", "fake", messages, [], 8)
+                    for _ in range(5)
+                ),
                 return_exceptions=True,
             ),
             timeout=10,
@@ -1528,20 +1590,29 @@ class TestUsageStoreConcurrent:
         # reserve() is the low-level primitive: it lets the real error through.
         with pytest.raises(Exception, match="DB down"):
             await store.reserve(
-                uuid.uuid4(), "agent", "fake", "fake",
-                [{"role": "user", "content": "hello"}], [], 8,
+                uuid.uuid4(),
+                "agent",
+                "fake",
+                "fake",
+                [{"role": "user", "content": "hello"}],
+                [],
+                8,
             )
 
         # complete_call() is the boundary that translates it for callers.
         class _Provider:
             model = "fake"
+
             async def complete(self, **kwargs):  # pragma: no cover - never reached
                 raise AssertionError("provider must not be called when reserve fails")
 
         with pytest.raises(DatabaseError, match="usage accounting unavailable"):
             await store.complete_call(
-                _Provider(), uuid.uuid4(), "agent",
-                [{"role": "user", "content": "hello"}], max_tokens=8,
+                _Provider(),
+                uuid.uuid4(),
+                "agent",
+                [{"role": "user", "content": "hello"}],
+                max_tokens=8,
             )
 
     async def test_finish_with_db_failure_propagates_and_complete_call_wraps(self, monkeypatch):
@@ -1564,6 +1635,7 @@ class TestUsageStoreConcurrent:
         # complete_call() wraps a finish failure after a successful provider call.
         class _Provider:
             model = "fake"
+
             async def complete(self, **kwargs):
                 return LLMResponse(content="ok", model="fake", usage={"total_tokens": 5})
 
@@ -1598,12 +1670,12 @@ class TestUsageStoreConcurrent:
         mock_db.acquire = MagicMock(side_effect=lambda: _Acquire())
         with pytest.raises(DatabaseError, match="usage accounting unavailable"):
             await store.complete_call(
-                _Provider(), uuid.uuid4(), "agent",
-                [{"role": "user", "content": "hello"}], max_tokens=8,
+                _Provider(),
+                uuid.uuid4(),
+                "agent",
+                [{"role": "user", "content": "hello"}],
+                max_tokens=8,
             )
-
-
-
 
 
 # ===========================================================================
@@ -1624,13 +1696,12 @@ class TestEmbedderCacheEviction:
         embedder._timeout = 30.0
         embedder._cache_size = 2  # Very small cache
         from collections import OrderedDict
+
         embedder._cache: OrderedDict[str, list[float]] = OrderedDict()
         embedder._client = MagicMock()
 
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "data": [{"index": 0, "embedding": [0.1] * 1536}]
-        }
+        mock_response.json.return_value = {"data": [{"index": 0, "embedding": [0.1] * 1536}]}
         mock_response.raise_for_status = MagicMock()
         embedder._client.post = AsyncMock(return_value=mock_response)
 
@@ -1656,13 +1727,12 @@ class TestEmbedderCacheEviction:
         embedder._timeout = 30.0
         embedder._cache_size = 3
         from collections import OrderedDict
+
         embedder._cache: OrderedDict[str, list[float]] = OrderedDict()
         embedder._client = MagicMock()
 
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "data": [{"index": 0, "embedding": [0.1] * 1536}]
-        }
+        mock_response.json.return_value = {"data": [{"index": 0, "embedding": [0.1] * 1536}]}
         mock_response.raise_for_status = MagicMock()
         embedder._client.post = AsyncMock(return_value=mock_response)
 
@@ -1736,27 +1806,37 @@ class TestMemoryConsolidatorDedup:
     async def test_duplicate_memory_not_written_twice(self):
         """Duplicate memory should not be written twice."""
         llm = AsyncMock()
-        llm.complete = AsyncMock(return_value=LLMResponse(
-            content=json.dumps([
-                {"content": "User likes Python", "category": "preference", "importance": 0.8},
-            ]),
-            model="test",
-            usage={},
-        ))
+        llm.complete = AsyncMock(
+            return_value=LLMResponse(
+                content=json.dumps(
+                    [
+                        {
+                            "content": "User likes Python",
+                            "category": "preference",
+                            "importance": 0.8,
+                        },
+                    ]
+                ),
+                model="test",
+                usage={},
+            )
+        )
 
         consolidator = MemoryConsolidator(llm_provider=llm)
         mock_store = AsyncMock()
         # Existing memory with same content
-        mock_store.search = AsyncMock(return_value=[
-            MemoryEntry(
-                id=uuid.uuid4(),
-                session_id=None,
-                agent_id="harness",
-                content="User likes Python",
-                category="preference",
-                importance=0.8,
-            )
-        ])
+        mock_store.search = AsyncMock(
+            return_value=[
+                MemoryEntry(
+                    id=uuid.uuid4(),
+                    session_id=None,
+                    agent_id="harness",
+                    content="User likes Python",
+                    category="preference",
+                    importance=0.8,
+                )
+            ]
+        )
         mock_store.search_by_embedding = AsyncMock(return_value=[])
         mock_store.add = AsyncMock()
         mock_store.update_access = AsyncMock()
@@ -1771,13 +1851,21 @@ class TestMemoryConsolidatorDedup:
     async def test_similar_embedding_deduplicates(self):
         """Memory with similar embedding should be deduplicated."""
         llm = AsyncMock()
-        llm.complete = AsyncMock(return_value=LLMResponse(
-            content=json.dumps([
-                {"content": "User likes Python", "category": "preference", "importance": 0.8},
-            ]),
-            model="test",
-            usage={},
-        ))
+        llm.complete = AsyncMock(
+            return_value=LLMResponse(
+                content=json.dumps(
+                    [
+                        {
+                            "content": "User likes Python",
+                            "category": "preference",
+                            "importance": 0.8,
+                        },
+                    ]
+                ),
+                model="test",
+                usage={},
+            )
+        )
 
         consolidator = MemoryConsolidator(llm_provider=llm)
         mock_store = MagicMock(spec=MemoryStore)
@@ -1792,15 +1880,18 @@ class TestMemoryConsolidatorDedup:
             importance=0.8,
             embedding=[0.1] * 1536,
         )
-        mock_store.search_by_embedding = AsyncMock(return_value=[
-            (existing_entry, 0.95),  # High similarity
-        ])
+        mock_store.search_by_embedding = AsyncMock(
+            return_value=[
+                (existing_entry, 0.95),  # High similarity
+            ]
+        )
         mock_store.add = AsyncMock()
         mock_store.update_access = AsyncMock()
         consolidator.store = mock_store
 
         # Create a mock chunk for the consolidator to process
         from ah.core.models import ContextChunk
+
         mock_chunk = ContextChunk(
             id=uuid.uuid4(),
             session_id=uuid.uuid4(),

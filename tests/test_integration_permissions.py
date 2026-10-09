@@ -941,10 +941,13 @@ def test_consolidation_budget_exhaustion_sends_no_paid_call():
     usagemod.usage_store.complete_call = _guarded  # type: ignore[method-assign]
     try:
         cons = MemoryConsolidator(llm_provider=_P())
-        out = asyncio.run(cons._extract_memories("hello world", None, "h"))
+        # AH-AUDIT-037: extraction failure is explicit (retryable, no
+        # checkpoint) — never a silent empty. Budget policy errors keep
+        # their type so callers can distinguish them from empty results.
+        with pytest.raises(UsageBudgetExceededError):
+            asyncio.run(cons._extract_memories("hello world", None, "h"))
     finally:
         usagemod.usage_store.complete_call = real_complete  # type: ignore[method-assign]
-    assert out == []
     assert sent == []
 
 
@@ -1234,7 +1237,7 @@ def test_ownership_loss_cancels_effect_task():
         async def renew_lease(self, job_id, claim_token=None):
             return False  # immediate loss
 
-        async def finish(self, job_id, *, error=None, claim_token=None):
+        async def finish(self, job_id, *, error=None, claim_token=None, paused_for=None):
             finish_calls.append((error, claim_token))
             return True
 

@@ -38,6 +38,46 @@ _mutation_locks: dict[str, asyncio.Lock] = {}
 
 _guard = _threading.Lock()
 
+# Local ownership registry (AH-AUDIT-016/017): one token-aware record per
+# session covering BOTH turn and mutation claims. Logical ownership is
+# separate from the mutexes below; release requires token equality so a
+# stale owner can never unlock a newer owner. DB-less (tests/degraded) mode
+# enforces the same single-owner rule in-process (no cross-process claim).
+_local_claims: dict[str, dict] = {}
+
+
+def _local_try_claim(session_id: object, kind: str, token: str) -> bool:
+    """Claim local ownership when no live local claim exists (either kind)."""
+    with _guard:
+        existing = _local_claims.get(str(session_id))
+        if existing is not None:
+            return False
+        _local_claims[str(session_id)] = {"kind": kind, "token": token}
+        return True
+
+
+def _local_release(session_id: object, token: str | None) -> bool:
+    """Release local ownership only for the matching owner token."""
+    if not token:
+        return False
+    with _guard:
+        existing = _local_claims.get(str(session_id))
+        if existing is None or existing.get("token") != token:
+            return False
+        _local_claims.pop(str(session_id), None)
+        return True
+
+
+def _local_owner(session_id: object) -> dict | None:
+    with _guard:
+        rec = _local_claims.get(str(session_id))
+        return dict(rec) if rec is not None else None
+
+
+def _local_reset_for_tests() -> None:
+    with _guard:
+        _local_claims.clear()
+
 
 def _session_lock(session_id: uuid.UUID) -> asyncio.Lock:
     key = str(session_id)
@@ -170,6 +210,76 @@ async def _acquire_or_steal(
     return True
 
 
+async def _db_renew(session_id: uuid.UUID, owner: str, ttl_s: int) -> bool:
+    """Extend a live claim owned by *owner*. False when expired/stolen."""
+    from ah.db.connection import db
+
+    result = await db.execute(
+        "UPDATE sessions SET claim_expires_at = now() + ($3 * interval '1 second') "
+        "WHERE id = $1 AND claim_owner = $2 AND claim_expires_at > now()",
+        session_id,
+        owner,
+        ttl_s,
+    )
+    from ah.db.connection import parse_command_count
+
+    return parse_command_count(result) > 0
+
+
+async def renew_turn(
+    session_id: uuid.UUID, token: str | None, ttl_s: int = TURN_TTL_SECONDS
+) -> bool:
+    """Renew a live turn claim (AH-AUDIT-013). False on loss/expiry."""
+    if not token:
+        return False
+    from ah.db.connection import db
+
+    if not db.connected:
+        # DB-less: ownership is the local registry entry.
+        owner = _local_owner(session_id)
+        return bool(owner is not None and owner.get("token") == token)
+    try:
+        return await _db_renew(session_id, token, ttl_s)
+    except Exception:
+        return False
+
+
+async def renew_mutation(
+    session_id: uuid.UUID, token: str | None, ttl_s: int = MUTATION_TTL_SECONDS
+) -> bool:
+    """Renew a live mutation claim (AH-AUDIT-013). False on loss/expiry."""
+    return await renew_turn(session_id, token, ttl_s=ttl_s)
+
+
+async def owns_claim(session_id: uuid.UUID, token: str | None) -> bool:
+    """True when *token* still holds a live claim (loss-of-ownership check)."""
+    if not token:
+        return False
+    from ah.db.connection import db
+
+    if not db.connected:
+        owner = _local_owner(session_id)
+        return bool(owner is not None and owner.get("token") == token)
+    try:
+        state = await _db_claim_state(session_id)
+    except Exception:
+        return False
+    if not state or state.get("claim_owner") != token:
+        return False
+    exp = state.get("claim_expires_at")
+    if exp is None:
+        return True
+    try:
+        from datetime import UTC, datetime
+
+        now = datetime.now(UTC)
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=UTC)
+        return exp > now
+    except Exception:
+        return False
+
+
 async def try_begin_turn(
     session_id: uuid.UUID, *, turn_id: str | None = None, ttl_s: int = TURN_TTL_SECONDS
 ) -> str | None:
@@ -177,7 +287,8 @@ async def try_begin_turn(
 
     Fails closed: DB errors (other than provable unavailability) propagate
     instead of degrading into concurrent execution. A new turn is blocked by
-    any live claim (turn or mutation).
+    any live claim (turn or mutation). DB-less mode enforces the same
+    single-owner rule through the token-aware local registry (AH-AUDIT-016).
     """
     from ah.db.connection import db
 
@@ -194,35 +305,81 @@ async def try_begin_turn(
                 except RuntimeError:
                     pass
                 return None
+            if not _local_try_claim(session_id, "turn", owner):
+                # A live DB claim is ours, so any local entry is stale
+                # (same-process holder died without release): evict only
+                # when its token no longer holds a live claim.
+                stale = _local_owner(session_id)
+                stale_token = (stale or {}).get("token")
+                if stale_token and not await owns_claim(session_id, stale_token):
+                    _local_release(session_id, stale_token)
+                    _local_try_claim(session_id, "turn", owner)
+                else:
+                    await _db_release(session_id, owner)
+                    try:
+                        lock.release()
+                    except RuntimeError:
+                        pass
+                    return None
             return owner
-        return owner  # DB-less (tests): in-process lock is the claim.
+        # DB-less: the local registry IS the claim (either kind blocks).
+        if not _local_try_claim(session_id, "turn", owner):
+            try:
+                lock.release()
+            except RuntimeError:
+                pass
+            return None
+        return owner
     except Exception:
         try:
             lock.release()
         except RuntimeError:
             pass
+        _local_release(session_id, owner)
         raise
 
 
 async def end_turn(session_id: uuid.UUID, token: str | None) -> bool:
-    """Release a turn claim; only the exact owner succeeds (stale-safe)."""
+    """Release a turn claim; only the exact owner succeeds (stale-safe).
+
+    AH-AUDIT-017: the local mutex is released only when the caller owns the
+    local registry entry. A stale token whose DB release was rejected never
+    unlocks a newer owner's local claim. Genuine owners still clean up
+    locally even when the DB release fails.
+    """
     from ah.db.connection import db
 
     if not token:
         return False
-    ok = True
     if db.connected:
         try:
             ok = await _db_release(session_id, token)
         except Exception:
             ok = False
-    lock = _session_lock(session_id)
-    if lock.locked():
-        try:
-            lock.release()
-        except RuntimeError:
-            pass
-    return ok
+        if ok:
+            # Opportunistically clear our own local entry; a rejected
+            # stale token never touches a newer owner's entry.
+            _local_release(session_id, token)
+            lock = _session_lock(session_id)
+            if lock.locked():
+                # Release the mutex only when no live local claim backs it.
+                if _local_owner(session_id) is None:
+                    try:
+                        lock.release()
+                    except RuntimeError:
+                        pass
+        return ok
+    # DB-less: the token-gated local registry is the claim.
+    mine = _local_release(session_id, token)
+    if mine:
+        lock = _session_lock(session_id)
+        if lock.locked():
+            try:
+                lock.release()
+            except RuntimeError:
+                pass
+        return True
+    return False
 
 
 def turn_locked(session_id: uuid.UUID) -> bool:
@@ -249,7 +406,11 @@ async def turn_active(session_id: uuid.UUID, kinds: tuple[str, ...] = ("turn",))
 
 
 async def begin_mutation(session_id: uuid.UUID, *, ttl_s: int = MUTATION_TTL_SECONDS) -> str | None:
-    """Claim a mutation slot; fails when a live turn owns the session."""
+    """Claim a mutation slot; fails when a live turn owns the session.
+
+    DB-less mode uses the shared local registry, so a held turn blocks a
+    mutation and vice versa (AH-AUDIT-016).
+    """
     from ah.db.connection import db
 
     lock = _mutation_session_lock(session_id)
@@ -265,34 +426,66 @@ async def begin_mutation(session_id: uuid.UUID, *, ttl_s: int = MUTATION_TTL_SEC
                 except RuntimeError:
                     pass
                 return None
+            if not _local_try_claim(session_id, "mutation", owner):
+                stale = _local_owner(session_id)
+                stale_token = (stale or {}).get("token")
+                if stale_token and not await owns_claim(session_id, stale_token):
+                    _local_release(session_id, stale_token)
+                    _local_try_claim(session_id, "mutation", owner)
+                else:
+                    await _db_release(session_id, owner)
+                    try:
+                        lock.release()
+                    except RuntimeError:
+                        pass
+                    return None
             return owner
+        if not _local_try_claim(session_id, "mutation", owner):
+            try:
+                lock.release()
+            except RuntimeError:
+                pass
+            return None
         return owner
     except Exception:
         try:
             lock.release()
         except RuntimeError:
             pass
+        _local_release(session_id, owner)
         raise
 
 
 async def end_mutation(session_id: uuid.UUID, token: str | None) -> bool:
+    """Release a mutation claim; stale tokens never unlock newer owners."""
     from ah.db.connection import db
 
     if not token:
         return False
-    ok = True
     if db.connected:
         try:
             ok = await _db_release(session_id, token)
         except Exception:
             ok = False
-    lock = _mutation_session_lock(session_id)
-    if lock.locked():
-        try:
-            lock.release()
-        except RuntimeError:
-            pass
-    return ok
+        if ok:
+            _local_release(session_id, token)
+            lock = _mutation_session_lock(session_id)
+            if lock.locked() and _local_owner(session_id) is None:
+                try:
+                    lock.release()
+                except RuntimeError:
+                    pass
+        return ok
+    mine = _local_release(session_id, token)
+    if mine:
+        lock = _mutation_session_lock(session_id)
+        if lock.locked():
+            try:
+                lock.release()
+            except RuntimeError:
+                pass
+        return True
+    return False
 
 
 @asynccontextmanager
@@ -309,6 +502,12 @@ class TurnOwnership:
     Holds the owner token + in-process slot for the whole turn, including
     permission waits. Never holds a DB transaction or pool connection across
     the turn or across human approval waits.
+
+    AH-AUDIT-013: start_renewal() keeps a long turn/approval wait alive with
+    periodic renew_claim; renewal failure or detected loss sets
+    ownership_lost so owned effects stop. stop_renewal() joins the task
+    during release. Crash expiry recovery is preserved (no renewal → the
+    claim lapses and becomes reclaimable).
     """
 
     def __init__(self, session_id: uuid.UUID, turn_id: str, token: str | None = None) -> None:
@@ -317,6 +516,8 @@ class TurnOwnership:
         self.token = token
         self._approval_event = asyncio.Event()
         self._approval_event.set()  # no wait by default
+        self.ownership_lost = asyncio.Event()
+        self._renew_task: asyncio.Task | None = None
 
     async def wait_for_approval(self, timeout: float) -> bool:
         """Wait for a permission decision without consuming compute budget.
@@ -334,6 +535,45 @@ class TurnOwnership:
     def resolve_approval(self, approved: bool) -> None:
         self._approved = approved
         self._approval_event.set()
+
+    def start_renewal(self, interval_s: float = 60.0, ttl_s: int = TURN_TTL_SECONDS) -> None:
+        """Begin periodic claim renewal; idempotent."""
+        if self._renew_task is not None and not self._renew_task.done():
+            return
+        if not self.token:
+            return
+
+        async def _heartbeat() -> None:
+            failures = 0
+            while True:
+                await asyncio.sleep(interval_s)
+                try:
+                    ok = await renew_turn(self.session_id, self.token, ttl_s=ttl_s)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    ok = False
+                if ok:
+                    failures = 0
+                    continue
+                failures += 1
+                if failures >= 2:
+                    self.ownership_lost.set()
+                    return
+
+        self._renew_task = asyncio.create_task(_heartbeat(), name=f"turn-renew-{self.turn_id}")
+
+    async def stop_renewal(self) -> None:
+        """Stop and join the renewal task (called during release)."""
+        task, self._renew_task = self._renew_task, None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        try:
+            await asyncio.gather(task, return_exceptions=True)
+        except (asyncio.CancelledError, Exception):
+            pass
 
     def child_token(self) -> dict:
         """Owner-authorized internal mutation token for delegated children.

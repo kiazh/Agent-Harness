@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from ah.core.config import config
 from ah.core.cron import next_cron_time
 from ah.db.connection import db, parse_command_count
 
@@ -33,6 +32,20 @@ logger = logging.getLogger(__name__)
 DEFAULT_HEARTBEAT_PROMPT = "Continue working toward your current goal. If it is done, say so."
 MIN_INTERVAL_SECONDS = 10
 RUN_LEASE_SECONDS = 300
+
+
+def _pause_request_id(exc: PermissionError) -> str | None:
+    """Extract the linked approval request id from a typed pause error."""
+    try:
+        linked = getattr(exc, "approval_request_id", None)
+        if linked:
+            return str(linked)
+        import re as _re
+
+        match = _re.search(r"request\s+([0-9a-fA-F-]{8,64})", str(exc))
+        return match.group(1) if match else None
+    except Exception:
+        return None
 
 
 @dataclass
@@ -57,6 +70,9 @@ class Job:
     script_path: str | None = None
     # AH-026: fencing token from claim_due. None for unclaimed/test rows.
     claim_token: uuid.UUID | None = None
+    # AH-AUDIT-021: linked approval request when parked awaiting human
+    # approval. Paused jobs are excluded from due claims until resumed.
+    paused_for_approval: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,26 +94,36 @@ class Job:
             "provider": self.provider,
             "noAgent": self.no_agent,
             "scriptPath": self.script_path,
+            "pausedForApproval": self.paused_for_approval,
         }
 
 
 _COLUMNS = (
     "id, name, kind, session_id, agent_name, prompt, interval_seconds, enabled, "
     "status, last_run_at, next_run_at, last_error, run_count, cron_expression, model, provider, "
-    "no_agent, script_path, claim_token"
+    "no_agent, script_path, claim_token, paused_for_approval"
 )
 
 
-def _row_to_job(row: Any) -> Job:
-    # claim_token may be absent on old mocks/rows — tolerate missing key.
+def _optional_col(row: Any, name: str) -> Any:
+    """Tolerate missing columns on old mocks/rows (narrow compat)."""
     try:
-        claim = row["claim_token"] if "claim_token" in row.keys() else None
+        keys = row.keys()
     except Exception:
-        claim = (
-            row["claim_token"]
-            if isinstance(row, dict) and "claim_token" in row
-            else getattr(row, "claim_token", None)
-        )
+        keys = None
+    try:
+        if keys is not None:
+            return row[name] if name in keys else None
+        if isinstance(row, dict):
+            return row.get(name)
+        return getattr(row, name, None)
+    except Exception:
+        return None
+
+
+def _row_to_job(row: Any) -> Job:
+    # claim_token / paused_for_approval may be absent on old mocks/rows.
+    claim = _optional_col(row, "claim_token")
     return Job(
         id=row["id"],
         name=row["name"],
@@ -118,6 +144,7 @@ def _row_to_job(row: Any) -> Job:
         no_agent=row["no_agent"],
         script_path=row["script_path"],
         claim_token=claim,
+        paused_for_approval=_optional_col(row, "paused_for_approval"),
     )
 
 
@@ -261,6 +288,9 @@ class JobStore:
         params = (now, RUN_LEASE_SECONDS) if now is not None else (RUN_LEASE_SECONDS,)
         token = uuid.uuid4()
         token_ph = "$3" if now is not None else "$2"
+        # AH-AUDIT-021: approval-paused jobs are never due. They resume
+        # only through an explicit human resume transition (resume_job),
+        # then run once under a fresh fenced claim with revalidation.
         row = await db.fetchrow(
             f"""
             UPDATE jobs
@@ -269,7 +299,9 @@ class JobStore:
                 claim_token = {token_ph}
             WHERE id = (
                 SELECT id FROM jobs
-                WHERE enabled AND next_run_at <= {clock}
+                WHERE enabled AND paused_for_approval IS NULL
+                  AND status <> 'paused_approval'
+                  AND next_run_at <= {clock}
                 ORDER BY next_run_at ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
@@ -325,6 +357,7 @@ class JobStore:
         *,
         error: str | None = None,
         claim_token: uuid.UUID | None = None,
+        paused_for: str | None = None,
     ) -> bool:
         """Record a run outcome and schedule the next run from now.
 
@@ -333,6 +366,11 @@ class JobStore:
         Allows idle->idle (direct finish without claim, for tests/CLI) and
         running->idle/error, but returns False if already error/finished
         to avoid stale overwrite.
+
+        AH-AUDIT-021: ``paused_for`` parks the job awaiting human approval
+        (status ``paused_approval`` with the linked approval request id).
+        Paused jobs are excluded from due claims until resume_job. Denial
+        cancels this run (error outcome); approval resumes via resume_job.
         """
         # Mock compat: SimpleNamespace(fetchval, execute) without acquire.
         if not hasattr(db, "acquire"):
@@ -362,20 +400,23 @@ class JobStore:
                 next_run = next_cron_time(expr, db_now) if kind == "cron" and expr else None
             except Exception:
                 next_run = None
+            paused_status = "paused_approval" if paused_for else ("error" if error else "idle")
             result = await db.execute(
                 """
                     UPDATE jobs
                     SET status = $2,
                         last_error = $3,
                         run_count = run_count + 1,
+                        paused_for_approval = $5,
                         next_run_at = CASE WHEN kind = 'cron' THEN $4
                             ELSE now() + (interval_seconds || ' seconds')::interval END
                     WHERE id = $1
                     """,
                 job_id,
-                "error" if error else "idle",
+                paused_status,
                 error,
                 next_run,
+                paused_for,
             )
             return parse_command_count(result) > 0 if isinstance(result, str) else True
         async with db.acquire() as conn:
@@ -406,6 +447,7 @@ class JobStore:
                     if job.kind == "cron" and job.cron_expression
                     else None
                 )
+                paused_status = "paused_approval" if paused_for else ("error" if error else "idle")
                 result = await conn.execute(
                     """
                     UPDATE jobs
@@ -413,18 +455,41 @@ class JobStore:
                         last_error = $3,
                         run_count = run_count + 1,
                         claim_token = NULL,
+                        paused_for_approval = $6,
                         next_run_at = CASE WHEN kind = 'cron' THEN $4
                             ELSE now() + (interval_seconds || ' seconds')::interval END
                     WHERE id = $1 AND status IN ('idle', 'running')
                     AND (claim_token = $5 OR (claim_token IS NULL AND $5 IS NULL))
                     """,
                     job_id,
-                    "error" if error else "idle",
+                    paused_status,
                     error,
                     next_run,
                     claim_token,
+                    paused_for,
                 )
                 return parse_command_count(result) > 0
+
+    async def resume_job(self, job_id: uuid.UUID) -> Job | None:
+        """Resume an approval-paused job (AH-AUDIT-021).
+
+        Defined human-resolution transition: paused_approval → idle with
+        next_run_at = now, so the next claim runs once under a fresh fenced
+        job and session claim with proposal revalidation. Returns the job,
+        or None when not paused. Denial (cancel one run vs disable the job)
+        is the caller's decision: deny-and-resume retries once; deny-and-
+        disable uses set_enabled(False).
+        """
+        row = await db.fetchrow(
+            f"""
+            UPDATE jobs
+            SET status = 'idle', paused_for_approval = NULL, next_run_at = now()
+            WHERE id = $1 AND status = 'paused_approval'
+            RETURNING {_COLUMNS}
+            """,
+            job_id,
+        )
+        return _row_to_job(row) if row else None
 
 
 job_store = JobStore()
@@ -482,6 +547,9 @@ class JobRunner:
         ownership_lost = asyncio.Event()
         lease_task = asyncio.create_task(self._keep_lease(job.id, claim_token, ownership_lost))
         exec_task: asyncio.Task | None = None
+        loss_wait: asyncio.Task | None = None
+        # AH-AUDIT-021: linked approval request when this run parks paused.
+        paused_for: str | None = None
         try:
             # Whole-job timeout so a hung provider cannot monopolize the
             # serial runner. At-least-once effects must be idempotent; the
@@ -517,6 +585,16 @@ class JobRunner:
                 except asyncio.CancelledError:
                     error = "cancelled"
                     raise
+                except PermissionError as e:
+                    # AH-AUDIT-021: typed approval pause parks durably (no
+                    # rerun before explicit resume) instead of error-retry.
+                    if str(e).startswith("needs_approval:"):
+                        paused_for = _pause_request_id(e) or "unknown"
+                        error = str(e)
+                        logger.warning("Job %s (%s) paused: %s", job.name, job.id, e)
+                    else:
+                        logger.exception("Job %s (%s) failed", job.name, job.id)
+                        error = f"{type(e).__name__}: {e}"
                 except Exception as e:
                     logger.exception("Job %s (%s) failed", job.name, job.id)
                     error = f"{type(e).__name__}: {e}"
@@ -530,18 +608,34 @@ class JobRunner:
             error = "cancelled"
             raise
         finally:
+            # AH-AUDIT-020: the ownership-wait task is owned here — cancel
+            # and join it on EVERY exit (success/failure/timeout/ownership
+            # loss/runner cancellation). Task GC is not lifecycle management.
+            try:
+                if loss_wait is not None and not loss_wait.done():
+                    loss_wait.cancel()
+                if loss_wait is not None:
+                    await asyncio.gather(loss_wait, return_exceptions=True)
+            except (asyncio.CancelledError, Exception):
+                pass
             lease_task.cancel()
             await asyncio.gather(lease_task, return_exceptions=True)
             # Stale workers never overwrite a newer owner's outcome: finish
             # with the exact token (rejected when fencing moved on).
             try:
-                await self._store.finish(job.id, error=error, claim_token=claim_token)
+                await self._store.finish(
+                    job.id, error=error, claim_token=claim_token, paused_for=paused_for
+                )
             except TypeError:
-                # Narrow compat: only non-JobStore test doubles lack the token
-                # parameter. Production errors must surface, not bypass fencing.
+                # Narrow compat: only non-JobStore test doubles lack the new
+                # parameters. Production errors must surface, not bypass
+                # fencing. Paused state needs a store that supports it.
                 if isinstance(self._store, JobStore):
                     raise
-                await self._store.finish(job.id, error=error)
+                try:
+                    await self._store.finish(job.id, error=error, claim_token=claim_token)
+                except TypeError:
+                    await self._store.finish(job.id, error=error)
         return True
 
     async def _keep_lease(
@@ -593,12 +687,81 @@ class JobRunner:
             raise RuntimeError("session turn busy; job rescheduled")
         try:
             if getattr(job, "no_agent", False):
+                # AH-AUDIT-009 trust model: no-agent scripts are
+                # administrator-configured (human-transport jobs_create
+                # only — no agent-accessible tool creates script jobs), but
+                # path validation is NOT a sandbox: every run is
+                # broker-governed, bound to the exact script content,
+                # interpreter, cwd, backend, and session authority. Changed
+                # content revalidates; headless pause parks the job.
                 from ah.core.assembler import get_token_count
                 from ah.core.context import context_manager
-                from ah.core.job_scripts import run_job_script
+                from ah.core.job_scripts import resolve_script_path, run_job_script
                 from ah.memory.redaction import redact_secrets
+                from ah.permissions.broker import (
+                    ApprovalDenied as _ScriptDenied,
+                )
+                from ah.permissions.broker import NeedsApproval as _ScriptNeeds
+                from ah.permissions.broker import permission_broker as _script_broker
+                from ah.permissions.policy import build_request as _script_req
 
-                output = redact_secrets(await run_job_script(job.script_path or "")).text
+                target = resolve_script_path(job.script_path or "")
+                try:
+                    script_content = target.read_text(encoding="utf-8", errors="replace")
+                except OSError as e:
+                    raise RuntimeError(f"script unreadable: {e}") from None
+                if len(script_content) > 200_000:
+                    raise RuntimeError("script exceeds 200 KiB review bound")
+                import sys as _sys
+
+                interpreter = _sys.executable if target.suffix.lower() == ".py" else "/usr/bin/bash"
+                try:
+                    from ah.core.session_mode import get_effective_mode as _eff_mode
+
+                    script_mode = _eff_mode(str(job.session_id) if job.session_id else None)
+                except Exception:
+                    script_mode = "ask"
+                script_proposal = _script_req(
+                    operation="process.exec",
+                    targets=[str(target)],
+                    argv=[interpreter, str(target)],
+                    cwd=str(target.parent),
+                    content=script_content,
+                    mode=script_mode,
+                    backend="host",
+                    agent_id=job.agent_name,
+                    session_id=str(job.session_id),
+                    capabilities=["job-script"],
+                    tool="job_script",
+                    timeout=30,
+                )
+                approval_id = ""
+                try:
+                    await _script_broker.guard(script_proposal)
+                    approval_id = script_proposal.approval_id or ""
+                except _ScriptNeeds as _need:
+                    _ap = _need.approval
+                    err = PermissionError(
+                        f"needs_approval: job paused awaiting human approval; "
+                        f"request {_ap.get('request_id')} "
+                        f"({script_proposal.operation}); resolve via approvals "
+                        "then resume (fresh claim revalidates)."
+                    )
+                    try:
+                        err.approval_request_id = _ap.get("request_id", "")  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    raise err from None
+                except _ScriptDenied as _denied:
+                    raise RuntimeError(f"script denied: {_denied.reason}") from None
+                try:
+                    output = redact_secrets(await run_job_script(job.script_path or "")).text
+                finally:
+                    if approval_id:
+                        try:
+                            await _script_broker.complete(approval_id, "completed")
+                        except Exception:
+                            pass
                 if output:
                     await context_manager.add_chunk(
                         session_id=job.session_id,
@@ -613,6 +776,7 @@ class JobRunner:
                 job.agent_name,
                 model=getattr(job, "model", None),
                 provider=getattr(job, "provider", None),
+                session_id=job.session_id,
             )
             # AH-023: close owned providers in finally; injected test factories
             # manage their own lifecycle.
@@ -622,34 +786,31 @@ class JobRunner:
                 if ownership_lost is not None and ownership_lost.is_set():
                     raise RuntimeError("job ownership lost")
                 response = await agent.run(job.session_id, prompt, verbose=False)
-                # Headless jobs never hang on hidden prompts (Phase E): a tool
-                # awaiting human approval surfaces as a structured needs_approval
-                # result. Pause durably with a resumable status and free the
-                # worker/lease instead of renewing indefinitely.
-                try:
-                    blob = (response.content or "") + str(
-                        [t.get("result_preview", "") for t in response.tool_calls]
+                # Headless jobs never hang on hidden prompts (Phase E):
+                # AH-AUDIT-022: pause detection uses the typed
+                # AgentResponse.needs_approval outcome — never prose
+                # matching. A benign answer merely discussing approvals
+                # stays a success; a structured pause (even with arbitrary
+                # or empty text) pauses durably and frees worker/lease.
+                pauses = list(getattr(response, "needs_approval", None) or [])
+                if pauses:
+                    first = pauses[0] if isinstance(pauses[0], dict) else {}
+                    raise PermissionError(
+                        "needs_approval: job paused awaiting human approval; "
+                        f"request {first.get('request_id', '')} "
+                        f"({first.get('operation', '')}); resolve via approvals "
+                        "then resume (fresh claim revalidates)."
                     )
-                    if "Needs approval" in blob or "needs_approval" in blob:
-                        raise PermissionError(
-                            "needs_approval: job paused awaiting human approval; "
-                            "resolve via approvals then resume (fresh claim revalidates)."
-                        )
-                except PermissionError:
-                    raise
-                except Exception:
-                    pass
             finally:
+                # AH-AUDIT-026: shared owner-aware cleanup contract —
+                # bounded join, never closes injected/shared clients, never
+                # masks the primary outcome. Claim release runs in the
+                # outer run_due_once finally regardless.
                 if owns_provider:
                     try:
-                        prov = getattr(agent, "provider", None)
-                        close = getattr(prov, "close", None)
-                        if callable(close):
-                            import inspect as _inspect
+                        from ah.core.agent_factory import close_agent_provider
 
-                            r = close()
-                            if _inspect.isawaitable(r):
-                                await r
+                        await close_agent_provider(agent)
                     except Exception:
                         pass
         finally:
@@ -659,26 +820,57 @@ class JobRunner:
                 pass
 
     async def _build_agent(
-        self, agent_name: str, *, model: str | None = None, provider: str | None = None
+        self,
+        agent_name: str,
+        *,
+        model: str | None = None,
+        provider: str | None = None,
+        session_id=None,
     ):
+        """Build the job agent through the shared session-aware factory.
+
+        AH-AUDIT-031: scheduled agents use build_agent_for_session with
+        explicit documented job overrides (model/provider pinning) and
+        inherited session authority — never a divergent direct ReActAgent
+        construction missing memory/RAG/consolidation/authority services.
+        Injected test factories manage their own lifecycle (no provider
+        close); production agents are owned and closed by the caller.
+        Precedence: job overrides > session settings > definition defaults
+        > global defaults (resolved inside the shared factory).
+        """
         if self._agent_factory is not None:
             return self._agent_factory(agent_name)
-        from ah.core.agent import ReActAgent
-        from ah.core.agent_def import agent_registry
-        from ah.core.provider import get_provider
+        from ah.core.agent_factory import build_agent_for_session
+        from ah.core.models import Session as _Session
+        from ah.core.session import session_manager
 
-        definition = await agent_registry.get(agent_name)
-        if definition is None:
-            raise ValueError(f"no agent named {agent_name!r}")
-        return ReActAgent(
-            provider=get_provider(
-                provider=provider or definition.provider or config.get("provider"),
-                model=model or definition.model or config.get("model"),
-            ),
-            max_iterations=definition.max_iterations,
-            agent_id=agent_name,
-            system_prompt=definition.system_prompt or None,
-            allowed_tools=definition.tools or None,
+        session = None
+        if session_id is not None:
+            try:
+                # AH-AUDIT-019: execution-critical read bypasses the cache.
+                session = await session_manager.get_fresh(session_id)
+            except Exception:
+                session = None
+        if session is None:
+            # Fallback identity when the session cannot be resolved:
+            # definition lookup still goes through the shared factory
+            # (fail-closed for unknown specialists).
+            import uuid as _uuid
+            from datetime import UTC as _UTC
+            from datetime import datetime as _dt
+
+            session = _Session(
+                id=session_id or _uuid.uuid4(),
+                agent_id=agent_name,
+                model=model,
+                provider=provider,
+                created_at=_dt.now(_UTC),
+                last_activity=_dt.now(_UTC),
+            )
+        return await build_agent_for_session(
+            session,
+            provider_override=provider,
+            model_override=model,
         )
 
 

@@ -32,6 +32,31 @@ _approval_handler: ContextVar[ApprovalHandler | None] = ContextVar("approval_han
 _principal: ContextVar[str] = ContextVar("approval_principal", default="tui")
 _turn: ContextVar[str] = ContextVar("approval_turn", default="")
 
+# Immutable execution context (AH-AUDIT-002): the broker stamps the approved
+# proposal's material fields at guard time. Backends (terminal/file) consume
+# this snapshot instead of re-reading mutable global settings, so a
+# concurrent mode/configuration change cannot alter approved execution
+# semantics. Set for the guard+execute window; cleared by the caller (agent
+# loop) afterwards. Never silently switch sandbox execution to host
+# execution: backend changes require fresh approval.
+_execution_context: ContextVar[dict | None] = ContextVar("execution_context", default=None)
+
+
+def get_execution_context() -> dict | None:
+    """Return the broker-stamped execution snapshot, if one is active."""
+    try:
+        return _execution_context.get()
+    except Exception:
+        return None
+
+
+def clear_execution_context() -> None:
+    """Clear the execution snapshot (end of the guard+execute window)."""
+    try:
+        _execution_context.set(None)
+    except Exception:
+        pass
+
 
 def set_approval_handler(
     handler: ApprovalHandler | None, *, principal: str = "tui", turn_id: str = ""
@@ -83,6 +108,18 @@ class PermissionBroker:
             raise ApprovalDenied("grant store unavailable") from None
         decision: Decision = decide(req, grants)
         if decision.verdict == "allowed":
+            # Stamp the immutable execution snapshot: backends execute
+            # exactly what was authorized, even if globals change next.
+            _execution_context.set(
+                {
+                    "session_id": req.session_id,
+                    "mode": req.mode,
+                    "backend": req.backend,
+                    "operation": req.operation,
+                    "digest": req.digest,
+                    "approval_id": req.approval_id,
+                }
+            )
             return req
         if decision.verdict == "denied":
             raise ApprovalDenied(decision.reason)
@@ -108,6 +145,7 @@ class PermissionBroker:
                 approved["request_id"], digest=req.digest, session_id=req.session_id
             ):
                 req.approval_id = approved["request_id"]
+                _stamp_execution(req)
                 return req
             current = await _store.get_approval(approved["request_id"])
             raise NeedsApproval(current or approved)
@@ -128,10 +166,18 @@ class PermissionBroker:
             if state == "pending":
                 raise NeedsApproval(current) from None
             if state == "approved":
+                # AH-AUDIT-005: legacy approvals without a reviewable
+                # proposal never resume — the user never saw the full
+                # action. Fail closed with explicit re-approval.
+                if not current.get("proposal_complete", bool(current.get("proposal"))):
+                    raise ApprovalDenied(
+                        "legacy approval lacks a reviewable proposal; re-approval required"
+                    ) from None
                 if await _store.claim_execution(
                     req.request_id, digest=req.digest, session_id=req.session_id
                 ):
                     req.approval_id = req.request_id
+                    _stamp_execution(req)
                     return req
                 current = await _store.get_approval(req.request_id)
                 raise NeedsApproval(current or {"request_id": req.request_id}) from None
@@ -172,6 +218,7 @@ class PermissionBroker:
         # No grant saved here: allow-once authorizes this execution only
         # (LP-03). Reusable authority is saved by the transport at resolve
         # time when the user explicitly chose a session/directory grant.
+        _stamp_execution(req)
         return req
 
     async def complete(self, request_id: str, outcome: str) -> bool:
@@ -193,15 +240,81 @@ class PermissionBroker:
         return await _store.revoke_grants(session_id, grant_id)
 
 
+def _stamp_execution(req: ActionRequest) -> None:
+    """Stamp the immutable execution snapshot for the guard+execute window."""
+    _execution_context.set(
+        {
+            "session_id": req.session_id,
+            "mode": req.mode,
+            "backend": req.backend,
+            "operation": req.operation,
+            "digest": req.digest,
+            "approval_id": req.approval_id,
+        }
+    )
+
+
+def _file_write_diff(req: ActionRequest) -> dict:
+    """Best-effort reviewable diff for file writes (AH-AUDIT-004).
+
+    Returns redacted current/new previews plus a unified diff, each
+    truncated with disclosure. Never raises: card rendering must not block
+    authorization on IO failure.
+    """
+    out: dict = {"current_preview": "", "diff": "", "truncated": False}
+    try:
+        if req.operation != "file.write" or not req.targets:
+            return out
+        from ah.memory.redaction import redact_secrets as _redact
+
+        current = ""
+        try:
+            from pathlib import Path as _Path
+
+            p = _Path(req.targets[0])
+            if p.is_file() and p.stat().st_size <= 200_000:
+                current = p.read_text(encoding="utf-8", errors="replace")[:4000]
+        except Exception:
+            current = ""
+        out["current_preview"] = _redact(current).text if current else "(new file)"
+        proposed_preview = str(getattr(req, "content_preview", "") or "")
+        if proposed_preview and current:
+            import difflib as _difflib
+
+            diff_lines = list(
+                _difflib.unified_diff(
+                    current.splitlines(),
+                    proposed_preview.splitlines(),
+                    fromfile="current",
+                    tofile="proposed",
+                )
+            )[:120]
+            out["diff"] = "\n".join(diff_lines)
+            out["truncated"] = len(diff_lines) >= 120 or bool(
+                getattr(req, "content_length", 0) and req.content_length > 4000
+            )
+        elif proposed_preview:
+            out["truncated"] = bool(getattr(req, "content_length", 0) and req.content_length > 4000)
+    except Exception:
+        pass
+    return out
+
+
 def _approval_view(req: ActionRequest, approval: dict) -> dict:
-    """Human-facing card payload: no secret values, names only."""
+    """Human-facing card payload (AH-AUDIT-003/004).
+
+    Exact executable and arguments (unambiguous argv list, never a sole
+    shell-looking string), cwd, backend, timeout, network, capabilities,
+    plus file-write content identity and diff. Secret values are redacted
+    for display; execution still binds the exact approved identity.
+    """
     from ah.permissions import store as _store2
 
     try:
         durable = _store2.is_durable()
     except Exception:
         durable = None
-    return {
+    card: dict = {
         "request_id": req.request_id,
         "session_id": req.session_id,
         "turn_id": req.turn_id,
@@ -209,16 +322,23 @@ def _approval_view(req: ActionRequest, approval: dict) -> dict:
         "mode": req.mode,
         "backend": req.backend,
         "operation": req.operation,
-        "argv": req.argv,
+        "tool": req.tool,
+        "argv": list(req.argv or []),
         "shell": req.shell,
         "cwd": req.cwd,
-        "targets": req.targets,
-        "capabilities": req.capabilities,
-        "network": req.network,
+        "targets": list(req.targets or []),
+        "capabilities": list(req.capabilities or []),
+        "network": list(req.network or []),
         "timeout": req.timeout,
+        "content_digest": req.content_digest,
+        "content_preview": req.content_preview,
+        "content_length": req.content_length,
         "digest": req.digest[:16],
         "durable": durable,
     }
+    if req.operation == "file.write":
+        card["file_diff"] = _file_write_diff(req)
+    return card
 
 
 permission_broker = PermissionBroker()

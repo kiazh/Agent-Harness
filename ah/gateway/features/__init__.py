@@ -31,6 +31,7 @@ from ah.gateway.features.jobs import (
     jobs_create,
     jobs_delete,
     jobs_list,
+    jobs_resume,
     jobs_set_enabled,
 )
 from ah.gateway.features.memory import (
@@ -136,6 +137,7 @@ METHODS: dict[str, Handler] = {
     "jobs.create": jobs_create,
     "jobs.list": jobs_list,
     "jobs.setEnabled": jobs_set_enabled,
+    "jobs.resume": jobs_resume,
     "jobs.delete": jobs_delete,
     "mode.get": mode_get,
     "mode.set": mode_set,

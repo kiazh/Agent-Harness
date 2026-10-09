@@ -18,17 +18,62 @@ logger = logging.getLogger(__name__)
 # Global RAG pipeline instance (lazy-initialized)
 _rag_pipeline: RAGPipeline | None = None
 _rag_pipeline_lock = asyncio.Lock()
+# Whether the shared instance was built with Cohere credentials present.
+# A mismatch (rotation/appearance/disappearance) rebuilds the pipeline so
+# the selected reranker always matches configuration (AH-AUDIT-036).
+_rag_pipeline_cohere: bool | None = None
+
+
+def _cohere_configured() -> bool:
+    try:
+        from ah.core.config import config as _cfg
+
+        return bool(_cfg.get("cohere_api_key"))
+    except Exception:
+        return False
+
+
+def _build_shared_pipeline() -> RAGPipeline:
+    """Choose the configured reranker (AH-AUDIT-036).
+
+    Cohere is selected only when a key is present AND its client builds;
+    otherwise the pipeline honestly runs passthrough. Explicit disabled
+    mode (enable_reranking=False) is honored by callers via config.
+    """
+    reranker = None
+    if _cohere_configured():
+        try:
+            from ah.rag.reranker import CohereReranker
+
+            reranker = CohereReranker()
+        except Exception as e:
+            logger.warning("Cohere reranker unavailable, passthrough: %s", e)
+            reranker = None
+    if reranker is None:
+        from ah.rag.reranker import IdentityReranker
+
+        reranker = IdentityReranker()
+    return RAGPipeline(reranker=reranker)
 
 
 async def get_rag_pipeline() -> RAGPipeline:
     """Get or create the global RAG pipeline instance."""
-    global _rag_pipeline
-    if _rag_pipeline is None:
+    global _rag_pipeline, _rag_pipeline_cohere
+    current = _cohere_configured()
+    if _rag_pipeline is None or _rag_pipeline_cohere != current:
         async with _rag_pipeline_lock:
             # Double-check after acquiring lock
-            if _rag_pipeline is None:
-                _rag_pipeline = RAGPipeline()
+            if _rag_pipeline is None or _rag_pipeline_cohere != current:
+                _rag_pipeline = _build_shared_pipeline()
+                _rag_pipeline_cohere = current
     return _rag_pipeline
+
+
+def reset_rag_pipeline_for_tests() -> None:
+    """Drop the shared instance (tests only)."""
+    global _rag_pipeline, _rag_pipeline_cohere
+    _rag_pipeline = None
+    _rag_pipeline_cohere = None
 
 
 @registry.register(

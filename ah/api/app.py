@@ -226,13 +226,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         logger.warning("Runtime startup degraded: %s", e)
     yield
+    # AH-AUDIT-024: bounded shutdown — no stage awaits cancellation-
+    # resistant work indefinitely.
     if runner is not None:
-        await runner.stop()
+        try:
+            await asyncio.wait_for(runner.stop(), timeout=10)
+        except (TimeoutError, asyncio.CancelledError, Exception):
+            logger.warning("API job runner stop exceeded its bound; continuing")
     if rpc_gw is not None:
-        await rpc_gw.close()
+        try:
+            await asyncio.wait_for(rpc_gw.close(), timeout=10)
+        except (TimeoutError, asyncio.CancelledError, Exception):
+            logger.warning("API gateway close exceeded its bound; continuing")
     try:
-        await runtime_services.shutdown()
-    except Exception:
+        await asyncio.wait_for(runtime_services.shutdown(), timeout=15)
+    except (TimeoutError, asyncio.CancelledError, Exception):
         pass
 
 
@@ -320,13 +328,9 @@ def create_app() -> FastAPI:
 
             if req.emotion and req.emotion not in EmotionTopology.EMOTION_PROFILES:
                 raise HTTPException(400, "unknown emotion")
-            await session_manager.update_state(
-                session_id,
-                {
-                    **session.state,
-                    "emotion": req.emotion or None,
-                },
-            )
+            # AH-AUDIT-018: transactional field merge — concurrent
+            # compaction/watermark writes are preserved, never clobbered.
+            await session_manager.update_state_fields(session_id, {"emotion": req.emotion or None})
         if req.title is not None:
             await session_manager.set_title(session_id, req.title)
         if req.goal is not None:
@@ -494,7 +498,8 @@ def create_app() -> FastAPI:
             sid = uuid.UUID(session_id)
         except ValueError:
             raise HTTPException(400, "invalid session ID") from None
-        session = await session_manager.get(sid)
+        # AH-AUDIT-019: execution-critical read bypasses the display cache.
+        session = await session_manager.get_fresh(sid)
         if session is None:
             raise HTTPException(404, "session not found")
         # Shared coordinator: owner-token claim BEFORE SSE headers so a
@@ -507,10 +512,59 @@ def create_app() -> FastAPI:
         if not turn_token:
             raise HTTPException(409, "a turn is already running for this session")
 
+        # AH-AUDIT-013: managed renewal while the stream owns the turn
+        # (compute only here — headless SSE never waits on humans, so no
+        # approval accounting is needed on this path). Created lazily on
+        # first iteration so an unconsumed stream never renews forever;
+        # stopped when the generator exits; crash expiry recovery preserved.
+        _renew_state: dict[str, Any] = {}
+
+        async def _ensure_renewal() -> None:
+            if _renew_state.get("task") is not None:
+                return
+            _renew_stop = asyncio.Event()
+            _renew_state["stop"] = _renew_stop
+
+            async def _renew_loop() -> None:
+                from ah.core.turns import renew_turn as _renew_stream_claim
+
+                while not _renew_stop.is_set():
+                    try:
+                        await asyncio.wait_for(_renew_stop.wait(), timeout=120)
+                    except TimeoutError:
+                        pass
+                    if _renew_stop.is_set():
+                        return
+                    try:
+                        if not await _renew_stream_claim(sid, turn_token):
+                            logger.warning("SSE turn lost ownership for session %s", session_id)
+                            return
+                    except Exception:
+                        pass
+
+            _renew_state["task"] = asyncio.create_task(_renew_loop())
+
+        async def _stop_renewal() -> None:
+            _renew_stop = _renew_state.pop("stop", None)
+            _renew_task = _renew_state.pop("task", None)
+            if _renew_stop is not None:
+                try:
+                    _renew_stop.set()
+                except Exception:
+                    pass
+            if _renew_task is not None and not _renew_task.done():
+                _renew_task.cancel()
+            if _renew_task is not None:
+                try:
+                    await asyncio.gather(_renew_task, return_exceptions=True)
+                except (asyncio.CancelledError, Exception):
+                    pass
+
         async def event_stream() -> AsyncGenerator[str, None]:
             agent = None
             _stream_cancelled = False
             _stage = "turn_started"
+            await _ensure_renewal()
 
             def _record_stage(stage: str) -> None:
                 nonlocal _stage
@@ -567,6 +621,28 @@ def create_app() -> FastAPI:
                                 _pre_redacted=True,
                             )
                             yield f"data: {json.dumps(data)}\n\n"
+                        # AH-AUDIT-030: typed needs_approval SSE output with
+                        # request/session/turn binding and the sanitized
+                        # proposal. A pause is actionable and distinct from
+                        # failure; resume revalidates under a fresh fenced
+                        # claim (never by continuing stale generator state).
+                        for pause in getattr(event.response, "needs_approval", None) or []:
+                            if not isinstance(pause, dict) or not pause.get("request_id"):
+                                continue
+                            pause_event = StreamEvent(
+                                type="needs_approval",
+                                content=str(pause.get("request_id", "")),
+                                tool_name=str(pause.get("operation", "")),
+                                tool_args={
+                                    "requestId": str(pause.get("request_id", "")),
+                                    "sessionId": str(pause.get("session_id", "") or session_id),
+                                    "operation": str(pause.get("operation", "")),
+                                    "target": str(pause.get("target", "")),
+                                    "status": str(pause.get("status", "pending")),
+                                },
+                            )
+                            data = _serialize_event(pause_event)
+                            yield f"data: {json.dumps(data)}\n\n"
                     data = _serialize_event(event)
                     yield f"data: {json.dumps(data)}\n\n"
             except TimeoutError:
@@ -591,7 +667,9 @@ def create_app() -> FastAPI:
                 # 3. Claim release: independent outer finally, always runs.
                 # 4. Auto-compaction: fire-and-forget, never blocks [DONE].
                 try:
-                    _learning = tuple(getattr(agent, "_learning_tasks", ())) if agent is not None else ()
+                    _learning = (
+                        tuple(getattr(agent, "_learning_tasks", ())) if agent is not None else ()
+                    )
                     if _learning:
                         _record_stage("joining_optional_work")
                         # Bounded join: learning reviews must never block
@@ -633,6 +711,11 @@ def create_app() -> FastAPI:
                                 )
                     finally:
                         _record_stage("releasing_ownership")
+                        # AH-AUDIT-013: stop renewal during release.
+                        try:
+                            await _stop_renewal()
+                        except (asyncio.CancelledError, Exception):
+                            pass
                         if turn_token:
                             try:
                                 await _end_turn(sid, turn_token)
@@ -640,15 +723,22 @@ def create_app() -> FastAPI:
                                 pass
                     # H-03: Auto-compaction is fire-and-forget background work.
                     # Never blocks [DONE] or holds the stream open.
+                    # AH-AUDIT-025: tracked by the shared runtime for bounded
+                    # shutdown joining before DB closure.
                     if not _stream_cancelled:
                         _record_stage("compaction_maintenance")
                         try:
                             from ah import services as _services
+                            from ah.core.runtime import runtime_services as _runtime
 
                             task = asyncio.create_task(_services.maybe_auto_compact(sid))
                             task.add_done_callback(
                                 lambda t: t.exception() if not t.cancelled() else None
                             )
+                            try:
+                                _runtime.track(task)
+                            except Exception:
+                                pass
                         except Exception:
                             pass
                 if not _stream_cancelled:
@@ -992,4 +1082,24 @@ def _serialize_event(event: StreamEvent, *, _pre_redacted: bool = False) -> dict
         data["tokens"] = resp.tokens_used
         data["iterations"] = resp.iterations
         data["toolCalls"] = len(resp.tool_calls)
+        pauses = [
+            p
+            for p in (getattr(resp, "needs_approval", None) or [])
+            if isinstance(p, dict) and p.get("request_id")
+        ]
+        if pauses:
+            data["needsApproval"] = [
+                {
+                    "requestId": str(p.get("request_id", "")),
+                    "operation": str(p.get("operation", "")),
+                    "target": str(p.get("target", "")),
+                    "status": str(p.get("status", "pending")),
+                }
+                for p in pauses
+            ]
+    elif event.type == "needs_approval":
+        # Typed pause (AH-AUDIT-030): actionable, never a generic error.
+        data["requestId"] = event.content
+        data["operation"] = event.tool_name
+        data["proposal"] = _redact_value(dict(event.tool_args or {}))
     return data

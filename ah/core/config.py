@@ -92,6 +92,7 @@ __all__ = [
     "LEGACY_ENV_VARS",
     "DEFAULTS",
     "get_config",
+    "validate_value",
 ]
 
 # Sensible defaults for all settings
@@ -179,6 +180,95 @@ LEGACY_ENV_VARS: dict[str, str] = {
     "tmpdir": "TMPDIR",
     "temp": "TEMP",
 }
+
+
+def validate_value(key: str, value: Any) -> Any:
+    """Coerce and bounds-check *value* for *key* (AH-AUDIT-042).
+
+    Returns the coerced value. Raises ValueError with an actionable message
+    on failure — callers must not mutate state or files when this raises.
+    Rejects NaN/infinity, out-of-range numbers, and unknown enum members
+    across CLI/gateway/HTTP/config-file/env paths. Intentional
+    zero/unlimited semantics (usage_*_limit == 0) are preserved.
+    """
+    if key == "execution_mode":
+        normalized = str(value).strip().lower()
+        if normalized not in ("ask", "workspace", "sandbox", "full"):
+            raise ValueError("execution_mode must be ask|workspace|sandbox|full")
+        return normalized
+    if key == "terminal_sandbox":
+        normalized = str(value).strip().lower()
+        if normalized not in ("disabled", "local", "docker"):
+            raise ValueError("terminal_sandbox must be disabled|local|docker")
+        return normalized
+    if key == "reasoning_effort":
+        normalized = str(value).strip().lower()
+        if normalized not in ("", "low", "medium", "high"):
+            raise ValueError("reasoning_effort must be ''|low|medium|high")
+        return normalized
+    if key not in DEFAULTS:
+        return value
+    default_value = DEFAULTS[key]
+    try:
+        if isinstance(default_value, bool):
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                if lowered in ("true", "1", "yes", "on"):
+                    return True
+                if lowered in ("false", "0", "no", "off"):
+                    return False
+                raise ValueError(f"{key} must be a boolean, got {value!r}")
+            return bool(value)
+        if isinstance(default_value, int) and not isinstance(default_value, bool):
+            coerced = int(str(value).strip()) if isinstance(value, str) else int(value)
+            _check_int_bounds(key, coerced)
+            return coerced
+        if isinstance(default_value, float):
+            coerced_f = float(str(value).strip()) if isinstance(value, str) else float(value)
+            import math as _math
+
+            if not _math.isfinite(coerced_f):
+                raise ValueError(f"{key} must be finite, got {value!r}")
+            _check_float_bounds(key, coerced_f)
+            return coerced_f
+        return str(value)
+    except ValueError as e:
+        if str(e).startswith(key):
+            raise
+        raise ValueError(f"{key} must be {type(default_value).__name__}, got {value!r}") from e
+    except (TypeError, AttributeError) as e:
+        raise ValueError(f"{key} must be {type(default_value).__name__}, got {value!r}") from e
+
+
+def _check_int_bounds(key: str, val: int) -> None:
+    bounds: dict[str, tuple[int, int | None]] = {
+        "turn_timeout": (1, 3600),
+        "approval_timeout": (1, 3600),
+        "context_budget": (100, None),
+        "max_tokens": (1, None),
+        "max_iterations": (1, 100),
+        "rate_limit_calls_per_minute": (1, None),
+        "usage_session_token_limit": (0, None),
+        "usage_session_request_limit": (0, None),
+        "usage_agent_token_limit": (0, None),
+        "usage_agent_request_limit": (0, None),
+        "history_size": (1, 10000),
+        "compression_preserve_recent": (0, 100),
+        "learning_review_max_per_session": (0, 100),
+        "eviction_max_tokens": (0, None),
+    }
+    if key in bounds:
+        lo, hi = bounds[key]
+        if val < lo or (hi is not None and val > hi):
+            hi_text = f"..{hi}" if hi is not None else "+"
+            raise ValueError(f"{key} must be in range {lo}{hi_text}, got {val}")
+
+
+def _check_float_bounds(key: str, val: float) -> None:
+    if key == "temperature" and not 0.0 <= val <= 2.0:
+        raise ValueError(f"temperature must be in range 0.0..2.0, got {val}")
+    if key in ("compression_threshold", "compression_target_ratio") and not 0.0 < val <= 1.0:
+        raise ValueError(f"{key} must be in range 0.0<..1.0, got {val}")
 
 
 @dataclass
@@ -279,41 +369,15 @@ class Config:
             key: Config key to set.
             value: New value.
             persist: If True, write to config file. If False, only set in-memory.
+
+        AH-AUDIT-042: validation is centralized in validate_value(): a
+        failure raises with an actionable error and mutates nothing — no
+        partial state, no partial file writes.
         """
         if key.startswith("_"):
             raise ValueError(f"Cannot set private key: {key}")
-
-        # Validated enums: a configured flag must correspond to enforced behavior.
-        if key == "execution_mode":
-            normalized = str(value).strip().lower()
-            if normalized not in ("ask", "workspace", "sandbox", "full"):
-                raise ValueError("execution_mode must be ask|workspace|sandbox|full")
-            value = normalized
-        if key == "terminal_sandbox":
-            normalized = str(value).strip().lower()
-            if normalized not in ("disabled", "local", "docker"):
-                raise ValueError("terminal_sandbox must be disabled|local|docker")
-            value = normalized
-
-        # Type coercion based on defaults
-        if key in DEFAULTS:
-            default_value = DEFAULTS[key]
-            try:
-                if isinstance(default_value, bool):
-                    if isinstance(value, str):
-                        value = value.lower() in ("true", "1", "yes", "on")
-                    else:
-                        value = bool(value)
-                elif isinstance(default_value, int):
-                    value = int(value)
-                elif isinstance(default_value, float):
-                    value = float(value)
-                else:
-                    value = str(value)
-            except (ValueError, TypeError):
-                pass  # Keep original value if coercion fails
-
-        setattr(self, key, value)
+        coerced = validate_value(key, value)
+        setattr(self, key, coerced)
 
         if persist:
             self.save()
@@ -346,14 +410,20 @@ class Config:
         config = Config()
         load_path = Path(path) if path else DEFAULT_CONFIG_PATH
 
-        # Load from file if it exists
+        # Load from file if it exists. AH-AUDIT-042: invalid values are
+        # rejected with a warning and the default kept — never activated.
         if load_path.exists():
             try:
                 with open(load_path) as f:
                     file_data = yaml.safe_load(f) or {}
                 for key, value in file_data.items():
                     if key in DEFAULTS:
-                        setattr(config, key, value)
+                        try:
+                            setattr(config, key, validate_value(key, value))
+                        except ValueError as e:
+                            logger.warning(
+                                "Ignoring invalid config %s in %s: %s", key, load_path, e
+                            )
                 logger.debug("Config loaded from %s", load_path)
             except Exception as e:
                 logger.warning("Failed to load config from %s: %s", load_path, e)
@@ -363,17 +433,11 @@ class Config:
             env_key = f"AGENT_HARNESS_{key.upper()}"
             env_value = os.environ.get(env_key)
             if env_value is not None:
-                # Coerce type from default
-                default_value = DEFAULTS[key]
                 try:
-                    if isinstance(default_value, bool):
-                        env_value = env_value.lower() in ("true", "1", "yes", "on")
-                    elif isinstance(default_value, int):
-                        env_value = int(env_value)
-                    elif isinstance(default_value, float):
-                        env_value = float(env_value)
-                except (ValueError, TypeError):
-                    pass
+                    env_value = validate_value(key, env_value)
+                except ValueError as e:
+                    logger.warning("Ignoring invalid env %s: %s", env_key, e)
+                    continue
                 setattr(config, key, env_value)
 
         # Override with legacy environment variables (OPENROUTER_API_KEY, etc.)

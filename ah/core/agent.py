@@ -717,9 +717,7 @@ class BaseReActAgent:
                         elif self.allowed_tools is None:
                             _merged["tools"] = list(_parent_tools)
                         else:
-                            _merged["tools"] = [
-                                t for t in self.allowed_tools if t in _parent_tools
-                            ]
+                            _merged["tools"] = [t for t in self.allowed_tools if t in _parent_tools]
                         authority_token = _pav.set(_merged)
                     except Exception:
                         authority_token = None
@@ -737,9 +735,15 @@ class BaseReActAgent:
 
                         _spec = _perm_tools.action_for_tool(tool_name, tool_args)
                         try:
+                            # AH-AUDIT-001: session-effective mode (session
+                            # override → global default), never the raw global
+                            # alone. A sibling session's activation cannot
+                            # alter this session's approved semantics.
+                            from ah.core.session_mode import get_effective_mode
+
+                            _mode = get_effective_mode(str(session_id))
                             from ah.core.config import config as _cfg
 
-                            _mode = _cfg.get("execution_mode") or "ask"
                             _sandbox_cfg = (_cfg.get("terminal_sandbox") or "disabled").lower()
                         except Exception:
                             _mode, _sandbox_cfg = "ask", "disabled"
@@ -763,6 +767,9 @@ class BaseReActAgent:
                             capabilities=_spec.get("capabilities"),
                             network=_spec.get("network"),
                             tool=tool_name,
+                            # AH-AUDIT-005/008: timeout is authorization-
+                            # relevant and bound into the approved digest.
+                            timeout=int(_spec.get("timeout", 60) or 60),
                         )
                         try:
                             await _broker.guard(_req)
@@ -776,6 +783,16 @@ class BaseReActAgent:
                                 "or choose another path."
                             )
                             item["result"] = str(result)
+                            # AH-AUDIT-022: typed pause outcome travels with
+                            # the tool item into AgentResponse.needs_approval.
+                            # Schedulers/transports read this — never prose.
+                            item["_needs_approval"] = {
+                                "request_id": _ap.get("request_id", ""),
+                                "session_id": _ap.get("session_id", ""),
+                                "operation": _ap.get("operation", ""),
+                                "target": _ap.get("target", ""),
+                                "status": _ap.get("status", "pending"),
+                            }
                             item["elapsed_ms"] = (time.monotonic() - start) * 1000
                             return
                         except _Denied as _den:
@@ -801,6 +818,17 @@ class BaseReActAgent:
                                     pass
                             raise
                     finally:
+                        try:
+                            # AH-AUDIT-002: end the guard+execute window so a
+                            # later tool call cannot inherit this approval's
+                            # snapshot.
+                            from ah.permissions.broker import (
+                                clear_execution_context as _clear_ctx,
+                            )
+
+                            _clear_ctx()
+                        except Exception:
+                            pass
                         try:
                             if authority_token is not None:
                                 from ah.core.agent_factory import parent_authority_var as _pav2
@@ -864,6 +892,23 @@ class BaseReActAgent:
                         tool_result=result_str,
                         tool_call_id=finished["call_id"],
                     )
+                    # AH-AUDIT-030: typed pause alongside the result so live
+                    # consumers need not wait for the terminal response.
+                    _pause_c = finished.get("_needs_approval")
+                    if isinstance(_pause_c, dict) and _pause_c.get("request_id"):
+                        yield StreamEvent(
+                            type="needs_approval",
+                            content=str(_pause_c.get("request_id", "")),
+                            tool_name=tool_name,
+                            tool_args={
+                                "requestId": str(_pause_c.get("request_id", "")),
+                                "sessionId": str(_pause_c.get("session_id", "")),
+                                "operation": str(_pause_c.get("operation", "")),
+                                "target": str(_pause_c.get("target", "")),
+                                "status": str(_pause_c.get("status", "pending")),
+                            },
+                            tool_call_id=finished["call_id"],
+                        )
             finally:
                 # Ensure no task leaks on cancellation.
                 for t in tasks:
@@ -904,6 +949,24 @@ class BaseReActAgent:
                     tool_result=result_str,
                     tool_call_id=item["call_id"],
                 )
+                # AH-AUDIT-030: typed pause event on the stream (not just in
+                # the terminal done response) so SSE/transports can pause
+                # mid-turn with request binding instead of parsing prose.
+                _pause = item.get("_needs_approval")
+                if isinstance(_pause, dict) and _pause.get("request_id"):
+                    yield StreamEvent(
+                        type="needs_approval",
+                        content=str(_pause.get("request_id", "")),
+                        tool_name=tool_name,
+                        tool_args={
+                            "requestId": str(_pause.get("request_id", "")),
+                            "sessionId": str(_pause.get("session_id", "")),
+                            "operation": str(_pause.get("operation", "")),
+                            "target": str(_pause.get("target", "")),
+                            "status": str(_pause.get("status", "pending")),
+                        },
+                        tool_call_id=item["call_id"],
+                    )
             else:
                 # Executed tools: metrics already recorded at completion time;
                 # still dispatch result hooks + audit once (idempotent).
@@ -956,13 +1019,16 @@ class BaseReActAgent:
                     },
                     token_count=len(result_str) // 4,
                 )
-            tool_calls_made.append(
-                {
-                    "tool": tool_name,
-                    "args": tool_args,
-                    "result_preview": result_str[:200],
-                }
-            )
+            tool_entry: dict[str, Any] = {
+                "tool": tool_name,
+                "args": tool_args,
+                "result_preview": result_str[:200],
+            }
+            # AH-AUDIT-022: typed pause marker travels with the entry so
+            # schedulers/transports never parse prose to detect pauses.
+            if item.get("_needs_approval"):
+                tool_entry["needs_approval"] = item["_needs_approval"]
+            tool_calls_made.append(tool_entry)
             self._append_tool_messages(messages, response, tc, result_str[:1000])
 
     async def _flush_pending_chunks(self, pending_chunks: list[dict[str, Any]]) -> None:
@@ -1099,24 +1165,30 @@ class BaseReActAgent:
             elif cursor and newest and str(newest[0].id) == str(cursor.get("id")):
                 logger.debug("consolidation cursor unchanged, skipping")
                 return
-            new_memories = await self.memory_consolidator.consolidate_session(
+            result = await self.memory_consolidator.consolidate_session(
                 session_id=session_id,
                 agent_id=self.agent_id,
                 since=since,
             )
-            # R-03: Advance watermark only to the last successfully processed
-            # chunk, NOT to the session's newest chunk. When pending input
-            # exceeds the batch limit, the newest chunk is beyond what was
-            # actually processed.
-            processed_up_to = getattr(self.memory_consolidator, "_last_processed_chunk", None)
-            if processed_up_to and session is not None:
+            # AH-AUDIT-037: the durable watermark advances ONLY from the
+            # typed checkpoint (fully processed contiguous input). Failed
+            # extraction and partial persistence leave failed ranges
+            # retryable; successful empty extraction advances (nothing was
+            # skipped). Merged transactionally so concurrent state writes
+            # survive.
+            new_memories = result.entries if hasattr(result, "entries") else (result or [])
+            checkpoint = getattr(result, "checkpoint", None)
+            if checkpoint and session is not None:
                 try:
-                    state = dict(session.state or {})
-                    state["mem_consolidated_up_to"] = {
-                        "id": str(processed_up_to["id"]),
-                        "at": processed_up_to["at"],
-                    }
-                    await session_manager.update_state(session_id, state)
+                    await session_manager.update_state_fields(
+                        session_id,
+                        {
+                            "mem_consolidated_up_to": {
+                                "id": str(checkpoint["id"]),
+                                "at": checkpoint["at"],
+                            }
+                        },
+                    )
                 except Exception as e:
                     logger.debug("consolidation cursor persist failed: %s", e)
             if new_memories:

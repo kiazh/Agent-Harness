@@ -478,10 +478,33 @@ export class App implements FeatureHost {
 	/** Compact approval card: action, cwd/target, backend, grant choices. */
 	private async promptApproval(event: Extract<GatewayEvent, { type: "permission.required" }>): Promise<void> {
 		const short = event.sessionId.slice(0, 8);
+		// AH-AUDIT-003/004: render the exact command (argv, unambiguous —
+		// never a shell-looking string alone), cwd, backend, timeout, and
+		// file-write content identity + diff. Secret values arrive redacted.
+		const argv = (event.argv ?? []).map((a) => JSON.stringify(a)).join(" ");
+		const command = argv ? `${event.operation} ${argv}` : `${event.operation} ${event.target}`;
 		this.transcript.addNotice(
-			`Approval needed [${short}]: ${event.operation} ${event.target} (cwd: ${event.cwd}, backend: ${event.backend})`,
+			`Approval needed [${short}]: ${command} (cwd: ${event.cwd}, backend: ${event.backend}, timeout: ${event.timeout ?? 60}s)`,
 			"warning",
 		);
+		if (event.network?.length) {
+			this.transcript.addNotice(`Destinations: ${event.network.join(", ")}`, "warning");
+		}
+		if (event.contentDigest) {
+			this.transcript.addNotice(
+				`Content sha256: ${event.contentDigest.slice(0, 16)}… (${event.contentLength ?? 0} chars)`,
+				"warning",
+			);
+		}
+		if (event.contentPreview) {
+			this.transcript.addNotice(`Proposed content:\n${event.contentPreview}`, "warning");
+		}
+		if (event.fileDiff?.diff) {
+			this.transcript.addNotice(
+				`Diff:\n${event.fileDiff.diff}${event.fileDiff.truncated ? "\n… [truncated]" : ""}`,
+				"warning",
+			);
+		}
 		if (event.durable === false) {
 			this.transcript.addNotice(
 				"Approvals are local-only right now (database unavailable); cross-worker guarantees are degraded.",

@@ -51,6 +51,7 @@ class TestTokenEstimation:
             mock_session.goal = None
             mock_session_mgr.create = AsyncMock(return_value=mock_session)
             mock_session_mgr.get = AsyncMock(return_value=mock_session)
+            mock_session_mgr.get_fresh = AsyncMock(return_value=mock_session)
             mock_db.execute = AsyncMock(return_value="INSERT 0 1")
             mock_ctx_mgr.get_recent_context = AsyncMock(return_value=[])
             mock_ctx_mgr.add_chunk = AsyncMock()
@@ -100,6 +101,7 @@ class TestTokenEstimation:
             mock_session.goal = None
             mock_session_mgr.create = AsyncMock(return_value=mock_session)
             mock_session_mgr.get = AsyncMock(return_value=mock_session)
+            mock_session_mgr.get_fresh = AsyncMock(return_value=mock_session)
             mock_db.execute = AsyncMock(return_value="INSERT 0 1")
             mock_ctx_mgr.get_recent_context = AsyncMock(return_value=[])
             mock_ctx_mgr.add_chunk = AsyncMock()

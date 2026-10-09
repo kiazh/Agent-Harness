@@ -230,18 +230,13 @@ class Orchestrator:
                 _pav.reset(authority_token)
             except Exception:
                 pass
-            # AH-023: close only factory-owned providers. Custom factories
-            # (tests) inject shared agents that must stay open.
+            # AH-AUDIT-026: shared owner-aware cleanup contract (bounded;
+            # custom test factories inject shared agents that stay open).
             if getattr(self, "_owns_factory_agents", False):
                 try:
-                    prov = getattr(agent, "provider", None)
-                    close = getattr(prov, "close", None)
-                    if callable(close):
-                        import inspect as _inspect
+                    from ah.core.agent_factory import close_agent_provider
 
-                        r = close()
-                        if _inspect.isawaitable(r):
-                            await r
+                    await close_agent_provider(agent)
                 except Exception:
                     pass
 
@@ -268,7 +263,8 @@ class Orchestrator:
 
     async def _parent_context(self, session_id: uuid.UUID) -> str:
         """Pass a bounded summary of recent parent activity to a child agent."""
-        parent = await session_manager.get(session_id)
+        # AH-AUDIT-019: delegation reads current durable parent state.
+        parent = await session_manager.get_fresh(session_id)
         if parent is None:
             raise ValueError(f"parent session {session_id} not found")
         recent = await context_manager.get_recent_context(session_id, limit=10)

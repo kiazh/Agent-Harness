@@ -393,4 +393,4 @@ class TestConsolidatorBatchDedup:
             mock_cm.get_chunks = AsyncMock(return_value=[])
             # This should not raise and should complete
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
-            assert isinstance(results, list)
+            assert results.status == "empty" and results.entries == []

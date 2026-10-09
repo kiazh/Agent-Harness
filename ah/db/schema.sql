@@ -307,6 +307,15 @@ CREATE TABLE IF NOT EXISTS jobs (
 -- must present the token from claim_due; a stale worker cannot mutate a
 -- newer claim.
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS claim_token UUID;
+-- AH-AUDIT-021: durable approval-paused state. A job awaiting human
+-- approval is parked here (linked to its approval request) and excluded
+-- from due claims until an explicit human resume. Restart-safe.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS paused_for_approval TEXT;
+CREATE INDEX IF NOT EXISTS idx_jobs_pause ON jobs(status) WHERE status = 'paused_approval';
+ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_status_check;
+ALTER TABLE jobs ADD CONSTRAINT jobs_status_check CHECK (
+    status IN ('idle', 'running', 'error', 'paused_approval')
+);
 
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cron_expression TEXT;
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS model TEXT;
@@ -504,3 +513,11 @@ ALTER TABLE permission_approvals ADD CONSTRAINT permission_approvals_status_chec
 );
 ALTER TABLE permission_grants ADD COLUMN IF NOT EXISTS scope_type TEXT NOT NULL DEFAULT 'file';
 ALTER TABLE permission_grants ADD COLUMN IF NOT EXISTS grant_kind TEXT NOT NULL DEFAULT 'session';
+-- AH-AUDIT-005: durable reviewable proposals. proposal is the versioned
+-- canonical action (argv/cwd/backend/timeout/network/content identity);
+-- display holds the sanitized human-review representation (redacted preview,
+-- never raw secrets). Legacy rows predate these columns: their proposals
+-- are incomplete and must fail closed (fresh approval), never be silently
+-- reconstructed from guesses.
+ALTER TABLE permission_approvals ADD COLUMN IF NOT EXISTS proposal JSONB;
+ALTER TABLE permission_approvals ADD COLUMN IF NOT EXISTS display TEXT;

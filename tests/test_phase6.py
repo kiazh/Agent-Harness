@@ -109,9 +109,9 @@ def test_mounted_secret_and_vault_lookup(monkeypatch, tmp_path):
         def get(self, url, headers):
             assert url == "https://vault.example/v1/secret/data/phase6"
             assert headers["X-Vault-Token"] == "token"
-            return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {
-                "data": {"data": {name: "vault-key"}}
-            })
+            return SimpleNamespace(
+                raise_for_status=lambda: None, json=lambda: {"data": {"data": {name: "vault-key"}}}
+            )
 
     monkeypatch.setattr(secrets.httpx, "Client", Client)
     assert get_secret(name) == "vault-key"
@@ -124,9 +124,11 @@ def test_aws_secret_lookup_uses_named_field(monkeypatch):
 
     def client(service):
         assert service == "secretsmanager"
-        return SimpleNamespace(get_secret_value=lambda **kwargs: {
-            "SecretString": '{"PHASE6_AWS_SECRET_TEST":"aws-key"}'
-        })
+        return SimpleNamespace(
+            get_secret_value=lambda **kwargs: {
+                "SecretString": '{"PHASE6_AWS_SECRET_TEST":"aws-key"}'
+            }
+        )
 
     monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=client))
     assert get_secret(name) == "aws-key"
@@ -207,9 +209,11 @@ async def test_agent_lifecycle_and_tool_hooks(monkeypatch):
             seen.append(("post", response.content))
 
     calls = [
-        LLMResponse(content="", model="test", tool_calls=[{
-            "id": "one", "function": {"name": "list_agents", "arguments": "{}"}
-        }]),
+        LLMResponse(
+            content="",
+            model="test",
+            tool_calls=[{"id": "one", "function": {"name": "list_agents", "arguments": "{}"}}],
+        ),
         LLMResponse(content="finished", model="test"),
     ]
 
@@ -221,7 +225,9 @@ async def test_agent_lifecycle_and_tool_hooks(monkeypatch):
     monkeypatch.setattr(agent_module.session_manager, "update_activity", AsyncMock())
     monkeypatch.setattr(agent_module.context_manager, "add_chunk", AsyncMock())
     monkeypatch.setattr(agent_module.context_manager, "add_chunks_batch", AsyncMock())
-    monkeypatch.setattr(agent_module.context_manager, "get_recent_context", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        agent_module.context_manager, "get_recent_context", AsyncMock(return_value=[])
+    )
     monkeypatch.setattr(agent_module.registry, "execute", AsyncMock(return_value="agents listed"))
     agent = ReActAgent(provider=Provider(), max_iterations=2)
     agent.memory_retriever.retrieve = AsyncMock(return_value=[])
@@ -263,9 +269,14 @@ async def test_api_lifespan_starts_and_stops_scheduler(monkeypatch):
 
     monkeypatch.setattr(db, "connect", connect)
     monkeypatch.setattr(db, "close", close)
+    # Startup gates the scheduler on real readiness (db.connected): the
+    # mock connect must also present a connected pool state.
+    monkeypatch.setattr(db, "_pool", object())
     monkeypatch.setattr(scheduler, "JobRunner", Runner)
     monkeypatch.setattr(audit_persistence, "start", lambda: events.append("audit-start"))
-    monkeypatch.setattr(audit_persistence, "stop", AsyncMock(side_effect=lambda: events.append("audit-stop")))
+    monkeypatch.setattr(
+        audit_persistence, "stop", AsyncMock(side_effect=lambda: events.append("audit-stop"))
+    )
     async with lifespan(create_app()):
         assert events == ["db-connect", "audit-start", "runner-start"]
     assert events[-3:] == ["runner-stop", "audit-stop", "db-close"]
@@ -345,7 +356,11 @@ async def test_versioned_memory_and_document_routes(monkeypatch):
     monkeypatch.setenv("AGENT_HARNESS_API_KEY", "phase6-test")
     monkeypatch.setenv("AGENT_HARNESS_HTTP_RATE_LIMIT", "100")
     session_id = uuid.uuid4()
-    monkeypatch.setattr(session_manager, "get", AsyncMock(return_value=SimpleNamespace(id=session_id, agent_id="harness")))
+    monkeypatch.setattr(
+        session_manager,
+        "get",
+        AsyncMock(return_value=SimpleNamespace(id=session_id, agent_id="harness")),
+    )
     memory = SimpleNamespace(id=uuid.uuid4(), content="saved", category="fact")
     add_memory = AsyncMock(return_value=memory)
     monkeypatch.setattr(memory_store, "add", add_memory)
@@ -355,13 +370,15 @@ async def test_versioned_memory_and_document_routes(monkeypatch):
     headers = {"Authorization": "Bearer phase6-test"}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         created = await client.post(
-            "/api/v1/memory", headers=headers,
+            "/api/v1/memory",
+            headers=headers,
             json={"content": "saved", "sessionId": str(session_id)},
         )
         assert created.status_code == 200
         assert add_memory.await_args.kwargs["session_id"] == session_id
         indexed = await client.post(
-            "/api/v1/documents", headers=headers,
+            "/api/v1/documents",
+            headers=headers,
             json={"sessionId": str(session_id), "source": "notes", "content": "hello"},
         )
         assert indexed.status_code == 200
@@ -376,9 +393,18 @@ async def test_versioned_session_update_and_delete(monkeypatch):
     monkeypatch.setenv("AGENT_HARNESS_API_KEY", "phase6-test")
     monkeypatch.setenv("AGENT_HARNESS_HTTP_RATE_LIMIT", "100")
     session_id = uuid.uuid4()
-    session = SimpleNamespace(id=session_id, title="Renamed", status="active", model="m",
-                              provider="p", goal=None, agent_id="harness", context_budget=8000,
-                              created_at=None, last_activity=None)
+    session = SimpleNamespace(
+        id=session_id,
+        title="Renamed",
+        status="active",
+        model="m",
+        provider="p",
+        goal=None,
+        agent_id="harness",
+        context_budget=8000,
+        created_at=None,
+        last_activity=None,
+    )
     monkeypatch.setattr(session_manager, "get", AsyncMock(return_value=session))
     set_title = AsyncMock()
     monkeypatch.setattr(session_manager, "set_title", set_title)
@@ -408,8 +434,12 @@ async def test_cron_job_persists_and_reschedules():
     try:
         session = await session_manager.create(title="cron phase 6")
         job = await job_store.create(
-            name="cron phase 6", kind="cron", session_id=session.id,
-            prompt="continue", interval_seconds=300, cron_expression="*/5 * * * *",
+            name="cron phase 6",
+            kind="cron",
+            session_id=session.id,
+            prompt="continue",
+            interval_seconds=300,
+            cron_expression="*/5 * * * *",
         )
         assert job.kind == "cron" and job.cron_expression == "*/5 * * * *"
         assert job.next_run_at > datetime.now(UTC)
@@ -438,7 +468,7 @@ async def test_docker_terminal_isolated_command_and_path_check(monkeypatch, tmp_
     monkeypatch.setenv("AGENT_HARNESS_TERMINAL_SANDBOX", "docker")
     seen = []
 
-    def fake_run(args, timeout, cwd):
+    def fake_run(args, timeout, cwd, **kwargs):
         seen.append(args)
         return "ok"
 

@@ -254,7 +254,7 @@ async def test_run_due_once_handles_cancelled_error(monkeypatch):
     runner._execute = cancel_execute
     with pytest.raises(asyncio.CancelledError):
         await runner.run_due_once()
-    store.finish.assert_awaited_with(job.id, error="cancelled", claim_token=None)
+    store.finish.assert_awaited_with(job.id, error="cancelled", claim_token=None, paused_for=None)
 
 
 async def test_keep_lease_renews_periodically(monkeypatch):
@@ -316,10 +316,10 @@ async def test_execute_raises_without_session():
 
 
 async def test_build_agent_raises_for_unknown_agent(monkeypatch):
-    """_build_agent raises ValueError for unknown agent names."""
+    """_build_agent fails closed for unknown agent names (shared factory)."""
     monkeypatch.setattr("ah.core.agent_def.agent_registry.get", AsyncMock(return_value=None))
     runner = JobRunner()
-    with pytest.raises(ValueError, match="no agent named"):
+    with pytest.raises(ValueError, match="unknown agent"):
         await runner._build_agent("nonexistent")
 
 
@@ -871,6 +871,18 @@ async def test_execute_no_agent_script(db_pool, monkeypatch, tmp_path):
             raise AssertionError("LLM agent was built")
 
         monkeypatch.setattr(runner, "_build_agent", no_agent)
+        # AH-AUDIT-009: broker-governed scripts pause for human approval
+        # first; the test drives the real pause → resolve → execute flow.
+        from ah.permissions import store as perm_store
+
+        with pytest.raises(PermissionError, match="needs_approval"):
+            await runner._execute(job)
+        pending = await perm_store.list_pending(str(session.id))
+        assert len(pending) == 1
+        resolved = await perm_store.resolve_decision(
+            pending[0]["request_id"], "approved", principal="tui"
+        )
+        assert resolved is not None
         await runner._execute(job)
         assert len(chunks) == 1
         assert chunks[0]["payload"]["content"] == "hello world"
@@ -913,6 +925,17 @@ async def test_execute_no_agent_empty_output(db_pool, monkeypatch, tmp_path):
             raise AssertionError("LLM agent was built")
 
         monkeypatch.setattr(runner, "_build_agent", no_agent)
+        # AH-AUDIT-009: same pause → resolve → execute flow as above.
+        from ah.permissions import store as perm_store
+
+        with pytest.raises(PermissionError, match="needs_approval"):
+            await runner._execute(job)
+        pending = await perm_store.list_pending(str(session.id))
+        assert len(pending) == 1
+        resolved = await perm_store.resolve_decision(
+            pending[0]["request_id"], "approved", principal="tui"
+        )
+        assert resolved is not None
         await runner._execute(job)
         assert len(chunks) == 0
     finally:
@@ -977,9 +1000,10 @@ async def test_execute_passes_model_and_provider(db_pool, monkeypatch):
         async def run(self, session_id, prompt, verbose=True):
             return AgentResponse(content="ok", tool_calls=[], tokens_used=1, iterations=1)
 
-    async def fake_build_agent(agent_name, *, model=None, provider=None):
+    async def fake_build_agent(agent_name, *, model=None, provider=None, session_id=None):
         captured["model"] = model
         captured["provider"] = provider
+        captured["session_id"] = session_id
         return FakeAgent(agent_name)
 
     try:
@@ -997,6 +1021,7 @@ async def test_execute_passes_model_and_provider(db_pool, monkeypatch):
         await runner._execute(job)
         assert captured["model"] == "gpt-4"
         assert captured["provider"] == "openai"
+        assert captured["session_id"] == job.session_id
     finally:
         await db_pool.execute("DELETE FROM sessions WHERE id = $1", session.id)
 
@@ -1019,7 +1044,7 @@ async def test_build_agent_without_factory_unknown_raises(monkeypatch):
     """_build_agent without factory raises for unknown agents."""
     monkeypatch.setattr("ah.core.agent_def.agent_registry.get", AsyncMock(return_value=None))
     runner = JobRunner()
-    with pytest.raises(ValueError, match="no agent named"):
+    with pytest.raises(ValueError, match="unknown agent"):
         await runner._build_agent("ghost")
 
 

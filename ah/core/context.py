@@ -389,6 +389,7 @@ class ContextManager:
         original_ids: list[uuid.UUID],
         chunks: list[ContextChunk],
         archive_reason: str = "compressed",
+        expected_owner: str | None = None,
     ) -> int:
         """Replace only *original_ids* with *chunks* (AH-008).
 
@@ -396,6 +397,16 @@ class ContextManager:
         IDs outside *original_ids* survive. Originals are archived
         transactionally before deletion (AH-009); a failure rolls back
         archive+delete+insert together so originals remain recoverable.
+
+        AH-AUDIT-014: when *expected_owner* is given, the live mutation
+        token is validated INSIDE the same transaction (owner + expiry on
+        the DB clock) — a preflight check alone is not a fence. Ownership
+        loss raises StaleOwnershipError with full rollback.
+        AH-AUDIT-015: the locked original set must equal the requested
+        input set. Missing rows abort via StaleSnapshotError instead of
+        inserting duplicate/conflicting output for a stale snapshot.
+        Retried committed operations are idempotent at the caller level:
+        a retry with already-replaced IDs aborts rather than duplicating.
         """
         records = []
         for c in chunks:
@@ -418,7 +429,34 @@ class ContextManager:
 
         async with db.acquire() as conn:
             async with conn.transaction():
+                if expected_owner:
+                    # Transactional fence (AH-AUDIT-014): owner, kind, and
+                    # expiry validated here, on the DB clock, atomically
+                    # with the destructive writes below.
+                    from ah.core.exceptions import StaleOwnershipError
+
+                    claim = await conn.fetchrow(
+                        "SELECT claim_owner, claim_kind, claim_expires_at "
+                        "FROM sessions WHERE id = $1 FOR UPDATE",
+                        session_id,
+                    )
+                    live = (
+                        claim is not None
+                        and claim["claim_owner"] == expected_owner
+                        and claim["claim_expires_at"] is not None
+                    )
+                    if live:
+                        try:
+                            live = claim["claim_expires_at"] > await conn.fetchval("SELECT now()")
+                        except Exception:
+                            live = False
+                    if not live:
+                        raise StaleOwnershipError(
+                            "mutation ownership lost before replacement; aborted"
+                        )
                 if original_ids:
+                    from ah.core.exceptions import StaleSnapshotError
+
                     # Archive originals first (byte-exact payloads).
                     orig_rows = await conn.fetch(
                         """
@@ -431,6 +469,15 @@ class ContextManager:
                         session_id,
                         list(original_ids),
                     )
+                    # Exact input-set validation (AH-AUDIT-015): stale or
+                    # partial snapshots abort instead of double-inserting.
+                    locked = {r["id"] for r in orig_rows}
+                    wanted = set(original_ids)
+                    if locked != wanted:
+                        raise StaleSnapshotError(
+                            f"original set changed ({len(wanted) - len(locked)} missing); "
+                            "stale replacement aborted"
+                        )
                     for r in orig_rows:
                         raw_payload = r["payload_msgpack"]
                         try:
@@ -704,7 +751,10 @@ class ContextManager:
                 SELECT id, token_count, chunk_type, created_at, payload_msgpack,
                        embedding, agent_id
                 FROM context_chunks
-                WHERE session_id = $1 AND (
+                -- AH-AUDIT-034: document lifecycle is separate from
+                -- conversational eviction; indexed documents are never
+                -- selected here (dedicated document operations only).
+                WHERE session_id = $1 AND chunk_type <> 'document' AND (
                     $2::timestamptz IS NULL OR
                     (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
                     > ($2, $3::uuid)

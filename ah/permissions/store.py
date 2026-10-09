@@ -232,8 +232,48 @@ async def revoke_all_grants() -> int:
 # ─── approvals ─────────────────────────────────────────────────────────────
 
 
+def proposal_of(req: Any) -> dict:
+    """Versioned canonical action proposal (AH-AUDIT-005).
+
+    Durable and reviewable: exact executable/arguments, cwd, backend,
+    timeout, network destinations, content identity, capabilities, and tool
+    identity. Secret-bearing values never enter here — content travels as a
+    digest plus a separately redacted display preview.
+    """
+    return {
+        "version": 1,
+        "operation": getattr(req, "operation", ""),
+        "tool": getattr(req, "tool", ""),
+        "argv": list(getattr(req, "argv", None) or []),
+        "shell": getattr(req, "shell", ""),
+        "cwd": getattr(req, "cwd", ""),
+        "backend": getattr(req, "backend", ""),
+        "mode": getattr(req, "mode", ""),
+        "targets": list(getattr(req, "targets", None) or []),
+        "capabilities": sorted(getattr(req, "capabilities", None) or []),
+        "network": list(getattr(req, "network", None) or []),
+        "opaque_network": bool(getattr(req, "opaque_network", False)),
+        "timeout": getattr(req, "timeout", 60),
+        "content_digest": getattr(req, "content_digest", ""),
+        "content_length": getattr(req, "content_length", 0),
+        "digest": getattr(req, "digest", ""),
+    }
+
+
+def display_of(req: Any) -> str:
+    """Sanitized human-review representation (redacted preview, no secrets)."""
+    import json as _json
+
+    preview = str(getattr(req, "content_preview", "") or "")
+    proposal = proposal_of(req)
+    # Keep the display compact: full proposal fields plus truncated preview.
+    return _json.dumps({**proposal, "content_preview": preview[:4000]}, ensure_ascii=False)[:8000]
+
+
 async def create_approval(req: Any, principal: str) -> dict:
     global _last_durable
+    proposal = proposal_of(req)
+    display = display_of(req)
     rec = {
         "id": str(uuid.uuid4()),
         "request_id": req.request_id,
@@ -247,17 +287,23 @@ async def create_approval(req: Any, principal: str) -> dict:
         "status": "pending",
         "consumed": False,
         "created_at": time.time(),
+        # In-memory reviewable proposal (full preview while live).
+        "proposal": proposal,
+        "display": display,
+        "content_preview": getattr(req, "content_preview", ""),
     }
     async with _mem.lock:
         _mem.approvals[req.request_id] = rec
     db = await _db()
     if db is not None:
         try:
+            import json as _json
+
             async with db.acquire() as conn:
                 await conn.execute(
                     """INSERT INTO permission_approvals
-                       (request_id, session_id, turn_id, agent_id, principal, operation, target, digest, status)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')""",
+                       (request_id, session_id, turn_id, agent_id, principal, operation, target, digest, status, proposal, display)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9::jsonb, $10)""",
                     req.request_id,
                     uuid.UUID(req.session_id) if req.session_id else None,
                     req.turn_id or None,
@@ -266,6 +312,8 @@ async def create_approval(req: Any, principal: str) -> dict:
                     req.operation,
                     "|".join(req.targets)[:500],
                     req.digest,
+                    _json.dumps(proposal),
+                    display,
                 )
         except Exception:
             logger.exception("durable approval create failed")
@@ -408,10 +456,26 @@ async def complete_execution(request_id: str, outcome: str) -> bool:
     return ok
 
 
+def _with_completeness(rec: dict | None) -> dict | None:
+    """Mark whether a record carries a reviewable proposal (AH-AUDIT-005).
+
+    Legacy rows predate proposal/display columns: they prove identity (digest)
+    only while the underlying proposal is unavailable, so transports must
+    fail closed (request fresh approval) instead of executing blind.
+    """
+    if rec is None:
+        return None
+    out = dict(rec)
+    out["proposal_complete"] = bool(out.get("proposal"))
+    return out
+
+
 async def get_approval(request_id: str) -> dict | None:
     async with _mem.lock:
         rec = _mem.approvals.get(request_id)
         mem_copy = dict(rec) if rec is not None else None
+    if mem_copy is not None and mem_copy.get("proposal"):
+        return _with_completeness(mem_copy)
     db = await _db()
     if db is not None:
         try:
@@ -419,10 +483,10 @@ async def get_approval(request_id: str) -> dict | None:
                 "SELECT * FROM permission_approvals WHERE request_id = $1", request_id
             )
             if row:
-                return dict(row)
+                return _with_completeness(dict(row))
         except Exception:
             pass
-    return mem_copy
+    return _with_completeness(mem_copy)
 
 
 async def find_pending(session_id: str, digest: str) -> dict | None:
@@ -453,7 +517,12 @@ async def find_pending(session_id: str, digest: str) -> dict | None:
 
 
 async def find_approved_unclaimed(session_id: str, digest: str) -> dict | None:
-    """Approved-but-never-executed action for headless resume (no new card)."""
+    """Approved-but-never-executed action for headless resume (no new card).
+
+    Legacy rows without a reviewable proposal never resume: a digest alone
+    is not informed approval (AH-AUDIT-005). The caller creates a fresh
+    approval card instead (fail closed).
+    """
     async with _mem.lock:
         for rec in _mem.approvals.values():
             if (
@@ -461,6 +530,7 @@ async def find_approved_unclaimed(session_id: str, digest: str) -> dict | None:
                 and rec.get("digest") == digest
                 and rec.get("status") == "approved"
                 and not rec.get("consumed")
+                and rec.get("proposal")
             ):
                 return rec
     db = await _db()
@@ -475,7 +545,10 @@ async def find_approved_unclaimed(session_id: str, digest: str) -> dict | None:
                 digest,
             )
             if row:
-                return dict(row)
+                candidate = dict(row)
+                if candidate.get("proposal"):
+                    return _with_completeness(candidate)
+                return None
         except Exception:
             pass
     return None

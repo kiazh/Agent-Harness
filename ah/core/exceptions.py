@@ -40,6 +40,22 @@ class UsageBudgetExceededError(AgentHarnessError, RuntimeError):
     """Raised before an LLM call when a persistent usage budget is exhausted."""
 
 
+class StaleOwnershipError(AgentHarnessError, RuntimeError):
+    """Raised when a fenced write finds ownership lost/expired (AH-AUDIT-014).
+
+    The transaction rolls back: no stale archive/delete/insert commits.
+    Callers abort the operation and surface an explicit stale outcome.
+    """
+
+
+class StaleSnapshotError(AgentHarnessError, RuntimeError):
+    """Raised when captured input IDs no longer match durable rows (AH-015).
+
+    Aborts stale replacement instead of inserting duplicate/conflicting
+    output. Concurrent inserts outside the captured set are preserved.
+    """
+
+
 class _StatusShim:
     """Minimal stand-in for an httpx.Response carrying only a status code.
 
@@ -93,4 +109,6 @@ __all__ = [
     "ContextBudgetExceededError",
     "UsageBudgetExceededError",
     "RateLimitError",
+    "StaleOwnershipError",
+    "StaleSnapshotError",
 ]

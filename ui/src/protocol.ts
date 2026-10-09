@@ -290,6 +290,7 @@ export type GatewayEvent = EventBase &
 	(
 		| { type: "message.start" }
 		| { type: "message.delta"; text: string }
+		| { type: "message.stopping"; reason: string }
 		| { type: "tool.start"; id: string; name: string; args: Record<string, unknown> }
 		| { type: "tool.complete"; id: string; name: string; result: string; isError: boolean }
 		| { type: "usage"; tokens: number }
@@ -300,16 +301,25 @@ export type GatewayEvent = EventBase &
 				iterations: number;
 				toolCalls: number;
 				cancelled: boolean;
-				}
+			}
 		| { type: "error"; message: string }
 		| {
 				type: "permission.required";
 				requestId: string;
 				operation: string;
+				tool?: string;
 				target: string;
+				argv: string[];
+				shell?: string;
 				cwd: string;
 				backend: string;
+				timeout?: number;
+				network?: string[];
 				capabilities: string[];
+				contentDigest?: string;
+				contentPreview?: string;
+				contentLength?: number;
+				fileDiff?: { current_preview: string; diff: string; truncated: boolean };
 				durable?: boolean | null;
 			}
 		| { type: "permission.resolved"; requestId: string; status: string }

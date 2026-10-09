@@ -72,7 +72,10 @@ async def test_eviction_pages_across_more_than_one_hundred_chunks(db_pool, monke
                     uuid.uuid4(),
                     session.id,
                     "owner",
-                    "document",
+                    # Conversational scope: eviction never selects indexed
+                    # documents (AH-AUDIT-034); pagination filler uses a
+                    # compactable conversational type.
+                    "user_message",
                     b"\x80",
                     1,
                     start + timedelta(seconds=i),

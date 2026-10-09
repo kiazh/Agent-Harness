@@ -39,13 +39,16 @@ async def export_markdown(session: Session) -> str:
     from ah.memory.redaction import redact_secrets as _redact
 
     chunks = await context_manager.get_all_chunks(session.id)
+    # AH-AUDIT-012: title/goal are outward-facing export fields subject to
+    # the same structured redaction policy as message content. Raw stored
+    # conversation (DB chunks) is intentionally untouched.
     lines = [
-        f"# Session: {session.title or '(untitled)'}",
+        f"# Session: {_redact(str(session.title or '(untitled)')).text}",
         "",
         f"**ID:** {session.id}",
         f"**Status:** {session.status}",
         f"**Agent:** {session.agent_id}",
-        f"**Goal:** {session.goal or '(none)'}",
+        f"**Goal:** {_redact(str(session.goal or '(none)')).text}",
         f"**Created:** {session.created_at.strftime('%Y-%m-%d %H:%M:%S')}",
         f"**Last Activity:** {session.last_activity.strftime('%Y-%m-%d %H:%M:%S')}",
         "",
@@ -117,7 +120,13 @@ async def compress_session(
     try:
         # AH-008: fetch ALL chunks (paginated), not just the newest 1000, and
         # replace only the captured input IDs so concurrent inserts survive.
-        chunks = await context_manager.get_all_chunks(session.id)
+        # AH-AUDIT-034: conversational compaction scope excludes indexed
+        # documents — document rows keep their IDs/text/embeddings/source
+        # metadata intact through explicit and automatic compression.
+        # Eviction likewise never selects documents (context.py); dedicated
+        # document lifecycle operations own the document index.
+        all_chunks = await context_manager.get_all_chunks(session.id)
+        chunks = [c for c in all_chunks if c.chunk_type != "document"]
         if not chunks:
             return None
 
@@ -153,60 +162,64 @@ async def compress_session(
             )
         if result.original_count == 0:
             return None
-        # Stale-snapshot guard: verify this owner still holds the claim BEFORE
-        # the destructive replacement (LP-11). An expired claim aborts.
-        # DB-less environments skip the check (the in-process mutex is the
-        # claim there).
+        # AH-AUDIT-014/015: the live mutation token travels INTO the
+        # archive/delete/insert transaction (fenced there on the DB clock),
+        # and the captured original ID set is validated exactly. Stale
+        # ownership or a stale snapshot aborts with rollback: an explicit
+        # stale outcome, never a partial commit.
+        from ah.core.exceptions import StaleOwnershipError, StaleSnapshotError
+
         try:
-            from ah.db.connection import db as _db
-
-            if _db.connected:
-                from ah.core.turns import _db_claim_state
-
-                current = await _db_claim_state(session.id)
-                if current is None or current.get("claim_owner") != mutation_token:
-                    return None
-        except Exception:
-            pass
-        # AH-008/AH-009: replace only captured IDs; originals are archived
-        # transactionally inside replace_chunks_by_ids.
-        await context_manager.replace_chunks_by_ids(
-            session.id,
-            [c.id for c in chunks],
-            result.compressed_chunks,
-            archive_reason="compressed",
-        )
+            await context_manager.replace_chunks_by_ids(
+                session.id,
+                [c.id for c in chunks],
+                result.compressed_chunks,
+                archive_reason="compressed",
+                expected_owner=mutation_token,
+            )
+        except (StaleOwnershipError, StaleSnapshotError):
+            return None
         return result
     finally:
         # Owned compression provider closes on EVERY exit: success, no-op,
         # summarization/persistence failure, cancellation, or timeout.
-        # Cleanup failures are recorded, never silently swallowed.
-        close = getattr(llm_provider, "close", None)
-        if callable(close):
-            try:
-                import inspect as _inspect
+        # AH-AUDIT-026: bounded join (5s) with claim release in an
+        # independent outer finally — a stuck close cannot strand the
+        # mutation claim or the serial runner.
+        try:
+            close = getattr(llm_provider, "close", None)
+            if callable(close):
+                try:
+                    import asyncio as _asyncio
+                    import inspect as _inspect
 
-                r = close()
-                if _inspect.isawaitable(r):
-                    await r
-            except Exception as e:
-                import logging as _logging
+                    r = close()
+                    if _inspect.isawaitable(r):
+                        await _asyncio.wait_for(r, timeout=5)
+                except Exception as e:
+                    import logging as _logging
 
-                _logging.getLogger(__name__).warning("compression provider close failed: %s", e)
-        if owned:
-            try:
-                await end_mutation(session.id, mutation_token)
-            except Exception:
-                pass
+                    _logging.getLogger(__name__).warning("compression provider close failed: %s", e)
+        finally:
+            if owned:
+                try:
+                    await end_mutation(session.id, mutation_token)
+                except Exception:
+                    pass
 
 
 async def _estimate_next_request(session_id, budget: int) -> int:
-    """Budget the ACTUAL next model request (LP-11), not just stored rows.
+    """Conservative approximation of the next model request (AH-AUDIT-041).
 
-    Measures the actual message list and provider tool schema that will be
-    sent, including in-turn accumulated tool messages and mandatory
-    persona/instructions. Distinguishes model context capacity, output
-    reservation, per-run spending, and durable usage budgets.
+    This is an approximation, not a measurement of the rendered request:
+    it sums stored conversational context, the EFFECTIVE tool schema for
+    this session's agent definition (restricted specialists count only
+    their allowlist, not the full registry), reserved output tokens, and
+    the effective system instructions (base prompt plus the session agent's
+    definition prompt). Retrieved memory/RAG material and provider-specific
+    serialization are not measured here — callers treat the result as a
+    compaction trigger threshold, never as exact request accounting. No
+    provider calls, no memory access-state changes.
     """
     from ah.core.assembler import get_token_count
 
@@ -216,11 +229,41 @@ async def _estimate_next_request(session_id, budget: int) -> int:
         total += await context_manager.get_token_usage(session_id)
     except Exception:
         pass
-    # Tool schema tokens (sent with every request)
+    # Effective tool schema: the session agent's allowlist when resolvable.
     try:
+        from ah.core.session import session_manager as _sessions
+
+        try:
+            session = await _sessions.get(session_id)
+        except Exception:
+            session = None
+        allowed: list | None = None
+        definition_prompt = ""
+        if session is not None:
+            try:
+                from ah.core.agent_def import agent_registry
+
+                definition = await agent_registry.get(session.agent_id or "harness")
+                if definition is not None:
+                    allowed = definition.tools
+                    definition_prompt = definition.system_prompt or ""
+            except Exception:
+                pass
         from ah.tools.base import registry
 
-        total += get_token_count(str(registry.get_tool_definitions()))
+        if allowed is None:
+            total += get_token_count(str(registry.get_tool_definitions()))
+        else:
+            allowed_set = set(allowed)
+            total += get_token_count(
+                str(
+                    [
+                        t
+                        for t in registry.get_tool_definitions()
+                        if getattr(t, "name", "") in allowed_set
+                    ]
+                )
+            )
     except Exception:
         pass
     # Reserved output tokens
@@ -228,11 +271,11 @@ async def _estimate_next_request(session_id, budget: int) -> int:
         total += int(config.get("max_tokens") or 4096)
     except Exception:
         total += 4096
-    # Mandatory system/persona instructions (always included)
+    # Effective system instructions (base + specialist definition prompt)
     try:
         from ah.core.agent import SYSTEM_PROMPT
 
-        total += get_token_count(SYSTEM_PROMPT)
+        total += get_token_count(SYSTEM_PROMPT + (definition_prompt or ""))
     except Exception:
         pass
     return total
@@ -298,9 +341,12 @@ async def maybe_auto_compact(session_id) -> dict | None:
         except Exception:
             pass
         try:
-            state = dict(session.state or {})
-            state["last_auto_compact_tokens"] = result.compressed_tokens
-            await _sessions.update_state(session_id, state)
+            # AH-AUDIT-018: transactional field merge preserves unrelated
+            # concurrent state (emotion/watermark) instead of overwriting
+            # from a stale snapshot.
+            await _sessions.update_state_fields(
+                session_id, {"last_auto_compact_tokens": result.compressed_tokens}
+            )
         except Exception:
             pass
         # Eviction pass when configured (retention policy, distinct from
@@ -432,10 +478,18 @@ async def status_summary() -> dict[str, Any]:
         mode = _cfg.get("execution_mode") or "ask"
         backend = "sandbox" if mode == "sandbox" else "host"
         workspace = _cfg.get("workspace_root") or _cfg.get("agent_harness_home") or ""
+        # AH-AUDIT-036: status derives from the actual shared component
+        # identity when initialized; otherwise an honestly labeled
+        # expectation (key presence alone never claims healthy selection).
         reranker = "passthrough"
         try:
-            if _cfg.get("cohere_api_key"):
-                reranker = "cohere"
+            from ah.tools import rag as _rag_tools
+
+            _shared = _rag_tools._rag_pipeline
+            if _shared is not None:
+                reranker = _shared.reranker_identity().get("reranker", "passthrough")
+            elif _cfg.get("cohere_api_key"):
+                reranker = "cohere (key set, pipeline not initialized)"
         except Exception:
             pass
         auto_compact = bool(_cfg.get("auto_compaction_enabled") and _cfg.get("compression_enabled"))
@@ -454,8 +508,10 @@ async def status_summary() -> dict[str, Any]:
             "ready",
         )
     try:
+        # AH-AUDIT-021: durable paused state plus legacy error rows.
         jobs_waiting = await db.fetchval(
-            "SELECT COUNT(*) FROM jobs WHERE status = 'error' AND last_error ILIKE '%needs_approval%'"
+            "SELECT COUNT(*) FROM jobs WHERE status = 'paused_approval' "
+            "OR (status = 'error' AND last_error ILIKE '%needs_approval%')"
         )
     except Exception:
         jobs_waiting = 0

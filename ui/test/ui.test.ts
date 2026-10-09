@@ -75,6 +75,30 @@ test("a streamed turn renders text, a tool card and a final summary", () => {
 	assert.doesNotMatch(out, /\(spinner\)/);
 });
 
+test("a withheld redaction tail reconciles exactly once (AH-AUDIT-027)", () => {
+	const view = new Container();
+	const transcript = new Transcript(view, new FakeSpinner());
+	transcript.apply(ev({ type: "message.start" }));
+	transcript.apply(ev({ type: "message.delta", text: "Hello " }));
+	// The canonical final extends the displayed deltas by the flushed tail.
+	const summary = transcript.apply(
+		ev({ type: "message.complete", text: "Hello world", tokens: 5, iterations: 1, toolCalls: 0, cancelled: false }),
+	);
+	assert.deepEqual(summary, { tokens: 5, cancelled: false });
+	const out = plain(view);
+	assert.match(out, /Hello world/);
+	assert.equal(out.match(/Hello /g)?.length, 1, "tail appended exactly once, never duplicated");
+});
+
+test("message.stopping is non-terminal (AH-AUDIT-028)", () => {
+	const view = new Container();
+	const transcript = new Transcript(view, new FakeSpinner());
+	transcript.apply(ev({ type: "message.start" }));
+	const summary = transcript.apply(ev({ type: "message.stopping", reason: "cancelled" }));
+	assert.equal(summary, undefined, "stopping emits no terminal summary");
+	assert.match(plain(view), /Stopping/);
+});
+
 test("a reply with no streamed text still shows the final answer", () => {
 	const view = new Container();
 	const transcript = new Transcript(view, new FakeSpinner());

@@ -62,8 +62,12 @@ async def _shared_rag_pipeline():
         return None
 
 
-class AgentDefinitionError(Exception):
-    """Raised when a requested specialist definition cannot be resolved."""
+class AgentDefinitionError(ValueError):
+    """Raised when a requested specialist definition cannot be resolved.
+
+    A ValueError so callers treating unresolvable definitions as invalid
+    input keep working; fail-closed semantics are unchanged.
+    """
 
 
 async def build_agent_for_session(
@@ -209,18 +213,30 @@ def check_mode_cap(parent_authority: dict | None, requested_mode: str) -> None:
         raise ApprovalDenied(f"mode {requested_mode!r} exceeds parent cap")
 
 
-async def close_agent_provider(agent) -> None:
-    """Close an agent's provider if this scope owns it (AH-023)."""
+async def close_agent_provider(agent, timeout: float = 5.0) -> None:
+    """Shared owner-aware provider cleanup contract (AH-AUDIT-026).
+
+    Closes an agent's provider only when this scope owns it (never
+    injected/shared clients), with a bounded join. Claim release belongs in
+    the caller's independent outer finally so a stuck close cannot strand
+    claims. Failures are recorded without masking the primary exception.
+    """
     if not getattr(agent, "_owns_provider", False):
         return
     provider = getattr(agent, "provider", None)
     close = getattr(provider, "close", None)
-    if callable(close):
-        try:
-            import inspect
+    if not callable(close):
+        return
+    try:
+        import asyncio as _asyncio
+        import inspect as _inspect
+        import logging as _logging
 
-            result = close()
-            if inspect.isawaitable(result):
-                await result
-        except Exception:
-            pass
+        result = close()
+        if _inspect.isawaitable(result):
+            try:
+                await _asyncio.wait_for(result, timeout=timeout)
+            except (TimeoutError, _asyncio.CancelledError):
+                _logging.getLogger(__name__).warning("owned provider close exceeded its bound")
+    except Exception:
+        pass

@@ -30,6 +30,12 @@ class SearchResult:
     rrf_score: float = 0.0
 
 
+#: Document-only retrieval scope (AH-AUDIT-033). Document search returns
+#: only document chunks; conversation/tool chunks use dedicated recall APIs
+#: (or an explicitly requested combined scope), never crowd out documents.
+DOCUMENT_TYPES: tuple[str, ...] = ("document",)
+
+
 class HybridSearch:
     """Hybrid search combining BM25 (PostgreSQL FTS) and dense vector search.
 
@@ -63,19 +69,23 @@ class HybridSearch:
         query_text: str,
         db: Any,
         top_k: int | None = None,
+        chunk_types: tuple[str, ...] | None = None,
     ) -> list[SearchResult]:
         """Perform hybrid search: BM25 + dense vector + RRF fusion.
 
-        Runs both retrievals concurrently for lower latency.
+        Runs both retrievals concurrently for lower latency. Document-only
+        scope by default (AH-AUDIT-033); pass explicit chunk_types for a
+        documented combined scope.
         """
         k = top_k or self._final_top_k
+        scope = tuple(chunk_types) if chunk_types else DOCUMENT_TYPES
         # Pipeline already passes k*2 for reranking headroom; do not multiply
         # again here (would over-retrieve k*4).
         retrieval_k = max(self._top_k, k)
 
         # Run dense and sparse retrieval concurrently
-        dense_task = self._dense_search(session_id, query_embedding, retrieval_k, db)
-        sparse_task = self._bm25_search(session_id, query_text, retrieval_k, db)
+        dense_task = self._dense_search(session_id, query_embedding, retrieval_k, db, scope)
+        sparse_task = self._bm25_search(session_id, query_text, retrieval_k, db, scope)
 
         dense_results, sparse_results = await asyncio.gather(
             dense_task, sparse_task, return_exceptions=True
@@ -120,10 +130,15 @@ class HybridSearch:
         query_embedding: list[float],
         db: Any,
         top_k: int | None = None,
+        chunk_types: tuple[str, ...] | None = None,
     ) -> list[SearchResult]:
         """Return dense vector matches without the keyword search or RRF."""
         matches = await self._dense_search(
-            session_id, query_embedding, top_k or self._final_top_k, db
+            session_id,
+            query_embedding,
+            top_k or self._final_top_k,
+            db,
+            tuple(chunk_types) if chunk_types else DOCUMENT_TYPES,
         )
         return [
             SearchResult(chunk=chunk, score=score, dense_score=score) for chunk, score in matches
@@ -135,12 +150,20 @@ class HybridSearch:
         query_text: str,
         db: Any,
         top_k: int | None = None,
+        chunk_types: tuple[str, ...] | None = None,
     ) -> list[SearchResult]:
         """Keyword-only matches for embedder-less operation (LP-10 fallback).
 
         No paid provider key needed; BM25 over stored search_text.
+        Document-only scope by default, matching dense/hybrid paths.
         """
-        matches = await self._bm25_search(session_id, query_text, top_k or self._final_top_k, db)
+        matches = await self._bm25_search(
+            session_id,
+            query_text,
+            top_k or self._final_top_k,
+            db,
+            tuple(chunk_types) if chunk_types else DOCUMENT_TYPES,
+        )
         return [
             SearchResult(chunk=chunk, score=score, sparse_score=score) for chunk, score in matches
         ]
@@ -151,6 +174,7 @@ class HybridSearch:
         query_embedding: list[float],
         top_k: int,
         db: Any,
+        chunk_types: tuple[str, ...] = DOCUMENT_TYPES,
     ) -> list[tuple[ContextChunk, float]]:
         """Dense vector search using pgvector cosine similarity."""
         # Build the pgvector literal with the shared helper so the format
@@ -163,12 +187,14 @@ class HybridSearch:
                    1 - (embedding <=> $1::vector) AS similarity
             FROM context_chunks
             WHERE session_id = $2 AND embedding IS NOT NULL
+              AND chunk_type = ANY($4::text[])
             ORDER BY embedding <=> $1::vector
             LIMIT $3
             """,
             embedding_str,
             session_id,
             top_k,
+            list(chunk_types),
         )
 
         results = []
@@ -185,10 +211,12 @@ class HybridSearch:
         query_text: str,
         top_k: int,
         db: Any,
+        chunk_types: tuple[str, ...] = DOCUMENT_TYPES,
     ) -> list[tuple[ContextChunk, float]]:
         """BM25 search using PostgreSQL full-text search (tsvector + GIN).
 
         Returns empty results if search_text column is not available.
+        Document-only scope by default (AH-AUDIT-033).
         """
         # Cap query terms via shared helper (max 16 OR terms) to bound FTS cost.
         tsquery = build_or_tsquery(query_text)
@@ -204,6 +232,7 @@ class HybridSearch:
                 FROM context_chunks
                 WHERE session_id = $1
                   AND search_text IS NOT NULL
+                  AND chunk_type = ANY($4::text[])
                   AND to_tsvector('english', search_text) @@ to_tsquery('english', $2)
                 ORDER BY rank DESC
                 LIMIT $3
@@ -211,6 +240,7 @@ class HybridSearch:
                 session_id,
                 tsquery,
                 top_k,
+                list(chunk_types),
             )
         except asyncpg.UndefinedColumnError:
             # search_text column doesn't exist — no fallback possible
@@ -275,11 +305,22 @@ class HybridSearch:
         return list(chunk_scores.values())
 
     def _row_to_chunk(self, row: asyncpg.Record) -> ContextChunk:
-        """Convert a database row to a ContextChunk."""
+        """Convert a database row to a ContextChunk.
+
+        Tolerates projections without the embedding column (dense search
+        selects similarity, not the vector itself).
+        """
         payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
         embedding = None
-        if row["embedding"] is not None:
-            embedding = str_to_embedding(row["embedding"])
+        try:
+            raw_emb = row["embedding"]
+        except (KeyError, IndexError):
+            raw_emb = None
+        if raw_emb is not None:
+            try:
+                embedding = str_to_embedding(raw_emb)
+            except (ValueError, TypeError):
+                embedding = None
 
         return ContextChunk(
             id=row["id"],

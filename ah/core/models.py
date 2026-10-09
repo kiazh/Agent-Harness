@@ -96,7 +96,7 @@ class LLMResponse:
 class StreamEvent:
     """Streaming event from LLM provider or agent."""
 
-    type: str  # "text", "tool_call", "tool_result", "token_usage", "done"
+    type: str  # "text", "tool_call", "tool_result", "token_usage", "needs_approval", "done"
     content: str = ""
     tool_name: str = ""
     tool_args: dict = field(default_factory=dict)
@@ -111,9 +111,40 @@ class StreamEvent:
 
 @dataclass
 class AgentResponse:
-    """Response from the agent loop."""
+    """Response from the agent loop.
+
+    needs_approval carries typed pause outcomes (AH-AUDIT-022): each entry
+    binds request_id/operation/target/session for one action awaiting human
+    approval. Scheduling and transport decisions MUST use this field — never
+    parse prose in content or result previews.
+    """
 
     content: str
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     tokens_used: int = 0
     iterations: int = 0
+    needs_approval: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Derive typed pauses from tool entries (AH-AUDIT-022).
+
+        Every construction site is covered automatically: entries carrying
+        a needs_approval marker contribute their pause record. Explicitly
+        passed entries are merged (deduplicated by request_id).
+        """
+        try:
+            seen = {
+                str(p.get("request_id", ""))
+                for p in (self.needs_approval or [])
+                if isinstance(p, dict)
+            }
+            for entry in self.tool_calls or []:
+                if not isinstance(entry, dict):
+                    continue
+                pause = entry.get("needs_approval")
+                if isinstance(pause, dict) and pause.get("request_id"):
+                    if str(pause["request_id"]) not in seen:
+                        seen.add(str(pause["request_id"]))
+                        self.needs_approval.append(dict(pause))
+        except Exception:
+            pass

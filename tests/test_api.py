@@ -169,7 +169,7 @@ class TestPromptSSE:
                     response=AgentResponse(content="Hello", tokens_used=10, iterations=1),
                 )
 
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("ah.api.app.session_manager.get_fresh", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_session
             with patch("ah.core.provider.get_provider") as mock_provider:
                 mock_provider.return_value = MagicMock()
@@ -214,7 +214,9 @@ class TestPromptSSE:
 
         provider = FakeProvider()
         FakeAgent.provider = provider
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock, return_value=session):
+        with patch(
+            "ah.api.app.session_manager.get_fresh", new_callable=AsyncMock, return_value=session
+        ):
             with patch("ah.core.provider.get_provider", return_value=provider):
                 with patch("ah.core.agent.ReActAgent", return_value=FakeAgent()):
                     response = await client.post(
@@ -259,7 +261,9 @@ class TestPromptSSE:
 
         provider = FakeProvider()
         FakeAgent.provider = provider
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock, return_value=session):
+        with patch(
+            "ah.api.app.session_manager.get_fresh", new_callable=AsyncMock, return_value=session
+        ):
             with patch("ah.core.provider.get_provider", return_value=provider):
                 with patch("ah.core.agent.ReActAgent", return_value=FakeAgent()):
                     response = await client.post(
@@ -305,7 +309,9 @@ class TestPromptSSE:
         )
         provider = FakeProvider()
         FakeAgent.provider = provider
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock, return_value=session):
+        with patch(
+            "ah.api.app.session_manager.get_fresh", new_callable=AsyncMock, return_value=session
+        ):
             with patch("ah.core.provider.get_provider", return_value=provider):
                 with patch("ah.core.agent.ReActAgent", return_value=FakeAgent()):
                     response = await prompt(str(session.id), PromptRequest(text="Hi"))

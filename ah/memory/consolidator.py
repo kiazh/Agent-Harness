@@ -19,7 +19,43 @@ from ah.memory.scorer import ImportanceScorer
 from ah.memory.store import MemoryStore, memory_store
 from ah.plugins.registry import plugin_registry
 
-__all__ = ["MemoryConsolidator"]
+__all__ = ["ConsolidationResult", "MemoryConsolidator"]
+
+
+class ConsolidationResult:
+    """Typed consolidation outcome (AH-AUDIT-037).
+
+    status: "complete" (all writes durable — checkpoint valid),
+    "empty" (successful extraction with zero memories — checkpoint valid,
+    the range was fully processed), "partial" (some writes failed —
+    checkpoint None, the range stays retryable), "failed" (extraction
+    failed — checkpoint None, nothing advances).
+    Only "complete"/"empty" carry a checkpoint, and only for the fully
+    processed contiguous input. Retries are idempotent via normalized-
+    content dedup; concurrent consolidations share the LP-14 single-flight.
+    """
+
+    def __init__(
+        self,
+        status: str,
+        entries: list | None = None,
+        checkpoint: dict | None = None,
+        chunks_processed: int = 0,
+    ) -> None:
+        self.status = status
+        self.entries = list(entries or [])
+        self.checkpoint = checkpoint
+        self.chunks_processed = chunks_processed
+
+    def __bool__(self) -> bool:
+        return bool(self.entries)
+
+    def __len__(self) -> int:
+        return len(self.entries)
+
+    def __iter__(self):
+        return iter(self.entries)
+
 
 logger = logging.getLogger(__name__)
 
@@ -97,12 +133,15 @@ class MemoryConsolidator:
         session_id: uuid.UUID,
         agent_id: str,
         since: tuple | None = None,
-    ) -> list[MemoryEntry]:
+    ) -> ConsolidationResult:
         """Consolidate a session's context chunks into long-term memories.
 
         With *since*=(created_at, id) only newer chunks are extracted
-        (LP-14 cursor); without it the recent window is processed once and the
-        caller records the watermark. Returns newly created entries.
+        (LP-14 cursor, ascending continuation); without it the recent
+        newest-first window is processed once and the caller records the
+        watermark. Returns a typed result — callers advance the durable
+        checkpoint ONLY from result.checkpoint (fully processed contiguous
+        input), never from an optimistic attribute.
         """
         # Step 0: Get context chunks (cursor-filtered when resuming).
         if since is not None:
@@ -119,24 +158,43 @@ class MemoryConsolidator:
             )
         if not chunks:
             logger.debug("No chunks to consolidate for session %s", session_id)
-            return []
+            return ConsolidationResult("empty", [], None, 0)
 
-        # R-03: Track the last successfully processed chunk for watermark
-        # advancement. The caller uses this to advance the cursor only to
-        # what was actually processed, not to the session's newest chunk.
-        self._last_processed_chunk = {
-            "id": str(chunks[-1].id),
-            "at": chunks[-1].created_at.isoformat() if chunks[-1].created_at else None,
-        }
+        # Checkpoint identity: the maximum (created_at, id) actually
+        # processed — never a positional guess. Initial newest-first windows
+        # (DESC) and ascending cursor continuations both resolve correctly.
+        def _checkpoint_for(processed: list) -> dict:
+            latest = max(
+                processed,
+                key=lambda c: (
+                    c.created_at.isoformat() if getattr(c, "created_at", None) else "",
+                    str(getattr(c, "id", "")),
+                ),
+            )
+            return {
+                "id": str(latest.id),
+                "at": latest.created_at.isoformat() if latest.created_at else None,
+            }
+
+        # Legacy mutable attribute retained for backward-compatible readers;
+        # the typed checkpoint on the result is authoritative.
+        self._last_processed_chunk = _checkpoint_for(chunks)
 
         # Step 1: Format conversation for LLM
         conversation = self._format_conversation(chunks)
 
         # Step 2: Extract candidate memories via LLM
-        candidates = await self._extract_memories(conversation, session_id, agent_id)
+        try:
+            candidates = await self._extract_memories(conversation, session_id, agent_id)
+        except Exception:
+            logger.exception("Memory extraction failed for session %s", session_id)
+            # Failed extraction: no checkpoint — the range stays retryable.
+            return ConsolidationResult("failed", [], None, len(chunks))
         if not candidates:
             logger.debug("No memories extracted from session %s", session_id)
-            return []
+            # Successful empty extraction differs from failure: the range
+            # was fully processed, so the checkpoint validly advances.
+            return ConsolidationResult("empty", [], _checkpoint_for(chunks), len(chunks))
 
         await plugin_registry.dispatch("on_memory_extract", candidates)
 
@@ -229,8 +287,33 @@ class MemoryConsolidator:
             seen.add(key)
             new_memories.append(candidate)
 
+        # Step 4.5: Redaction-before-embedding ingestion (AH-AUDIT-038).
+        # Candidates extracted by the LLM carry embedding=None; without this
+        # stage they stay invisible to dense retrieval and vector dedup.
+        # Redacted content is embedded through the same query embedder, so
+        # candidate and query embeddings share an enforced space. No-key
+        # operation is preserved (embedding stays None, keyword retrieval
+        # unaffected); embedding failures never drop the memory.
+        try:
+            from ah.memory.embeddings import embed_query as _embed_query
+            from ah.memory.redaction import redact_secrets as _redact_mem
+
+            for candidate in new_memories:
+                if candidate.embedding:
+                    continue
+                try:
+                    redacted = _redact_mem(candidate.content or "").text
+                    if not redacted.strip():
+                        continue
+                    candidate.embedding = await _embed_query(redacted[:2000])
+                except Exception:
+                    candidate.embedding = None
+        except Exception:
+            pass
+
         # Step 5: Write new memories
         written: list[MemoryEntry] = []
+        write_failures = 0
         for memory in new_memories:
             try:
                 entry = await self.store.add(
@@ -245,6 +328,7 @@ class MemoryConsolidator:
                 )
                 written.append(entry)
             except Exception as e:
+                write_failures += 1
                 logger.error("Failed to write memory: %s", e)
 
         audit_log(
@@ -263,7 +347,12 @@ class MemoryConsolidator:
             len(candidates),
             len(written),
         )
-        return written
+        if write_failures:
+            # Partial persistence: no checkpoint — retry stays idempotent
+            # via normalized-content dedup. Advancing here would skip the
+            # failed range.
+            return ConsolidationResult("partial", written, None, len(chunks))
+        return ConsolidationResult("complete", written, _checkpoint_for(chunks), len(chunks))
 
     async def consolidate_from_text(
         self,
@@ -273,9 +362,13 @@ class MemoryConsolidator:
     ) -> list[MemoryEntry]:
         """Consolidate memories directly from text (bypasses context chunks).
 
-        Useful for testing or direct memory injection.
+        Useful for testing or direct memory injection. Extraction failure
+        yields [] here (no watermark exists for text injection).
         """
-        candidates = await self._extract_memories(text, session_id, agent_id)
+        try:
+            candidates = await self._extract_memories(text, session_id, agent_id)
+        except Exception:
+            return []
         if not candidates:
             return []
 
@@ -385,11 +478,13 @@ class MemoryConsolidator:
     ) -> list[MemoryEntry]:
         """Use LLM to extract candidate memories from conversation.
 
-        Returns list of MemoryEntry objects (not yet persisted).
+        Returns list of MemoryEntry objects (not yet persisted). Raises on
+        extraction failure (no provider, provider error, malformed output)
+        so callers distinguish failed extraction (retryable, no checkpoint)
+        from successful empty extraction (checkpoint valid).
         """
         if not self.llm:
-            logger.warning("No LLM provider available for memory extraction")
-            return []
+            raise RuntimeError("no LLM provider available for memory extraction")
 
         try:
             from ah.core.usage import usage_store
@@ -442,7 +537,9 @@ class MemoryConsolidator:
 
         except json.JSONDecodeError as e:
             logger.error("Failed to parse LLM memory extraction response as JSON: %s", e)
-            return []
+            raise RuntimeError(f"memory extraction parse failed: {e}") from e
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.error("Memory extraction failed: %s", e)
-            return []
+            raise RuntimeError(f"memory extraction failed: {e}") from e

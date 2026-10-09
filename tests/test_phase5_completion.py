@@ -71,7 +71,9 @@ async def test_delegation_passes_parent_context_and_records_result(monkeypatch):
         module.session_manager, "create", AsyncMock(return_value=SimpleNamespace(id=child_id))
     )
     monkeypatch.setattr(
-        module.session_manager, "get", AsyncMock(return_value=SimpleNamespace(goal="Ship phase 5"))
+        module.session_manager,
+        "get_fresh",
+        AsyncMock(return_value=SimpleNamespace(goal="Ship phase 5")),
     )
     monkeypatch.setattr(
         module.context_manager,
@@ -110,7 +112,9 @@ async def test_delegate_tool_uses_isolated_session_context(monkeypatch):
 
     seen = []
 
-    async def fake_delegate(agent, task, *, from_agent, parent_session_id, _hop_count):
+    async def fake_delegate(
+        agent, task, *, from_agent, parent_session_id, _hop_count, authority=None
+    ):
         await asyncio.sleep(0)
         seen.append(parent_session_id)
         return SimpleNamespace(status="complete", response="done")

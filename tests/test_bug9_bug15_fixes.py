@@ -85,6 +85,7 @@ class TestMemoryConsolidationTaskReference:
         consolidator.consolidate_session.assert_awaited_once_with(
             session_id=session_id,
             agent_id=agent.agent_id,
+            since=None,
         )
 
     @pytest.mark.asyncio

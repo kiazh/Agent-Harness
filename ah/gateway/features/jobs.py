@@ -107,6 +107,30 @@ async def jobs_set_enabled(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
     return {"job": job.to_dict()}
 
 
+async def jobs_resume(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Resume an approval-paused job (AH-AUDIT-021).
+
+    Defined human-resolution transition: paused_approval → idle. The next
+    claim runs once under a fresh fenced job and session claim with
+    proposal revalidation. Ownership is checked when sessionId is given.
+    """
+    gw.require_db()
+    from ah.core.scheduler import job_store
+
+    job_id = _uuid(params, "id")
+    if params.get("sessionId"):
+        session = await gw.get_session(params)
+        owned = await job_store.get(job_id)
+        if owned is None or owned.session_id != session.id:
+            raise RpcError(NOT_FOUND, "job not found for this session")
+    else:
+        logger.warning("jobs.resume without sessionId: admin fallback for job %s", job_id)
+    job = await job_store.resume_job(job_id)
+    if job is None:
+        raise RpcError(NOT_FOUND, "job is not paused awaiting approval")
+    return {"job": job.to_dict()}
+
+
 async def jobs_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """Delete a job.
 
