@@ -98,7 +98,9 @@ def chat(
     message: str = typer.Argument(None, help="Message to send to the agent"),
     continue_: bool = typer.Option(False, "--continue", "-c", help="Continue last session"),
     session_id: str | None = typer.Option(None, "--session", "-s", help="Resume specific session"),
-    model: str | None = typer.Option(None, "--model", "-m", help="Model to use (e.g., openrouter/free)"),
+    model: str | None = typer.Option(
+        None, "--model", "-m", help="Model to use (e.g., openrouter/free)"
+    ),
     provider: str | None = typer.Option(
         None,
         "--provider",
@@ -309,7 +311,8 @@ def set_mode(
             return
         if not mode:
             output.status_line("Mode", str(config.get("execution_mode")), "success")
-            console.print("ask: approval-based (default) | workspace: project operation")
+            console.print("ask: routine tools proceed; risky actions ask (default)")
+            console.print("workspace: project operation; crossing boundaries asks")
             console.print("sandbox: isolated container | full: explicit FULL HOST grant")
             console.print("`ah mode X` sets the persistent default for new sessions.")
             return
@@ -1023,7 +1026,9 @@ def setup(
                 )
             if provider_answer != existing.get("AGENT_HARNESS_PROVIDER", "").strip():
                 updates["AGENT_HARNESS_PROVIDER"] = provider_answer
-                console.print("[dim]Tip: set AGENT_HARNESS_MODEL to a model id served by that provider.[/dim]")
+                console.print(
+                    "[dim]Tip: set AGENT_HARNESS_MODEL to a model id served by that provider.[/dim]"
+                )
             current_model = existing.get("AGENT_HARNESS_MODEL", "").strip() or "openrouter/free"
             model_answer = typer.prompt(
                 "AGENT_HARNESS_MODEL (default model id)",

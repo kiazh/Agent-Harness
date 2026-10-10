@@ -56,7 +56,7 @@ class ActionRequest:
     # Concrete tool name (when invoked through the agent tool loop). Lets the
     # broker enforce inherited parent caps even when session grants exist.
     tool: str = ""
-    # Redacted display-only preview of proposed content (AH-AUDIT-004): shown
+    # Redacted display-only preview of content/extension arguments: shown
     # on approval cards, never executed. Execution binds to content_digest
     # via the canonical digest; the preview is truncated with its full
     # length disclosed. Secrets are redacted at build time.
@@ -114,87 +114,101 @@ def workspace_root() -> Path:
     return configured_workspace()
 
 
-def _sensitive_capabilities(req: ActionRequest) -> list[str]:
-    """Exact capability identity plus heuristic tripwires (AH-AUDIT-006/007).
+def _sensitive_path(value: str, root: Path) -> bool:
+    """Match credential path components, never incidental words/usernames."""
+    text = value.replace("\\", "/")
+    path = Path(text).expanduser()
+    # Ignore ancestors of the configured project (e.g. /Users/shadow).
+    if path.is_absolute():
+        try:
+            text = str(path.relative_to(root))
+        except ValueError:
+            text = str(path)
+    parts = [p.lower() for p in text.replace("\\", "/").split("/") if p]
+    private_dirs = {".ssh", ".aws", ".gnupg", ".azure", ".kube"}
+    private_files = {".npmrc", ".pypirc", "id_rsa", "id_ed25519", "credentials"}
+    if private_dirs.intersection(parts) or any(p in private_files for p in parts):
+        return True
+    if any(p == ".env" or p.startswith(".env.") and p != ".env.example" for p in parts):
+        return True
+    return any(
+        parts[i : i + 2] in (["etc", "passwd"], ["etc", "shadow"]) for i in range(len(parts) - 1)
+    )
 
-    Structured capabilities in CONFLICTING_CAPABILITIES match exactly.
-    Heuristic substring tripwires are a backstop for opaque execution (which
-    can never be fully classified by substrings): they force explicit
-    approval but never silently authorize.
-    """
-    found = [c for c in (req.capabilities or []) if c in CONFLICTING_CAPABILITIES]
-    # Opaque executables (npm/pip/python/...) can run arbitrary code: their
-    # full effects are unknowable statically, so they always need explicit
-    # review for mutating operations.
-    if "opaque_execution" in (req.capabilities or []) and req.operation in (
-        "process.exec",
-        "file.write",
-        "network.fetch",
-    ):
-        # Unclassifiable power bucket: the approval card shows the
-        # opaque_execution capability itself so reviewers see the real
-        # reason. Destructive commands below map to destructive_system.
+
+def _sensitive_capabilities(req: ActionRequest) -> list[str]:
+    """Exact capability identities plus operation-aware path/command checks."""
+    from ah.permissions.commands import (
+        command_path_values,
+        executable_name,
+        routine_project_command,
+    )
+
+    found = [c for c in (req.capabilities or []) if c in REVIEW_CAPABILITIES]
+    first = executable_name(req.argv[0]) if req.argv else ""
+    root = Path(req.workspace_root).resolve() if req.workspace_root else workspace_root()
+    routine = not req.shell_payload and routine_project_command(req.argv, req.cwd, root)
+    if "opaque_execution" in (req.capabilities or []) and not routine:
         found.append("opaque_execution_review")
-    blob = " ".join([req.shell_payload, *req.argv, *req.targets]).lower()
-    if any(
-        k in blob
-        for k in (
-            ".ssh",
-            ".aws",
-            "id_rsa",
-            "id_ed25519",
-            ".gnupg",
-            "secrets",
-            "credential",
-            ".env",
-            ".npmrc",
-            ".pypirc",
-            "passwd",
-            "shadow",
-        )
+    paths = list(req.targets)
+    if req.operation == "process.exec":
+        for value in command_path_values(req.argv):
+            path = Path(value).expanduser()
+            paths.append(str((path if path.is_absolute() else Path(req.cwd) / path).resolve()))
+    if req.operation in {"file.read", "file.write", "process.exec"}:
+        if any(_sensitive_path(v, root) for v in paths):
+            found.append("credential_access")
+    writes_paths = req.operation == "file.write" or (
+        req.operation == "process.exec"
+        and first in {"cp", "mv", "mkdir", "touch", "chmod", "chown", "tsc", "ruff"}
+    )
+    if writes_paths and any(
+        ".git" in Path(t).parts or ".agent-harness" in Path(t).parts for t in paths
     ):
-        found.append("credential_access")
-    if any(
-        k in blob
-        for k in (
+        found.append("security_settings")
+    if (
+        first
+        in {
             "sudo",
+            "su",
             "runas",
-            "set-mppreference",
+            "chown",
+            "passwd",
             "iptables",
+            "set-mppreference",
             "set-executionpolicy",
-            "chmod 777",
-            "chown ",
-            "passwd ",
-            "net user",
-        )
+        }
+        or first == "chmod"
+        and "777" in req.argv
     ):
         found.append("privilege_escalation")
-    if any(
-        k in blob
-        for k in (
-            "rm -rf",
-            "rm --no-preserve",
-            "mkfs",
-            "diskpart",
-            "format ",
-            "shutdown",
-            "reboot",
-            "halt",
-            ":(){:|:&};:",
-            "dd if=",
-            "del /f",
-            "del /s",
-            "rd /s",
-            "remove-item",
-        )
+    if first in {
+        "rm",
+        "rmdir",
+        "dd",
+        "mkfs",
+        "fdisk",
+        "shutdown",
+        "reboot",
+        "halt",
+        "diskpart",
+        "format",
+        "del",
+        "rd",
+        "remove-item",
+    }:
+        found.append("destructive_system")
+    if (
+        first == "git"
+        and len(req.argv) > 1
+        and req.argv[1] in {"reset", "clean", "restore", "checkout", "rebase"}
     ):
         found.append("destructive_system")
-    # Bare destructive verbs as argv[0] (rm/del/dd/shutdown/...) — argv
-    # boundaries are exact here, not substrings.
-    if req.argv:
-        first = req.argv[0].lower().rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-        if first in ("rm", "rmdir", "dd", "mkfs", "fdisk", "shutdown", "reboot", "halt"):
-            found.append("destructive_system")
+    if first == "find" and "-delete" in req.argv:
+        found.append("destructive_system")
+    if req.shell_payload:
+        # Shell grammar and indirect execution cannot be classified as routine.
+        found.append("opaque_execution_review")
     return sorted(set(found))
 
 
@@ -332,22 +346,31 @@ def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
         return Decision(
             "pending", "full mode requires explicit session activation (/mode full)", req
         )
-    if req.mode == "sandbox" and req.backend != "sandbox":
+    if req.mode == "sandbox" and req.operation == "process.exec" and req.backend != "sandbox":
         return Decision(
             "pending",
             "sandbox mode requires isolated backend; approve backend change or switch mode",
             req,
         )
-    # ask (default) / workspace: trusted read-only project ops proceed.
+    # Default ask is risk-based: ordinary project edits and known tool reads
+    # proceed. Sensitive actions were handled above in every mode.
     if req.operation == "file.read" and all(_inside_workspace(t) for t in req.targets):
         return Decision("allowed", "trusted project read", req)
     if (
-        req.mode == "workspace"
+        req.mode in ("ask", "workspace", "sandbox")
         and req.operation in ("file.read", "file.write")
         and all(_inside_workspace(t) for t in req.targets)
     ):
-        # Opaque scripts still request approval even for project writes below.
-        return Decision("allowed", "workspace project write", req)
+        return Decision("allowed", "routine project file operation", req)
+    if req.mode in ("ask", "workspace", "sandbox"):
+        if req.operation == "network.fetch" and req.tool in {"web_search", "web_extract"}:
+            return Decision("allowed", "built-in web read (backend validates URLs)", req)
+        if req.operation == "process.exec" and not req.shell_payload:
+            from ah.permissions.commands import routine_project_command
+
+            root = Path(req.workspace_root).resolve() if req.workspace_root else workspace_root()
+            if routine_project_command(req.argv, req.cwd, root):
+                return Decision("allowed", "routine trusted project command", req)
     # Scoped grants (LP-03/04/05): live + bound + exact scope; mutating ops
     # additionally require the EXACT action digest, so changed content/cwd/
     # argv/backend always re-approve even under a directory grant.
@@ -474,13 +497,13 @@ def build_request(
 
     # AH-AUDIT-004: redacted display preview bound to the same identity as
     # the executable digest. Truncated with full length disclosed. Attached
-    # ONLY where content is the proposal (file.write): for other operations
-    # the card shows argv/targets, never raw secret-bearing blobs.
+    # Where content is the proposal (file.write/extension arguments); other
+    # operations show argv/targets, never raw secret-bearing blobs.
     preview = ""
     preview_len = 0
     if content:
         preview_len = len(content)
-    if content and operation == "file.write":
+    if content and (operation == "file.write" or operation.startswith("tool.")):
         try:
             from ah.memory.redaction import redact_secrets as _redact
 

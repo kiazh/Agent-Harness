@@ -5,8 +5,8 @@ import { options, type Command, type FeatureHost } from "./types.ts";
 import type { ApprovalsListResult, ModeResult } from "../protocol.ts";
 
 const MODE_HELP = [
-	"ask — host tools; writes/exec/out-of-scope ask first (default)",
-	"workspace — project reads/writes proceed; crossing boundaries asks",
+	"ask — routine project tools proceed; risky actions ask (default)",
+	"workspace — routine project tools proceed; crossing boundaries asks",
 	"sandbox — isolated Docker backend with scoped mounts",
 	"full — explicit FULL HOST grant (session-scoped by default)",
 ].join("\n");
@@ -21,7 +21,7 @@ export const modeCommand: Command = {
 	description: "Show or set execution mode (ask|workspace|sandbox|full)",
 	argumentHint: "[ask|workspace|sandbox|full]",
 	getArgumentCompletions: options([
-		["ask", "Approval-based access (default)"],
+		["ask", "Ask for risky actions (default)"],
 		["workspace", "Project operation"],
 		["sandbox", "Isolated container"],
 		["full", "Explicit full-host access"],

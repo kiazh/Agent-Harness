@@ -331,13 +331,15 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
     if not args:
         raise ValidationError("Empty command")
 
-    # Check allowlist. In full mode (explicit session grant) any on-PATH
-    # binary is a *valid* operation — approval already authorized it via the
-    # broker; validation only rejects unknown binaries. Other modes keep the
-    # narrow allowlist.
+    # The broker already classified or obtained approval for this exact
+    # command. Keep the narrow allowlist for direct, unbrokered calls.
     base_cmd = os.path.basename(args[0])
     _mode = _call_mode()
-    if _mode == "full":
+    snapshot = _approved_snapshot()
+    authorized = bool(snapshot and snapshot.get("operation") == "process.exec")
+    if authorized and snapshot.get("argv") != args:
+        raise ValidationError("command differs from broker-authorized argv")
+    if _mode == "full" or authorized:
         import shutil as _shutil
 
         if _shutil.which(args[0]) is None and _shutil.which(base_cmd) is None:
@@ -348,9 +350,15 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
     # Tighten allowlist: block escape hatches even for allowed commands.
     _validate_blocked_args(args)
 
-    # Validate workdir (refresh config, not frozen) and re-resolve at exec time.
-    _validate_workdir(workdir)
-    resolved_workdir = str(Path(workdir or ".").resolve())
+    # Relative workdirs share the policy's workspace root, not process CWD.
+    from ah.core.execution_context import execution_context
+
+    workdir_path = Path(workdir or ".")
+    if not workdir_path.is_absolute():
+        workdir_path = execution_context("terminal").workspace / workdir_path
+    resolved_workdir = str(workdir_path.resolve())
+    if authorized and resolved_workdir != snapshot.get("cwd"):
+        raise ValidationError("workdir differs from broker-authorized cwd")
     _validate_workdir(resolved_workdir)
 
     # Local subprocesses are not a security boundary: git aliases, find -exec,
@@ -384,11 +392,10 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
         container_name = f"ah-term-{_uuid.uuid4().hex[:12]}"
         workspace = resolved_workdir
         image = os.environ.get("AGENT_HARNESS_TERMINAL_IMAGE", "agent-harness-tool-sandbox:latest")
-        # Read-write project mounts when the approved mode allows writes
-        # (workspace/full); ask keeps read-only. The container root fs stays
-        # read-only; /tmp + /workspace (when rw) are the writable locations.
+        # Broker-authorized project workflows may write in every mode. The
+        # container root stays read-only; only /tmp and /workspace are writable.
         _mm = _call_mode()
-        _mount_ro = "" if _mm in ("workspace", "full") else ",readonly"
+        _mount_ro = "" if authorized or _mm in ("workspace", "full") else ",readonly"
         args = [
             "docker",
             "run",
@@ -434,7 +441,7 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
     # cancellation returns; output collection is bounded without holding
     # session ownership forever.
     try:
-        exec_cwd = resolved_workdir if workdir != "." else None
+        exec_cwd = resolved_workdir
         _validate_workdir(resolved_workdir)
         stop = threading.Event()
         holder: dict = {}

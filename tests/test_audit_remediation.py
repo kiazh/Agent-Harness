@@ -563,6 +563,7 @@ def test_023_kill_tree_stops_resistant_child():
         [sys.executable, "-c", "import time; time.sleep(60)"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
     try:
         _kill_tree(proc)

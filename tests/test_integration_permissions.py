@@ -1125,7 +1125,7 @@ def test_approved_approval_executes_instead_of_denying():
     async def _go():
         req = build_request(
             operation="process.exec",
-            argv=["whoami"],
+            argv=["git", "reset", "--hard"],
             cwd=".",
             mode="ask",
             agent_id="harness",
@@ -1179,7 +1179,7 @@ def test_denied_approval_raises_denied():
     async def _go():
         req = build_request(
             operation="process.exec",
-            argv=["whoami"],
+            argv=["git", "reset", "--hard"],
             cwd=".",
             mode="ask",
             agent_id="harness",

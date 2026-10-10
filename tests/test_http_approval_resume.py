@@ -25,9 +25,25 @@ def events(response):
 
 @pytest.fixture
 async def approval_http(db_pool, monkeypatch, tmp_path):
-    from ah import services
     import ah.core.agent_factory as factory
-    from ah.tools import file  # noqa: F401
+    from ah import services
+    from ah.tools import file
+    from ah.tools.base import Tool, registry
+
+    # Use an unclassified extension effect to exercise approval recovery.
+    # Built-in workspace writes now proceed under the routine risk policy.
+    monkeypatch.setitem(
+        registry._tools,
+        "reviewed_write",
+        Tool(
+            name="reviewed_write",
+            description="Extension write requiring review",
+            parameters=registry._tools["write_file"].parameters,
+            func=file.write_file,
+            is_async=True,
+            effects=("fs.write",),
+        ),
+    )
 
     monkeypatch.setenv("AGENT_HARNESS_API_KEY", "approval-resume-test")
     monkeypatch.setattr("ah.db.connection.db", db_pool)
@@ -39,7 +55,7 @@ async def approval_http(db_pool, monkeypatch, tmp_path):
     monkeypatch.setattr(services, "maybe_auto_compact", AsyncMock())
     session = await SessionManager().create(title="HTTP approval")
     arguments = {"path": "approved.txt", "content": "exact reviewed bytes"}
-    agent = ReActAgent(provider=SimpleNamespace(), allowed_tools=["write_file"])
+    agent = ReActAgent(provider=SimpleNamespace(), allowed_tools=["reviewed_write"])
 
     async def initial_stream(sid, text, verbose=False):
         made = []
@@ -50,7 +66,7 @@ async def approval_http(db_pool, monkeypatch, tmp_path):
                 {
                     "id": "approved-call",
                     "type": "function",
-                    "function": {"name": "write_file", "arguments": json.dumps(arguments)},
+                    "function": {"name": "reviewed_write", "arguments": json.dumps(arguments)},
                 }
             ],
         )

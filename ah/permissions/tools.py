@@ -8,6 +8,8 @@ make an invalid action valid.
 
 from __future__ import annotations
 
+import json
+
 
 def action_for_tool(name: str, args: dict) -> dict:
     """Return broker kwargs for tool *name* with *args* (operation/targets/...)."""
@@ -38,7 +40,9 @@ def action_for_tool(name: str, args: dict) -> dict:
         }
     if name in ("index_document",):
         return {"operation": "file.read", "targets": [str(args.get("path", ""))]}
-    if name in ("web_search", "web_extract", "search_documents"):
+    if name == "search_documents":
+        return {"operation": "context.read", "targets": []}
+    if name in ("web_search", "web_extract"):
         return {
             "operation": "network.fetch",
             "network": [str(args.get("url", args.get("query", "")))[:300]],
@@ -60,6 +64,8 @@ def action_for_tool(name: str, args: dict) -> dict:
             "operation": f"tool.{name}",
             "targets": [],
             "capabilities": ["mutating-tool", *(f"fx:{e}" for e in effects)],
+            # Approval must bind the actual extension arguments too.
+            "content": json.dumps(args, sort_keys=True, ensure_ascii=False),
         }
     return {"operation": f"tool.{name}", "targets": []}
 

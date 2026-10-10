@@ -1,7 +1,8 @@
 # Security model
 
 AgentHarness executes agent-proposed actions on a host controlled by its operator.
-The default `ask` policy and approvals restrict agent authority. Host execution
+The default `ask` policy approves routine project work automatically and reserves
+human review for risky or unclassified effects. Host execution
 does not isolate Python, plugins, administrators, or a compromised machine.
 Do not expose a gateway, database, or Docker socket to untrusted clients.
 
@@ -12,7 +13,7 @@ Do not expose a gateway, database, or Docker socket to untrusted clients.
 | Human → HTTP/gateway | HTTP bearer key; local gateway token. Agent principals cannot resolve human approvals. A gateway without `AH_GATEWAY_TOKEN` is explicitly unauthenticated and belongs only on trusted local stdio. | `test_api.py`, `test_approvals_ownership.py` |
 | Agent → tools | Broker evaluates declared effects and exact action; tools execute a stamped mode/backend/workspace snapshot. Durable mode reads fail closed on database failure. | `test_execution_context_boundary.py`, `test_integration_permissions.py` |
 | Tool → filesystem | Canonical workspace boundary, private path restrictions, symlink/parent traversal and hard-link defenses, identity checks on file operations. | `test_security.py`, `test_audit_remediation.py` |
-| Tool → process | Structured argv and guarded command grammar. Opaque scripts/build tools require approval; shell payloads are distinct approval material. Child environment uses an allowlist. | `test_terminal_safety.py`, `test_scheduler_scripts.py`, `test_integration_permissions.py` |
+| Tool → process | Structured argv and guarded command grammar. Known project test/build/lint workflows are operator-trusted; other opaque execution requires approval; shell payloads are distinct approval material. Child environment uses an allowlist. | `test_terminal_safety.py`, `test_scheduler_scripts.py`, `test_integration_permissions.py` |
 | Tool → external web | DNS/IP validation at every redirect; connect to the validated address with correct Host/TLS identity. Aggregate deadlines and byte/header bounds apply to extraction. | `test_web_extract_pinned_fetch.py`, `test_deep_fetch_deadline.py` |
 | Workers → PostgreSQL | Conditional owner-token claims, database clock, lease renewal, token-matched release/finish. Unknown ownership blocks effects and mutations. | `test_multi_worker_fencing.py`, `test_rest_ownership_loss.py`, `test_claim_failure_boundary.py` |
 | Runtime → providers | Provider receives prompts and its own credentials. Owned clients close with bounded observation; failure metrics and sanitized diagnostics remain visible. | `test_provider_close_visibility.py`, `test_usage.py` |
@@ -28,7 +29,16 @@ update durable mode and revoke prior session grants. `full` activation issues an
 explicit session grant; routing mode alone does not replace a grant. Revocation
 returns the session to `ask`. Forks start in `ask`.
 
-`workspace` allows policy-approved operations in the configured workspace.
+`ask` and `workspace` permit routine project file reads/writes, built-in web
+search/extraction, document retrieval, local Git inspection/add/commit, and
+common project test/build/lint commands without approval. Examples include
+`pytest`, `python -m pytest`, `uv run pytest`, and `npm run build`. Project
+workflows and their installed dependencies are trusted executable code; this
+policy is not a host sandbox. Arbitrary scripts, package installation, deploy
+commands, unknown extension effects, and access beyond the workspace still
+require review. Terminal symlink arguments resolve against the workspace.
+Sensitive-path checks match actual credential locations/components rather
+than words in usernames, source filenames, or documentation titles.
 `sandbox` selects Docker for terminal execution; other tools still have their
 own boundaries. `full` permits explicitly granted host capabilities. Credential
 access, privilege escalation, security settings, and destructive system actions

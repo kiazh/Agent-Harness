@@ -132,7 +132,8 @@ DEFAULTS: dict[str, Any] = {
     "compression_target_ratio": 0.5,
     "compression_preserve_recent": 3,
     "compression_llm_summarize": True,
-    # Execution modes (Phase 5): ask | workspace | sandbox | full.
+    # ask is risk-based: routine project tools proceed; risky actions ask.
+    # Execution modes: ask | workspace | sandbox | full.
     "execution_mode": "ask",
     "workspace_root": "",
     "terminal_sandbox": "disabled",
