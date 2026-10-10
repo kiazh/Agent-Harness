@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { stripTerminalSequences, type SelectItem } from "@earendil-works/pi-tui";
 import { parseCommand } from "../src/commands.ts";
-import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "../src/features/index.ts";
+import { type AskTextOptions, type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "../src/features/index.ts";
 import { resolvePrefix, table } from "../src/format.ts";
 import type { ConfigResult, HistoryEntry, SessionInfo } from "../src/protocol.ts";
 
@@ -21,6 +21,9 @@ class FakeHost implements FeatureHost {
 	markdown: string[] = [];
 	files = new Map<string, string>();
 	picks: Array<string | undefined> = [];
+	pickTitles: string[] = [];
+	textQueue: Array<string | undefined> = [];
+	asked: AskTextOptions[] = [];
 	current: SessionInfo | undefined = SESSION;
 	switched: Array<{ session: SessionInfo; history: HistoryEntry[] }> = [];
 	responses: Record<string, unknown | ((params: Record<string, unknown>) => unknown)> = {};
@@ -52,9 +55,14 @@ class FakeHost implements FeatureHost {
 	updateSession(session: SessionInfo) {
 		this.current = session;
 	}
-	async pick(_title: string, items: SelectItem[]) {
+	async pick(title: string, items: SelectItem[]) {
+		this.pickTitles.push(title);
 		const value = this.picks.shift();
 		return items.find((i) => i.value === value);
+	}
+	async askText(options: AskTextOptions): Promise<string | undefined> {
+		this.asked.push(options);
+		return this.textQueue.shift();
 	}
 	async writeFile(path: string, text: string) {
 		this.files.set(path, text);
@@ -74,16 +82,107 @@ class FakeHost implements FeatureHost {
 
 const run = (text: string, host: FakeHost) => runCommand(parseCommand(text)!, host);
 
-test("/persona shows, saves and clears the user's requested personality", async () => {
+test("/persona saves and clears via explicit args without opening the menu", async () => {
 	const host = new FakeHost();
-	host.responses["config.get"] = { config: { persona_description: "A patient mentor" }, secrets: [] };
-	await run("/persona", host);
-	assert.match(host.last().text, /A patient mentor/);
 	host.responses["config.set"] = { key: "persona_description", value: "Warm, witty and concise" };
 	await run("/persona Warm, witty and concise", host);
 	assert.deepEqual(host.calls.at(-1), { method: "config.set", params: { key: "persona_description", value: "Warm, witty and concise", persist: true } });
 	await run("/persona --clear", host);
 	assert.deepEqual(host.calls.at(-1), { method: "config.set", params: { key: "persona_description", value: "", persist: true } });
+	assert.equal(host.pickTitles.length, 0);
+	assert.equal(host.asked.length, 0);
+});
+
+test("bare /persona Add collects text and saves once with persist:true", async () => {
+	const host = new FakeHost();
+	host.responses["config.get"] = { config: { persona_description: "A patient mentor" }, secrets: [] };
+	host.responses["config.set"] = { key: "persona_description", value: "Warm, witty and concise" };
+	host.picks.push("add");
+	host.textQueue.push("Warm, witty and concise");
+	await run("/persona", host);
+	assert.deepEqual(host.pickTitles, ["Persona"]);
+	assert.equal(host.asked.length, 1);
+	assert.equal(host.asked[0]!.title, "Add persona");
+	assert.equal(host.asked[0]!.initial, "A patient mentor");
+	assert.equal(host.asked[0]!.maxLength, 2000);
+	const sets = host.calls.filter((c) => c.method === "config.set");
+	assert.equal(sets.length, 1);
+	assert.deepEqual(sets[0], { method: "config.set", params: { key: "persona_description", value: "Warm, witty and concise", persist: true } });
+	assert.equal(host.configured.length, 1);
+	assert.match(host.last().text, /Default persona saved/);
+	assert.equal(host.submitted.length, 0);
+});
+
+test("bare /persona Add replaces the existing value instead of appending", async () => {
+	const host = new FakeHost();
+	host.responses["config.get"] = { config: { persona_description: "Old value" }, secrets: [] };
+	host.responses["config.set"] = (p: Record<string, unknown>) => ({ key: p.key, value: p.value });
+	host.picks.push("add");
+	host.textQueue.push("New value");
+	await run("/persona", host);
+	assert.deepEqual(host.calls.at(-1), { method: "config.set", params: { key: "persona_description", value: "New value", persist: true } });
+});
+
+test("bare /persona Add rejects blank and over-limit input without saving", async () => {
+	const host = new FakeHost();
+	host.responses["config.get"] = { config: { persona_description: "" }, secrets: [] };
+	host.picks.push("add");
+	host.textQueue.push("   ", undefined);
+	await run("/persona", host);
+	assert.match(host.printed.map((p) => p.text).join("\n"), /cannot be blank/);
+	assert.equal(host.calls.filter((c) => c.method === "config.set").length, 0);
+
+	const long = new FakeHost();
+	long.responses["config.get"] = { config: { persona_description: "" }, secrets: [] };
+	long.picks.push("add");
+	long.textQueue.push(`${"x".repeat(2001)}`, undefined);
+	await run("/persona", long);
+	assert.match(long.printed.map((p) => p.text).join("\n"), /at most 2000/);
+	assert.equal(long.calls.filter((c) => c.method === "config.set").length, 0);
+});
+
+test("bare /persona cancel at the picker or editor never persists or submits", async () => {
+	const host = new FakeHost();
+	host.responses["config.get"] = { config: { persona_description: "Kept" }, secrets: [] };
+	await run("/persona", host);
+	assert.equal(host.calls.map((c) => c.method).join(","), "config.get");
+	assert.equal(host.submitted.length, 0);
+
+	const editorCancel = new FakeHost();
+	editorCancel.responses["config.get"] = { config: { persona_description: "Kept" }, secrets: [] };
+	editorCancel.picks.push("add");
+	editorCancel.textQueue.push(undefined);
+	await run("/persona", editorCancel);
+	assert.equal(editorCancel.calls.filter((c) => c.method === "config.set").length, 0);
+	assert.equal(editorCancel.submitted.length, 0);
+});
+
+test("bare /persona Reset defaults to No and Yes clears only the persona", async () => {
+	const noHost = new FakeHost();
+	noHost.responses["config.get"] = { config: { persona_description: "Custom" }, secrets: [] };
+	noHost.picks.push("reset", "no");
+	await run("/persona", noHost);
+	assert.deepEqual(noHost.pickTitles, ["Persona", "Reset your default persona?"]);
+	assert.equal(noHost.calls.filter((c) => c.method === "config.set").length, 0);
+
+	const yesHost = new FakeHost();
+	yesHost.responses["config.get"] = { config: { persona_description: "Custom" }, secrets: [] };
+	yesHost.responses["config.set"] = { key: "persona_description", value: "" };
+	yesHost.picks.push("reset", "yes");
+	await run("/persona", yesHost);
+	assert.deepEqual(yesHost.calls.at(-1), { method: "config.set", params: { key: "persona_description", value: "", persist: true } });
+	assert.match(yesHost.last().text, /Default persona reset/);
+	assert.equal(yesHost.submitted.length, 0);
+});
+
+test("bare /persona Reset with no custom value explains instead of confirming", async () => {
+	const host = new FakeHost();
+	host.responses["config.get"] = { config: { persona_description: "" }, secrets: [] };
+	host.picks.push("reset");
+	await run("/persona", host);
+	assert.deepEqual(host.pickTitles, ["Persona"]);
+	assert.match(host.last().text, /Already using the agent default/);
+	assert.equal(host.calls.filter((c) => c.method === "config.set").length, 0);
 });
 
 test("/growth teaches and rates the current session without an approval prompt", async () => {

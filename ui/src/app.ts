@@ -16,8 +16,9 @@ import {
 } from "@earendil-works/pi-tui";
 import { ArgumentAwareAutocompleteProvider } from "./autocomplete.ts";
 import { parseCommand } from "./commands.ts";
-import { ComposerBox, createLayout, Footer, header, type LayoutRoot, Picker } from "./components.ts";
+import { ComposerBox, createLayout, Footer, header, type LayoutRoot, Picker, TextForm } from "./components.ts";
 import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features/index.ts";
+import type { AskTextOptions } from "./features/types.ts";
 import type { GatewayClient } from "./gateway.ts";
 import type {
 	ConfigGetResult,
@@ -228,6 +229,30 @@ export class App implements FeatureHost {
 			const picker = new Picker(title, items, (item) => close(item), () => close());
 			// Codex menu style: full-bleed sheet docked above the composer.
 			this.overlay = this.tui.showOverlay(picker, {
+				width: "100%",
+				maxHeight: "70%",
+				anchor: "bottom-center",
+				margin: { bottom: 5 },
+			});
+			this.tui.requestRender();
+		});
+	}
+
+	askText(options: AskTextOptions): Promise<string | undefined> {
+		if (this.overlay) return Promise.resolve(undefined);
+		return new Promise((done) => {
+			const close = (value?: string) => {
+				this.overlay?.hide();
+				this.overlay = undefined;
+				this.tui.setFocus(this.editor);
+				this.tui.requestRender();
+				done(value);
+			};
+			const form = new TextForm(this.tui, editorTheme, options);
+			form.onSubmit = (value) => close(value);
+			form.onCancel = () => close(undefined);
+			// Same sheet placement as pick() so management flows share one control style.
+			this.overlay = this.tui.showOverlay(form, {
 				width: "100%",
 				maxHeight: "70%",
 				anchor: "bottom-center",

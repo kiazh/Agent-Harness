@@ -7,6 +7,7 @@ import {
 	Editor,
 	type EditorOptions,
 	type EditorTheme,
+	getKeybindings,
 	Markdown,
 	ScrollView,
 	SelectList,
@@ -369,5 +370,112 @@ export class Picker implements Component {
 
 	invalidate(): void {
 		this.list.invalidate();
+	}
+}
+
+export interface TextFormOptions {
+	title: string;
+	description?: string;
+	initial?: string;
+	placeholder?: string;
+	example?: string;
+	maxLength?: number;
+}
+
+/**
+ * A titled multiline text form shown as an overlay (e.g. persona editing).
+ * Codex menu style: borderless, docked above the composer, lowercase hints.
+ * Uses the terminal Editor so Shift+Enter inserts a newline and Enter saves,
+ * matching the composer. Ctrl+S also saves; Esc cancels. Errors carry a
+ * text marker as well as color.
+ */
+export class TextForm implements Component {
+	focused = false;
+	readonly editor: Editor;
+	onSubmit: ((value: string) => void) | undefined;
+	onCancel: (() => void) | undefined;
+
+	private readonly title: string;
+	private readonly description?: string;
+	private readonly placeholder?: string;
+	private readonly example?: string;
+	private readonly maxLength?: number;
+	private readonly tui: TUI;
+	private error = "";
+
+	constructor(tui: TUI, editorTheme: EditorTheme, options: TextFormOptions) {
+		this.tui = tui;
+		this.title = options.title;
+		this.description = options.description;
+		this.placeholder = options.placeholder;
+		this.example = options.example;
+		this.maxLength = options.maxLength;
+		this.editor = new Editor(tui, editorTheme, { paddingX: 1 });
+		this.editor.setText(options.initial ?? "");
+		this.editor.onSubmit = (value) => this.onSubmit?.(value);
+		this.editor.onChange = () => {
+			if (this.error) this.error = "";
+			this.tui.requestRender();
+		};
+	}
+
+	setError(message: string): void {
+		this.error = message;
+		this.tui.requestRender();
+	}
+
+	getValue(): string {
+		return this.editor.getText();
+	}
+
+	handleInput(data: string): void {
+		const kb = getKeybindings();
+		if (kb.matches(data, "tui.select.cancel")) {
+			this.onCancel?.();
+			return;
+		}
+		// Explicit save shortcut alongside Enter (the Editor submits on Enter).
+		if (data === "\x13") {
+			this.onSubmit?.(this.editor.getText());
+			return;
+		}
+		this.editor.focused = true;
+		this.editor.handleInput(data);
+	}
+
+	render(width: number): string[] {
+		const content = Math.max(1, width);
+		const out: string[] = [];
+		out.push(truncateToWidth(theme.dim(this.title), content));
+		if (this.description) {
+			for (const line of this.description.split("\n").flatMap((l) => wrapTextWithAnsi(l, content))) {
+				out.push(truncateToWidth(theme.dim(line), content));
+			}
+		}
+		this.editor.focused = this.focused;
+		for (const line of this.editor.render(content)) out.push(line);
+		const value = this.editor.getText();
+		if (!value && this.placeholder) {
+			out.push(truncateToWidth(theme.dim(this.placeholder), content));
+		}
+		const count = Array.from(value).length;
+		const countText = this.maxLength ? `${count} / ${this.maxLength} characters` : `${count} characters`;
+		out.push(truncateToWidth(theme.dim(countText), content));
+		if (this.example) {
+			for (const line of `Example: ${this.example}`.split("\n").flatMap((l) => wrapTextWithAnsi(l, content))) {
+				out.push(truncateToWidth(theme.dim(line), content));
+			}
+		}
+		if (this.error) {
+			for (const line of this.error.split("\n").flatMap((l) => wrapTextWithAnsi(`✗ ${l}`, content))) {
+				out.push(truncateToWidth(theme.error(line), content));
+			}
+		}
+		out.push(truncateToWidth(theme.dim("enter save · shift+enter newline · ctrl+s save · esc cancel"), content));
+		return out;
+	}
+
+	invalidate(): void {
+		this.editor.invalidate();
 	}
 }

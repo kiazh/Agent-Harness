@@ -13,21 +13,91 @@ async function setConfig(host: FeatureHost, key: string, value: string, persist:
 	host.print(`${key} = ${formatValue(result.value)}${persist ? " (saved)" : ""}`, "success");
 }
 
+const PERSONA_MAX_LENGTH = 2000;
+const PERSONA_EXAMPLE = "Be concise, warm, and direct. Explain tradeoffs clearly.";
+
+function personaError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+async function personaAdd(host: FeatureHost, current: string): Promise<void> {
+	let draft = current;
+	for (;;) {
+		const text = await host.askText({
+			title: "Add persona",
+			description: "Describe how you want your agent to communicate.\nSaved as your default across sessions.",
+			initial: draft,
+			example: PERSONA_EXAMPLE,
+			maxLength: PERSONA_MAX_LENGTH,
+		});
+		if (text === undefined) return;
+		if (!text.trim()) {
+			host.print("Persona description cannot be blank.", "error");
+			draft = text;
+			continue;
+		}
+		if (Array.from(text).length > PERSONA_MAX_LENGTH) {
+			host.print(`Persona description must be at most ${PERSONA_MAX_LENGTH} characters.`, "error");
+			draft = text;
+			continue;
+		}
+		try {
+			const result = await host.request<ConfigSetResult>("config.set", { key: "persona_description", value: text, persist: true });
+			host.onConfig(result);
+			host.print("Default persona saved.", "success");
+			return;
+		} catch (error) {
+			host.print(`Could not save persona: ${personaError(error)}`, "error");
+			draft = text;
+		}
+	}
+}
+
+async function personaReset(host: FeatureHost, current: string): Promise<void> {
+	if (!current) {
+		host.print("Already using the agent default.", "plain");
+		return;
+	}
+	const choice = await host.pick("Reset your default persona?", [
+		{ value: "no", label: "No, keep it" },
+		{ value: "yes", label: "Yes, reset" },
+	]);
+	if (choice?.value !== "yes") return;
+	try {
+		const result = await host.request<ConfigSetResult>("config.set", { key: "persona_description", value: "", persist: true });
+		host.onConfig(result);
+		host.print("Default persona reset.", "success");
+	} catch (error) {
+		host.print(`Could not reset persona: ${personaError(error)}`, "error");
+	}
+}
+
+async function openPersonaMenu(host: FeatureHost): Promise<void> {
+	const { config } = await host.request<ConfigGetResult>("config.get");
+	const current = typeof config.persona_description === "string" ? config.persona_description : "";
+	const choice = await host.pick("Persona", [
+		{ value: "add", label: "Add", description: "Write or update your persona description" },
+		{ value: "reset", label: "Reset", description: "Use the agent's default persona" },
+	]);
+	if (!choice) return;
+	if (choice.value === "add") await personaAdd(host, current);
+	else if (choice.value === "reset") await personaReset(host, current);
+}
+
 export const settingsCommands: Command[] = [
-    {
-        name: "persona",
-        description: "Show or save your preferred persona description (--clear to reset)",
-        argumentHint: "[description|--clear]",
-        async run(args, host) {
-            const description = args.trim();
-            if (!description) {
-                const { config } = await host.request<ConfigGetResult>("config.get");
-                host.print(`Persona: ${config.persona_description || "agent default"}`, "plain");
-                return;
-            }
-            await setConfig(host, "persona_description", description === "--clear" ? "" : description, true);
-        },
-    },
+	{
+		name: "persona",
+		description: "Manage your default persona (menu when empty)",
+		argumentHint: "[description|--clear]",
+		async run(args, host) {
+			const description = args.trim();
+			if (description) {
+				await setConfig(host, "persona_description", description === "--clear" ? "" : description, true);
+				return;
+			}
+			await openPersonaMenu(host);
+		},
+	},
 	{
 		name: "default-model",
 		description: "Pick the default model from a menu (saved across sessions)",

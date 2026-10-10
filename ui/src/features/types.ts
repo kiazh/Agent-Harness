@@ -5,6 +5,19 @@ import type { ConfigResult, HistoryEntry, SessionInfo } from "../protocol.ts";
 
 export type NoticeKind = "info" | "plain" | "success" | "warning" | "error";
 
+/** Options for a single free-form text prompt shown as an overlay form. */
+export interface AskTextOptions {
+	title: string;
+	description?: string;
+	/** Prefilled draft (e.g. the current value being replaced). */
+	initial?: string;
+	placeholder?: string;
+	example?: string;
+	maxLength?: number;
+}
+
+export type AskTextResult = string | undefined;
+
 /** What a command can do to the app. Implemented by App. */
 export interface FeatureHost {
 	request<T>(method: string, params?: Record<string, unknown>): Promise<T>;
@@ -18,6 +31,8 @@ export interface FeatureHost {
 	/** Update details (e.g. title) of the current session. */
 	updateSession(session: SessionInfo): void;
 	pick(title: string, items: SelectItem[]): Promise<SelectItem | undefined>;
+	/** Collect free-form text in an overlay editor; undefined means cancelled. */
+	askText(options: AskTextOptions): Promise<AskTextResult>;
 	/** Write a file relative to the working directory; returns the absolute path. */
 	writeFile(path: string, text: string): Promise<string>;
 	onConfig(result: ConfigResult): void;

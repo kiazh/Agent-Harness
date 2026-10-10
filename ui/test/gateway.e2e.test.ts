@@ -106,6 +106,7 @@ test("slash commands work against the real gateway and database", { skip, timeou
 			current = session;
 		},
 		pick: async (_title: string, items: SelectItem[]) => items.find((i) => i.value === "yes") ?? items[0],
+		askText: async () => undefined,
 		writeFile: async (path, text) => {
 			const full = join(dir, path);
 			const { writeFile } = await import("node:fs/promises");

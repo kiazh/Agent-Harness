@@ -16,9 +16,9 @@ import { modelsCommand } from "./models.ts";
 import { settingsCommands } from "./settings.ts";
 import { themeCommand } from "./theme.ts";
 import { contextCommands } from "./context.ts";
-import type { Command, FeatureHost, NoticeKind } from "./types.ts";
+import type { AskTextOptions, AskTextResult, Command, FeatureHost, NoticeKind } from "./types.ts";
 
-export type { Command, FeatureHost, NoticeKind };
+export type { AskTextOptions, AskTextResult, Command, FeatureHost, NoticeKind };
 
 const appCommands: Command[] = [
 	{
