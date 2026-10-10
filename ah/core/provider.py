@@ -372,11 +372,28 @@ if not _audit_logger.handlers:
 
 def _sanitize_value(value: Any) -> Any:
     """Sanitize a value for audit logging — redact potential secrets."""
+    if isinstance(value, bytes):
+        try:
+            return _sanitize_value(value.decode("utf-8")).encode("utf-8")
+        except UnicodeDecodeError:
+            return value
     if isinstance(value, str):
         sanitized = value
         sanitized = re.sub(r"sk-[a-zA-Z0-9]{20,}", "[REDACTED_KEY]", sanitized)
         sanitized = re.sub(r"sk-ant-[a-zA-Z0-9\-_]{20,}", "[REDACTED_KEY]", sanitized)
-        sanitized = re.sub(r"sk-or-[a-zA-Z0-9]{20,}", "[REDACTED_KEY]", sanitized)
+        sanitized = re.sub(r"sk-or-[a-zA-Z0-9\-_]{20,}", "[REDACTED_KEY]", sanitized)
+        sanitized = re.sub(
+            r"\b(ghp_[a-zA-Z0-9]{20,}|gho_[a-zA-Z0-9]{20,}|ghu_[a-zA-Z0-9]{20,}"
+            r"|ghs_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,})",
+            "[REDACTED_KEY]",
+            sanitized,
+        )
+        sanitized = re.sub(r"\bxox[baprs]-[a-zA-Z0-9\-]{10,}", "[REDACTED_KEY]", sanitized)
+        sanitized = re.sub(
+            r"\beyJ[a-zA-Z0-9\-_]{10,}\.eyJ[a-zA-Z0-9\-_]{10,}\.[a-zA-Z0-9\-_]{10,}",
+            "[REDACTED_KEY]",
+            sanitized,
+        )
         sanitized = re.sub(
             r"(Bearer\s+)[a-zA-Z0-9\-._~+/]+=*",
             r"\1[REDACTED_TOKEN]",
@@ -411,6 +428,8 @@ def _sanitize_value(value: Any) -> Any:
         return [_sanitize_value(v) for v in value]
     elif isinstance(value, tuple):
         return tuple(_sanitize_value(v) for v in value)
+    elif isinstance(value, set):
+        return {_sanitize_value(v) for v in value}
     else:
         return value
 

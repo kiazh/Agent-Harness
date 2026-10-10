@@ -646,6 +646,20 @@ class Gateway:
                 except Exception as _boundary_error:
                     # Optional fallback preserves the primary outcome; report no payload.
                     record_failure("server._run_turn", _boundary_error)
+            pauses = []
+            try:
+                for p in (getattr(final, "needs_approval", None) or []):
+                    if isinstance(p, dict) and p.get("request_id"):
+                        pauses.append(
+                            {
+                                "requestId": str(p.get("request_id", "")),
+                                "operation": str(p.get("operation", "")),
+                                "target": str(p.get("target", "")),
+                                "status": str(p.get("status", "pending")),
+                            }
+                        )
+            except Exception:
+                pauses = []
             emit(
                 "message.complete",
                 text=text,
@@ -655,6 +669,7 @@ class Gateway:
                 iterations=final.iterations if final is not None else 0,
                 toolCalls=len(final.tool_calls) if final is not None else 0,
                 cancelled=cancelled,
+                **({"needsApproval": pauses} if pauses else {}),
             )
 
         emit("message.start")

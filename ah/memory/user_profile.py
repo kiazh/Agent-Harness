@@ -16,6 +16,24 @@ from typing import Any
 
 from ah.core.provider import audit_log
 from ah.db.connection import db
+from ah.memory.redaction import _default_redactor, redact_secrets
+
+
+def _clean_text(value: str) -> str:
+    """Redact secret-looking substrings from free-form profile text."""
+    try:
+        return redact_secrets(value).text
+    except Exception:
+        return value
+
+
+def _clean_preferences(preferences: dict[str, Any]) -> dict[str, Any]:
+    """Recursively redact secret-looking values in a preferences mapping."""
+    try:
+        cleaned, _ = _default_redactor._redact_value(dict(preferences))
+        return cleaned if isinstance(cleaned, dict) else {}
+    except Exception:
+        return preferences
 
 __all__ = [
     "UserProfile",
@@ -66,6 +84,7 @@ class UserProfile:
         self.interaction_count += 1
         self.updated_at = datetime.now(UTC)
         if topic:
+            topic = _clean_text(topic)
             self.topics[topic] = self.topics.get(topic, 0) + 1
             # Maintain last 10 topics, most recent first
             if topic in self.last_topics:
@@ -75,7 +94,11 @@ class UserProfile:
 
     def set_preference(self, key: str, value: Any) -> None:
         """Set a preference key-value pair."""
-        self.preferences[key] = value
+        try:
+            cleaned, _ = _default_redactor._redact_value(value)
+        except Exception:
+            cleaned = value
+        self.preferences[key] = cleaned
         self.updated_at = datetime.now(UTC)
 
     def get_preference(self, key: str, default: Any = None) -> Any:
@@ -140,7 +163,9 @@ class UserProfileStore:
         """Create a new user profile."""
         profile_id = uuid.uuid4()
         now = datetime.now(UTC)
-        preferences_json = json.dumps(preferences or {})
+        preferences_json = json.dumps(_clean_preferences(preferences or {}))
+        display_name = _clean_text(display_name)
+        user_id = _clean_text(user_id)
 
         row = await db.fetchrow(
             """
@@ -208,7 +233,7 @@ class UserProfileStore:
         preferences: dict[str, Any],
     ) -> UserProfile | None:
         """Replace all preferences for a profile."""
-        preferences_json = json.dumps(preferences)
+        preferences_json = json.dumps(_clean_preferences(preferences))
         row = await db.fetchrow(
             """
             UPDATE user_profiles
@@ -241,6 +266,7 @@ class UserProfileStore:
         between concurrent interaction recordings.
         """
         if topic:
+            topic = _clean_text(topic)
             row = await db.fetchrow(
                 """
                 UPDATE user_profiles

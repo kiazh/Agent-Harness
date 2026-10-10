@@ -447,6 +447,15 @@ export class App implements FeatureHost {
 			this.tui.requestRender();
 			return;
 		}
+		if (event.type === "approval.resumed") {
+			this.transcript.addNotice(`Approval ${event.requestId.slice(0, 8)} resumed.`);
+			this.tui.requestRender();
+			return;
+		}
+		if (event.type === "turn.started") {
+			this.tui.requestRender();
+			return;
+		}
 		if (event.type === "turn.cleanup_pending" || event.type === "turn.ownership_lost") {
 			this.transcript.addNotice(event.type === "turn.cleanup_pending"
 				? "Stopping: waiting for the running action to finish cleanup."

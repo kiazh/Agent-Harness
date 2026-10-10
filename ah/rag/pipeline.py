@@ -41,22 +41,13 @@ def _redact_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     """
     if not metadata:
         return {}
+    from ah.memory.redaction import _default_redactor
+
     redacted: dict[str, Any] = {}
     for key, value in metadata.items():
         try:
-            if isinstance(value, str):
-                redacted[str(key)] = redact_secrets(value).text
-            elif isinstance(value, (list, tuple)):
-                redacted[str(key)] = [
-                    redact_secrets(v).text if isinstance(v, str) else v for v in value
-                ]
-            elif isinstance(value, dict):
-                redacted[str(key)] = {
-                    str(k): redact_secrets(v).text if isinstance(v, str) else v
-                    for k, v in value.items()
-                }
-            else:
-                redacted[str(key)] = value
+            cleaned, _ = _default_redactor._redact_value(value)
+            redacted[str(key)] = cleaned
         except Exception:
             redacted[str(key)] = value
     return redacted

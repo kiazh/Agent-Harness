@@ -110,3 +110,19 @@ alert receiver, or production backup/restore has passed.
 
 See [the threat model](SECURITY.md) and [the deployment/recovery runbook](OPERATIONS.md)
 for enforced guarantees, operator requirements, and explicit limitations.
+
+## Finish-off (2026-10-10, post-merge `6b5ccaa`)
+
+Code-level leftovers closed on top of the production-completion merge; the
+v1.0.0 gate stays open until DB/Docker/staging verification per
+`docs/plans/PRODUCTION_COMPLETION_PROGRESS.md` tasks 12/15/16.
+
+| Boundary | Change | Proof |
+|---|---|---|
+| RAG metadata | `_redact_metadata` recurses via the shared redactor (nested dicts/lists/tuples/sets/bytes), matching its documented claim | `test_audit_remediation.py::test_012_metadata_redacted_and_reserved_fields_win`, `npm --prefix ui` n/a |
+| SSE redaction | HTTP `_redact_value` handles `set`/`bytes` in addition to str/dict/list/tuple | `test_observability_payload_boundary.py` |
+| Audit sanitizer | `_sanitize_value` handles `bytes`/`set`, fixes `sk-or-` class to include `-_`, adds GitHub/Slack/JWT patterns | `test_observability_payload_boundary.py` |
+| Profiles | `user_profile` redacts display/user IDs, preferences (recursive), topics, and in-memory setters before persistence | code + `test_observability_payload_boundary.py` pattern |
+| Gateway approval | `approvals.resolve` accepts `cancelled`/`expired` (parity with HTTP) and optionally binds `sessionId` | `test_http_approval_resume.py` pattern, `test_approvals_ownership.py` |
+| Gateway completion | `message.complete` carries `needsApproval` summary when the turn ends paused (parity with HTTP `done`) | protocol schema `needsApproval?`, UI `transcript` reconciliation |
+| TUI contract | `transcript.apply` explicitly handles `turn.started`, `needs_approval`/`permission.required`, `approval.resolved`, `approval.resumed`, `turn.ownership_lost`, `turn.cleanup_pending`; `app.onEvent` notices `approval.resumed`/`turn.started` | `npm --prefix ui test` (87 passed, 3 DB-skipped), `typecheck`, `lint` |

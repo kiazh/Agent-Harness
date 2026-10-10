@@ -177,14 +177,17 @@ async def approvals_resolve(gw: Gateway, params: dict[str, Any]) -> dict[str, An
 
     request_id = _str(params, "requestId", max_len=64)
     verdict = _str(params, "verdict", max_len=16).lower()
-    if verdict not in ("approved", "denied"):
-        raise RpcError(INVALID_PARAMS, "verdict must be approved|denied")
+    if verdict not in ("approved", "denied", "cancelled", "expired"):
+        raise RpcError(INVALID_PARAMS, "verdict must be approved|denied|cancelled|expired")
     grant = str(params.get("grant") or "once").lower()
     if grant not in ("once", "session"):
         raise RpcError(INVALID_PARAMS, "grant must be once|session")
     rec = await _store.get_approval(request_id)
     if rec is None:
         raise RpcError(INVALID_PARAMS, "unknown approval")
+    bound_session = params.get("sessionId", params.get("session_id"))
+    if bound_session is not None and str(bound_session) != str(rec.get("session_id") or ""):
+        raise RpcError(INVALID_PARAMS, "approval does not belong to this session")
     # Authenticated principal: gateway token holder (human transport), never agent.
     resolved = await _store.resolve_decision(request_id, verdict, principal="tui")
     if resolved is None:

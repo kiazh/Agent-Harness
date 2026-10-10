@@ -1268,6 +1268,13 @@ def _redact_value(value: Any) -> Any:
         return [_redact_value(v) for v in value]
     if isinstance(value, tuple):
         return tuple(_redact_value(v) for v in value)
+    if isinstance(value, set):
+        return {_redact_value(v) for v in value}
+    if isinstance(value, bytes):
+        try:
+            return redact_secrets(value.decode("utf-8")).text.encode("utf-8")
+        except UnicodeDecodeError:
+            return value
     return value
 
 

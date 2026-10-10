@@ -106,6 +106,23 @@ export class Transcript {
 				// message.complete still follows exactly once.
 				this.addNotice("Stopping…", "warning");
 				return undefined;
+			case "turn.started":
+				return undefined;
+			case "needs_approval":
+			case "permission.required":
+				return undefined;
+			case "approval.resolved":
+			case "permission.resolved":
+				return undefined;
+			case "approval.resumed":
+				return undefined;
+			case "turn.ownership_lost":
+				this.hideSpinner();
+				this.addNotice("Turn ownership was lost; stopping the running action.", "warning");
+				return undefined;
+			case "turn.cleanup_pending":
+				this.addNotice("Stopping: waiting for the running action to finish cleanup.", "warning");
+				return undefined;
 			case "message.complete":
 				this.hideSpinner();
 				// AH-AUDIT-027: reconcile with the canonical final content.
