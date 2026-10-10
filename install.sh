@@ -514,6 +514,8 @@ shell_rc_file() {
   esac
 }
 
+PATH_STATE="unknown" # on-path | added:<rc> | already:<rc> | hint-only | shim-failed
+PATH_RC=""
 ensure_path_in_rc() {
   local dir="$1" rc line
   if [ "$SHELL_RC" = "no" ]; then
@@ -521,6 +523,7 @@ ensure_path_in_rc() {
     warn "  zsh (macOS default): echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && source ~/.zshrc"
     warn "  bash:                echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc && source ~/.bashrc"
     warn "  current shell only:  export PATH=\"\$HOME/.local/bin:\$PATH\""
+    PATH_STATE="hint-only"
     return 0
   fi
   case "${SHELL:-}" in
@@ -528,16 +531,20 @@ ensure_path_in_rc() {
     *) line="export PATH=\"$dir:\$PATH\"" ;;
   esac
   rc="$(shell_rc_file)"
+  PATH_RC="$rc"
   mkdir -p "$(dirname "$rc")" 2>/dev/null || true
   touch "$rc" 2>/dev/null || {
     warn "Cannot write $rc; add this line yourself: $line"
+    PATH_STATE="hint-only"
     return 0
   }
-  if grep -Fq ".local/bin" "$rc" 2>/dev/null; then
-    log "~/.local/bin already referenced in $rc"
+  if grep -Fqx "$line" "$rc" 2>/dev/null; then
+    log "$dir already on PATH in $rc"
+    PATH_STATE="already:$rc"
   else
     printf '\n# AgentHarness installer: `ah` on PATH\n%s\n' "$line" >> "$rc"
     log "Added $dir to PATH in $rc — restart your shell (or: source $rc)"
+    PATH_STATE="added:$rc"
   fi
 }
 
@@ -580,17 +587,49 @@ EOF2
     chmod +x "$SHIM_DIR/ah"
     log "Installed \`ah\` shim to $SHIM_DIR/ah"
     case ":$PATH:" in
-      *":$SHIM_DIR:"*) log "$SHIM_DIR already on PATH in this shell" ;;
+      *":$SHIM_DIR:"*)
+        log "$SHIM_DIR already on PATH in this shell"
+        PATH_STATE="on-path"
+        ;;
       *) ensure_path_in_rc "$SHIM_DIR" ;;
     esac
   else
     warn "Could not write $SHIM_DIR/ah; activate the venv instead: source .venv/bin/activate"
+    PATH_STATE="shim-failed"
   fi
+else
+  PATH_STATE="shim-failed"
 fi
 register_windows_path
 
-cat <<EOF
+# A piped `curl | bash` cannot export PATH into the caller's shell, and the
+# rc-file note scrolls by mid-install — so repeat the exact fix here, in the
+# final block the user actually reads. This is the macOS `command not found`
+# case: ~/.zshrc was updated but this terminal hasn't reloaded it yet.
+case ":$PATH:" in
+  *":$SHIM_DIR:"*) PATH_NOW=1 ;;
+  *) PATH_NOW=0 ;;
+esac
+if [ "$PATH_NOW" = "0" ] && [ "$PATH_STATE" != "shim-failed" ] && [ -f "$SHIM_DIR/ah" ]; then
+  cat <<EOF
 
+[action needed] \`ah\` is installed but not on PATH in THIS shell yet.
+Run this one line now (new terminals pick it up automatically):
+  export PATH="\$HOME/.local/bin:\$PATH"
+EOF
+  case "$PATH_STATE" in
+    added:*|already:*) printf 'Persisted in %s — or just restart your terminal.\n' "${PATH_STATE#*:}" ;;
+  esac
+  echo ""
+fi
+
+if [ "$PATH_STATE" = "shim-failed" ]; then
+  warn "No \`ah\` shim was installed; use the venv directly:"
+  warn "  source \"$(pwd)/.venv/bin/activate\" && ah"
+  echo ""
+fi
+
+cat <<EOF
 Done. Next:
   ah                          # interactive terminal UI
   ah chat "What is the capital of France?"   # one-shot (needs OPENROUTER_API_KEY)
