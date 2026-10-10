@@ -881,9 +881,22 @@ def doctor():
         f'Run: npm install --ignore-scripts --prefix "{ui_dir()}"',
     )
 
+    def _key_configured(value: object) -> bool:
+        # Placeholders copied from .env.example must not count as configured —
+        # otherwise doctor reports ✓ and every provider call fails with 401.
+        text = str(value or "").strip()
+        return bool(text) and text not in {
+            "sk-or-...",
+            "sk-...",
+            "sk-ant-...",
+            "gsk_",
+            "replace-with-a-long-random-key",
+            "replace-with-a-separate-long-random-key",
+        }
+
     check(
         "OPENROUTER_API_KEY",
-        bool(config.get("openrouter_api_key")),
+        _key_configured(config.get("openrouter_api_key")),
         "",
         "Run `ah setup` or set it in .env.",
     )
@@ -942,8 +955,9 @@ def setup(
     """First-launch setup — create the .env file and configure API keys.
 
     Creates the git-ignored ``.env`` next to the project (or at
-    ``$AH_ENV_FILE``) with one entry per model family you use. Existing
-    values are kept when you press Enter; ``--force`` starts over.
+    ``$AH_ENV_FILE``) with one entry per model family you use, plus the
+    default provider and model. Existing values are kept when you press
+    Enter; ``--force`` starts over.
     """
     import secrets as _secrets
 
@@ -975,6 +989,53 @@ def setup(
 
     updates: dict[str, str] = {}
     if not non_interactive:
+        # Default provider + model (non-secret .env values, applied to every
+        # turn until /provider or /model overrides them for the session).
+        known_providers = (
+            "openrouter",
+            "openai",
+            "anthropic",
+            "google",
+            "mistral",
+            "groq",
+            "together",
+            "deepseek",
+            "xai",
+            "ollama",
+        )
+        try:
+            current_provider = existing.get("AGENT_HARNESS_PROVIDER", "").strip() or "openrouter"
+            while True:
+                provider_answer = (
+                    typer.prompt(
+                        "AGENT_HARNESS_PROVIDER (default LLM provider)",
+                        default=current_provider,
+                        hide_input=False,
+                        show_default=True,
+                    )
+                    .strip()
+                    .lower()
+                ) or current_provider
+                if provider_answer in known_providers:
+                    break
+                console.print(
+                    f"[red]Unknown provider. Choose one of: {', '.join(known_providers)}[/red]"
+                )
+            if provider_answer != existing.get("AGENT_HARNESS_PROVIDER", "").strip():
+                updates["AGENT_HARNESS_PROVIDER"] = provider_answer
+                console.print("[dim]Tip: set AGENT_HARNESS_MODEL to a model id served by that provider.[/dim]")
+            current_model = existing.get("AGENT_HARNESS_MODEL", "").strip() or "openrouter/free"
+            model_answer = typer.prompt(
+                "AGENT_HARNESS_MODEL (default model id)",
+                default=current_model,
+                hide_input=False,
+                show_default=True,
+            ).strip()
+            if model_answer and model_answer != existing.get("AGENT_HARNESS_MODEL", "").strip():
+                updates["AGENT_HARNESS_MODEL"] = model_answer
+        except (typer.Abort, KeyboardInterrupt):
+            console.print("\n[dim]Setup cancelled.[/dim]")
+            raise typer.Exit(1) from None
         for key, desc, default, hidden in prompts:
             current = existing.get(key, "")
             shown_default = default or ("" if hidden else current)

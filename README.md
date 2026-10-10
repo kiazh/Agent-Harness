@@ -122,7 +122,7 @@ docker compose up --build
 # db:  pgvector/pgvector:pg16 with healthcheck
 ```
 
-`ah setup` writes the git-ignored `.env` next to the project (or at `$AH_ENV_FILE`), one slot per model family — OpenRouter, OpenAI, Anthropic, Google, Mistral, Groq, Together, DeepSeek, xAI, Cohere. Existing values are kept when you press Enter.
+`ah setup` writes the git-ignored `.env` next to the project (or at `$AH_ENV_FILE`), one slot per model family — OpenRouter, OpenAI, Anthropic, Google, Mistral, Groq, Together, DeepSeek, xAI, Cohere — plus the default provider (`AGENT_HARNESS_PROVIDER`) and model (`AGENT_HARNESS_MODEL`). Existing values are kept when you press Enter.
 
 ---
 

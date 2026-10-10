@@ -4,7 +4,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
-	CombinedAutocompleteProvider,
 	Container,
 	type Editor,
 	isViewportTUI,
@@ -15,6 +14,7 @@ import {
 	type SelectItem,
 	type TUI,
 } from "@earendil-works/pi-tui";
+import { ArgumentAwareAutocompleteProvider } from "./autocomplete.ts";
 import { parseCommand } from "./commands.ts";
 import { ComposerBox, createLayout, Footer, header, type LayoutRoot, Picker } from "./components.ts";
 import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features/index.ts";
@@ -97,7 +97,7 @@ export class App implements FeatureHost {
 		this.composer = new ComposerBox(tui, editorTheme, { paddingX: 1 });
 		this.editor = this.composer.editor;
 		this.layoutRoot = createLayout(this.transcriptView, this.composer, this.footer);
-		this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider(SLASH_COMMANDS, process.cwd()));
+		this.editor.setAutocompleteProvider(new ArgumentAwareAutocompleteProvider(SLASH_COMMANDS, process.cwd()));
 		this.editor.setAutocompleteMaxVisible(8);
 		this.editor.onSubmit = (text) => void this.submit(text);
 	}
