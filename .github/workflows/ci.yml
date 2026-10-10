@@ -42,7 +42,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,workflow-trial]"
           pip install pytest-cov bandit
 
       - name: Run ruff check
@@ -74,6 +74,23 @@ jobs:
 
   ui:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agentharness_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      AGENT_HARNESS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/agentharness_test
+      AGENT_HARNESS_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/agentharness_test
     defaults:
       run:
         working-directory: ui
@@ -85,6 +102,28 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
+
+      - name: Set up Python for real gateway tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install gateway and initialize test schema
+        working-directory: .
+        run: |
+          python -m pip install -e ".[dev]"
+          python - <<'PY'
+          import asyncio
+          from ah.db.connection import db
+          async def initialize():
+              try:
+                  await db.connect()
+                  await db.initialize_schema()
+              finally:
+                  await db.close()
+          asyncio.run(initialize())
+          PY
+          python -c "import sys; print('AH_TEST_PYTHON=' + sys.executable)" >> "$GITHUB_ENV"
 
       - name: Install UI dependencies (lockfile, no lifecycle scripts)
         run: npm ci --ignore-scripts

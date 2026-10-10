@@ -18,6 +18,8 @@ _SECRET_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,64}$")
 _CACHE_SECONDS = 60
 _cache: dict[tuple[str, str, str], tuple[float, str]] = {}
 _lock = threading.Lock()
+_redaction_values: set[str] = set()
+_redaction_lock = threading.Lock()
 
 
 def _read_file(path: str) -> str:
@@ -99,7 +101,7 @@ def _external_secret(name: str, backend: str) -> str:
     return value
 
 
-def get_secret(name: str, *, env_names: tuple[str, ...] | None = None) -> str | None:
+def _resolve_secret(name: str, *, env_names: tuple[str, ...] | None = None) -> str | None:
     """Resolve a named secret without caching environment or file values."""
     if not _SECRET_NAME_RE.match(name or ""):
         raise ValueError(f"invalid secret name {name!r}")
@@ -135,6 +137,32 @@ def get_secret(name: str, *, env_names: tuple[str, ...] | None = None) -> str | 
     with _lock:
         _cache[cache_key] = (now, value)
     return value
+
+
+def get_secret(name: str, *, env_names: tuple[str, ...] | None = None) -> str | None:
+    """Resolve a credential and remember its exact bytes for outbound redaction.
+
+    Retain rotated credentials for the process lifetime: an older provider may
+    still be retiring and echoing its original credential.
+    """
+    value = _resolve_secret(name, env_names=env_names)
+    if value:
+        with _redaction_lock:
+            _redaction_values.add(value)
+    return value
+
+
+def known_secret_values() -> tuple[str, ...]:
+    """Snapshot credentials without backend access, logging, or file reads."""
+    with _redaction_lock:
+        values = set(_redaction_values)
+    for name, value in os.environ.copy().items():
+        if value and (
+            name.endswith(("_API_KEY", "_TOKEN", "_PASSWORD"))
+            or name in {"AGENT_HARNESS_API_KEY", "AGENT_HARNESS_PROVENANCE_KEY"}
+        ):
+            values.add(value)
+    return tuple(sorted(values, key=len, reverse=True))
 
 
 def invalidate_secret_cache() -> None:

@@ -45,7 +45,7 @@ All rows have the common envelope. A trailing `?` marks an optional field.
 | `approval.resolved` | `requestId: string`, `status: string`, `originTurnId?: string` | Human decision recorded; approval has not necessarily executed. |
 | `approval.resumed` | `requestId: string`, `originTurnId: string` | Approved action continuing under this fresh turn; originTurnId identifies the reviewed turn. |
 | `turn.ownership_lost` | `reason?: string` | Fenced ownership lost; owned work is being cancelled. Nonterminal. |
-| `turn.cleanup_pending` | `reason?: string` | Cancellation was requested but execution remains alive; ownership is retained until retirement. Nonterminal. |
+| `turn.cleanup_pending` | `reason?: string` | Execution is still retiring, or the database could not confirm claim release. Nonterminal; await retirement or database recovery/claim expiry. |
 
 ## Approval and continuation
 

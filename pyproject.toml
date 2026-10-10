@@ -32,6 +32,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
+    "hypothesis>=6.0.0",
     "ruff==0.16.9",
     "bandit>=1.7.0",
 ]
@@ -64,6 +65,8 @@ select = ["E4", "E7", "E9", "F", "B904", "I", "UP"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = [
+    "db: requires the dedicated PostgreSQL test database",
+    "integration: exercises service or transport integration boundaries",
     "load: load/concurrent integration tests (deselect with '-m \"not load\"')",
 ]
 

@@ -86,3 +86,27 @@ Same shared factory/coordinator/broker/scope/ownership on every path. Evidence =
 | Compaction/archive | `maybe_auto_compact` (CLI single-shot n/a) | post-turn auto + `/compress` (mutation claim) | post-stream auto + RPC compress | n/a (jobs are short) | n/a | disabled → skipped; no-progress guard; keyset snapshot + exact-ID replace |
 | Broker + modes | `--mode`/`ah mode`; headless → structured pause | `/mode`, approval card, `/approvals` | approval endpoints + ownership checks | pause as `needs_approval`, fresh claim resume | capped authority; agent principals never approve | sandbox absent → explicit refusal, never silent host |
 | Usage/lifecycle/cancel | `close_agent_provider` in finally | join learning tasks, then close owned | same + auto-compact post-release | owned close + turn release; loss cancels task | deadline/hop inheritance; cancel propagates | shared/injected never closed (`test_shared_provider_not_closed_by_non_owner`) |
+
+## Production completion changes (2026-10-09)
+
+Release status is tracked in [the completion ledger](docs/plans/PRODUCTION_COMPLETION_PROGRESS.md).
+The implementation evidence below does not assert that an external deployment,
+alert receiver, or production backup/restore has passed.
+
+| Boundary | Current behavior | Proof |
+|---|---|---|
+| Mode | Durable per-session mode; atomic grant/mode transitions; fresh worker reads | `test_session_mode_persistence.py`, `test_multi_worker_fencing.py` |
+| HTTP approval | Exact original tool resume, fresh fenced turn, one-time consumption | `test_http_approval_resume.py` |
+| Extraction | Per-hop pinned connection, private IP rejection, aggregate deadline/size bounds | `test_web_extract_pinned_fetch.py`, `test_deep_fetch_deadline.py` |
+| Ownership | Failed renewal cancels effects; failed DB release cannot emit terminal success | `test_rest_ownership_loss.py`, `test_claim_failure_boundary.py` |
+| Lifecycle | Resistant work stays tracked and owned until retirement; cleanup failures visible | `test_turn_completion_lifecycle.py`, `test_provider_close_visibility.py` |
+| Wait budget | Active/overlapping approvals pause compute time while ownership renews | `test_approval_budget_active_wait.py`, `test_approval_wait_renewal.py` |
+| Scripts | Administrator allowlist, reviewed entry snapshot, declared dependency revalidation | `test_script_dependency_boundary.py` |
+| Protocol | Single schema/generated TUI types; negotiated compatible v1/v2 | `test_protocol_conformance.py` |
+| Config | Explicit precedence, mounted/backend resolution, persist-before-activate rotation | `test_configuration_precedence.py` |
+| Diagnostics | Audit omits raw conversation/tool payload; exact known-secret and pattern redaction | `test_observability_payload_boundary.py` |
+| Migration | UTF-8 atomic schema application, repeated fresh/upgrade checks, SQL compilation | `test_schema_conformance.py` |
+| Smoke | Actual PostgreSQL session/job lifecycle, authenticated metrics, SSE ownership/provider cleanup | `test_production_smoke.py` |
+
+See [the threat model](SECURITY.md) and [the deployment/recovery runbook](OPERATIONS.md)
+for enforced guarantees, operator requirements, and explicit limitations.

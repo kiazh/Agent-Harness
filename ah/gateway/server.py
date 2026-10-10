@@ -664,6 +664,7 @@ class Gateway:
         final = None
         agent = None
         _cancelled = False
+        _release_failed = False
         # Streaming redaction per turn (5.1): text deltas pass the frontier
         # redactor; the withheld tail flushes at completion. A safe helper
         # unused by this transport would not be a fix.
@@ -821,7 +822,14 @@ class Gateway:
                         "iterations": 0,
                         "toolCalls": tool_count,
                     }
-                    emit("tool.start", id=tool_id, name=event.tool_name, args=event.tool_args)
+                    from ah.memory.redaction import redact_value
+
+                    emit(
+                        "tool.start",
+                        id=tool_id,
+                        name=event.tool_name,
+                        args=redact_value(event.tool_args),
+                    )
                 elif event.type == "tool_result":
                     # Pair by tool-call id when the event carries one;
                     # otherwise fall back to the oldest open call with the
@@ -841,7 +849,9 @@ class Gateway:
                                 break
                     if match_id is not None:
                         del open_tools[match_id]
-                    result = str(event.tool_result)
+                    from ah.memory.redaction import redact_secrets
+
+                    result = redact_secrets(str(event.tool_result)).text
                     truncated = len(result) > MAX_TOOL_RESULT_CHARS
                     emit(
                         "tool.complete",
@@ -922,30 +932,28 @@ class Gateway:
                         try:
                             from ah.core.agent_factory import close_agent_provider
 
-                            await asyncio.wait_for(
-                                close_agent_provider(agent),
-                                timeout=5,
-                            )
+                            await close_agent_provider(agent)
                         except (TimeoutError, asyncio.CancelledError):
                             logger.warning("Provider close timed out for session %s", sid)
                         except Exception:
                             logger.exception("Could not close turn provider for session %s", sid)
                 finally:
                     self._record_stage(turn_id, "releasing_ownership", session_id=sid)
-                    if registered_turn is not None and self._turns.get(sid) is registered_turn:
-                        del self._turns[sid]
                     # Owner-token release on EVERY exit (success/failure/cancel/timeout).
                     # Stale-safe: only this turn's token clears its own claim.
                     try:
                         from ah.core.turns import end_turn as _end_turn
 
-                        if self._turn_tokens.get(sid) == owned_token:
-                            self._turn_tokens.pop(sid, None)
                         if owned_token:
                             await _end_turn(session_id, owned_token)
+                        if self._turn_tokens.get(sid) == owned_token:
+                            self._turn_tokens.pop(sid, None)
                     except Exception as _boundary_error:
-                        # Optional fallback preserves the primary outcome; report no payload.
+                        _release_failed = True
+                        # Preserve the owner token until DB recovery or claim expiry.
                         record_failure("server._run_turn", _boundary_error)
+                    if registered_turn is not None and self._turns.get(sid) is registered_turn:
+                        del self._turns[sid]
         # AH-AUDIT-013: stop/join renewal during release (never leaks).
         _renew_stop.set()
         try:
@@ -955,6 +963,10 @@ class Gateway:
                 _renew_task.cancel()
         finally:
             self._turn_ownership_lost.pop(turn_id, None)
+        if _release_failed:
+            emit("turn.cleanup_pending", reason="ownership release unavailable")
+            self._cancel_requested.discard(turn_id)
+            return
         # AH-AUDIT-027: emit the safe flushed tail as a delta exactly once
         # before terminal completion, so concatenated displayed text equals
         # the canonical redacted answer exactly once (also when prior

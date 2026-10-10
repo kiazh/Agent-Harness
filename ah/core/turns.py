@@ -143,13 +143,11 @@ async def _db_release(session_id: uuid.UUID, owner: str) -> bool:
 async def _db_claim_state(session_id: uuid.UUID) -> dict | None:
     from ah.db.connection import db
 
-    try:
-        row = await db.fetchrow(
-            "SELECT claim_owner, claim_kind, claim_expires_at FROM sessions WHERE id = $1",
-            session_id,
-        )
-    except Exception:
-        return None
+    # An unavailable database is unknown ownership, never an absent claim.
+    row = await db.fetchrow(
+        "SELECT claim_owner, claim_kind, claim_expires_at FROM sessions WHERE id = $1",
+        session_id,
+    )
     if row is None:
         return None
     return dict(row)
@@ -346,18 +344,15 @@ async def end_turn(session_id: uuid.UUID, token: str | None) -> bool:
 
     AH-AUDIT-017: the local mutex is released only when the caller owns the
     local registry entry. A stale token whose DB release was rejected never
-    unlocks a newer owner's local claim. Genuine owners still clean up
-    locally even when the DB release fails.
+    unlocks a newer owner's local claim. Database errors propagate so callers
+    cannot mistake unknown ownership for a successfully retired turn.
     """
     from ah.db.connection import db
 
     if not token:
         return False
     if db.connected:
-        try:
-            ok = await _db_release(session_id, token)
-        except Exception:
-            ok = False
+        ok = await _db_release(session_id, token)
         if ok:
             # Opportunistically clear our own local entry; a rejected
             # stale token never touches a newer owner's entry.
@@ -402,8 +397,10 @@ async def turn_active(session_id: uuid.UUID, kinds: tuple[str, ...] = ("turn",))
     if db.connected:
         try:
             return await _live_claim(session_id, kinds)
-        except Exception:
-            return turn_locked(session_id)
+        except Exception as error:
+            # Unknown remote ownership blocks mutation until DB recovery/expiry.
+            record_failure("turns.turn_active", error)
+            return True
     return turn_locked(session_id)
 
 
@@ -465,10 +462,7 @@ async def end_mutation(session_id: uuid.UUID, token: str | None) -> bool:
     if not token:
         return False
     if db.connected:
-        try:
-            ok = await _db_release(session_id, token)
-        except Exception:
-            ok = False
+        ok = await _db_release(session_id, token)
         if ok:
             _local_release(session_id, token)
             lock = _mutation_session_lock(session_id)

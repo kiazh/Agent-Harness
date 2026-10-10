@@ -59,19 +59,32 @@ The v1.0.0 release gate remains open until operational requirements are verified
    events follow retirement; HTTP `done` is buffered until release. Resistant REST
    execution retains the claim and provider until it unwinds, reporting cleanup
    pending without false completion. Full suite: 1,639 passed, zero skips.
-8. Script dependency trust boundary — in progress.
-9. Provider-close visibility — pending.
-10. Unified approval protocol — pending.
-11. Critical-path deduplication — implemented; final full suite running.
+8. Script dependency trust boundary — implemented and verified (Option B).
+9. Provider-close visibility — implemented and verified.
+10. Unified approval protocol — implemented and verified.
+11. Critical-path deduplication — implemented; 1,677 tests passed, zero skips,
+    zero warnings (106.14 seconds).
     Shared execution-context resolver freezes mode/backend/workspace; one bounded
     cleanup helper retains resistant tasks. Nine config/secret regressions, two
     workspace regressions, and three diagnostic payload regressions RED → GREEN.
     170 lifecycle/memory checks and 143 observability/transport checks passed.
     Replaced database mocks with proper async connection context managers.
-12. Multi-worker/failure/security/smoke verification — pending.
-13. Migrations and schema conformance — pending.
-14. Documentation and threat model — pending.
-15. Full release gate — pending.
+12. Multi-worker/failure/security/smoke verification — in progress.
+    Five claim-failure regressions RED → GREEN; 24 lifecycle checks passed.
+    Database release errors propagate separately from stale-token rejection;
+    HTTP/gateway emit cleanup pending without terminal completion or compaction.
+    Claim-read failure cannot prove absence or authorize a concurrent mutation.
+13. Migrations and schema conformance — implemented; five isolated-schema
+    checks passed. UTF-8 schema loader regression RED → GREEN; migrations are
+    atomic, repeatable, preserve legacy sessions, enforce modes/FKs/indexes.
+    SQL conformance prepares complete static SQL and fixed column projections;
+    dynamic query builders are additionally exercised by integration suites.
+14. Documentation and threat model — written: SECURITY.md, OPERATIONS.md,
+    README, environment example, feature ledger, and event retirement semantics.
+15. Full release gate — in progress. Windows suite: 1,702 passed, zero skips,
+    zero warnings; coverage 80% (required 60%). UI check: 90 passed, zero skips,
+    including real gateway/database tests. Ruff check/format and Bandit gate pass.
+    Linux and non-editable fresh-install verification remain in progress.
 16. v1.0.0 — gated on all preceding requirements.
 
 ## Environment checks
@@ -111,3 +124,15 @@ The v1.0.0 release gate remains open until operational requirements are verified
 - Task 11: durable approval reads now fail closed; optional fallback errors report
   sanitized diagnostic metrics/logs. No broad Exception/pass handlers remain
   outside CLI code. Exception logs retain class/source locations, omit payloads.
+
+- Task 12: seven real independent-process fencing tests and four authenticated
+  PostgreSQL/HTTP smoke tests passed. Dedicated private schemas avoid interference
+  with shared test data. Real UI gateway tests now have DB/Python infrastructure
+  in CI; optional workflow dependencies are installed in the backend CI gate.
+- Task 12: four outbound-secret regressions RED → GREEN. Exact configured values
+  from environment, mounted files, and backends are redacted, including partial
+  streaming boundaries and rotated values; gateway tool arguments/results redact.
+- Task 15 infrastructure: Windows PostgreSQL 18 clients found; WSL Python environment
+  bootstrapped without changing OS packages. Linux can reach the dedicated test DB.
+  Docker is unavailable in both checked environments. External staging/alert/backup
+  target remains unspecified, so those deployment gates and v1.0.0 stay open.

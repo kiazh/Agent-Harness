@@ -24,6 +24,13 @@ _SECRET_CONFIG_KEYS = (
 )
 
 
+def pytest_collection_modifyitems(items):
+    """Expose actual DB fixtures through the documented release selection."""
+    for item in items:
+        if {"db_pool", "live_db"}.intersection(item.fixturenames):
+            item.add_marker(pytest.mark.db)
+
+
 @pytest.fixture(autouse=True)
 def isolate_config_secrets(monkeypatch):
     """Isolate developer credentials across all supported secret sources.
@@ -32,6 +39,10 @@ def isolate_config_secrets(monkeypatch):
     backend values using monkeypatch after this fixture runs.
     """
     from ah.core.config import LEGACY_ENV_VARS, config
+    from ah.security import secrets
+
+    known_values = set(secrets._redaction_values)
+    secrets._redaction_values.clear()
 
     saved = {k: getattr(config, k) for k in _SECRET_CONFIG_KEYS}
     monkeypatch.setenv("AGENT_HARNESS_SECRET_BACKEND", "")
@@ -44,6 +55,8 @@ def isolate_config_secrets(monkeypatch):
             monkeypatch.setenv(LEGACY_ENV_VARS[k], "")
             monkeypatch.setenv(f"{LEGACY_ENV_VARS[k]}_FILE", "")
     yield
+    secrets._redaction_values.clear()
+    secrets._redaction_values.update(known_values)
     for k, v in saved.items():
         setattr(config, k, v)
 

@@ -625,6 +625,7 @@ def create_app() -> FastAPI:
             terminal_data = None
             resume_token = None
             _stream_cancelled = False
+            _release_failed = False
             _stage = "turn_started"
             await _ensure_renewal()
 
@@ -846,10 +847,7 @@ def create_app() -> FastAPI:
                                 try:
                                     from ah.core.agent_factory import close_agent_provider
 
-                                    await asyncio.wait_for(
-                                        close_agent_provider(agent),
-                                        timeout=5,
-                                    )
+                                    await close_agent_provider(agent)
                                 except (TimeoutError, asyncio.CancelledError):
                                     logger.warning(
                                         "Provider close timed out for session %s", session_id
@@ -871,13 +869,14 @@ def create_app() -> FastAPI:
                                 try:
                                     await _end_turn(sid, turn_token)
                                 except Exception as _boundary_error:
-                                    # Optional fallback preserves the primary outcome; report no payload.
+                                    _release_failed = True
+                                    # Unknown ownership must not produce a terminal event.
                                     record_failure("app.create_app", _boundary_error)
                         # H-03: Auto-compaction is fire-and-forget background work.
                         # Never blocks [DONE] or holds the stream open.
                         # AH-AUDIT-025: tracked by the shared runtime for bounded
                         # shutdown joining before DB closure.
-                        if not _stream_cancelled:
+                        if not _stream_cancelled and not _release_failed:
                             _record_stage("compaction_maintenance")
                             try:
                                 from ah import services as _services
@@ -896,10 +895,18 @@ def create_app() -> FastAPI:
                                 # Optional fallback preserves the primary outcome; report no payload.
                                 record_failure("app.create_app", _boundary_error)
                     if not _stream_cancelled:
-                        _record_stage("answer_complete")
-                        if terminal_data is not None:
-                            yield frame(terminal_data)
-                        yield "data: [DONE]\n\n"
+                        if _release_failed:
+                            yield frame(
+                                {
+                                    "type": "turn.cleanup_pending",
+                                    "reason": "ownership release unavailable",
+                                }
+                            )
+                        else:
+                            _record_stage("answer_complete")
+                            if terminal_data is not None:
+                                yield frame(terminal_data)
+                            yield "data: [DONE]\n\n"
 
         return StreamingResponse(
             event_stream(),

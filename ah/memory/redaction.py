@@ -26,6 +26,7 @@ __all__ = [
     "StreamingSecretRedactor",
     "STREAM_TAIL_CHARS",
     "redact_secrets",
+    "redact_value",
 ]
 
 
@@ -230,6 +231,13 @@ class SecretRedactor:
         """
         redacted = text
         redactions: list[str] = []
+
+        from ah.security.secrets import known_secret_values
+
+        for value in known_secret_values():
+            if value in redacted:
+                redacted = redacted.replace(value, "[REDACTED_SECRET]")
+                redactions.append("configured_secret")
 
         for rp in self._patterns:
             if rp.name == "credit_card":
@@ -588,6 +596,11 @@ def _stream_frontier(buf: str) -> int:
     return frontier
 
 
+def redact_value(value: object) -> object:
+    """Redact nested transport payloads while preserving their structure."""
+    return SecretRedactor()._redact_value(value)[0]
+
+
 class StreamingSecretRedactor:
     """Boundary-safe redactor for streamed text deltas (rewritten 5.1).
 
@@ -607,6 +620,18 @@ class StreamingSecretRedactor:
             return ""
         self._buf += delta
         frontier = _stream_frontier(self._buf)
+        from ah.security.secrets import known_secret_values
+
+        for value in known_secret_values():
+            # Keep any partial configured credential across the emission boundary.
+            for length in range(min(len(value) - 1, len(self._buf)), 0, -1):
+                if self._buf.endswith(value[:length]):
+                    frontier = min(frontier, len(self._buf) - length)
+                    break
+            # Never split a complete credential before exact-value redaction.
+            start = self._buf.rfind(value)
+            if start >= 0 and start < frontier < start + len(value):
+                frontier = start
         if frontier <= 0:
             return ""
         safe, self._buf = self._buf[:frontier], self._buf[frontier:]

@@ -202,13 +202,14 @@ class Database:
             raise
 
     async def initialize_schema(self, schema_path: str | None = None) -> None:
-        """Run schema.sql to create tables."""
+        """Apply UTF-8 schema/migrations atomically, preserving data on failure."""
         if schema_path is None:
             schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
-        with open(schema_path) as f:
+        with open(schema_path, encoding="utf-8") as f:
             schema_sql = f.read()
         async with self.acquire() as conn:
-            await conn.execute(schema_sql)
+            async with conn.transaction():
+                await conn.execute(schema_sql)
 
     @classmethod
     def reset(cls) -> None:

@@ -26,7 +26,7 @@
 - [Development](#development)
 - [Project structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
-- [Production-ready vs research](#production-ready-vs-research)
+- [Production release status and research](#production-release-status-and-research)
 - [Technology stack](#technology-stack)
 - [License](#license)
 
@@ -34,7 +34,7 @@
 
 ## What this is
 
-AgentHarness is a complete AI agent framework that runs on your machine. You chat with agents in a streaming terminal UI. Agents remember things across sessions, search the web, run tools in a sandbox, follow schedules, and delegate work to each other. Everything is stored in PostgreSQL with pgvector for semantic search.
+AgentHarness is a self-hosted AI agent framework that runs on your machine. The production completion release is still gated on verification recorded in [the completion ledger](docs/plans/PRODUCTION_COMPLETION_PROGRESS.md). You chat with agents in a streaming terminal UI. Agents remember things across sessions, search the web, run tools in a sandbox, follow schedules, and delegate work to each other. Everything is stored in PostgreSQL with pgvector for semantic search.
 
 ```
 >_ AgentHarness (v0.2.0)
@@ -291,7 +291,8 @@ ah serve --host 127.0.0.1 --port 8000
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/health`, `/ready`, `/metrics` | Open (ready is generic, no oracle) |
+| GET | `/health`, `/ready` | Public liveness and generic database/schema readiness |
+| GET | `/metrics` | Bearer-authenticated Prometheus metrics |
 | POST | `/api/v1/sessions` | `{title}` |
 | GET | `/api/v1/sessions?limit&cursor` | Capped 200, offset-capped |
 | GET/PATCH/DELETE | `/api/v1/sessions/{id}` | Resume/history, rename/goal, delete (blocked mid-turn) |
@@ -422,9 +423,9 @@ See `FEATURE_LEDGER.md` for detailed fix mapping (H-01 through H-07, R-01 throug
 
 ---
 
-## Production-ready vs research
+## Production release status and research
 
-**Ready:** ReAct loop, Postgres context + recall, persona-on memory, RAG, delegation, scheduling, HTTP API + SSE, usage budgets, tools, skills, TUI + skins, observability, sandboxing, retries.
+**Implemented:** ReAct loop, Postgres context + recall, persona-on memory, RAG, delegation, scheduling, HTTP API + SSE, usage budgets, tools, skills, TUI + skins, observability, Docker backend, retries. Production readiness additionally requires the [release gates](docs/plans/PRODUCTION_COMPLETION_PROGRESS.md); a passing unit suite alone is insufficient.
 
 **Baseline (not in hot path):** RL policy trainer output; SoulSpec cross-runs (adapters, not cert); LoCoMo accuracy (needs live LLM budget).
 
@@ -451,3 +452,23 @@ See `FEATURE_LEDGER.md` for detailed fix mapping (H-01 through H-07, R-01 throug
 ## License
 
 [MIT](LICENSE) — © 2026 Kiarad Zafar Heidari.
+
+## Production security and operations
+
+[SECURITY.md](SECURITY.md) defines approval authority, exact action bindings,
+worker fencing, secret redaction, and the limitations of host execution, plugins,
+trusted script dependencies, external providers, and resistant cancellation.
+[OPERATIONS.md](OPERATIONS.md) specifies configuration precedence, migration,
+backup/restore, rollback, staging validation, monitoring, and retention.
+
+Session modes are durable across workers/restarts; changing the global default
+affects future sessions. HTTP approval resume executes the original reviewed tool
+on a fresh fenced turn and consumes approval once. HTTP clients opt into v2 with
+`protocolVersion: 2`; the TUI negotiates v2. Both use the shared
+[versioned event contract](communications/ui-gateway-protocol.md). Claim-release
+uncertainty reports cleanup pending without terminal success.
+
+Script jobs use an administrator-controlled allowlist and revalidated declared
+dependency hashes under `.script-policy.json`; this is the documented trusted
+dependency boundary, not a complete dependency snapshot. Keep the script root
+outside the agent workspace with administrator-owned permissions/ACLs.

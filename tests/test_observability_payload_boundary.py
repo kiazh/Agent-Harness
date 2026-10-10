@@ -54,6 +54,7 @@ def test_config_corruption_does_not_log_parser_source(tmp_path, caplog):
 
 async def test_audit_writer_failure_has_metric_and_no_error_payload(monkeypatch, caplog):
     import asyncio
+
     from ah.core.metrics import metrics
     from ah.observability import audit
 
@@ -75,3 +76,60 @@ async def test_audit_writer_failure_has_metric_and_no_error_payload(monkeypatch,
         assert "private-provider-response" not in caplog.text
     finally:
         await writer.stop()
+
+
+@pytest.mark.parametrize("source", ["environment", "mounted", "backend"])
+def test_opaque_configured_secret_redacted_after_resolution(monkeypatch, tmp_path, caplog, source):
+    import logging
+
+    from ah.memory.redaction import StreamingSecretRedactor, redact_secrets
+    from ah.security import secrets
+
+    value = "opaquecredentialwithoutstandardprefix"
+    if source == "environment":
+        monkeypatch.setenv("SMOKE_API_KEY", value)
+    elif source == "mounted":
+        path = tmp_path / "secret"
+        path.write_text(value, encoding="utf-8")
+        monkeypatch.setenv("SMOKE_API_KEY_FILE", str(path))
+    else:
+        monkeypatch.setenv("AGENT_HARNESS_SECRET_BACKEND", "vault")
+        monkeypatch.setattr(secrets, "_external_secret", lambda *args: value)
+        monkeypatch.setattr(secrets, "_cache", {})
+    assert secrets.get_secret("SMOKE_API_KEY") == value
+    assert value not in redact_secrets("provider echoed " + value).text
+    stream = StreamingSecretRedactor()
+    output = "".join(stream.feed(char) for char in "echo " + value + " suffix") + stream.flush()
+    assert value not in output and "[REDACTED" in output
+    logging.getLogger("ah.smoke").warning("provider echoed %s", value)
+    assert value not in caplog.text
+
+
+async def test_gateway_redacts_tool_arguments_and_results(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from ah.core import turns
+    from ah.core.models import AgentResponse, Session, StreamEvent
+    from ah.core.session import session_manager
+
+    value = "sk-" + "a" * 30
+    session = Session(id=uuid.uuid4())
+    monkeypatch.setattr(session_manager, "get_fresh", AsyncMock(return_value=session))
+    monkeypatch.setattr("ah.services.maybe_auto_compact", AsyncMock())
+
+    class Agent:
+        async def run_stream(self, *args, **kwargs):
+            yield StreamEvent(type="tool_call", tool_name="echo", tool_args={"input": value})
+            yield StreamEvent(type="tool_result", tool_name="echo", tool_result=value)
+            yield StreamEvent(type="done", response=AgentResponse(content="done"))
+
+    frames = []
+    gateway = Gateway(frames.append, agent_factory=lambda *args: Agent(), owns_db=False)
+    token = await turns.try_begin_turn(session.id)
+    gateway._turn_tokens[str(session.id)] = token
+    try:
+        await gateway._run_turn(session.id, "sanitized-tool", "smoke")
+        assert value not in json.dumps(frames)
+        assert any(frame["params"]["type"] == "tool.complete" for frame in frames)
+    finally:
+        await turns.end_turn(session.id, token)
