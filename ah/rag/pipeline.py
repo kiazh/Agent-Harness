@@ -21,6 +21,7 @@ from ah.core.serialization import (
 )
 from ah.db.connection import db
 from ah.memory.redaction import redact_secrets
+from ah.observability.diagnostics import record_failure
 from ah.rag.chunker import Chunk, RecursiveCharacterTextSplitter
 from ah.rag.embedder import Embedder, OpenAIEmbedder
 from ah.rag.loaders import Document, FileLoader
@@ -375,8 +376,9 @@ class RAGPipeline:
                 )
         except ValueError:
             raise
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("pipeline.search", _boundary_error)
         await self._enforce_embedding_space(session_id, str(embed_model), scope)
 
         # Hybrid search (BM25 + dense + RRF)
@@ -501,8 +503,9 @@ class RAGPipeline:
             # Record embedding model/dims namespace for incompat detection.
             try:
                 self._last_embed_model = str(embed_model)
-            except Exception:
-                pass
+            except Exception as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("pipeline._finish_search", _boundary_error)
             # Evict oldest if cache is full (simple approach)
             if len(self._search_cache) > self._search_cache_max_size:
                 oldest_key = min(self._search_cache, key=lambda k: self._search_cache[k][0])

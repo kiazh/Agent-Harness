@@ -15,7 +15,7 @@ Tests all 9 security fixes:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -287,7 +287,7 @@ class TestSecretRedactionOnDirectWrites:
                     "content": captured_content,
                     "category": "fact",
                     "importance": 0.5,
-                    "created_at": datetime.utcnow(),
+                    "created_at": datetime.now(UTC).replace(tzinfo=None),
                     "last_accessed": None,
                     "access_count": 0,
                     "embedding": None,
@@ -325,7 +325,7 @@ class TestSecretRedactionOnDirectWrites:
                     "content": captured_content,
                     "category": "fact",
                     "importance": 0.5,
-                    "created_at": datetime.utcnow(),
+                    "created_at": datetime.now(UTC).replace(tzinfo=None),
                     "last_accessed": None,
                     "access_count": 0,
                     "embedding": None,

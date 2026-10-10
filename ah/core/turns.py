@@ -30,6 +30,8 @@ import threading as _threading
 import uuid
 from contextlib import asynccontextmanager
 
+from ah.observability.diagnostics import record_failure
+
 TURN_TTL_SECONDS = 360
 MUTATION_TTL_SECONDS = 120
 
@@ -544,9 +546,8 @@ class TurnOwnership:
             return
 
         async def _heartbeat() -> None:
-            failures = 0
             while True:
-                await asyncio.sleep(interval_s)
+                await asyncio.sleep(min(interval_s, ttl_s / 3))
                 try:
                     ok = await renew_turn(self.session_id, self.token, ttl_s=ttl_s)
                 except asyncio.CancelledError:
@@ -554,12 +555,9 @@ class TurnOwnership:
                 except Exception:
                     ok = False
                 if ok:
-                    failures = 0
                     continue
-                failures += 1
-                if failures >= 2:
-                    self.ownership_lost.set()
-                    return
+                self.ownership_lost.set()
+                return
 
         self._renew_task = asyncio.create_task(_heartbeat(), name=f"turn-renew-{self.turn_id}")
 
@@ -572,8 +570,9 @@ class TurnOwnership:
             task.cancel()
         try:
             await asyncio.gather(task, return_exceptions=True)
-        except (asyncio.CancelledError, Exception):
-            pass
+        except (asyncio.CancelledError, Exception) as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("turns.stop_renewal", _boundary_error)
 
     def child_token(self) -> dict:
         """Owner-authorized internal mutation token for delegated children.

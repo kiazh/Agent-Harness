@@ -20,6 +20,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 
+from ah.observability.diagnostics import record_failure
 from ah.permissions import store as _store
 from ah.permissions.policy import ActionRequest, Decision, decide
 
@@ -31,6 +32,7 @@ ApprovalHandler = Callable[[dict], Awaitable[str]]
 _approval_handler: ContextVar[ApprovalHandler | None] = ContextVar("approval_handler", default=None)
 _principal: ContextVar[str] = ContextVar("approval_principal", default="tui")
 _turn: ContextVar[str] = ContextVar("approval_turn", default="")
+resume_approval_var: ContextVar[str | None] = ContextVar("resume_approval", default=None)
 
 # Immutable execution context (AH-AUDIT-002): the broker stamps the approved
 # proposal's material fields at guard time. Backends (terminal/file) consume
@@ -44,18 +46,12 @@ _execution_context: ContextVar[dict | None] = ContextVar("execution_context", de
 
 def get_execution_context() -> dict | None:
     """Return the broker-stamped execution snapshot, if one is active."""
-    try:
-        return _execution_context.get()
-    except Exception:
-        return None
+    return _execution_context.get()
 
 
 def clear_execution_context() -> None:
-    """Clear the execution snapshot (end of the guard+execute window)."""
-    try:
-        _execution_context.set(None)
-    except Exception:
-        pass
+    """Clear the execution snapshot at the end of guard and execution."""
+    _execution_context.set(None)
 
 
 def set_approval_handler(
@@ -83,6 +79,7 @@ class ApprovalDenied(Exception):
 class PermissionBroker:
     async def guard(self, req: ActionRequest) -> ActionRequest:
         """Evaluate *req*; allow, await human approval, or raise."""
+        req.turn_id = req.turn_id or _turn.get()
         # LP-08: inherited parent caps enforced at the broker boundary (not
         # just stored on the agent): a restricted parent can never mint a
         # broader child through tools, RPC, jobs, or delegation.
@@ -99,8 +96,26 @@ class PermissionBroker:
                 check_mode_cap(parent, req.mode)
         except ApprovalDenied:
             raise
-        except Exception:
-            pass
+        except Exception as error:
+            logger.error("parent authority evaluation failed (%s)", type(error).__name__)
+            raise ApprovalDenied("parent authority unavailable") from None
+        resume_id = resume_approval_var.get()
+        if resume_id:
+            from ah.core.approval_resume import matches_approval
+
+            record = await _store.get_approval(resume_id)
+            if record is None or record.get("status") != "approved":
+                raise ApprovalDenied("approval already consumed or not approved")
+            if not matches_approval(req, record):
+                fresh = await _store.create_approval(req, principal="http")
+                raise NeedsApproval(fresh)
+            if not await _store.claim_execution(
+                resume_id, digest=req.digest, session_id=req.session_id
+            ):
+                raise ApprovalDenied("approval already consumed")
+            req.approval_id = resume_id
+            _stamp_execution(req)
+            return req
         try:
             grants = await _store.list_grants(req.session_id) if req.session_id else []
         except Exception:
@@ -110,16 +125,7 @@ class PermissionBroker:
         if decision.verdict == "allowed":
             # Stamp the immutable execution snapshot: backends execute
             # exactly what was authorized, even if globals change next.
-            _execution_context.set(
-                {
-                    "session_id": req.session_id,
-                    "mode": req.mode,
-                    "backend": req.backend,
-                    "operation": req.operation,
-                    "digest": req.digest,
-                    "approval_id": req.approval_id,
-                }
-            )
+            _stamp_execution(req)
             return req
         if decision.verdict == "denied":
             raise ApprovalDenied(decision.reason)
@@ -245,6 +251,7 @@ def _stamp_execution(req: ActionRequest) -> None:
     _execution_context.set(
         {
             "session_id": req.session_id,
+            "workspace_root": req.workspace_root,
             "mode": req.mode,
             "backend": req.backend,
             "operation": req.operation,
@@ -295,8 +302,9 @@ def _file_write_diff(req: ActionRequest) -> dict:
             )
         elif proposed_preview:
             out["truncated"] = bool(getattr(req, "content_length", 0) and req.content_length > 4000)
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("broker._file_write_diff", _boundary_error)
     return out
 
 

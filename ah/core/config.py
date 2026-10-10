@@ -15,6 +15,8 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
+from ah.observability.diagnostics import record_failure
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = Path.home() / ".agent-harness" / "config.yaml"
@@ -42,32 +44,12 @@ SECRET_KEYS = frozenset(
 # .env upward, else repo .env — the same path secret management writes to.
 # Real environment variables always win over .env values.
 def _startup_env_path() -> str | None:
-    try:
-        import os as _os
-        from pathlib import Path as _Path
+    from ah.security.env_file import find_env_file
 
-        override = _os.environ.get("AH_ENV_FILE", "").strip()
-        if override:
-            p = _Path(override).expanduser()
-            if not p.is_absolute():
-                p = (_Path.cwd() / p).resolve()
-            # Shared contract with ah.security.env_file.find_env_file: the
-            # override must end with .env or be an existing file.
-            if p.name != ".env" and not p.name.endswith(".env") and not p.is_file():
-                return None
-            return str(p)
-        here = _Path.cwd().resolve()
-        for candidate in (here, *here.parents):
-            env = candidate / ".env"
-            try:
-                if env.is_file():
-                    return str(env)
-            except OSError:
-                continue
-        # Fall back to repo .env (two levels above this file).
-        repo_env = _Path(__file__).resolve().parents[2] / ".env"
-        return str(repo_env)
-    except Exception:
+    try:
+        return str(find_env_file())
+    except (OSError, ValueError):
+        logger.warning("environment file could not be resolved")
         return None
 
 
@@ -82,8 +64,9 @@ except Exception:
     # secret lookup will surface a clear error later.
     try:
         load_dotenv(override=False)
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("config.module", _boundary_error)
 
 __all__ = [
     "Config",
@@ -307,17 +290,17 @@ class Config:
     theme: str = "default"
     history_size: int = 100
     # API keys and service URLs
-    openrouter_api_key: str = ""
-    openai_api_key: str = ""
-    anthropic_api_key: str = ""
-    google_api_key: str = ""
-    mistral_api_key: str = ""
-    groq_api_key: str = ""
-    together_api_key: str = ""
-    deepseek_api_key: str = ""
-    xai_api_key: str = ""
-    cohere_api_key: str = ""
-    database_url: str = ""
+    openrouter_api_key: str = field(default="", repr=False)
+    openai_api_key: str = field(default="", repr=False)
+    anthropic_api_key: str = field(default="", repr=False)
+    google_api_key: str = field(default="", repr=False)
+    mistral_api_key: str = field(default="", repr=False)
+    groq_api_key: str = field(default="", repr=False)
+    together_api_key: str = field(default="", repr=False)
+    deepseek_api_key: str = field(default="", repr=False)
+    xai_api_key: str = field(default="", repr=False)
+    cohere_api_key: str = field(default="", repr=False)
+    database_url: str = field(default="", repr=False)
     searxng_url: str = "http://localhost:8080"
     agent_harness_home: str = ""
     tmpdir: str = ""
@@ -343,24 +326,25 @@ class Config:
     _session_overrides: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def get(self, key: str) -> Any:
-        """Get a config value, checking session overrides first, then legacy env vars."""
+        """Live precedence: override, explicit env, legacy env, backend, file, default."""
         if key in self._session_overrides:
-            return self._session_overrides[key]
-        value = getattr(self, key, None)
-        if value is not None and value != "":
-            return value
-        # Check legacy environment variable
-        if key in LEGACY_ENV_VARS:
-            env_val = os.environ.get(LEGACY_ENV_VARS[key])
-            if env_val is not None and (env_val != "" or key not in SECRET_KEYS):
-                return env_val
-            if key in SECRET_KEYS:
-                from ah.security.secrets import get_secret
+            return validate_value(key, self._session_overrides[key])
+        explicit = f"AGENT_HARNESS_{key.upper()}"
+        legacy = LEGACY_ENV_VARS.get(key)
+        names = (explicit, legacy) if legacy else (explicit,)
+        if key in SECRET_KEYS:
+            from ah.security.secrets import get_secret
 
-                secret = get_secret(LEGACY_ENV_VARS[key])
-                if secret is not None:
-                    return secret
-        return DEFAULTS.get(key)
+            secret = get_secret(legacy or explicit, env_names=names)
+            if secret is not None:
+                return secret
+        else:
+            for name in names:
+                value = os.environ.get(name)
+                if value is not None:
+                    return validate_value(key, value)
+        value = getattr(self, key, None)
+        return value if value is not None and value != "" else DEFAULTS.get(key)
 
     def set(self, key: str, value: Any, persist: bool = False) -> None:
         """Set a config value.
@@ -377,16 +361,20 @@ class Config:
         if key.startswith("_"):
             raise ValueError(f"Cannot set private key: {key}")
         coerced = validate_value(key, value)
+        previous = getattr(self, key, None)
         setattr(self, key, coerced)
-
         if persist:
-            self.save()
+            try:
+                self.save()
+            except Exception:
+                setattr(self, key, previous)
+                raise
 
     def to_dict(self) -> dict[str, Any]:
         """Export config as a dict (excluding private fields)."""
         result = {}
         for key in DEFAULTS:
-            result[key] = self.get(key)
+            result[key] = "" if key in SECRET_KEYS else self.get(key)
         return result
 
     def save(self, path: str | Path | None = None) -> None:
@@ -417,7 +405,7 @@ class Config:
                 with open(load_path) as f:
                     file_data = yaml.safe_load(f) or {}
                 for key, value in file_data.items():
-                    if key in DEFAULTS:
+                    if key in DEFAULTS and key not in SECRET_KEYS:
                         try:
                             setattr(config, key, validate_value(key, value))
                         except ValueError as e:
@@ -428,24 +416,8 @@ class Config:
             except Exception as e:
                 logger.warning("Failed to load config from %s: %s", load_path, e)
 
-        # Override with environment variables (AGENT_HARNESS_<KEY>)
-        for key in DEFAULTS:
-            env_key = f"AGENT_HARNESS_{key.upper()}"
-            env_value = os.environ.get(env_key)
-            if env_value is not None:
-                try:
-                    env_value = validate_value(key, env_value)
-                except ValueError as e:
-                    logger.warning("Ignoring invalid env %s: %s", env_key, e)
-                    continue
-                setattr(config, key, env_value)
-
-        # Override with legacy environment variables (OPENROUTER_API_KEY, etc.)
-        for key, env_name in LEGACY_ENV_VARS.items():
-            env_value = os.environ.get(env_name)
-            if env_value is not None:
-                setattr(config, key, env_value)
-
+        # Environment and backends are resolved live by get(), so rotation
+        # never leaves a stale credential copied into file configuration.
         return config
 
     @classmethod

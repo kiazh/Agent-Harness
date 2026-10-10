@@ -7,6 +7,7 @@ import json
 import logging
 from typing import Any
 
+from ah.core.metrics import metrics
 from ah.db.connection import db
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ class AuditPersistence:
         try:
             self._queue.put_nowait(entry)
         except asyncio.QueueFull:
+            metrics.increment_counter("audit.queue.dropped")
             logger.error("Audit event queue is full; event was not persisted")
 
     async def stop(self, *, timeout: float = 5.0) -> None:
@@ -74,8 +76,10 @@ class AuditPersistence:
                     entry["event"],
                     json.dumps(entry, default=str),
                 )
-            except Exception:
-                logger.exception("Could not persist audit event %s", entry.get("event"))
+                metrics.increment_counter("audit.persistence.succeeded")
+            except Exception as error:
+                metrics.increment_counter("audit.persistence.failed")
+                logger.error("Could not persist audit event (%s)", type(error).__name__)
             finally:
                 queue.task_done()
 

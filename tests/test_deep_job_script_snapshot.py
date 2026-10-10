@@ -30,6 +30,9 @@ async def test_script_changed_during_approval_cannot_execute_unreviewed_content(
         "print('unreviewed output')\n"
     )
     monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    from tests.support.scripts import allow_scripts
+
+    allow_scripts(tmp_path, {"reviewed.py": [], "identity.py": ["sibling.py"]})
     monkeypatch.setattr("ah.core.session_mode.get_effective_mode", lambda _sid: "ask")
     outputs = []
     approvals = []
@@ -83,6 +86,9 @@ async def test_python_snapshot_preserves_encoding_and_script_identity(
     from ah.core.job_scripts import run_job_script
 
     monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    from tests.support.scripts import allow_scripts
+
+    allow_scripts(tmp_path, {"reviewed.py": [], "identity.py": ["sibling.py"]})
     monkeypatch.setenv("OPENROUTER_API_KEY", "snapshot-secret-must-not-leak")
     (tmp_path / "sibling.py").write_text("value = 'local import'\n", encoding="utf-8")
     target = tmp_path / "identity.py"

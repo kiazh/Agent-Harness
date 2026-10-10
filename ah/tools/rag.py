@@ -200,7 +200,7 @@ async def search_documents(
 
         return "\n".join(lines)
     except Exception as e:
-        logger.exception("Failed to search documents: %s", query)
+        logger.exception("Failed to search documents")
         audit_log(
             "rag_tool_search_documents_error",
             session_id=session_id,

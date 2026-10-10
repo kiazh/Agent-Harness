@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ah.core.config import config
 from ah.core.exceptions import ToolError, ValidationError
+from ah.observability.diagnostics import record_failure
 from ah.tools.base import registry
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ DANGEROUS_CHARS = frozenset(";|&$()`<>\\\n")
 # A command may only see the configured workspace, never the whole home
 # directory or a system temporary directory that may contain credentials.
 ALLOWED_WORKDIR_PREFIXES = (str(Path(config.get("agent_harness_home") or Path.cwd()).resolve()),)
+_IMPORT_WORKDIR_PREFIXES = ALLOWED_WORKDIR_PREFIXES
 
 # Argument blocklist: git aliases, find -exec, and test-runner overrides can
 # escape the command allowlist (e.g. `find . -exec`, `git -c`, `pytest -o`).
@@ -51,28 +53,12 @@ _BLOCKED_ARGS = frozenset({"-exec", "-execdir", "-delete", "-c", "-C", "--config
 
 
 def _allowed_workdir_prefixes() -> tuple[str, ...]:
-    """Refresh allowed prefixes from config (not frozen at import)."""
-    # Respect monkeypatched ALLOWED_WORKDIR_PREFIXES in tests.
-    import ah.tools.terminal as _self
+    from ah.core.execution_context import execution_context
+    from ah.permissions.broker import get_execution_context
 
-    try:
-        explicit = getattr(_self, "ALLOWED_WORKDIR_PREFIXES", None)
-        # If tests override it to a tmp dir different from config, honour it.
-        # Detect override by comparing to config-derived default.
-        try:
-            home = config.get("agent_harness_home") or Path.cwd()
-        except Exception:
-            home = Path.cwd()
-        default = str(Path(home).resolve())
-        if explicit and tuple(explicit) != (default,):
-            return tuple(explicit)
-    except Exception:
-        pass
-    try:
-        home = config.get("agent_harness_home") or Path.cwd()
-    except Exception:
-        home = Path.cwd()
-    return (str(Path(home).resolve()),)
+    if not get_execution_context() and ALLOWED_WORKDIR_PREFIXES != _IMPORT_WORKDIR_PREFIXES:
+        return tuple(ALLOWED_WORKDIR_PREFIXES)
+    return (str(execution_context("terminal").workspace),)
 
 
 def _validate_blocked_args(args: list[str]) -> None:
@@ -154,43 +140,15 @@ def _sanitized_env() -> dict[str, str]:
 
 
 def _approved_snapshot() -> dict | None:
-    """Broker-stamped execution snapshot for this guard+execute window."""
-    try:
-        from ah.permissions.broker import get_execution_context
+    from ah.permissions.broker import get_execution_context
 
-        return get_execution_context()
-    except Exception:
-        return None
+    return get_execution_context()
 
 
 def _call_mode() -> str:
-    """Effective mode: approved snapshot wins, else session-effective mode.
+    from ah.core.execution_context import execution_context
 
-    Backends never re-resolve mutable globals directly (AH-AUDIT-002): a
-    concurrent mode change cannot alter approved execution semantics.
-    """
-    snap = _approved_snapshot()
-    if snap and snap.get("mode"):
-        return str(snap["mode"]).lower()
-    try:
-        sid = None
-        try:
-            from ah.tools.agents import current_session_id as _sid_var
-
-            sid = _sid_var.get()
-        except Exception:
-            sid = None
-        from ah.core.session_mode import get_effective_mode
-
-        return get_effective_mode(str(sid) if sid else None)
-    except Exception:
-        pass
-    try:
-        from ah.core.config import config as _cfg
-
-        return str(_cfg.get("execution_mode") or "ask").lower()
-    except Exception:
-        return "ask"
+    return execution_context("terminal").mode
 
 
 def _kill_tree(process: subprocess.Popen[str]) -> None:
@@ -245,8 +203,9 @@ def _stop_container(name: str) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("terminal._stop_container", _boundary_error)
 
 
 def _run_bounded(
@@ -400,17 +359,7 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
     # action; this layer validates backend availability. Host execution is
     # available in ask/workspace/full modes once approved — Docker sandbox
     # use stays independent of permission policy.
-    sandbox = os.environ.get("AGENT_HARNESS_TERMINAL_SANDBOX", "disabled").lower()
-    try:
-        from ah.core.config import config as _cfg2
-
-        cfg_sandbox = (_cfg2.get("terminal_sandbox") or "").lower()
-        if cfg_sandbox in {"disabled", "local", "docker"}:
-            # Config wins when explicitly set; env stays as override for ops.
-            if os.environ.get("AGENT_HARNESS_TERMINAL_SANDBOX") is None:
-                sandbox = cfg_sandbox
-    except Exception:
-        pass
+    sandbox = str(config.get("terminal_sandbox") or "disabled").lower()
     if sandbox not in {"disabled", "local", "docker"}:
         raise ValidationError("terminal sandbox must be 'disabled', 'local', or 'docker'")
     # "disabled" previously hard-rejected everything. With the broker in place,

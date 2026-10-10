@@ -21,6 +21,7 @@ from ah.core.config import config
 from ah.core.context import context_manager
 from ah.core.session import session_manager
 from ah.db.connection import db
+from ah.observability.diagnostics import record_failure
 
 __all__ = ["DelegationResult", "Orchestrator", "AgentNotFoundError"]
 
@@ -228,8 +229,9 @@ class Orchestrator:
                 from ah.core.agent_factory import parent_authority_var as _pav
 
                 _pav.reset(authority_token)
-            except Exception:
-                pass
+            except Exception as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("orchestrator.delegate", _boundary_error)
             # AH-AUDIT-026: shared owner-aware cleanup contract (bounded;
             # custom test factories inject shared agents that stay open).
             if getattr(self, "_owns_factory_agents", False):
@@ -237,8 +239,9 @@ class Orchestrator:
                     from ah.core.agent_factory import close_agent_provider
 
                     await close_agent_provider(agent)
-                except Exception:
-                    pass
+                except Exception as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("orchestrator.delegate", _boundary_error)
 
         await self._record_end(
             message_id, status="complete", response=response.content, tokens=response.tokens_used

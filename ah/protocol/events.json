@@ -1,0 +1,74 @@
+{
+  "version": 2,
+  "events": {
+    "message.start": {},
+    "turn.started": {},
+    "message.delta": {
+      "text": "string"
+    },
+    "message.stopping": {
+      "reason": "string"
+    },
+    "tool.start": {
+      "id": "string",
+      "name": "string",
+      "args": "object"
+    },
+    "tool.complete": {
+      "id": "string",
+      "name": "string",
+      "result": "string",
+      "isError": "boolean",
+      "truncated?": "boolean"
+    },
+    "usage": {
+      "tokens": "number"
+    },
+    "message.complete": {
+      "text": "string",
+      "tokens": "number",
+      "iterations": "number",
+      "toolCalls": "number",
+      "cancelled": "boolean",
+      "needsApproval?": "object[]"
+    },
+    "error": {
+      "message": "string"
+    },
+    "needs_approval": {
+      "requestId": "string",
+      "operation": "string",
+      "target": "string",
+      "argv": "string[]",
+      "cwd": "string",
+      "backend": "string",
+      "capabilities": "string[]",
+      "tool?": "string",
+      "shell?": "string",
+      "timeout?": "number",
+      "network?": "string[]",
+      "contentDigest?": "string",
+      "contentPreview?": "string",
+      "contentLength?": "number",
+      "fileDiff?": "object",
+      "durable?": "boolean|null",
+      "status?": "string",
+      "originTurnId?": "string"
+    },
+    "approval.resolved": {
+      "requestId": "string",
+      "status": "string",
+      "originTurnId?": "string"
+    },
+    "approval.resumed": {
+      "requestId": "string",
+      "originTurnId": "string"
+    },
+    "turn.ownership_lost": {
+      "reason?": "string"
+    },
+    "turn.cleanup_pending": {
+      "reason?": "string"
+    }
+  }
+}

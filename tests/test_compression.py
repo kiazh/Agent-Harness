@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -24,7 +24,7 @@ from ah.core.models import ContextChunk, LLMResponse
 @pytest.fixture
 def sample_chunks() -> list[ContextChunk]:
     """Create a list of sample context chunks (newest first)."""
-    now = datetime.utcnow()
+    now = datetime.now(UTC).replace(tzinfo=None)
     return [
         ContextChunk(
             id=uuid.uuid4(),

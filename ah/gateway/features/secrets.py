@@ -69,24 +69,24 @@ async def secrets_set(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         key = _validate_key(raw_key)
     except ValueError as e:
         raise RpcError(INVALID_PARAMS, str(e)) from None
+    if any(character in value for character in ("\r", "\n", "\x00")):
+        raise RpcError(INVALID_PARAMS, "secret value must not contain line breaks or NUL")
     value = value.strip()
     if not value:
         raise RpcError(INVALID_PARAMS, "value must not be blank")
-    os.environ[key] = value
     env_file: str | None = None
     if persist:
-        from ah.core.config import get_config
-
         try:
             env_file = str(set_env_values({key: value}))
         except (OSError, ValueError) as e:
-            logger.warning("secrets.set: .env write failed for %s: %s", key, e)
-            raise RpcError(INVALID_PARAMS, f"could not write .env: {e}") from None
-        # Refresh the config singleton's in-memory copy for known keys.
-        try:
-            get_config().set(key.lower(), value)
-        except Exception:
-            pass
+            logger.warning("secrets.set: .env write failed for %s (%s)", key, type(e).__name__)
+            raise RpcError(
+                INVALID_PARAMS, "could not write .env; live secret was not changed"
+            ) from None
+    os.environ[key] = value
+    from ah.security.secrets import invalidate_secret_cache
+
+    invalidate_secret_cache()
     logger.info("secrets.set: %s updated (persist=%s)", key, persist)
     return {"key": key, "set": True, "persisted": persist, "envFile": env_file}
 
@@ -103,20 +103,22 @@ async def secrets_clear(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         key = _validate_key(raw_key)
     except ValueError as e:
         raise RpcError(INVALID_PARAMS, str(e)) from None
-    os.environ.pop(key, None)
-    # Best effort: blank the persisted line so a restart stays cleared.
+    # Persist first: a failed write must not report durable removal.
     try:
         if find_env_file().is_file():
             stored = read_env_values()
             if key in stored:
                 set_env_values({key: ""})
-    except (OSError, ValueError) as e:
-        logger.warning("secrets.clear: .env blank failed for %s: %s", key, e)
-    try:
-        from ah.core.config import get_config
+    except (OSError, ValueError) as error:
+        logger.warning("secrets.clear: .env blank failed for %s (%s)", key, type(error).__name__)
+        raise RpcError(
+            INVALID_PARAMS, "could not clear .env; live secret was not changed"
+        ) from None
+    os.environ.pop(key, None)
+    from ah.core.config import SECRET_KEYS, get_config
+    from ah.security.secrets import invalidate_secret_cache
 
-        if key.lower() in get_config().to_dict():
-            get_config().set(key.lower(), "")
-    except Exception:
-        pass
+    if key.lower() in SECRET_KEYS:
+        get_config().set(key.lower(), "")
+    invalidate_secret_cache()
     return {"key": key, "set": False}

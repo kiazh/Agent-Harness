@@ -550,7 +550,7 @@ async def test_interval_job_next_run_is_future(db_pool, monkeypatch):
     session = await SessionManager().create(title="interval", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
     try:
-        before = datetime.now(UTC)
+        before = await db_pool.fetchval("SELECT clock_timestamp()")
         job = await store.create(
             name="interval",
             kind="interval",
@@ -558,7 +558,7 @@ async def test_interval_job_next_run_is_future(db_pool, monkeypatch):
             prompt="p",
             interval_seconds=120,
         )
-        after = datetime.now(UTC)
+        after = await db_pool.fetchval("SELECT clock_timestamp()")
         assert job.next_run_at >= before + timedelta(seconds=120)
         assert job.next_run_at <= after + timedelta(seconds=120)
     finally:
@@ -842,6 +842,9 @@ async def test_run_due_once_cron_job(db_pool, monkeypatch):
 async def test_execute_no_agent_script(db_pool, monkeypatch, tmp_path):
     """_execute for no_agent jobs runs the script and adds a chunk."""
     monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    from tests.support.scripts import allow_scripts
+
+    allow_scripts(tmp_path, {"hello.py": [], "silent.py": [], "check.py": []})
     (tmp_path / "hello.py").write_text("print('hello world')", encoding="utf-8")
     monkeypatch.setattr("ah.core.session.db", db_pool)
     monkeypatch.setattr("ah.core.scheduler.db", db_pool)
@@ -896,6 +899,9 @@ async def test_execute_no_agent_script(db_pool, monkeypatch, tmp_path):
 async def test_execute_no_agent_empty_output(db_pool, monkeypatch, tmp_path):
     """_execute for no_agent jobs with empty output does not add a chunk."""
     monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    from tests.support.scripts import allow_scripts
+
+    allow_scripts(tmp_path, {"hello.py": [], "silent.py": [], "check.py": []})
     (tmp_path / "silent.py").write_text("pass", encoding="utf-8")
     monkeypatch.setattr("ah.core.session.db", db_pool)
     monkeypatch.setattr("ah.core.scheduler.db", db_pool)

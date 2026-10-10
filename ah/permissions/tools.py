@@ -65,13 +65,10 @@ def action_for_tool(name: str, args: dict) -> dict:
 
 
 def _declared_effects(name: str) -> tuple[str, ...]:
-    try:
-        from ah.tools.base import registry
+    from ah.tools.base import registry
 
-        tool = registry._tools.get(name)
-        return tuple(getattr(tool, "effects", None) or ())
-    except Exception:
-        return ()
+    tool = registry._tools.get(name)
+    return tuple(getattr(tool, "effects", None) or ())
 
 
 _MUTATING_EFFECTS = frozenset({"fs.write", "exec", "net", "delegate"})

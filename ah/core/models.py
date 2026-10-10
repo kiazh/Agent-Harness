@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from ah.observability.diagnostics import record_failure
+
 __all__ = [
     "Session",
     "ContextChunk",
@@ -34,6 +36,7 @@ class Session:
     context_budget: int = 8000
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_activity: datetime = field(default_factory=lambda: datetime.now(UTC))
+    execution_mode: str = "ask"
 
 
 @dataclass
@@ -146,5 +149,6 @@ class AgentResponse:
                     if str(pause["request_id"]) not in seen:
                         seen.add(str(pause["request_id"]))
                         self.needs_approval.append(dict(pause))
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("models.__post_init__", _boundary_error)

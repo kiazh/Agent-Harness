@@ -22,26 +22,10 @@ _PRIVATE_FILES = {".env", ".env.local", ".npmrc", ".pypirc", "id_rsa", "id_ed255
 
 
 def _base_dir() -> Path:
-    """Shared execution root (AH-AUDIT-011).
+    from ah.core.execution_context import execution_context
 
-    Follows the same workspace_root() contract the permission policy uses
-    for proposal identity, so approval and access name the same file even
-    when process CWD, workspace_root, and agent_harness_home differ.
-    An explicitly monkeypatched _BASE_DIR (tests) is honored.
-    """
-    try:
-        import ah.tools.file as _self
-
-        if Path(_self._BASE_DIR) != _IMPORT_BASE_DIR:
-            return Path(_self._BASE_DIR)
-    except Exception:
-        pass
-    try:
-        from ah.permissions.policy import workspace_root as _ws_root
-
-        return _ws_root()
-    except Exception:
-        return _BASE_DIR
+    override = Path(_BASE_DIR) if Path(_BASE_DIR) != _IMPORT_BASE_DIR else None
+    return execution_context(workspace_override=override).workspace
 
 
 def _realpath_inside_base(path: Path) -> Path:
@@ -116,38 +100,9 @@ def _verify_fd_matches_path(fd: int, candidate: Path, *, check_base: bool = True
 
 
 def _full_mode() -> bool:
-    """Session-aware full-mode check (AH-AUDIT-001/002).
+    from ah.core.execution_context import execution_context
 
-    The broker-stamped snapshot wins; otherwise the session-effective mode
-    (via caller scope) is used. The raw global alone never decides.
-    """
-    try:
-        from ah.permissions.broker import get_execution_context
-
-        snap = get_execution_context()
-        if snap and snap.get("mode"):
-            return str(snap["mode"]).lower() == "full"
-    except Exception:
-        pass
-    try:
-        sid = None
-        try:
-            from ah.tools.agents import current_session_id as _sid_var
-
-            sid = _sid_var.get()
-        except Exception:
-            sid = None
-        from ah.core.session_mode import get_effective_mode
-
-        return get_effective_mode(str(sid) if sid else None) == "full"
-    except Exception:
-        pass
-    try:
-        from ah.core.config import config as _cfg
-
-        return (_cfg.get("execution_mode") or "ask").lower() == "full"
-    except Exception:
-        return False
+    return execution_context().mode == "full"
 
 
 def resolve_path(path: str, *, allow_outside: bool = False) -> Path:

@@ -16,6 +16,7 @@ import httpx
 
 from ah.core.config import config
 from ah.core.exceptions import ToolError, ValidationError
+from ah.observability.diagnostics import record_failure
 from ah.tools.base import registry
 
 logger = logging.getLogger(__name__)
@@ -124,34 +125,6 @@ def _is_safe_url(url: str) -> bool:
     return True
 
 
-def _resolve_safe_ip(hostname: str) -> str | None:
-    """Resolve hostname to a safe (non-private) IP address.
-
-    Returns the first safe IP address, or None if no safe address is found.
-    This is used to pin the resolved IP for the actual connection, preventing
-    TOCTOU races where DNS resolution changes between validation and connection.
-    TODO(pinned-ip): actually connect to the pinned IP with Host header / TLS
-    SNI instead of only validating, so DNS rebinding between check and fetch
-    cannot bypass the SSRF policy.
-    """
-    try:
-        addr_infos = _getaddrinfo_timeout(hostname, timeout=3.0)
-        for _, _, _, _, sockaddr in addr_infos:
-            ip = ipaddress.ip_address(sockaddr[0])
-            if not (
-                ip.is_private
-                or ip.is_loopback
-                or ip.is_reserved
-                or ip.is_link_local
-                or ip.is_multicast
-                or ip.is_unspecified
-            ):
-                return str(ip)
-    except (socket.gaierror, ValueError):
-        pass
-    return None
-
-
 @registry.register(description="Search the web for information")
 async def web_search(query: str, limit: int = 5) -> str:
     """Search the web using SearXNG (self-hosted) or DuckDuckGo."""
@@ -189,8 +162,9 @@ async def web_search(query: str, limit: int = 5) -> str:
             pass
         except httpx.HTTPError:
             pass
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("builtins.web_search", _boundary_error)
 
     # Fallback: DuckDuckGo HTML
     try:
@@ -213,73 +187,63 @@ async def web_search(query: str, limit: int = 5) -> str:
         pass
     except httpx.HTTPError:
         pass
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("builtins.web_search", _boundary_error)
 
     raise ToolError(f"Search failed for '{query}'. No results.")
 
 
+class _ExtractedText(HTMLParser):
+    """Discard markup and executable/style content from bounded HTML input."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.hidden: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in ("script", "style", "template", "noscript"):
+            self.hidden.append(tag)
+        elif not self.hidden and tag in ("p", "div", "br", "li", "h1", "h2", "h3", "article"):
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.hidden and tag == self.hidden[-1]:
+            self.hidden.pop()
+        elif not self.hidden:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self.hidden:
+            self.parts.append(data)
+
+
 @registry.register(description="Extract content from a URL")
 async def web_extract(url: str) -> str:
-    """Extract clean text content from a URL using Jina Reader.
+    """Extract text through a direct, validated-IP connection (no proxy).
 
-    SSRF protection: validates URL against private IP ranges before fetching.
+    DNS, TLS, redirects, headers, body size, and overall deadline are enforced
+    by the shared pinned fetch. TLS verifies the original host; every redirect
+    undergoes the same public-address policy.
     """
+    from ah.security.fetch import FetchError, pinned_fetch
+
     if not url or not url.strip():
         raise ValidationError("Empty URL")
-
-    url = url.strip()
-
-    # SSRF validation
-    if not _is_safe_url(url):
-        raise ValidationError(
-            f"URL rejected by security policy (private/internal address or invalid protocol): {url}"
-        )
-
-    # Pin the resolved IP to prevent TOCTOU race
-    parsed = urlparse(url)
-    hostname = parsed.hostname
-    pinned_ip = _resolve_safe_ip(hostname) if hostname else None
-    if pinned_ip is None:
-        raise ValidationError(f"Could not resolve safe IP for: {hostname}")
-
     try:
-        # The fetch is performed by the Jina Reader proxy, so the URL is passed
-        # through unchanged. Rewriting it to a pinned IP (and overriding Host)
-        # sent the *target's* hostname to r.jina.ai and broke TLS/SNI there.
-        # Stream with byte limit to avoid loading full response into memory
-        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
-            async with client.stream(
-                "GET",
-                f"https://r.jina.ai/{url}",
-                headers={"Accept": "text/markdown"},
-            ) as resp:
-                if resp.status_code in (301, 302, 303, 307, 308):
-                    location = resp.headers.get("location", "")
-                    if not location or not _is_safe_url(location):
-                        raise ValidationError(
-                            f"Redirect target rejected by security policy: {location!r}"
-                        )
-                    raise ToolError(f"HTTP {resp.status_code} redirect for {url}")
-                if resp.status_code != 200:
-                    raise ToolError(f"HTTP {resp.status_code} for {url}")
-                # Read at most 20000 bytes (enough for ~5000 chars of UTF-8)
-                chunks = []
-                total_bytes = 0
-                max_bytes = 20000
-                async for chunk in resp.aiter_bytes():
-                    total_bytes += len(chunk)
-                    if total_bytes > max_bytes:
-                        break
-                    chunks.append(chunk)
-                content = b"".join(chunks)[:max_bytes].decode("utf-8", errors="replace")
-                return content[:5000]
-    except httpx.TimeoutException:
-        raise ToolError(f"Request timed out for {url}") from None
-    except httpx.HTTPError as e:
-        raise ToolError(f"HTTP error for {url}: {e}") from e
-    except Exception as e:
-        raise ToolError(f"Error extracting URL: {e}") from e
+        content = await asyncio.to_thread(pinned_fetch, url.strip(), max_bytes=20_000, timeout=30)
+    except FetchError as error:
+        raise ToolError(f"Error extracting URL: {error}") from None
+    if re.search(
+        r"<(?:!doctype|html|head|body|div|p|h[1-6]|article|script|style)\b", content, re.I
+    ):
+        parser = _ExtractedText()
+        parser.feed(content)
+        content = "\n".join(
+            line.strip() for line in "".join(parser.parts).splitlines() if line.strip()
+        )
+    return content[:5000]
 
 
 @registry.register(description="Search file contents with regex")

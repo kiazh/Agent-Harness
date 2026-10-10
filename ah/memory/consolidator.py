@@ -15,6 +15,7 @@ from ah.core.provider import LLMProvider, audit_log
 from ah.memory.models import MemoryEntry
 from ah.memory.scorer import ImportanceScorer
 from ah.memory.store import MemoryStore, memory_store
+from ah.observability.diagnostics import record_failure
 from ah.plugins.registry import plugin_registry
 
 __all__ = ["ConsolidationResult", "MemoryConsolidator"]
@@ -234,8 +235,9 @@ class MemoryConsolidator:
                     if match is not None and getattr(match, "id", None) is not None:
                         try:
                             await self.store.update_access(match.id)
-                        except Exception:
-                            pass
+                        except Exception as _boundary_error:
+                            # Optional fallback preserves the primary outcome; report no payload.
+                            record_failure("consolidator.consolidate_session", _boundary_error)
                     is_duplicate = True
                 else:
                     # Intra-batch embedding similarity against already-accepted batch items
@@ -279,8 +281,9 @@ class MemoryConsolidator:
                 if match is not None and getattr(match, "id", None) is not None:
                     try:
                         await self.store.update_access(match.id)
-                    except Exception:
-                        pass
+                    except Exception as _boundary_error:
+                        # Optional fallback preserves the primary outcome; report no payload.
+                        record_failure("consolidator.consolidate_session", _boundary_error)
                 continue
             seen.add(key)
             new_memories.append(candidate)
@@ -306,8 +309,9 @@ class MemoryConsolidator:
                     candidate.embedding = await _embed_query(redacted[:2000])
                 except Exception:
                     candidate.embedding = None
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("consolidator.consolidate_session", _boundary_error)
 
         # Step 5: Write new memories
         written: list[MemoryEntry] = []
@@ -393,8 +397,9 @@ class MemoryConsolidator:
                 if match is not None and getattr(match, "id", None) is not None:
                     try:
                         await self.store.update_access(match.id)
-                    except Exception:
-                        pass
+                    except Exception as _boundary_error:
+                        # Optional fallback preserves the primary outcome; report no payload.
+                        record_failure("consolidator.consolidate_from_text", _boundary_error)
                 continue
             is_duplicate = False
             if memory.embedding:

@@ -65,6 +65,7 @@ class ActionRequest:
     # Filled by the broker when an approval is claimed for this execution;
     # the agent loop marks it completed/failed/cancelled afterwards.
     approval_id: str = ""
+    workspace_root: str = ""
 
 
 @dataclass
@@ -74,7 +75,7 @@ class Decision:
     request: ActionRequest | None = None
 
 
-DIGEST_VERSION = "v1"
+DIGEST_VERSION = "v2"
 
 
 def _digest_of(*parts: str) -> str:
@@ -85,7 +86,7 @@ def _digest_of(*parts: str) -> str:
     must pass every material authorization field; see normalize_request.
     """
     h = hashlib.sha256()
-    h.update(b"ah-action-digest-v1\x00")
+    h.update(b"ah-action-digest-v2\x00")
     for p in parts:
         encoded = str(p).encode("utf-8", errors="replace")
         h.update(str(len(encoded)).encode("ascii"))
@@ -108,13 +109,9 @@ def _canonical_list(values: list[str] | tuple[str, ...] | None) -> str:
 
 
 def workspace_root() -> Path:
-    try:
-        from ah.core.config import config
+    from ah.core.execution_context import configured_workspace
 
-        root = config.get("workspace_root") or config.get("agent_harness_home") or Path.cwd()
-        return Path(root).resolve()
-    except Exception:
-        return Path.cwd().resolve()
+    return configured_workspace()
 
 
 def _sensitive_capabilities(req: ActionRequest) -> list[str]:
@@ -225,14 +222,15 @@ def normalize_request(req: ActionRequest) -> ActionRequest:
     """
     if not req.request_id:
         req.request_id = uuid.uuid4().hex
-    root = workspace_root()
+    root = Path(req.workspace_root).resolve() if req.workspace_root else workspace_root()
+    req.workspace_root = str(root)
     try:
         cwd_path = Path(req.cwd or ".")
         if not cwd_path.is_absolute():
             cwd_path = root / cwd_path
         req.cwd = str(cwd_path.resolve())
-    except Exception:
-        pass
+    except (OSError, ValueError) as error:
+        raise ValueError("invalid execution working directory") from error
     canon_targets = []
     for t in req.targets:
         try:
@@ -240,8 +238,8 @@ def normalize_request(req: ActionRequest) -> ActionRequest:
             if not target_path.is_absolute():
                 target_path = root / target_path
             canon_targets.append(str(target_path.resolve()))
-        except Exception:
-            canon_targets.append(str(t))
+        except (OSError, ValueError) as error:
+            raise ValueError("invalid execution target") from error
     req.targets = canon_targets
     # AH-AUDIT-008: every material authorization field is bound with
     # array-boundary-preserving encoding (no separator joins). Tool
@@ -261,6 +259,7 @@ def normalize_request(req: ActionRequest) -> ActionRequest:
         _canonical_list(req.network),
         str(req.timeout),
         str(req.opaque_network),
+        req.workspace_root,
     )
     return req
 

@@ -99,17 +99,22 @@ def _external_secret(name: str, backend: str) -> str:
     return value
 
 
-def get_secret(name: str) -> str | None:
+def get_secret(name: str, *, env_names: tuple[str, ...] | None = None) -> str | None:
     """Resolve a named secret without caching environment or file values."""
     if not _SECRET_NAME_RE.match(name or ""):
         raise ValueError(f"invalid secret name {name!r}")
-    direct = os.environ.get(name, "").strip()
-    if direct:
-        return direct
-    file_path = (os.environ.get(f"{name}_FILE") or "").strip()
-    if file_path:
-        # File var is set: empty/whitespace file means None, no fall-through.
-        return _read_file(file_path) or None
+    names = env_names or (name,)
+    for env_name in names:
+        if not _SECRET_NAME_RE.fullmatch(env_name):
+            raise ValueError("invalid secret environment name")
+        direct = os.environ.get(env_name, "").strip()
+        if direct:
+            return direct
+    for env_name in names:
+        file_path = (os.environ.get(f"{env_name}_FILE") or "").strip()
+        if file_path:
+            # An explicitly selected mounted file never falls through.
+            return _read_file(file_path) or None
     backend = os.environ.get("AGENT_HARNESS_SECRET_BACKEND", "").lower()
     if not backend:
         return None
@@ -130,3 +135,9 @@ def get_secret(name: str) -> str | None:
     with _lock:
         _cache[cache_key] = (now, value)
     return value
+
+
+def invalidate_secret_cache() -> None:
+    """Forget backend values after an administrator rotation."""
+    with _lock:
+        _cache.clear()

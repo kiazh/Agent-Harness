@@ -12,6 +12,19 @@ async def test_script_job_persists_and_delivers_stdout_without_an_agent(
     db_pool, monkeypatch, tmp_path
 ):
     monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    from tests.support.scripts import allow_scripts
+
+    allow_scripts(
+        tmp_path,
+        {
+            "watch.py": [],
+            "env.py": [],
+            "silent.py": [],
+            "hang.py": [],
+            "check.py": [],
+            "parent.py": [],
+        },
+    )
     (tmp_path / "watch.py").write_text("print('disk alert')", encoding="utf-8")
     monkeypatch.setattr("ah.core.session.db", db_pool)
     monkeypatch.setattr("ah.core.scheduler.db", db_pool)
@@ -65,6 +78,19 @@ async def test_script_runner_rejects_traversal_and_hides_provider_secret(monkeyp
     from ah.core.job_scripts import run_job_script
 
     monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    from tests.support.scripts import allow_scripts
+
+    allow_scripts(
+        tmp_path,
+        {
+            "watch.py": [],
+            "env.py": [],
+            "silent.py": [],
+            "hang.py": [],
+            "check.py": [],
+            "parent.py": [],
+        },
+    )
     monkeypatch.setenv("OPENROUTER_API_KEY", "sentinel-secret")
     (tmp_path / "env.py").write_text(
         "import os\nprint('secret-present' if os.getenv('OPENROUTER_API_KEY') else 'clean')",
@@ -82,6 +108,19 @@ async def test_script_runner_bounds_time_and_suppresses_empty_output(monkeypatch
     from ah.core import job_scripts
 
     monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    from tests.support.scripts import allow_scripts
+
+    allow_scripts(
+        tmp_path,
+        {
+            "watch.py": [],
+            "env.py": [],
+            "silent.py": [],
+            "hang.py": [],
+            "check.py": [],
+            "parent.py": [],
+        },
+    )
     (tmp_path / "silent.py").write_text("print('   ')", encoding="utf-8")
     (tmp_path / "hang.py").write_text("import time\ntime.sleep(5)", encoding="utf-8")
     assert await job_scripts.run_job_script("silent.py") == ""
@@ -94,6 +133,19 @@ async def test_gateway_creates_script_job_without_prompt(db_pool, monkeypatch, t
     from ah.gateway.features.jobs import jobs_create
 
     monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    from tests.support.scripts import allow_scripts
+
+    allow_scripts(
+        tmp_path,
+        {
+            "watch.py": [],
+            "env.py": [],
+            "silent.py": [],
+            "hang.py": [],
+            "check.py": [],
+            "parent.py": [],
+        },
+    )
     (tmp_path / "check.py").write_text("print('ok')", encoding="utf-8")
     monkeypatch.setattr("ah.core.session.db", db_pool)
     monkeypatch.setattr("ah.core.scheduler.db", db_pool)
@@ -135,6 +187,19 @@ async def test_gateway_creates_script_job_without_prompt(db_pool, monkeypatch, t
 
 async def test_script_job_rejects_an_unused_prompt(db_pool, monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    from tests.support.scripts import allow_scripts
+
+    allow_scripts(
+        tmp_path,
+        {
+            "watch.py": [],
+            "env.py": [],
+            "silent.py": [],
+            "hang.py": [],
+            "check.py": [],
+            "parent.py": [],
+        },
+    )
     (tmp_path / "check.py").write_text("print('ok')", encoding="utf-8")
     monkeypatch.setattr("ah.core.session.db", db_pool)
     monkeypatch.setattr("ah.core.scheduler.db", db_pool)
@@ -161,6 +226,19 @@ async def test_script_timeout_terminates_child_processes(monkeypatch, tmp_path):
     from ah.core import job_scripts
 
     monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    from tests.support.scripts import allow_scripts
+
+    allow_scripts(
+        tmp_path,
+        {
+            "watch.py": [],
+            "env.py": [],
+            "silent.py": [],
+            "hang.py": [],
+            "check.py": [],
+            "parent.py": [],
+        },
+    )
     marker = tmp_path / "orphan.txt"
     child_code = (
         f"import time, pathlib; time.sleep(0.4); pathlib.Path({str(marker)!r}).write_text('orphan')"
@@ -186,6 +264,19 @@ async def test_script_children_do_not_outlive_successful_parent(
     from ah.core import job_scripts
 
     monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    from tests.support.scripts import allow_scripts
+
+    allow_scripts(
+        tmp_path,
+        {
+            "watch.py": [],
+            "env.py": [],
+            "silent.py": [],
+            "hang.py": [],
+            "check.py": [],
+            "parent.py": [],
+        },
+    )
     marker = tmp_path / "late-child.txt"
     child_code = (
         f"import time, pathlib; time.sleep(1.5); pathlib.Path({str(marker)!r}).write_text('late')"
