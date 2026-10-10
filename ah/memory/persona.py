@@ -266,7 +266,7 @@ class PersonaMemoryStore:
             WHERE {where_clause}
             ORDER BY confidence DESC, created_at DESC
             LIMIT ${param_idx}
-            """,
+            """,  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
             *params,
         )
         return [self._row_to_persona(row) for row in rows]
@@ -357,7 +357,7 @@ class PersonaMemoryStore:
             RETURNING id, fact_id, persona_id, interpretation,
                       emotional_valence, emotional_arousal, confidence,
                       created_at, updated_at
-            """,
+            """,  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
             *params,
         )
         if row is None:

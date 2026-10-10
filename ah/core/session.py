@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import uuid
 
@@ -28,11 +29,13 @@ class SessionManager:
 
     async def _cache_get(self, session_id: uuid.UUID) -> Session | None:
         async with self._cache_lock:
-            return self._cache.get(session_id)
+            cached = self._cache.get(session_id)
+            return copy.deepcopy(cached) if cached is not None else None
 
     async def _cache_put(self, session: Session) -> None:
         async with self._cache_lock:
-            self._cache[session.id] = session
+            # The cache owns its snapshot, including nested session state.
+            self._cache[session.id] = copy.deepcopy(session)
 
     async def _cache_invalidate(self, session_id: uuid.UUID) -> None:
         async with self._cache_lock:
@@ -87,11 +90,9 @@ class SessionManager:
         return a copy, so callers cannot mutate the authority source.
         Execution-critical reads must use get_fresh() instead.
         """
-        import copy as _copy
-
         cached = await self._cache_get(session_id)
         if cached is not None:
-            return _copy.copy(cached)
+            return cached
         row = await db.fetchrow(
             """
             SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, created_at, last_activity
@@ -103,9 +104,7 @@ class SessionManager:
             return None
         session = self._row_to_session(row)
         await self._cache_put(session)
-        import copy as _copy2
-
-        return _copy2.copy(session)
+        return session
 
     async def get_fresh(self, session_id: uuid.UUID) -> Session | None:
         """Bypass the cache for execution-critical reads (AH-AUDIT-019).

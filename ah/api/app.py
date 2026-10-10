@@ -675,10 +675,9 @@ def create_app() -> FastAPI:
                         # Bounded join: learning reviews must never block
                         # normal answer completion indefinitely.
                         try:
-                            await asyncio.wait_for(
-                                asyncio.gather(*_learning, return_exceptions=True),
-                                timeout=2,
-                            )
+                            _, pending = await asyncio.wait(_learning, timeout=2)
+                            for _t in pending:
+                                _t.cancel()
                         except (TimeoutError, asyncio.CancelledError, Exception):
                             for _t in _learning:
                                 try:

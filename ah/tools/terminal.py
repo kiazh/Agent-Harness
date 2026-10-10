@@ -462,7 +462,7 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
             "--user",
             "65534:65534",
             "--tmpfs",
-            "/tmp:rw,nosuid,size=64m",
+            "/tmp:rw,nosuid,size=64m",  # nosec B108 # Private Docker tmpfs; no host temporary file.
             "--mount",
             f"type=bind,src={workspace},dst=/workspace{_mount_ro}",
             "--workdir",

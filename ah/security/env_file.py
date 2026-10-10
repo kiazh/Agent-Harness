@@ -210,7 +210,11 @@ def set_env_values(
         lines.extend(f"{k}={_quote(normalized[k])}" for k in missing)
     if not target.is_file() and not create:
         raise OSError(f".env not found: {target}")
-    parent = target.parent.resolve() if target.parent.exists() else (Path.cwd() / target.parent).resolve()
+    parent = (
+        target.parent.resolve()
+        if target.parent.exists()
+        else (Path.cwd() / target.parent).resolve()
+    )
     if not explicit and not _is_inside_allowed(parent):
         raise ValueError(f".env parent escapes allowed roots: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)

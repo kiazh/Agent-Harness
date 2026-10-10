@@ -160,7 +160,7 @@ async def list_grants(session_id: str) -> list[dict]:
         recs = await db.fetch(
             f"""SELECT {GRANT_COLUMNS} FROM permission_grants
                 WHERE session_id = $1 AND revoked = FALSE
-                  AND (expires_at IS NULL OR expires_at > now())""",
+                  AND (expires_at IS NULL OR expires_at > now())""",  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
             uuid.UUID(session_id),
         )
         for r in recs:

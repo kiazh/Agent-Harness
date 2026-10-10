@@ -224,7 +224,7 @@ class MemoryStore:
             WHERE {where_clause}
             ORDER BY importance DESC, created_at DESC
             LIMIT ${param_idx} OFFSET ${param_idx + 1}
-            """,
+            """,  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
             *params,
         )
         return [self._row_to_entry(row) for row in rows]
@@ -272,7 +272,7 @@ class MemoryStore:
             WHERE {where_clause}
             ORDER BY embedding <=> $1::vector
             LIMIT $2
-            """,
+            """,  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
             *params,
         )
         results = []
@@ -386,25 +386,25 @@ class MemoryStore:
         q_filter = " AND quarantined = FALSE" if exclude_quarantined else ""
         if agent_id is not None and session_id is not None:
             result = await db.fetchval(
-                f"SELECT COUNT(*) FROM memories WHERE agent_id = $1 AND session_id = $2{q_filter}",
+                f"SELECT COUNT(*) FROM memories WHERE agent_id = $1 AND session_id = $2{q_filter}",  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
                 agent_id,
                 session_id,
             )
         elif session_id is not None:
             where = "WHERE session_id = $1" + q_filter
             result = await db.fetchval(
-                f"SELECT COUNT(*) FROM memories {where}",
+                f"SELECT COUNT(*) FROM memories {where}",  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
                 session_id,
             )
         elif agent_id is not None:
             where = "WHERE agent_id = $1" + q_filter
             result = await db.fetchval(
-                f"SELECT COUNT(*) FROM memories {where}",
+                f"SELECT COUNT(*) FROM memories {where}",  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
                 agent_id,
             )
         else:
             where = "WHERE quarantined = FALSE" if exclude_quarantined else ""
-            result = await db.fetchval(f"SELECT COUNT(*) FROM memories {where}".strip())
+            result = await db.fetchval(f"SELECT COUNT(*) FROM memories {where}".strip())  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
         return result or 0
 
     async def delete_by_session(self, session_id: uuid.UUID) -> int:

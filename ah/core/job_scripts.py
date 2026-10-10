@@ -7,6 +7,7 @@ import os
 import shutil
 import signal
 import sys
+import tempfile
 from pathlib import Path
 
 from ah.memory.redaction import redact_secrets
@@ -20,6 +21,21 @@ _WINDOWS_BOOTSTRAP = (
     "sys.stdin.buffer.read(1); "
     "raise SystemExit(subprocess.call(sys.argv[1:], stdin=subprocess.DEVNULL))"
 )
+_PYTHON_SNAPSHOT_BOOTSTRAP = (
+    "import os,sys\n"
+    "target,snapshot=sys.argv[1:3]\n"
+    "sys.argv=[target]\n"
+    "sys.path[0]=os.path.dirname(target)\n"
+    "with open(snapshot,'rb') as source:\n"
+    "    code=compile(source.read(),target,'exec')\n"
+    "def run(code,namespace,target):\n"
+    "    namespace.clear()\n"
+    "    namespace.update(__name__='__main__',__file__=target,__package__=None,"
+    "__spec__=None,__cached__=None,__doc__=None)\n"
+    "    exec(code,namespace)\n"
+    "run(code,vars(sys.modules['__main__']),target)\n"
+)
+_BASH_SNAPSHOT_BOOTSTRAP = 'snapshot=$1; shift; source "$snapshot"'
 
 
 def resolve_script_path(script_path: str) -> Path:
@@ -94,7 +110,9 @@ async def _terminate_tree(process: asyncio.subprocess.Process, job_handle: int |
     await process.wait()
 
 
-async def run_job_script(script_path: str) -> str:
+async def run_job_script(
+    script_path: str, *, approved_content: bytes | None = None, approved_path: Path | None = None
+) -> str:
     """Run a Python or bash script with a time limit and no provider secrets."""
     target = resolve_script_path(script_path)
     if target.suffix.lower() == ".py":
@@ -121,18 +139,42 @@ async def run_job_script(script_path: str) -> str:
         if bash is None:
             raise ValueError("bash is required for shell scripts")
         command = [bash, str(target)]
+    if approved_content is None:
+        return await _execute_script_command(command, _cwd)
+    if approved_path is None or target != approved_path:
+        raise ValueError("script path changed after approval")
+    if len(approved_content) > 200_000:
+        raise ValueError("script exceeds 200,000 byte review bound")
+    # Keep reviewed content private and immutable to changes in the scripts
+    # directory. Content never enters argv or the child environment. The
+    # snapshot remains available until every script descendant is stopped.
+    with tempfile.TemporaryDirectory(prefix="ah-job-script-") as snapshot_dir:
+        snapshot = Path(snapshot_dir) / target.name
+        snapshot.write_bytes(approved_content)
+        if target.suffix.lower() == ".py":
+            command = [sys.executable, "-c", _PYTHON_SNAPSHOT_BOOTSTRAP, str(target), str(snapshot)]
+        else:
+            command = [bash, "-c", _BASH_SNAPSHOT_BOOTSTRAP, str(target), str(snapshot)]
+        return await _execute_script_command(command, _cwd)
+
+
+async def _execute_script_command(command: list[str], cwd: Path) -> str:
+    """Execute a prepared script command with bounded process-tree ownership."""
     environment = {
         key: value
         for key in ("PATH", "SystemRoot", "WINDIR", "TMP", "TEMP", "TMPDIR")
         if (value := os.environ.get(key)) is not None
     }
+    # Python pipes default to the Windows locale encoding, while this runner
+    # decodes output as UTF-8. Fix the encoding without inheriting user secrets.
+    environment["PYTHONIOENCODING"] = "utf-8"
     if os.name != "nt":
         environment["PATH"] = "/usr/bin:/bin"
     windows = os.name == "nt"
     process_options = {} if windows else {"start_new_session": True}
     process = await asyncio.create_subprocess_exec(
         *([sys.executable, "-c", _WINDOWS_BOOTSTRAP, *command] if windows else command),
-        cwd=str(_cwd),
+        cwd=str(cwd),
         env=environment,
         stdin=asyncio.subprocess.PIPE if windows else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,

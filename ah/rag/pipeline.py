@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import logging
 import time
@@ -24,7 +25,7 @@ from ah.rag.chunker import Chunk, RecursiveCharacterTextSplitter
 from ah.rag.embedder import Embedder, OpenAIEmbedder
 from ah.rag.loaders import Document, FileLoader
 from ah.rag.reranker import IdentityReranker, Reranker
-from ah.rag.search import HybridSearch, SearchResult
+from ah.rag.search import DOCUMENT_TYPES, HybridSearch, SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -295,9 +296,7 @@ class RAGPipeline:
         Returns:
             List of SearchResult objects sorted by relevance.
         """
-        from ah.rag.search import DOCUMENT_TYPES as _DOC_TYPES
-
-        scope = tuple(chunk_types) if chunk_types else _DOC_TYPES
+        scope = tuple(chunk_types) if chunk_types else DOCUMENT_TYPES
         k = top_k or self._config.top_k
 
         audit_log(
@@ -322,13 +321,14 @@ class RAGPipeline:
             str(embed_model),
             bool(self._config.enable_reranking),
             bool(self._config.enable_hybrid_search),
+            scope,
         )
         now = time.monotonic()
         if cache_key in self._search_cache:
             cached_time, cached_results = self._search_cache[cache_key]
             if now - cached_time < self._search_cache_ttl:
                 logger.debug("RAG search cache hit for session %s", session_id)
-                return list(cached_results)[:k]
+                return copy.deepcopy(cached_results[:k])
             else:
                 # Expired
                 del self._search_cache[cache_key]
@@ -377,7 +377,7 @@ class RAGPipeline:
             raise
         except Exception:
             pass
-        await self._enforce_embedding_space(session_id, str(embed_model))
+        await self._enforce_embedding_space(session_id, str(embed_model), scope)
 
         # Hybrid search (BM25 + dense + RRF)
         if self._config.enable_hybrid_search:
@@ -402,39 +402,68 @@ class RAGPipeline:
             results, query, session_id, k, rerank, cache_key, now, embed_model
         )
 
-    async def _enforce_embedding_space(self, session_id: uuid.UUID, query_model: str) -> None:
+    async def _enforce_embedding_space(
+        self,
+        session_id: uuid.UUID,
+        query_model: str,
+        chunk_types: tuple[str, ...] = DOCUMENT_TYPES,
+    ) -> None:
         """Reject cross-model dense comparison (AH-AUDIT-035).
 
         Compares the query embedding model against distinct stored models
-        for document chunks with non-NULL embeddings in this session. A
+        for scoped chunks with non-NULL embeddings in this session. A
         mismatch raises an explicit error (reindex/migrate); matching or
         keyword-only indexes proceed. Legacy rows without model metadata
         are treated as the default model only when dimensions agree.
+        Inspect all candidate rows in bounded pages: sampling payloads can
+        miss a second model, and database or metadata errors must not allow
+        an unverified dense comparison.
         """
-        try:
-            rows = await db.fetch(
-                """SELECT DISTINCT payload_msgpack FROM context_chunks
-                   WHERE session_id = $1 AND chunk_type = 'document'
-                     AND embedding IS NOT NULL LIMIT 25""",
-                session_id,
-            )
-        except Exception:
-            return
+        page_size = 256
+        cursor: uuid.UUID | None = None
         stored: set[str] = set()
-        for row in rows:
-            try:
-                payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
-                model = str((payload.get("metadata") or {}).get("embedding_model", ""))
-                if model and model != "keyword-only":
-                    stored.add(model)
-            except Exception:
-                continue
-        if stored and query_model not in stored:
-            raise ValueError(
-                f"embedding space mismatch: query model {query_model!r} vs stored "
-                f"{sorted(stored)!r}. Reindex (or migrate/backfill) so candidate "
-                "and query embeddings share one enforced space."
+        while True:
+            rows = await db.fetch(
+                """SELECT id, payload_msgpack FROM context_chunks
+                   WHERE session_id = $1 AND chunk_type = ANY($2::text[])
+                     AND embedding IS NOT NULL
+                     AND ($3::uuid IS NULL OR id > $3)
+                   ORDER BY id LIMIT $4""",
+                session_id,
+                list(chunk_types),
+                cursor,
+                page_size,
             )
+            for row in rows:
+                try:
+                    payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
+                    if not isinstance(payload, dict):
+                        raise ValueError("embedding payload must be a dict")
+                    metadata = payload.get("metadata")
+                    if metadata is None:
+                        metadata = {}
+                    if not isinstance(metadata, dict):
+                        raise ValueError("embedding metadata must be a dict")
+                    model = metadata.get("embedding_model", "")
+                    if model is None:
+                        model = ""
+                    if not isinstance(model, str):
+                        raise ValueError("embedding model must be a string")
+                    stored.add(model or OpenAIEmbedder.DEFAULT_MODEL)
+                except Exception as e:
+                    raise ValueError(
+                        "Cannot verify stored embedding model metadata. "
+                        "Reindex (or migrate/backfill) before dense retrieval."
+                    ) from e
+            if stored - {query_model}:
+                raise ValueError(
+                    f"embedding space mismatch: query model {query_model!r} vs stored "
+                    f"{sorted(stored)!r}. Reindex (or migrate/backfill) so candidate "
+                    "and query embeddings share one enforced space."
+                )
+            if len(rows) < page_size:
+                return
+            cursor = rows[-1]["id"]
 
     async def _finish_search(
         self,
@@ -463,11 +492,12 @@ class RAGPipeline:
 
         final_results = results[:k]
 
-        # Store in TTL cache (store a copy so callers cannot mutate the cache).
+        # Own the full snapshot so callers cannot mutate cached result objects
+        # or the nested chunk payloads through fresh results or cache hits.
         # Never cache empty results: a delete+reindex inside the TTL would
         # otherwise keep serving stale emptiness.
         if final_results:
-            self._search_cache[cache_key] = (now, list(final_results))
+            self._search_cache[cache_key] = (now, copy.deepcopy(final_results))
             # Record embedding model/dims namespace for incompat detection.
             try:
                 self._last_embed_model = str(embed_model)
@@ -512,11 +542,11 @@ class RAGPipeline:
         for row in rows:
             payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
             text = payload.get("text", payload.get("content", str(payload)))
-            chunks_to_embed.append((row, str(text)))
+            chunks_to_embed.append((row, str(text), payload))
 
         # Embed in batch (keyword-only rows keep NULL embeddings when the
         # embedder is unavailable — AH-AUDIT-032; search_text still indexed).
-        texts = [t for _, t in chunks_to_embed]
+        texts = [text for _, text, _ in chunks_to_embed]
         if self._embedder is None:
             embeddings = [None] * len(texts)
         else:
@@ -526,16 +556,33 @@ class RAGPipeline:
                 logger.warning("batch embedding failed, keyword-only backfill: %s", e)
                 embeddings = [None] * len(texts)
 
-        # Update rows with embeddings and FTS text (batch)
+        embed_model_name = (
+            getattr(self._embedder, "model_name", getattr(self._embedder, "_model", "unknown"))
+            if self._embedder is not None
+            else "keyword-only"
+        )
+        # Persist each vector and its identity in the same row update.
         updated = []
-        for (row, text), embedding in zip(chunks_to_embed, embeddings, strict=True):
-            updated.append((embedding_to_str(embedding) if embedding else None, text, row["id"]))
+        for (row, text, payload), embedding in zip(chunks_to_embed, embeddings, strict=True):
+            payload["metadata"] = {
+                **(payload.get("metadata") or {}),
+                "embedding_model": str(embed_model_name) if embedding else "keyword-only",
+                "embedding_dims": len(embedding) if embedding else 0,
+            }
+            updated.append(
+                (
+                    embedding_to_str(embedding) if embedding else None,
+                    text,
+                    payload_to_msgpack(payload),
+                    row["id"],
+                )
+            )
 
         await db.executemany(
             """
             UPDATE context_chunks
-            SET embedding = $1, search_text = $2
-            WHERE id = $3
+            SET embedding = $1, search_text = $2, payload_msgpack = $3
+            WHERE id = $4
             """,
             updated,
         )
@@ -549,7 +596,7 @@ class RAGPipeline:
             chunks_embedded=len(updated),
         )
 
-        return [row["id"] for row, _ in chunks_to_embed]
+        return [row["id"] for row, _, _ in chunks_to_embed]
 
     def _invalidate_search_cache(self, session_id: uuid.UUID) -> None:
         """Remove cached search results for *session_id* (after re-indexing)."""

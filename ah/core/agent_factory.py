@@ -234,9 +234,18 @@ async def close_agent_provider(agent, timeout: float = 5.0) -> None:
 
         result = close()
         if _inspect.isawaitable(result):
+            task = _asyncio.ensure_future(result)
+            # Retrieve late errors even when cleanup is quarantined.
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
             try:
-                await _asyncio.wait_for(result, timeout=timeout)
-            except (TimeoutError, _asyncio.CancelledError):
-                _logging.getLogger(__name__).warning("owned provider close exceeded its bound")
+                done, _ = await _asyncio.wait({task}, timeout=timeout)
+                if task in done:
+                    task.result()
+                else:
+                    task.cancel()
+                    _logging.getLogger(__name__).warning("owned provider close exceeded its bound")
+            except _asyncio.CancelledError:
+                task.cancel()
+                raise
     except Exception:
         pass

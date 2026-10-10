@@ -16,7 +16,6 @@ from __future__ import annotations
 import ipaddress
 import socket
 import ssl
-from typing import Any
 from urllib.parse import urlparse
 
 MAX_BYTES = 200_000
@@ -80,25 +79,46 @@ def _read_response(
             raise FetchError("fetch exceeded overall deadline")
         return left
 
-    def _bounded_line(f: Any) -> str:
-        # readline with the per-call socket timeout already bounding each
-        # blocking op; the aggregate caps below bound the total.
+    pending = bytearray()
+
+    def _recv(size: int) -> bytes:
         try:
-            line = f.readline(MAX_LINE_BYTES + 1)
+            sock.settimeout(_remaining())
+            data = sock.recv(size)
+        except TimeoutError:
+            raise FetchError("fetch exceeded overall deadline") from None
         except (OSError, ValueError) as e:
             raise FetchError(f"short response: {e}") from None
         _remaining()
-        if len(line) > MAX_LINE_BYTES:
-            raise FetchError("response line exceeds size cap")
-        return line.decode("latin-1")
+        return data
 
-    f = sock.makefile("rb")
-    try:
-        status_line = _bounded_line(f)
-    except FetchError:
-        raise
-    except Exception as e:
-        raise FetchError(f"short response: {e}") from None
+    def _bounded_line() -> str:
+        while True:
+            _remaining()
+            end = pending.find(b"\n")
+            length = end + 1 if end >= 0 else len(pending)
+            if length > MAX_LINE_BYTES:
+                raise FetchError("response line exceeds size cap")
+            if end >= 0:
+                line = bytes(pending[:length])
+                del pending[:length]
+                return line.decode("latin-1")
+            data = _recv(min(4096, MAX_LINE_BYTES + 1 - len(pending)))
+            if not data:
+                line = bytes(pending)
+                pending.clear()
+                return line.decode("latin-1")
+            pending.extend(data)
+
+    def _read(size: int) -> bytes:
+        _remaining()
+        if pending:
+            data = bytes(pending[:size])
+            del pending[:size]
+            return data
+        return _recv(size)
+
+    status_line = _bounded_line()
     parts = status_line.strip().split(" ", 2)
     if len(parts) < 2 or not parts[1].isdigit():
         raise FetchError(f"bad status line: {status_line.strip()!r}")
@@ -107,7 +127,7 @@ def _read_response(
     header_bytes = len(status_line.encode("latin-1"))
     header_count = 0
     while True:
-        line = _bounded_line(f)
+        line = _bounded_line()
         header_bytes += len(line.encode("latin-1"))
         if header_bytes > MAX_HEADER_BYTES:
             raise FetchError("response headers exceed aggregate byte cap")
@@ -126,52 +146,43 @@ def _read_response(
         if len(body) > max_bytes:
             raise FetchError(f"response exceeds {max_bytes} byte cap")
 
-    try:
-        if headers.get("transfer-encoding", "").lower() == "chunked":
-            while True:
-                size_line = _bounded_line(f).strip().split(";")[0]
-                try:
-                    size = int(size_line, 16)
-                except ValueError:
-                    raise FetchError("bad chunk size") from None
-                if size == 0:
-                    _bounded_line(f)
-                    break
-                if size > max_bytes:
-                    raise FetchError(f"response exceeds {max_bytes} byte cap")
-                remaining = size
-                while remaining > 0:
-                    _remaining()
-                    data = f.read(min(remaining, 65536))
-                    if not data:
-                        raise FetchError("truncated chunk")
-                    _push(data)
-                    remaining -= len(data)
-                _bounded_line(f)
-        elif headers.get("content-length", "").strip().isdigit():
-            remaining = int(headers["content-length"])
-            if remaining > max_bytes:
+    if headers.get("transfer-encoding", "").lower() == "chunked":
+        while True:
+            size_line = _bounded_line().strip().split(";")[0]
+            try:
+                size = int(size_line, 16)
+            except ValueError:
+                raise FetchError("bad chunk size") from None
+            if size == 0:
+                _bounded_line()
+                break
+            if size > max_bytes:
                 raise FetchError(f"response exceeds {max_bytes} byte cap")
+            remaining = size
             while remaining > 0:
-                _remaining()
-                data = f.read(min(remaining, 65536))
+                data = _read(min(remaining, 65536))
                 if not data:
-                    raise FetchError("truncated body")
+                    raise FetchError("truncated chunk")
                 _push(data)
                 remaining -= len(data)
-        else:
-            while True:
-                _remaining()
-                data = f.read(65536)
-                if not data:
-                    break
-                _push(data)
-        return status, headers, bytes(body)
-    finally:
-        try:
-            f.close()
-        except Exception:
-            pass
+            _bounded_line()
+    elif headers.get("content-length", "").strip().isdigit():
+        remaining = int(headers["content-length"])
+        if remaining > max_bytes:
+            raise FetchError(f"response exceeds {max_bytes} byte cap")
+        while remaining > 0:
+            data = _read(min(remaining, 65536))
+            if not data:
+                raise FetchError("truncated body")
+            _push(data)
+            remaining -= len(data)
+    else:
+        while True:
+            data = _read(65536)
+            if not data:
+                break
+            _push(data)
+    return status, headers, bytes(body)
 
 
 def pinned_fetch(url: str, *, max_bytes: int = MAX_BYTES, timeout: float = CONNECT_TIMEOUT) -> str:
@@ -211,44 +222,36 @@ def pinned_fetch(url: str, *, max_bytes: int = MAX_BYTES, timeout: float = CONNE
         raw = socket.socket(
             socket.AF_INET6 if ":" in target_ip else socket.AF_INET, socket.SOCK_STREAM
         )
-        raw.settimeout(_remaining())
         sock: socket.socket = raw
         try:
+            raw.settimeout(_remaining())
             raw.connect((target_ip, port))
             if parsed.scheme == "https":
-                try:
-                    ctx = ssl.create_default_context()
-                    sock = ctx.wrap_socket(raw, server_hostname=hostname)
-                except Exception:
-                    # Never leak the raw socket when TLS setup fails.
-                    try:
-                        raw.close()
-                    except OSError:
-                        pass
-                    raise
-            try:
-                sock.settimeout(_remaining())
-                req = (
-                    f"GET {path} HTTP/1.1\r\nHost: {hostname}\r\n"
-                    f"Connection: close\r\nUser-Agent: AgentHarness/1.0\r\n"
-                    f"Accept: text/markdown,text/plain\r\n\r\n"
-                )
-                sock.sendall(req.encode("ascii"))
-                status, headers, body = _read_response(sock, max_bytes, deadline)
-            finally:
-                try:
-                    sock.close()
-                except OSError:
-                    pass
-                if sock is not raw:
-                    try:
-                        raw.close()
-                    except OSError:
-                        pass
+                ctx = ssl.create_default_context()
+                raw.settimeout(_remaining())
+                sock = ctx.wrap_socket(raw, server_hostname=hostname)
+            sock.settimeout(_remaining())
+            req = (
+                f"GET {path} HTTP/1.1\r\nHost: {hostname}\r\n"
+                f"Connection: close\r\nUser-Agent: AgentHarness/1.0\r\n"
+                f"Accept: text/markdown,text/plain\r\n\r\n"
+            )
+            sock.sendall(req.encode("ascii"))
+            status, headers, body = _read_response(sock, max_bytes, deadline)
         except FetchError:
             raise
         except (OSError, ssl.SSLError) as e:
             raise FetchError(f"connection to {hostname} failed: {e}") from None
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+            if sock is not raw:
+                try:
+                    raw.close()
+                except OSError:
+                    pass
         if status in (301, 302, 303, 307, 308):
             location = headers.get("location", "")
             if not location:

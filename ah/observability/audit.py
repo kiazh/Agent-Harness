@@ -23,12 +23,13 @@ class AuditPersistence:
         self._owners += 1
         if self._task is None or self._task.done():
             self._queue = asyncio.Queue(maxsize=self._max_pending)
-            self._task = asyncio.create_task(self._run(), name="ah-audit-writer")
-            self._task.add_done_callback(lambda t: self._clear_task())
+            self._task = asyncio.create_task(self._run(self._queue), name="ah-audit-writer")
+            self._task.add_done_callback(self._clear_task)
 
-    def _clear_task(self) -> None:
-        self._task = None
-        self._queue = []
+    def _clear_task(self, task: asyncio.Task) -> None:
+        if self._task is task:
+            self._task = None
+            self._queue = None
 
     def submit(self, entry: dict[str, Any]) -> None:
         if self._task is None or self._task.done() or self._queue is None:
@@ -46,6 +47,8 @@ class AuditPersistence:
             return
         task = self._task
         queue = self._queue
+        # A new owner must start a new writer while this generation drains.
+        self._clear_task(task)
         try:
             async with asyncio.timeout(timeout):
                 await queue.put(None)
@@ -54,15 +57,16 @@ class AuditPersistence:
             logger.warning("Audit writer did not drain before shutdown; cancelling it")
             task.cancel()
             await asyncio.wait({task}, timeout=0.1)
-        finally:
-            self._task = None
-            self._queue = None
+        except asyncio.CancelledError:
+            task.cancel()
+            await asyncio.wait({task}, timeout=0.1)
+            raise
 
-    async def _run(self) -> None:
+    async def _run(self, queue: asyncio.Queue[dict[str, Any] | None]) -> None:
         while True:
-            entry = await self._queue.get()
+            entry = await queue.get()
             if entry is None:
-                self._queue.task_done()
+                queue.task_done()
                 return
             try:
                 await db.execute(
@@ -73,7 +77,7 @@ class AuditPersistence:
             except Exception:
                 logger.exception("Could not persist audit event %s", entry.get("event"))
             finally:
-                self._queue.task_done()
+                queue.task_done()
 
 
 audit_persistence = AuditPersistence()

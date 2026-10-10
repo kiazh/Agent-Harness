@@ -44,8 +44,11 @@ async def test_tool_allowlist_is_enforced_at_execution_and_ollama_arguments_work
     ]
 
     execute.assert_awaited_once_with("read_file", path="a")
-    assert "not allowed" in events[1].tool_result
-    assert events[-1].tool_result == "read"
+    results = [event for event in events if event.type == "tool_result"]
+    assert len(results) == 2
+    by_id = {event.tool_call_id: event.tool_result for event in results}
+    assert "not allowed" in by_id["denied"]
+    assert by_id["allowed"] == "read"
 
 
 @pytest.mark.asyncio
@@ -83,13 +86,16 @@ def test_prompt_budget_and_document_text():
 
 
 @pytest.mark.asyncio
-async def test_rag_cache_respects_result_count_and_dense_mode():
+async def test_rag_cache_respects_result_count_and_dense_mode(monkeypatch):
+    from ah.core.models import ContextChunk
     from ah.rag.pipeline import RAGConfig, RAGPipeline
     from ah.rag.search import SearchResult
 
     class Embedder:
+        model_name = "text-embedding-3-small"
+
         async def embed(self, _text):
-            return [1.0]
+            return [1.0] + [0.0] * 1535
 
     class Search:
         def __init__(self):
@@ -99,7 +105,17 @@ async def test_rag_cache_respects_result_count_and_dense_mode():
         async def search(self, **kwargs):
             self.hybrid_calls += 1
             return [
-                SearchResult(chunk=SimpleNamespace(payload={"text": "x"}), score=1.0)
+                SearchResult(
+                    chunk=ContextChunk(
+                        id=uuid.uuid4(),
+                        session_id=session_id,
+                        agent_id="harness",
+                        chunk_type="document",
+                        payload={"text": "x"},
+                        token_count=1,
+                    ),
+                    score=1.0,
+                )
                 for _ in range(kwargs["top_k"])
             ]
 
@@ -108,6 +124,7 @@ async def test_rag_cache_respects_result_count_and_dense_mode():
             return await self.search(**kwargs)
 
     search = Search()
+    monkeypatch.setattr("ah.rag.pipeline.db.fetch", AsyncMock(return_value=[]))
     pipeline = RAGPipeline(embedder=Embedder(), search=search)
     session_id = uuid.uuid4()
     assert len(await pipeline.search("same", session_id, top_k=1, rerank=False)) == 1
@@ -243,9 +260,13 @@ async def test_job_claim_has_recovery_lease_and_named_agent_definition(monkeypat
 async def test_running_job_renews_its_lease(monkeypatch):
     from ah.core.scheduler import JobRunner
 
-    monkeypatch.setattr("ah.core.scheduler.RUN_LEASE_SECONDS", 0.03)
+    monkeypatch.setattr("ah.core.scheduler.RUN_LEASE_SECONDS", 0.3)
     job_id = uuid.uuid4()
     session_id = uuid.uuid4()
+    claim = uuid.uuid4()
+    renewed = asyncio.Event()
+    monkeypatch.setattr("ah.core.turns.try_begin_turn", AsyncMock(return_value=object()))
+    monkeypatch.setattr("ah.core.turns.end_turn", AsyncMock())
 
     class Store:
         def __init__(self):
@@ -263,18 +284,24 @@ async def test_running_job_renews_its_lease(monkeypatch):
                 name="test",
                 agent_name="harness",
                 prompt="work",
+                claim_token=claim,
             )
 
-        async def renew_lease(self, _job_id):
+        async def renew_lease(self, job_id_arg, claim_token):
+            assert (job_id_arg, claim_token) == (job_id, claim)
             self.renewed += 1
+            renewed.set()
+            return True
 
-        async def finish(self, _job_id, *, error=None):
+        async def finish(self, job_id_arg, *, error=None, claim_token=None, paused_for=None):
+            assert (job_id_arg, claim_token, paused_for) == (job_id, claim, None)
             assert error is None
             self.finished = True
+            return True
 
     class Agent:
         async def run(self, *_args, **_kwargs):
-            await asyncio.sleep(0.06)
+            await renewed.wait()
 
     store = Store()
     assert await JobRunner(store=store, agent_factory=lambda _name: Agent()).run_due_once()

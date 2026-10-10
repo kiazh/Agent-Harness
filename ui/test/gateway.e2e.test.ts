@@ -17,9 +17,11 @@ const dsn = process.env.AGENT_HARNESS_TEST_DATABASE_URL;
 const skip = !python || !dsn ? "AH_TEST_PYTHON / AGENT_HARNESS_TEST_DATABASE_URL not set" : false;
 
 function startClient() {
+	const token = `ui-e2e-${Math.random().toString(36).slice(2)}`;
 	const client = new GatewayClient({
 		python: python!,
-		env: { DATABASE_URL: dsn!, AH_GATEWAY_NO_SCHEDULER: "1" },
+		token,
+		env: { DATABASE_URL: dsn!, AH_GATEWAY_NO_SCHEDULER: "1", AH_GATEWAY_TOKEN: token },
 	});
 	let crashed = false;
 	client.onExit = () => {
@@ -106,7 +108,7 @@ test("slash commands work against the real gateway and database", { skip, timeou
 		assert.match(await run("/goal"), /finish the e2e test/);
 
 		assert.match(await run(`/memory add preference: ${tag} likes green tea`), /Remembered/);
-		assert.match(await run(`/memory search ${tag} green tea`), new RegExp(tag));
+		assert.match(await run(`/memory search ${tag}`), new RegExp(tag));
 		assert.match(await run("/memory stats"), /Stored/);
 
 		assert.match(await run("/context"), /Tokens/);

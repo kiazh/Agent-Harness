@@ -169,6 +169,7 @@ class Gateway:
         # Compute accounting pauses during these waits; approval timeout
         # stays separately bounded by the broker handler.
         self._approval_wait_total: dict[str, float] = {}
+        self._approval_wait_started: dict[str, float] = {}
         # H-07: Sanitized progress stage tracker for hang diagnosis.
         # Records the current stage for each turn without logging sensitive data.
         self._turn_stages: dict[str, dict[str, Any]] = {}
@@ -572,6 +573,8 @@ class Gateway:
     async def _run_turn(self, session_id: uuid.UUID, turn_id: str, text: str) -> None:
         """Run one agent turn, translating agent stream events into protocol events."""
         sid = str(session_id)
+        owned_token = self._turn_tokens.get(sid)
+        registered_turn = self._turns.get(sid)
         self._record_stage(turn_id, "turn_started", session_id=sid)
 
         def emit(event_type: str, **fields: Any) -> None:
@@ -653,6 +656,8 @@ class Gateway:
             loop = asyncio.get_running_loop()
             fut: asyncio.Future[str] = loop.create_future()
             self._pending_approvals[card["request_id"]] = (fut, turn_id, sid)
+            # Concurrent approval cards share one paused wall-clock interval.
+            self._approval_wait_started.setdefault(turn_id, loop.time())
             # AH-AUDIT-003/004: the card carries the exact executable and
             # arguments (argv list), cwd, backend, timeout, network, and
             # file-write content identity + diff. Never a bare operation
@@ -680,11 +685,10 @@ class Gateway:
             # (tracked separately); approval timeout stays broker-bounded.
             # Renew logical ownership while waiting so a long human pause
             # does not expire the live claim mid-turn.
-            _wait_start = asyncio.get_running_loop().time()
             try:
                 from ah.core.turns import renew_turn as _renew_claim
 
-                _renew_token = self._turn_tokens.get(sid)
+                _renew_token = owned_token
             except Exception:
                 _renew_token = None
             try:
@@ -692,10 +696,15 @@ class Gateway:
             finally:
                 self._pending_approvals.pop(card["request_id"], None)
                 try:
-                    waited = asyncio.get_running_loop().time() - _wait_start
-                    self._approval_wait_total[turn_id] = self._approval_wait_total.get(
-                        turn_id, 0.0
-                    ) + max(0.0, waited)
+                    if not any(
+                        owner == turn_id for _, owner, _ in self._pending_approvals.values()
+                    ):
+                        started = self._approval_wait_started.pop(turn_id, None)
+                        if started is not None:
+                            waited = asyncio.get_running_loop().time() - started
+                            self._approval_wait_total[turn_id] = self._approval_wait_total.get(
+                                turn_id, 0.0
+                            ) + max(0.0, waited)
                     if _renew_token:
                         renewed = await _renew_claim(session_id, _renew_token)
                         if not renewed:
@@ -727,7 +736,7 @@ class Gateway:
             from ah.core.turns import owns_claim as _owns
             from ah.core.turns import renew_turn as _renew
 
-            token = self._turn_tokens.get(sid)
+            token = owned_token
             if not token:
                 return
             failures = 0
@@ -780,7 +789,15 @@ class Gateway:
                 complete()
                 return
             self._record_stage(turn_id, "building_agent", session_id=sid)
-            agent = await build_agent_for_session(session)
+            if self._agent_factory is _default_agent_factory:
+                agent = await build_agent_for_session(session)
+            else:
+                # Explicit in-process dependency injection is trusted code,
+                # never a fallback after a default factory failure. Resolve
+                # stored session settings on this path too.
+                agent = self._agent_factory(
+                    session.model or self.model, session.provider or self.provider
+                )
             self._record_stage(turn_id, "waiting_for_provider", session_id=sid)
             async for event in agent.run_stream(session_id, text, verbose=False):
                 if event.type == "text":
@@ -878,10 +895,9 @@ class Gateway:
                 if _learning:
                     self._record_stage(turn_id, "joining_optional_work", session_id=sid)
                     try:
-                        await asyncio.wait_for(
-                            asyncio.gather(*_learning, return_exceptions=True),
-                            timeout=2,
-                        )
+                        _, pending = await asyncio.wait(_learning, timeout=2)
+                        for _t in pending:
+                            _t.cancel()
                     except (TimeoutError, asyncio.CancelledError, Exception):
                         for _t in _learning:
                             try:
@@ -908,16 +924,17 @@ class Gateway:
                             logger.exception("Could not close turn provider for session %s", sid)
                 finally:
                     self._record_stage(turn_id, "releasing_ownership", session_id=sid)
-                    if self._turns.get(sid) is asyncio.current_task():
+                    if registered_turn is not None and self._turns.get(sid) is registered_turn:
                         del self._turns[sid]
                     # Owner-token release on EVERY exit (success/failure/cancel/timeout).
                     # Stale-safe: only this turn's token clears its own claim.
                     try:
                         from ah.core.turns import end_turn as _end_turn
 
-                        token = self._turn_tokens.pop(sid, None)
-                        if token:
-                            await _end_turn(session_id, token)
+                        if self._turn_tokens.get(sid) == owned_token:
+                            self._turn_tokens.pop(sid, None)
+                        if owned_token:
+                            await _end_turn(session_id, owned_token)
                     except Exception:
                         pass
         # AH-AUDIT-013: stop/join renewal during release (never leaks).
@@ -995,11 +1012,15 @@ class Gateway:
         try:
             while not inner.done():
                 waited = self._approval_wait_total.get(turn_id, 0.0)
-                compute_used = asyncio.get_running_loop().time() - start - waited
+                now = asyncio.get_running_loop().time()
+                approval_started = self._approval_wait_started.get(turn_id)
+                if approval_started is not None:
+                    waited += max(0.0, now - approval_started)
+                compute_used = now - start - waited
                 if compute_used >= timeout:
                     timed_out = True
                     break
-                await asyncio.sleep(0.2)
+                await asyncio.wait({inner}, timeout=0.2)
             if timed_out and inner.done():
                 # Finished exactly as the budget expired: normal completion
                 # already emitted; no timeout accounting.
@@ -1094,8 +1115,15 @@ class Gateway:
                 del self._turns[sid]
             raise
         finally:
+            if self._turns.get(sid) is current:
+                if inner.done():
+                    del self._turns[sid]
+                else:
+                    # The inner task retains ownership while cleanup runs.
+                    self._turns[sid] = inner
             self._turn_progress.pop(turn_id, None)
             self._approval_wait_total.pop(turn_id, None)
+            self._approval_wait_started.pop(turn_id, None)
             # Bounded turn-id retention for the exactly-once guard.
             try:
                 if len(self._turn_finished) > 1000:

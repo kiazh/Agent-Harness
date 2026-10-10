@@ -332,9 +332,7 @@ class LearningReviewer:
         metrics = compute_learning_precision([row["status"] for row in rows])
         accepted_names = [row["name"] for row in rows if row["status"] == "approved"]
         self.registry.load_all()
-        usage_by_name = {
-            skill.name: skill.usage_count for skill in self.registry.list_skills()
-        }
+        usage_by_name = {skill.name: skill.usage_count for skill in self.registry.list_skills()}
         accepted_with_usage = sum(
             1 for name in accepted_names if name and usage_by_name.get(name, 0) > 0
         )

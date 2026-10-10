@@ -7,7 +7,6 @@ fixture and skip when unavailable. No live provider calls anywhere.
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 
 import pytest
@@ -50,7 +49,6 @@ def _req(**kw):
 
 
 def test_001_session_full_does_not_leak_to_future_sessions():
-    import asyncio
 
     from ah.core import session_mode as sm
     from ah.core.config import config
@@ -93,7 +91,6 @@ def test_001_session_full_does_not_leak_to_future_sessions():
 
 
 def test_001_grant_failure_leaves_no_elevation():
-    import asyncio
 
     from ah.core import session_mode as sm
     from ah.permissions import store as st
@@ -209,7 +206,6 @@ def test_006_env_and_destructive_tripwires():
 
 
 def test_002_backend_snapshot_survives_global_change():
-    import asyncio
 
     from ah.permissions.broker import clear_execution_context, permission_broker
     from ah.permissions.policy import build_request
@@ -274,7 +270,6 @@ def test_003_004_card_carries_command_and_diff():
 
 
 def test_005_legacy_approval_never_resumes():
-    import asyncio
 
     from ah.permissions import store as st
     from ah.permissions.policy import build_request
@@ -287,7 +282,7 @@ def test_005_legacy_approval_never_resumes():
             session_id="s5",
             mode="ask",
         )
-        rec = await st.create_approval(req, principal="tui")
+        await st.create_approval(req, principal="tui")
         assert (await st.get_approval(req.request_id))["proposal_complete"] is True
         # Simulate a legacy row predating proposal columns.
         async with st._mem.lock:
@@ -318,7 +313,6 @@ def test_010_child_env_strips_secrets_keeps_platform(monkeypatch):
 
 
 def test_010_terminal_runs_without_inheriting_secrets(monkeypatch):
-    import asyncio
 
     from ah.tools import terminal as tmod
 
@@ -336,8 +330,7 @@ def test_010_terminal_runs_without_inheriting_secrets(monkeypatch):
 
 def test_011_approval_and_backend_agree(tmp_path, monkeypatch):
     import ah.permissions.policy as policymod
-    from ah.permissions.policy import normalize_request
-    from ah.permissions.policy import ActionRequest
+    from ah.permissions.policy import ActionRequest, normalize_request
     from ah.tools import file as fmod
 
     ws = tmp_path / "ws"
@@ -357,7 +350,6 @@ def test_011_approval_and_backend_agree(tmp_path, monkeypatch):
 
 
 def test_012_export_redacts_title_goal_and_content(monkeypatch):
-    import asyncio
     from types import SimpleNamespace
 
     from ah import services as svc
@@ -398,7 +390,6 @@ def test_012_metadata_redacted_and_reserved_fields_win():
 
 
 def test_016_db_less_turn_blocks_mutation_and_vice_versa():
-    import asyncio
     import uuid
 
     from ah.core import turns as t
@@ -421,7 +412,6 @@ def test_016_db_less_turn_blocks_mutation_and_vice_versa():
 
 
 def test_013_db_less_renewal_and_ownership():
-    import asyncio
     import uuid
 
     from ah.core import turns as t
@@ -441,7 +431,6 @@ def test_013_db_less_renewal_and_ownership():
 
 
 def test_013_turn_ownership_renewal_lifecycle():
-    import asyncio
     import uuid
 
     from ah.core import turns as t
@@ -508,7 +497,6 @@ def test_021_pause_request_id_extraction():
 
 
 def test_020_no_leaked_tasks_after_run():
-    import asyncio
     import uuid
 
     from ah.core.models import AgentResponse
@@ -588,7 +576,6 @@ def test_023_kill_tree_stops_resistant_child():
 
 
 def test_023_terminal_cancel_signals_stop():
-    import asyncio
 
     from ah.tools import terminal as tmod
 
@@ -597,7 +584,6 @@ def test_023_terminal_cancel_signals_stop():
         seen = {}
 
         def _slow(*a, **k):
-            import threading
             import time
 
             stop = k.get("stop_event")
@@ -626,7 +612,6 @@ def test_023_terminal_cancel_signals_stop():
 
 
 def test_024_shutdown_quarantines_resistant_tasks():
-    import asyncio
     import time
 
     from ah.core.runtime import RuntimeServices
@@ -733,7 +718,6 @@ def _chunk(cid, created):
 
 
 def test_037_failed_extraction_advances_nothing(monkeypatch):
-    import asyncio
     import uuid
     from datetime import UTC, datetime
 
@@ -791,7 +775,6 @@ class _FakeMemStore:
 
 
 def test_037_empty_extraction_checkpoint_valid_partial_not(monkeypatch):
-    import asyncio
     import uuid
     from datetime import UTC, datetime
 
@@ -851,11 +834,10 @@ async def test_014_015_fenced_replace_aborts_stale(db_pool, monkeypatch):
     monkeypatch.setattr(sessmod, "db", db_pool)
     session = await session_manager.create(title="fence", agent_id="h")
     try:
-        from ah.core.turns import begin_mutation, end_mutation
-
         # turns.py binds db lazily per call: point the shared handle at the
         # test database for this test (reverted afterwards).
         import ah.db.connection as _connmod
+        from ah.core.turns import begin_mutation, end_mutation
 
         monkeypatch.setattr(_connmod, "db", db_pool)
         token = await begin_mutation(session.id)
@@ -915,8 +897,6 @@ async def test_014_015_fenced_replace_aborts_stale(db_pool, monkeypatch):
 
 
 async def test_021_paused_job_not_due_until_resume(db_pool, monkeypatch):
-    from datetime import UTC, datetime, timedelta
-
     from ah.core import session as sessmod
     from ah.core.scheduler import JobStore
     from ah.core.session import session_manager
@@ -937,20 +917,20 @@ async def test_021_paused_job_not_due_until_resume(db_pool, monkeypatch):
         # Side-effect-free check (the shared test DB holds other suites'
         # rows): attempt the exact claim_due predicate for OUR row only, in
         # a rolled-back transaction — never touching other jobs.
-        past = datetime.now(UTC) - timedelta(hours=1)
-        await db_pool.execute("UPDATE jobs SET next_run_at = $2 WHERE id = $1", job.id, past)
+        await db_pool.execute(
+            "UPDATE jobs SET next_run_at = now() - interval '1 hour' WHERE id = $1", job.id
+        )
         assert await store.finish(job.id, error="needs_approval: x", paused_for="req-1")
 
-        async def _try_claim_mine(now):
+        async def _try_claim_mine():
             async with db_pool.acquire() as conn:
                 async with conn.transaction():
                     row = await conn.fetchrow(
                         "UPDATE jobs SET status = 'running' WHERE id = $1 "
                         "AND enabled AND paused_for_approval IS NULL "
-                        "AND status <> 'paused_approval' AND next_run_at <= $2 "
+                        "AND status <> 'paused_approval' AND next_run_at <= now() "
                         "RETURNING id",
                         job.id,
-                        now,
                     )
                     # Rollback: predicate probe only, no state change.
                     raise _RollbackProbe(row)
@@ -960,18 +940,18 @@ async def test_021_paused_job_not_due_until_resume(db_pool, monkeypatch):
                 super().__init__("probe")
                 self.row = row
 
-        async def _claimable(now):
+        async def _claimable():
             try:
-                await _try_claim_mine(now)
+                await _try_claim_mine()
             except _RollbackProbe as probe:
                 return probe.row is not None
             return False  # unreachable
 
-        assert await _claimable(datetime.now(UTC)) is False
+        assert await _claimable() is False
         # Explicit human resume re-arms exactly one run.
         resumed = await store.resume_job(job.id)
         assert resumed is not None and resumed.status == "idle"
-        assert await _claimable(datetime.now(UTC)) is True
+        assert await _claimable() is True
     finally:
         await db_pool.execute("DELETE FROM sessions WHERE id = $1", session.id)
 
@@ -981,8 +961,8 @@ async def test_021_paused_job_not_due_until_resume(db_pool, monkeypatch):
 
 def test_042_invalid_values_rejected_without_mutation():
     from ah.core.config import config, validate_value
-    from ah.gateway.features._common import coerce_config_value
     from ah.gateway.errors import RpcError
+    from ah.gateway.features._common import coerce_config_value
 
     saved = config.get("turn_timeout")
     with pytest.raises(ValueError):
@@ -1009,8 +989,8 @@ class _FakeSock:
 
         self._buf = io.BytesIO(payload)
 
-    def makefile(self, *a, **k):
-        return self._buf
+    def recv(self, size):
+        return self._buf.read(size)
 
     def settimeout(self, *a, **k):
         pass

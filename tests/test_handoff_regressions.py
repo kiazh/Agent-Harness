@@ -771,10 +771,10 @@ def _fake_pinned_transport(monkeypatch, routes):
         def sendall(self, data):
             self.sent += data
 
-        def makefile(self, mode):
-            import io
-
-            return io.BytesIO(self._recv)
+        def recv(self, size):
+            data = self._recv[self._pos : self._pos + size]
+            self._pos += len(data)
+            return data
 
         def close(self):
             pass

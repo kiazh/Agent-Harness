@@ -3,6 +3,7 @@
 import asyncio
 import sys
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,6 +30,26 @@ def _get_config_module():
 class TestMemoryConsolidationTaskReference:
     """Verify that scheduled consolidation tasks are tracked and not GC'd."""
 
+    @pytest.fixture(autouse=True)
+    def memory_boundaries(self, monkeypatch):
+        from ah.core.agent import context_manager, session_manager
+        from ah.core.config import config
+        from ah.core.models import Session
+
+        states = {}
+
+        async def get_session(session_id):
+            return Session(id=session_id, state=states.setdefault(session_id, {}))
+
+        async def update_state(session_id, fields):
+            states.setdefault(session_id, {}).update(fields)
+
+        monkeypatch.setattr(config, "memory_consolidation_enabled", True)
+        monkeypatch.setattr(session_manager, "get", get_session)
+        monkeypatch.setattr(session_manager, "update_state_fields", update_state)
+        monkeypatch.setattr(context_manager, "get_chunks", AsyncMock(return_value=[]))
+        return states
+
     @pytest.mark.asyncio
     async def test_task_is_stored_in_consolidation_tasks(self):
         """The scheduled task must appear in _consolidation_tasks."""
@@ -37,7 +58,7 @@ class TestMemoryConsolidationTaskReference:
         consolidator = MagicMock()
         consolidator.consolidate_session = AsyncMock(return_value=[])
 
-        agent = BaseReActAgent(memory_consolidator=consolidator)
+        agent = BaseReActAgent(provider=object(), memory_consolidator=consolidator)
         session_id = uuid.uuid4()
 
         agent._schedule_memory_consolidation(session_id)
@@ -45,6 +66,7 @@ class TestMemoryConsolidationTaskReference:
         assert len(agent._consolidation_tasks) == 1
         task = next(iter(agent._consolidation_tasks))
         assert isinstance(task, asyncio.Task)
+        await task
 
     @pytest.mark.asyncio
     async def test_task_is_removed_after_completion(self):
@@ -54,7 +76,7 @@ class TestMemoryConsolidationTaskReference:
         consolidator = MagicMock()
         consolidator.consolidate_session = AsyncMock(return_value=[])
 
-        agent = BaseReActAgent(memory_consolidator=consolidator)
+        agent = BaseReActAgent(provider=object(), memory_consolidator=consolidator)
         session_id = uuid.uuid4()
 
         agent._schedule_memory_consolidation(session_id)
@@ -67,33 +89,37 @@ class TestMemoryConsolidationTaskReference:
         assert len(agent._consolidation_tasks) == 0
 
     @pytest.mark.asyncio
-    async def test_task_actually_completes(self):
+    async def test_task_actually_completes(self, memory_boundaries):
         """The consolidation coroutine must run to completion (not be GC'd)."""
         from ah.core.agent import BaseReActAgent
+        from ah.memory.consolidator import ConsolidationResult
 
+        checkpoint = {"id": str(uuid.uuid4()), "at": "2026-01-01T00:00:00+00:00"}
         consolidator = MagicMock()
-        consolidator.consolidate_session = AsyncMock(return_value=["mem1", "mem2"])
+        consolidator.consolidate_session = AsyncMock(
+            return_value=ConsolidationResult("complete", ["mem1", "mem2"], checkpoint)
+        )
 
-        agent = BaseReActAgent(memory_consolidator=consolidator)
+        agent = BaseReActAgent(provider=object(), memory_consolidator=consolidator)
         session_id = uuid.uuid4()
 
         agent._schedule_memory_consolidation(session_id)
 
-        # Give the event loop a chance to run the task
-        await asyncio.sleep(0.1)
+        await asyncio.wait_for(next(iter(agent._consolidation_tasks)), timeout=1)
 
         consolidator.consolidate_session.assert_awaited_once_with(
             session_id=session_id,
             agent_id=agent.agent_id,
             since=None,
         )
+        assert memory_boundaries[session_id] == {"mem_consolidated_up_to": checkpoint}
 
     @pytest.mark.asyncio
     async def test_no_task_when_no_consolidator(self):
         """No task should be created when memory_consolidator is None."""
         from ah.core.agent import BaseReActAgent
 
-        agent = BaseReActAgent(memory_consolidator=None)
+        agent = BaseReActAgent(provider=object(), memory_consolidator=None)
         session_id = uuid.uuid4()
 
         agent._schedule_memory_consolidation(session_id)
@@ -105,20 +131,63 @@ class TestMemoryConsolidationTaskReference:
         """Multiple scheduled tasks must all be tracked."""
         from ah.core.agent import BaseReActAgent
 
+        session_ids = {uuid.uuid4() for _ in range(3)}
+        started = set()
+        all_started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def consolidate_session(*, session_id, agent_id, since):
+            started.add(session_id)
+            if len(started) == 3:
+                all_started.set()
+            await release.wait()
+            return []
+
         consolidator = MagicMock()
-        consolidator.consolidate_session = AsyncMock(return_value=[])
+        consolidator.consolidate_session = consolidate_session
 
-        agent = BaseReActAgent(memory_consolidator=consolidator)
+        agent = BaseReActAgent(provider=object(), memory_consolidator=consolidator)
 
-        for _ in range(3):
-            agent._schedule_memory_consolidation(uuid.uuid4())
+        for session_id in session_ids:
+            agent._schedule_memory_consolidation(session_id)
 
-        assert len(agent._consolidation_tasks) == 3
-
-        # Let them all finish
-        await asyncio.gather(*list(agent._consolidation_tasks))
+        try:
+            await asyncio.wait_for(all_started.wait(), 1)
+            assert started == session_ids
+        finally:
+            release.set()
+            await asyncio.gather(*list(agent._consolidation_tasks))
 
         assert len(agent._consolidation_tasks) == 0
+
+    @pytest.mark.asyncio
+    async def test_same_session_consolidation_is_shared_across_agents(self):
+        from ah.core.agent import BaseReActAgent
+
+        session_id = uuid.uuid4()
+        started = asyncio.Event()
+        release = asyncio.Event()
+        sessions = []
+
+        async def consolidate_session(*, session_id, agent_id, since):
+            sessions.append(session_id)
+            started.set()
+            await release.wait()
+            return []
+
+        consolidator = SimpleNamespace(consolidate_session=consolidate_session)
+        first = BaseReActAgent(provider=object(), memory_consolidator=consolidator)
+        second = BaseReActAgent(provider=object(), memory_consolidator=consolidator)
+        first._schedule_memory_consolidation(session_id)
+        await asyncio.wait_for(started.wait(), 1)
+        second._schedule_memory_consolidation(session_id)
+        try:
+            assert sessions == [session_id]
+        finally:
+            release.set()
+            await asyncio.gather(*first._consolidation_tasks, *second._consolidation_tasks)
+
+        assert sessions == [session_id]
 
 
 # ---------------------------------------------------------------------------

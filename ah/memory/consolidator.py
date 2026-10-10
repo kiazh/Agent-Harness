@@ -9,8 +9,6 @@ import json
 import logging
 import uuid
 
-logger = logging.getLogger(__name__)
-
 from ah.core.context import context_manager
 from ah.core.models import ContextChunk
 from ah.core.provider import LLMProvider, audit_log

@@ -94,7 +94,11 @@ def load_locomo(path: str | Path) -> tuple[Conversation, ...]:
                 # into partial matches ("1:1", "D1").
                 identifiers = re.findall(r"\bD?\d+:\d+\b", entry)
                 normalized.extend(identifiers or [entry])
-            questions.append(Question(qa["question"], tuple(normalized), qa.get("category"), qa.get("answer", "")))
+            questions.append(
+                Question(
+                    qa["question"], tuple(normalized), qa.get("category"), qa.get("answer", "")
+                )
+            )
         conversations.append(Conversation(tuple(turns), tuple(questions)))
     return tuple(conversations)
 
@@ -448,9 +452,7 @@ async def evaluate_answers(
                 if dia_id in texts:
                     evidence_texts.append(texts[dia_id])
 
-            prediction = await generate_answer(
-                provider, question.text, evidence_texts
-            )
+            prediction = await generate_answer(provider, question.text, evidence_texts)
             ground_truth = question.answer
 
             f1 = token_f1(prediction, ground_truth)

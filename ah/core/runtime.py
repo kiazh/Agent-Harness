@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,18 +34,33 @@ async def _bounded_join(
     if not tasks:
         return []
     for t in tasks:
+        t.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
         try:
             if not t.done():
                 t.cancel()
         except Exception:
             pass
-    try:
-        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout)
-    except (TimeoutError, asyncio.CancelledError):
-        pass
-    except Exception:
-        pass
+    # wait_for(gather(...)) waits for cancellation acknowledgement on timeout.
+    # A task that suppresses cancellation can therefore retain us indefinitely.
+    # wait() observes the deadline without joining resistant workers.
+    await asyncio.wait(tasks, timeout=timeout)
     return [t for t in tasks if not t.done()]
+
+
+async def _bounded_cleanup(cleanup: Coroutine[Any, Any, None], timeout: float, label: str) -> None:
+    """Observe cleanup deadlines without waiting for cancellation acknowledgement."""
+    task = asyncio.create_task(cleanup)
+    task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=timeout)
+    except asyncio.CancelledError:
+        task.cancel()
+        raise
+    if task not in done:
+        task.cancel()
+        logger.warning("runtime shutdown: %s quarantined after %ss", label, timeout)
+        return
+    task.result()
 
 
 @dataclass
@@ -137,36 +153,57 @@ class RuntimeServices:
         (logged + dropped from tracking) instead of awaited forever — a
         cancellation-resistant task cannot exceed the outer deadline. DB
         closure runs after the join with its own bound. New tasks created
-        during shutdown are rejected.
+        during shutdown are rejected. Caller cancellation still attempts
+        remaining service cleanup (100ms per stage), then propagates, so
+        restarting cannot acquire audit ownership a second time.
         """
         async with self._lock:
             self._shutting_down = True
+            cancellation: asyncio.CancelledError | None = None
             try:
-                leftovers = await _bounded_join(
-                    list(self._background), timeout=timeout, label="runtime background"
-                )
-                if leftovers:
-                    logger.warning(
-                        "runtime shutdown: %d task(s) quarantined after %ss",
-                        len(leftovers),
-                        timeout,
+                try:
+                    leftovers = await _bounded_join(
+                        list(self._background), timeout=timeout, label="runtime background"
                     )
+                    if leftovers:
+                        logger.warning(
+                            "runtime shutdown: %d task(s) quarantined after %ss",
+                            len(leftovers),
+                            timeout,
+                        )
+                except asyncio.CancelledError as e:
+                    cancellation = e
+                finally:
+                    self._background.clear()
+                try:
+                    from ah.observability.audit import audit_persistence
+
+                    await _bounded_cleanup(
+                        audit_persistence.stop(),
+                        timeout=min(0.1 if cancellation is not None else 5, timeout),
+                        label="audit stop",
+                    )
+                except asyncio.CancelledError as e:
+                    cancellation = e
+                except Exception:
+                    pass
+                try:
+                    from ah.db.connection import db
+
+                    await _bounded_cleanup(
+                        db.close(),
+                        timeout=min(0.1 if cancellation is not None else 5, timeout),
+                        label="database close",
+                    )
+                except asyncio.CancelledError as e:
+                    cancellation = e
+                except Exception:
+                    pass
+                if cancellation is not None:
+                    raise cancellation
             finally:
-                self._background.clear()
-            try:
-                from ah.observability.audit import audit_persistence
-
-                await asyncio.wait_for(audit_persistence.stop(), timeout=min(5, timeout))
-            except (TimeoutError, asyncio.CancelledError, Exception):
-                pass
-            try:
-                from ah.db.connection import db
-
-                await asyncio.wait_for(db.close(), timeout=min(5, timeout))
-            except (TimeoutError, asyncio.CancelledError, Exception):
-                pass
-            self._started = False
-            self._shutting_down = False
+                self._started = False
+                self._shutting_down = False
 
     def track(self, task: asyncio.Task) -> asyncio.Task:
         """Register a maintenance task for bounded shutdown joining."""

@@ -207,7 +207,7 @@ class JobStore:
                               next_run_at, cron_expression, model, provider, no_agent, script_path)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING {_COLUMNS}
-            """,
+            """,  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
             name,
             kind,
             session_id,
@@ -224,19 +224,20 @@ class JobStore:
         return _row_to_job(row)
 
     async def get(self, job_id: uuid.UUID) -> Job | None:
-        row = await db.fetchrow(f"SELECT {_COLUMNS} FROM jobs WHERE id = $1", job_id)
+        row = await db.fetchrow(f"SELECT {_COLUMNS} FROM jobs WHERE id = $1", job_id)  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
         return _row_to_job(row) if row else None
 
     async def list(self, *, session_id: uuid.UUID | None = None, limit: int = 100) -> list[Job]:
         if session_id is not None:
             rows = await db.fetch(
-                f"SELECT {_COLUMNS} FROM jobs WHERE session_id = $1 ORDER BY created_at DESC LIMIT $2",
+                f"SELECT {_COLUMNS} FROM jobs WHERE session_id = $1 ORDER BY created_at DESC LIMIT $2",  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
                 session_id,
                 limit,
             )
         else:
             rows = await db.fetch(
-                f"SELECT {_COLUMNS} FROM jobs ORDER BY created_at DESC LIMIT $1", limit
+                f"SELECT {_COLUMNS} FROM jobs ORDER BY created_at DESC LIMIT $1",  # nosec B608 # Fixed columns; bound limit.
+                limit,
             )
         return [_row_to_job(r) for r in rows]
 
@@ -262,7 +263,7 @@ class JobStore:
                 END
             WHERE id = $1
             RETURNING {_COLUMNS}
-            """,
+            """,  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
             job_id,
             enabled,
             cron_next,
@@ -307,7 +308,7 @@ class JobStore:
                 LIMIT 1
             )
             RETURNING {_COLUMNS}
-            """,
+            """,  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
             *params,
             token,
         )
@@ -384,7 +385,7 @@ class JobStore:
                 expr = getattr(job_obj, "cron_expression", None)
             else:
                 job_row = (
-                    await db.fetchrow(f"SELECT {_COLUMNS} FROM jobs WHERE id = $1", job_id)
+                    await db.fetchrow(f"SELECT {_COLUMNS} FROM jobs WHERE id = $1", job_id)  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
                     if hasattr(db, "fetchrow")
                     else None
                 )
@@ -422,7 +423,7 @@ class JobStore:
         async with db.acquire() as conn:
             async with conn.transaction():
                 job_row = await conn.fetchrow(
-                    f"SELECT {_COLUMNS} FROM jobs WHERE id = $1 FOR UPDATE",
+                    f"SELECT {_COLUMNS} FROM jobs WHERE id = $1 FOR UPDATE",  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
                     job_id,
                 )
                 if job_row is None or job_row["status"] not in ("idle", "running"):
@@ -486,7 +487,7 @@ class JobStore:
             SET status = 'idle', paused_for_approval = NULL, next_run_at = now()
             WHERE id = $1 AND status = 'paused_approval'
             RETURNING {_COLUMNS}
-            """,
+            """,  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
             job_id,
         )
         return _row_to_job(row) if row else None
@@ -498,6 +499,8 @@ job_store = JobStore()
 class JobRunner:
     """Background loop that runs due jobs. Started by the gateway or the CLI daemon."""
 
+    _cancel_grace_seconds = 0.1
+
     def __init__(
         self, store: JobStore | None = None, agent_factory=None, poll_seconds: float = 5.0
     ) -> None:
@@ -506,6 +509,8 @@ class JobRunner:
         self._poll_seconds = poll_seconds
         self._task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
+        self._quarantined: set[asyncio.Task] = set()
+        self._finalizers: set[asyncio.Task] = set()
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -563,19 +568,13 @@ class JobRunner:
             )
             if not done:
                 exec_task.cancel()
-                try:
-                    await exec_task
-                except (asyncio.CancelledError, Exception):
-                    pass
+                await asyncio.wait({exec_task}, timeout=self._cancel_grace_seconds)
                 error = f"job timed out after {RUN_LEASE_SECONDS}s"
                 logger.warning("Job %s (%s) timed out", job.name, job.id)
             elif loss_wait in done and not exec_task.done():
                 # Ownership lost while effects were active: cancel and join.
                 exec_task.cancel()
-                try:
-                    await exec_task
-                except (asyncio.CancelledError, Exception):
-                    pass
+                await asyncio.wait({exec_task}, timeout=self._cancel_grace_seconds)
                 error = "ownership lost; execution cancelled"
                 logger.warning("Job %s (%s) lost ownership; cancelled", job.name, job.id)
             else:
@@ -601,10 +600,7 @@ class JobRunner:
         except asyncio.CancelledError:
             if exec_task is not None and not exec_task.done():
                 exec_task.cancel()
-                try:
-                    await exec_task
-                except (asyncio.CancelledError, Exception):
-                    pass
+                await asyncio.wait({exec_task}, timeout=self._cancel_grace_seconds)
             error = "cancelled"
             raise
         finally:
@@ -618,25 +614,73 @@ class JobRunner:
                     await asyncio.gather(loss_wait, return_exceptions=True)
             except (asyncio.CancelledError, Exception):
                 pass
-            lease_task.cancel()
-            await asyncio.gather(lease_task, return_exceptions=True)
-            # Stale workers never overwrite a newer owner's outcome: finish
-            # with the exact token (rejected when fencing moved on).
-            try:
-                await self._store.finish(
-                    job.id, error=error, claim_token=claim_token, paused_for=paused_for
-                )
-            except TypeError:
-                # Narrow compat: only non-JobStore test doubles lack the new
-                # parameters. Production errors must surface, not bypass
-                # fencing. Paused state needs a store that supports it.
-                if isinstance(self._store, JobStore):
-                    raise
-                try:
-                    await self._store.finish(job.id, error=error, claim_token=claim_token)
-                except TypeError:
-                    await self._store.finish(job.id, error=error)
+            if exec_task is not None and not exec_task.done():
+                self._quarantine_run(job, exec_task, lease_task, claim_token, error, paused_for)
+            else:
+                if exec_task is not None and not exec_task.cancelled():
+                    exec_task.exception()
+                await self._finish_run(job, lease_task, claim_token, error, paused_for)
         return True
+
+    def _quarantine_run(
+        self,
+        job: Job,
+        execution: asyncio.Task,
+        lease: asyncio.Task,
+        claim_token: uuid.UUID | None,
+        error: str | None,
+        paused_for: str | None,
+    ) -> None:
+        """Retain active effects and their lease until genuine termination."""
+        self._quarantined.add(execution)
+        logger.warning("Job %s (%s) quarantined while cancellation unwinds", job.name, job.id)
+
+        def finalized(task: asyncio.Task) -> None:
+            self._finalizers.discard(task)
+            if not task.cancelled():
+                exc = task.exception()
+                if exc is not None:
+                    logger.error(
+                        "Could not record deferred outcome for job %s",
+                        job.id,
+                        exc_info=(type(exc), exc, exc.__traceback__),
+                    )
+
+        def terminated(task: asyncio.Task) -> None:
+            self._quarantined.discard(task)
+            if not task.cancelled():
+                task.exception()
+            finalizer = asyncio.create_task(
+                self._finish_run(job, lease, claim_token, error, paused_for)
+            )
+            self._finalizers.add(finalizer)
+            finalizer.add_done_callback(finalized)
+
+        execution.add_done_callback(terminated)
+
+    async def _finish_run(
+        self,
+        job: Job,
+        lease: asyncio.Task,
+        claim_token: uuid.UUID | None,
+        error: str | None,
+        paused_for: str | None,
+    ) -> None:
+        lease.cancel()
+        await asyncio.gather(lease, return_exceptions=True)
+        # Only terminated effects may finish; the original token still fences
+        # the outcome if another owner acquired the row during quarantine.
+        try:
+            await self._store.finish(
+                job.id, error=error, claim_token=claim_token, paused_for=paused_for
+            )
+        except TypeError:
+            if isinstance(self._store, JobStore):
+                raise
+            try:
+                await self._store.finish(job.id, error=error, claim_token=claim_token)
+            except TypeError:
+                await self._store.finish(job.id, error=error)
 
     async def _keep_lease(
         self,
@@ -707,11 +751,11 @@ class JobRunner:
 
                 target = resolve_script_path(job.script_path or "")
                 try:
-                    script_content = target.read_text(encoding="utf-8", errors="replace")
+                    script_content = target.read_bytes()
                 except OSError as e:
                     raise RuntimeError(f"script unreadable: {e}") from None
                 if len(script_content) > 200_000:
-                    raise RuntimeError("script exceeds 200 KiB review bound")
+                    raise RuntimeError("script exceeds 200,000 byte review bound")
                 import sys as _sys
 
                 interpreter = _sys.executable if target.suffix.lower() == ".py" else "/usr/bin/bash"
@@ -726,7 +770,9 @@ class JobRunner:
                     targets=[str(target)],
                     argv=[interpreter, str(target)],
                     cwd=str(target.parent),
-                    content=script_content,
+                    # Reversible byte-to-text mapping binds the exact source
+                    # without corrupting BOMs or declared Python encodings.
+                    content=script_content.decode("latin-1"),
                     mode=script_mode,
                     backend="host",
                     agent_id=job.agent_name,
@@ -754,12 +800,23 @@ class JobRunner:
                     raise err from None
                 except _ScriptDenied as _denied:
                     raise RuntimeError(f"script denied: {_denied.reason}") from None
+                script_outcome = "failed"
                 try:
-                    output = redact_secrets(await run_job_script(job.script_path or "")).text
+                    output = redact_secrets(
+                        await run_job_script(
+                            job.script_path or "",
+                            approved_content=script_content,
+                            approved_path=target,
+                        )
+                    ).text
+                    script_outcome = "completed"
+                except asyncio.CancelledError:
+                    script_outcome = "cancelled"
+                    raise
                 finally:
                     if approval_id:
                         try:
-                            await _script_broker.complete(approval_id, "completed")
+                            await _script_broker.complete(approval_id, script_outcome)
                         except Exception:
                             pass
                 if output:
@@ -795,12 +852,14 @@ class JobRunner:
                 pauses = list(getattr(response, "needs_approval", None) or [])
                 if pauses:
                     first = pauses[0] if isinstance(pauses[0], dict) else {}
-                    raise PermissionError(
+                    err = PermissionError(
                         "needs_approval: job paused awaiting human approval; "
                         f"request {first.get('request_id', '')} "
                         f"({first.get('operation', '')}); resolve via approvals "
                         "then resume (fresh claim revalidates)."
                     )
+                    err.approval_request_id = first.get("request_id", "")  # type: ignore[attr-defined]
+                    raise err
             finally:
                 # AH-AUDIT-026: shared owner-aware cleanup contract —
                 # bounded join, never closes injected/shared clients, never

@@ -75,12 +75,8 @@ class SoulSpecMerger:
                 voice = override.voice
             else:
                 voice = SoulSpec.Voice(
-                    tone=override.voice.tone
-                    if override.voice.tone is not None
-                    else voice.tone,
-                    style=override.voice.style
-                    if override.voice.style is not None
-                    else voice.style,
+                    tone=override.voice.tone if override.voice.tone is not None else voice.tone,
+                    style=override.voice.style if override.voice.style is not None else voice.style,
                 )
 
         return SoulSpec.Persona(

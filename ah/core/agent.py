@@ -1100,9 +1100,6 @@ class BaseReActAgent:
         if running is not None and not running.done():
             logger.debug("consolidation already running for session, skipping duplicate")
             return
-        if any(not t.done() for t in self._consolidation_tasks):
-            logger.debug("consolidation already running, skipping duplicate")
-            return
         task = asyncio.create_task(self._consolidate_memories(session_id))
         _consolidation_inflight[key] = task
         self._consolidation_tasks.add(task)

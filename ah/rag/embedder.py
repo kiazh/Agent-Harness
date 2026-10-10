@@ -124,6 +124,7 @@ class OpenAIEmbedder(Embedder):
         if not hasattr(self, "_cache_lock"):
             import threading as _th
             from collections import OrderedDict as _OD
+
             self._cache_lock = _th.Lock()  # type: ignore[attr-defined]
             if not hasattr(self, "_cache"):
                 self._cache = _OD()  # type: ignore[attr-defined]
@@ -157,6 +158,7 @@ class OpenAIEmbedder(Embedder):
         if not hasattr(self, "_cache_lock"):
             import threading as _th2
             from collections import OrderedDict as _OD2
+
             self._cache_lock = _th2.Lock()  # type: ignore[attr-defined]
             if not hasattr(self, "_cache"):
                 self._cache = _OD2()  # type: ignore[attr-defined]

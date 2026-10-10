@@ -10,6 +10,7 @@ import re
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -86,6 +87,7 @@ def _resolve_effort(explicit: str | None, instance_default: str | None = None) -
         raise
     except Exception:
         return ""
+
 
 # ---------------------------------------------------------------------------
 # Retry with backoff for rate-limited (429) responses
@@ -270,7 +272,7 @@ def _retry_delay(attempt: int, resp: httpx.Response | None, free: bool) -> float
     import random
 
     base = _FREE_BASE_DELAY if free else _RETRY_BASE_DELAY
-    delay = base * (2 ** attempt)
+    delay = base * (2**attempt)
     delay = min(delay, 30.0 if free else 8.0)
     return delay + random.uniform(0, 1.0)  # jitter so parallel turns don't thunder
 
@@ -321,6 +323,36 @@ async def _post_with_retry(
             )
             await asyncio.sleep(delay)
     raise last_exc  # type: ignore[misc]
+
+
+@asynccontextmanager
+async def _stream_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict[str, Any],
+) -> AsyncGenerator[httpx.Response, None]:
+    """Apply the POST retry policy before exposing any streaming content."""
+    model = str(payload.get("model", ""))
+    free = _is_free_model(model)
+    max_retries = 0 if free else _MAX_RETRIES
+    for attempt in range(max_retries + 1):
+        async with client.stream("POST", url, json=payload) as resp:
+            if resp.status_code != 429:
+                yield resp
+                return
+            if free and _quota_exhausted(resp):
+                raise RateLimitError(
+                    _quota_message(resp, model),
+                    reset_at=_quota_reset_at(resp),
+                    daily_limit=int(resp.headers.get("x-ratelimit-limit") or 0) or None,
+                    remaining=0,
+                )
+            if attempt == max_retries:
+                resp.raise_for_status()
+            delay = _retry_delay(attempt, resp, free)
+        # Close the rejected response before waiting or opening another stream.
+        logger.warning("429 rate limited (model=%s), retrying stream in %.1fs", model, delay)
+        await asyncio.sleep(delay)
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +502,9 @@ _RESPONSE_CACHE_TTL = 60  # seconds
 _RESPONSE_CACHE: dict[str, tuple[float, Any]] = {}
 
 
-def _cache_key(messages: list[dict[str, str]], tools: list[ToolDefinition] | None, model: str) -> str:
+def _cache_key(
+    messages: list[dict[str, str]], tools: list[ToolDefinition] | None, model: str
+) -> str:
     """Build a cache key from the request parameters."""
     raw = json.dumps(
         {"messages": messages, "tools": tools, "model": model},
@@ -686,7 +720,9 @@ class OpenRouterProvider(LLMProvider):
                 used_model = cand
                 if cand != model:
                     logger.info("free-tier fallback succeeded with model=%s", cand)
-                    audit_log("llm_free_fallback", provider="openrouter", from_model=model, to_model=cand)
+                    audit_log(
+                        "llm_free_fallback", provider="openrouter", from_model=model, to_model=cand
+                    )
                 break
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code if e.response is not None else 0
@@ -708,21 +744,24 @@ class OpenRouterProvider(LLMProvider):
                         used_model = cand
                         audit_log("llm_free_fallback_no_tools", provider="openrouter", model=cand)
                         break
-                    except RateLimitError:
-                        # Quota exhausted — do not mask it as a generic failure.
-                        raise
                     except Exception as e2:
                         last_err = e2
                         break
                 if not retryable or cand == candidates[-1]:
                     break
-                logger.warning("free model %s got %s, trying fallback %s after 2s", cand, status, candidates[candidates.index(cand) + 1])
+                logger.warning(
+                    "free model %s got %s, trying fallback %s after 2s",
+                    cand,
+                    status,
+                    candidates[candidates.index(cand) + 1],
+                )
                 await asyncio.sleep(2.0)
                 continue
-            except RateLimitError:
+            except RateLimitError as e:
                 # Daily quota is exhausted account-wide: trying other free
                 # models cannot succeed, so fail fast with the real reason.
-                raise
+                last_err = e
+                break
             except Exception as e:
                 last_err = e
                 break
@@ -880,7 +919,6 @@ class OpenRouterProvider(LLMProvider):
         stream_usage: dict[str, int] = {}
         resolved_model = model
 
-        last_stream_err: Exception | None = None
         for cand in candidates:
             payload["model"] = cand
             resolved_model = cand
@@ -888,7 +926,7 @@ class OpenRouterProvider(LLMProvider):
             tool_calls_by_index = {}
             stream_usage = {}
             try:
-                async with self.client.stream("POST", "/chat/completions", json=payload) as resp:
+                async with _stream_with_retry(self.client, "/chat/completions", payload) as resp:
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
                         if not line.startswith("data: "):
@@ -935,7 +973,6 @@ class OpenRouterProvider(LLMProvider):
                                     frag = json.dumps(frag)
                                 tc["arguments"] += frag
                 # Success — stop trying fallbacks.
-                last_stream_err = None
                 break
             except Exception as e:
                 if isinstance(e, RateLimitError):
@@ -957,8 +994,9 @@ class OpenRouterProvider(LLMProvider):
                 nothing_yielded = not content_parts and not tool_calls_by_index
                 retryable = status in (429, 404) and nothing_yielded and cand != candidates[-1]
                 if retryable:
-                    logger.warning("free stream model %s got %s, trying fallback after 2s", cand, status)
-                    last_stream_err = e
+                    logger.warning(
+                        "free stream model %s got %s, trying fallback after 2s", cand, status
+                    )
                     # Discard any partial state so a throttled candidate cannot
                     # contaminate the next one.
                     content_parts = []
@@ -966,16 +1004,25 @@ class OpenRouterProvider(LLMProvider):
                     stream_usage = {}
                     await asyncio.sleep(2.0)
                     continue
-                if status == 404 and nothing_yielded and payload.get("tools") and cand == candidates[1]:
+                if (
+                    status == 404
+                    and nothing_yielded
+                    and payload.get("tools")
+                    and cand == candidates[-1]
+                ):
                     # Same "no provider can serve tools" case as non-stream:
-                    # retry the first fallback model once as plain chat.
-                    logger.warning("free stream model %s 404 with tools, retrying without tools", cand)
+                    # retry the last candidate once as plain chat.
+                    logger.warning(
+                        "free stream model %s 404 with tools, retrying without tools", cand
+                    )
                     payload.pop("tools", None)
                     content_parts = []
                     tool_calls_by_index = {}
                     stream_usage = {}
                     try:
-                        async with self.client.stream("POST", "/chat/completions", json=payload) as resp2:
+                        async with _stream_with_retry(
+                            self.client, "/chat/completions", payload
+                        ) as resp2:
                             resp2.raise_for_status()
                             async for line in resp2.aiter_lines():
                                 if not line.startswith("data: "):
@@ -998,14 +1045,13 @@ class OpenRouterProvider(LLMProvider):
                                 if c2:
                                     content_parts.append(c2)
                                     yield StreamEvent(type="text", content=c2)
-                        last_stream_err = None
                         break
                     except Exception as e2:
                         e = e2
                 if reservation_id is not None:
                     await usage_store.finish(reservation_id, failed=True)
                 audit_log("llm_stream_error", provider="openrouter", model=cand, error=str(e))
-                raise
+                raise e
 
         # Build final tool calls list
         tool_calls: list[dict] = []
@@ -1057,14 +1103,10 @@ class OpenRouterProvider(LLMProvider):
         data = resp.json()
         # OpenRouter can return 200 with an error body or empty data list.
         if not data.get("data") or not isinstance(data["data"], list):
-            raise ProviderError(
-                f"OpenRouter embed returned no data: {data.get('error') or data}"
-            )
+            raise ProviderError(f"OpenRouter embed returned no data: {data.get('error') or data}")
         first = data["data"][0]
         if not isinstance(first, dict) or "embedding" not in first:
-            raise ProviderError(
-                f"OpenRouter embed response missing 'embedding' key: {first}"
-            )
+            raise ProviderError(f"OpenRouter embed response missing 'embedding' key: {first}")
         return first["embedding"]
 
     async def close(self) -> None:

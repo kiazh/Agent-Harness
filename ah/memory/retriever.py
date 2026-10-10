@@ -10,8 +10,6 @@ import json
 import logging
 import re
 import uuid
-
-logger = logging.getLogger(__name__)
 from datetime import datetime
 from typing import Any
 
@@ -357,7 +355,7 @@ class MemoryRetriever:
             WHERE {where_clause}
             ORDER BY importance DESC, created_at DESC
             LIMIT ${param_idx}
-            """,
+            """,  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
             *params,
         )
 

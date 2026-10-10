@@ -179,9 +179,13 @@ class TestAgentWithRealTools:
                 assert len(response.tool_calls) == 1
                 assert response.tool_calls[0]["tool"] == "read_file"
 
-    async def test_agent_executes_real_file_write(self, mock_session, temp_dir):
+    async def test_agent_executes_real_file_write(self, mock_session, temp_dir, monkeypatch):
         """Test that agent actually executes write_file tool."""
         test_file = temp_dir / "output.txt"
+        from ah.core.config import config
+
+        monkeypatch.setattr(config, "execution_mode", "workspace")
+        monkeypatch.setattr(config, "workspace_root", str(temp_dir))
 
         provider = FakeProvider(
             [
@@ -229,6 +233,7 @@ class TestAgentWithRealTools:
                     )
 
                     assert response is not None
+                    assert not response.needs_approval
                     # Verify the file was actually written
                     assert test_file.exists()
                     assert test_file.read_text() == "written by agent"

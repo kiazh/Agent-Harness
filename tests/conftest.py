@@ -25,17 +25,24 @@ _SECRET_CONFIG_KEYS = (
 
 
 @pytest.fixture(autouse=True)
-def isolate_config_secrets():
-    """Blank secrets loaded from the user's config file for each test.
+def isolate_config_secrets(monkeypatch):
+    """Isolate developer credentials across all supported secret sources.
 
-    ``Config.get`` falls back to the legacy env vars when the attribute is
-    empty, so tests that patch ``os.environ`` still work as intended.
+    Individual tests can explicitly configure fake environment, file, or
+    backend values using monkeypatch after this fixture runs.
     """
-    from ah.core.config import config
+    from ah.core.config import LEGACY_ENV_VARS, config
 
     saved = {k: getattr(config, k) for k in _SECRET_CONFIG_KEYS}
+    monkeypatch.setenv("AGENT_HARNESS_SECRET_BACKEND", "")
     for k in _SECRET_CONFIG_KEYS:
         setattr(config, k, "")
+        # Config.get() falls back to dotenv-loaded environment values. Blank
+        # those too so a fake-provider test cannot spend a developer's keys.
+        monkeypatch.setenv(f"AGENT_HARNESS_{k.upper()}", "")
+        if k in LEGACY_ENV_VARS:
+            monkeypatch.setenv(LEGACY_ENV_VARS[k], "")
+            monkeypatch.setenv(f"{LEGACY_ENV_VARS[k]}_FILE", "")
     yield
     for k, v in saved.items():
         setattr(config, k, v)

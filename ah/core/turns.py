@@ -114,7 +114,7 @@ async def _db_claim(session_id: uuid.UUID, owner: str, kind: str, ttl_s: int) ->
             claim_expires_at = now() + ($4 * interval '1 second')
         WHERE id = $1 AND {_live_claim_where()}
         RETURNING id
-        """,
+        """,  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
         session_id,
         owner,
         kind,

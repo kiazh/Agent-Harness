@@ -362,13 +362,15 @@ class TestRAGPipeline:
         )
         pipeline._search.search = AsyncMock(return_value=[mock_result])
 
-        results = await pipeline.search("test query", session_id=uuid.uuid4())
+        with patch("ah.rag.pipeline.db.fetch", AsyncMock(return_value=[])):
+            results = await pipeline.search("test query", session_id=uuid.uuid4())
         assert isinstance(results, list)
 
     async def test_search_with_top_k(self, pipeline):
         """Test searching with top_k parameter."""
         pipeline._search.search = AsyncMock(return_value=[])
-        results = await pipeline.search("test", session_id=uuid.uuid4(), top_k=5)
+        with patch("ah.rag.pipeline.db.fetch", AsyncMock(return_value=[])):
+            results = await pipeline.search("test", session_id=uuid.uuid4(), top_k=5)
         assert isinstance(results, list)
 
     async def test_index_session_context(self, pipeline):
