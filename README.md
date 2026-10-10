@@ -294,7 +294,7 @@ ah serve --host 127.0.0.1 --port 8000
 | GET | `/health`, `/ready` | Public liveness and generic database/schema readiness |
 | GET | `/metrics` | Bearer-authenticated Prometheus metrics |
 | POST | `/api/v1/sessions` | `{title}` |
-| GET | `/api/v1/sessions?limit&cursor` | Capped 200, offset-capped |
+| GET | `/api/v1/sessions?limit` | Capped 100 (default 20) |
 | GET/PATCH/DELETE | `/api/v1/sessions/{id}` | Resume/history, rename/goal, delete (blocked mid-turn) |
 | POST | `/api/v1/sessions/{id}/prompt` | SSE stream (`text/event-stream`), `turn_timeout` enforced |
 | GET | `/api/v1/sessions/{id}/context` | Redacted previews |
@@ -330,8 +330,8 @@ Plus LoCoMo harness (`ah/research/locomo.py`), identity eval (`identity_eval.py`
 
 ## Performance & tests
 
-- **Python:** 1288 passed, coverage **~80%** (gate 60%). Phase-7 modules (scheduler, recall, text_search, usage) at ~100%.
-- **UI:** 85 passed, 3 e2e skipped without live DB (`npm --prefix ui test`).
+- **Python:** 1702 passed, coverage **~80%** (gate 60%). Phase-7 modules (scheduler, recall, text_search, usage) at ~100%.
+- **UI:** 87 passed, 3 e2e skipped without live DB (`npm --prefix ui test`).
 - **Concurrency:** advisory-lock usage (agent→session order), atomic job claim, per-session turn locks.
 - **Workflow trial:** native Postgres approval **~3.6 ms** vs LangGraph **~18.6 ms** (5.1x overhead); native retained.
 - **Resilience:** 429-then-200 recovers; sustained 429 raises after retries.
