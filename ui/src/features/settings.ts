@@ -4,6 +4,7 @@ import { userInfo } from "node:os";
 import { keyValues, table } from "../format.ts";
 import type { ConfigGetResult, ConfigSetResult, ProfileInfo, ProfileListResult, StatusResult, UsageResult } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
+import { applyModel, CURATED_MODELS, filterCuratedModels, pickCuratedModel } from "./models.ts";
 import { formatValue, options, type Command, type FeatureHost } from "./types.ts";
 
 async function setConfig(host: FeatureHost, key: string, value: string, persist: boolean): Promise<void> {
@@ -14,14 +15,42 @@ async function setConfig(host: FeatureHost, key: string, value: string, persist:
 
 export const settingsCommands: Command[] = [
 	{
-		name: "model",
-		description: "Show or set the model",
-		argumentHint: "[model]",
+		name: "default-model",
+		description: "Pick the default model from a menu (saved across sessions)",
+		argumentHint: "[search|model-id]",
+		getArgumentCompletions: (prefix: string) => {
+			const typed = prefix.trimStart().toLowerCase();
+			if (/\s/.test(typed)) return null;
+			const items = CURATED_MODELS.filter((e) => e.model.toLowerCase().startsWith(typed)).map((e) => ({
+				value: e.model,
+				label: `${e.model} (${e.provider})`,
+				description: e.description,
+			}));
+			return items.length ? items : null;
+		},
 		async run(args, host) {
-			if (!args) {
-				const { config } = await host.request<ConfigGetResult>("config.get");
-				host.print(`Model: ${config.model}`);
-			} else await setConfig(host, "model", args, false);
+			const query = args.trim();
+			if (!query) {
+				const entry = await pickCuratedModel(host, CURATED_MODELS);
+				if (!entry) return;
+				await applyModel(host, entry, true);
+				return;
+			}
+			const exact = CURATED_MODELS.find((e) => e.model.toLowerCase() === query.toLowerCase());
+			if (exact) {
+				await applyModel(host, exact, true);
+				return;
+			}
+			const entries = filterCuratedModels(query);
+			if (entries.length) {
+				const entry = await pickCuratedModel(host, entries);
+				if (!entry) return;
+				await applyModel(host, entry, true);
+				return;
+			}
+			// Off-list custom id: keep the current provider, save the model.
+			await setConfig(host, "model", query, true);
+			host.print("Provider unchanged — use /provider if this id belongs to another provider.", "plain");
 		},
 	},
 	{

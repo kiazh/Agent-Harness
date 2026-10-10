@@ -1,8 +1,10 @@
 // Model menu: pick from a curated list instead of typing an id.
 //
-// `/models` (no args) opens a picker grouped by provider. `/model <id>` still
-// works for anything off-list. Selecting an entry sets both model and provider.
+// `/models` (no args) opens a picker grouped by provider for this session.
+// `/default-model` opens the same menu to choose the saved default (or takes
+// a custom id). Selecting an entry sets both model and provider.
 
+import type { SelectItem } from "@earendil-works/pi-tui";
 import { keyValues } from "../format.ts";
 import type { ConfigSetResult } from "../protocol.ts";
 import type { Command, FeatureHost } from "./types.ts";
@@ -29,12 +31,44 @@ export const CURATED_MODELS: ModelEntry[] = [
 	{ model: "phi3", provider: "ollama", description: "Local, small and fast" },
 ];
 
-async function applyModel(host: FeatureHost, entry: ModelEntry): Promise<void> {
-	const providerResult = await host.request<ConfigSetResult>("config.set", { key: "provider", value: entry.provider });
+export async function applyModel(host: FeatureHost, entry: ModelEntry, persist = false): Promise<void> {
+	// Only send `persist` when saving the default, so the session-scoped
+	// `/models` request shape is unchanged.
+	const extra = persist ? { persist: true } : {};
+	const providerResult = await host.request<ConfigSetResult>("config.set", { key: "provider", value: entry.provider, ...extra });
 	host.onConfig(providerResult);
-	const modelResult = await host.request<ConfigSetResult>("config.set", { key: "model", value: entry.model });
+	const modelResult = await host.request<ConfigSetResult>("config.set", { key: "model", value: entry.model, ...extra });
 	host.onConfig(modelResult);
-	host.print(`Model: ${entry.model} (${entry.provider})`, "success");
+	host.print(`Model: ${entry.model} (${entry.provider})${persist ? " (saved as default)" : ""}`, "success");
+}
+
+function toSelectItem(e: ModelEntry): SelectItem {
+	return {
+		value: `${e.provider}::${e.model}`,
+		label: `${e.model} (${e.provider})`,
+		description: e.description,
+	};
+}
+
+/** Open the curated-model picker; returns the chosen entry (or undefined). */
+export async function pickCuratedModel(host: FeatureHost, entries: ModelEntry[]): Promise<ModelEntry | undefined> {
+	const choice = await host.pick(
+		"Models (Enter to apply)",
+		entries.map(toSelectItem),
+	);
+	if (!choice) return undefined;
+	return CURATED_MODELS.find((e) => `${e.provider}::${e.model}` === choice.value);
+}
+
+export function filterCuratedModels(query: string): ModelEntry[] {
+	const q = query.trim().toLowerCase();
+	if (!q) return CURATED_MODELS;
+	return CURATED_MODELS.filter(
+		(e) =>
+			e.model.toLowerCase().includes(q) ||
+			e.provider.includes(q) ||
+			e.description.toLowerCase().includes(q),
+	);
 }
 
 export const modelsCommand: Command = {
@@ -42,33 +76,17 @@ export const modelsCommand: Command = {
 	description: "Pick a model from the curated menu",
 	argumentHint: "[search]",
 	async run(args, host) {
-		const query = args.trim().toLowerCase();
-		const entries = query
-			? CURATED_MODELS.filter(
-					(e) =>
-						e.model.toLowerCase().includes(query) ||
-						e.provider.includes(query) ||
-						e.description.toLowerCase().includes(query),
-				)
-			: CURATED_MODELS;
+		const entries = filterCuratedModels(args);
 		if (!entries.length) {
-			host.print(`No curated model matches "${args.trim()}". Use /model <id> for anything off-list.`, "warning");
+			host.print(`No curated model matches "${args.trim()}". Use /default-model <id> for anything off-list.`, "warning");
 			return;
 		}
-		const choice = await host.pick(
-			"Models (Enter to apply)",
-			entries.map((e) => ({
-				value: `${e.provider}::${e.model}`,
-				label: `${e.model} (${e.provider})`,
-				description: e.description,
-			})),
-		);
-		if (!choice) return;
-		const entry = CURATED_MODELS.find((e) => `${e.provider}::${e.model}` === choice.value)!;
+		const entry = await pickCuratedModel(host, entries);
+		if (!entry) return;
 		await applyModel(host, entry);
 		host.print(
 			keyValues([
-				["Off-list", "Use /model <id> for any other model id"],
+				["Off-list", "Use /default-model <id> for any other model id"],
 				["Keys", "Missing provider key? See /keys"],
 			]),
 			"plain",

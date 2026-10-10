@@ -14,6 +14,7 @@ const ALIASES: Record<string, string> = {
 	settings: "config",
 	set: "config",
 	compact: "compress",
+	model: "default-model",
 };
 
 export interface ParsedCommand {
@@ -50,7 +51,7 @@ const HELP_GROUPS: Array<[group: string, names: string[]]> = [
 	["Memory", ["memory", "skills"]],
 	["Context", ["context", "compress"]],
 	["Automation", ["jobs"]],
-	["Setup", ["keys", "models", "model", "provider", "effort", "config", "theme", "profile", "profiles", "mode", "approvals"]],
+	["Setup", ["keys", "models", "default-model", "provider", "effort", "config", "theme", "profile", "profiles", "mode", "approvals"]],
 	["Info", ["status", "usage", "help", "exit"]],
 ];
 

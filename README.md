@@ -148,9 +148,10 @@ Secrets never echo, never enter history, never touch `config.yaml`.
 ### Models
 
 ```
-/models                # picker over curated direct-provider + Ollama list
+/models                # picker over curated direct-provider + Ollama list (this session)
 /models <query>        # filter, e.g. /models llama
-/model <id>            # off-list, e.g. /model deepseek-reasoner
+/default-model       # menu to pick the saved default model
+/default-model <id>  # off-list default, e.g. /default-model deepseek-reasoner
 /provider <name>       # openrouter | openai | anthropic | google | mistral | groq | together | deepseek | xai | ollama
 /effort [low|medium|high|off]  # reasoning depth (provider default when off)
 /keys set DEEPSEEK_API_KEY ... # each family uses its own direct key, never routed via OpenRouter
@@ -171,7 +172,7 @@ Secrets never echo, never enter history, never touch `config.yaml`.
 | `jobs` | `list · add · script · heartbeat · cron · on · off · delete` |
 | `keys` | `list · set · clear` |
 | `mode`, `approvals` | Execution mode (`ask|workspace|sandbox|full`); pending approvals (`list · allow · deny · revoke`) |
-| `models`, `model`, `provider`, `effort` | Picker; custom model; provider; reasoning effort |
+| `models`, `default-model`, `provider`, `effort` | Session picker; saved default model; provider; reasoning effort |
 | `config` | Show/set settings (`--save` persists) |
 | `theme` | Switch skin |
 | `profile`, `profiles` | Preferences and topics |

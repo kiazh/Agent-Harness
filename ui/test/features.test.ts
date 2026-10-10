@@ -331,11 +331,44 @@ test("/config sets a value and --save persists it", async () => {
 	assert.match(host.last().text, /Unknown setting/);
 });
 
-test("/model updates the footer through onConfig", async () => {
+test("/default-model sets a custom id and saves it", async () => {
 	const host = new FakeHost();
 	host.responses["config.set"] = { model: "openai/gpt-4o", provider: "openrouter", key: "model", value: "openai/gpt-4o" };
-	await run("/model openai/gpt-4o", host);
+	await run("/default-model openai/gpt-4o", host);
 	assert.equal(host.configured[0]!.model, "openai/gpt-4o");
+	assert.deepEqual(host.calls.at(-1)!.params, { key: "model", value: "openai/gpt-4o", persist: true });
+});
+
+test("/default-model with no args opens the menu and saves the pick", async () => {
+	const host = new FakeHost();
+	host.responses["config.set"] = (p: Record<string, unknown>) => ({ model: "m", provider: "p", key: p.key, value: p.value });
+	host.picks.push("deepseek::deepseek-chat");
+	await run("/default-model", host);
+	assert.deepEqual(
+		host.calls.map((c) => [c.method, c.params]),
+		[
+			["config.set", { key: "provider", value: "deepseek", persist: true }],
+			["config.set", { key: "model", value: "deepseek-chat", persist: true }],
+		],
+	);
+	assert.match(host.last().text, /saved as default/);
+});
+
+test("/default-model resolves a curated id directly", async () => {
+	const host = new FakeHost();
+	host.responses["config.set"] = (p: Record<string, unknown>) => ({ model: "m", provider: "p", key: p.key, value: p.value });
+	await run("/default-model deepseek-chat", host);
+	assert.deepEqual(
+		host.calls.map((c) => [c.method, c.params]),
+		[
+			["config.set", { key: "provider", value: "deepseek", persist: true }],
+			["config.set", { key: "model", value: "deepseek-chat", persist: true }],
+		],
+	);
+});
+
+test("/model is an alias for /default-model", () => {
+	assert.deepEqual(parseCommand("/model deepseek-chat"), { name: "default-model", args: "deepseek-chat" });
 });
 
 test("commands that need a session say so", async () => {

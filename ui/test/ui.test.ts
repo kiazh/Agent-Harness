@@ -33,7 +33,7 @@ function plain(component: Component, width = 60): string {
 test("parseCommand recognizes commands, aliases and plain prompts", () => {
 	assert.deepEqual(parseCommand("/new  My title "), { name: "new", args: "My title" });
 	assert.deepEqual(parseCommand("/quit"), { name: "exit", args: "" });
-	assert.deepEqual(parseCommand("/MODEL openai/gpt-4o"), { name: "model", args: "openai/gpt-4o" });
+	assert.deepEqual(parseCommand("/MODEL openai/gpt-4o"), { name: "default-model", args: "openai/gpt-4o" });
 	assert.equal(parseCommand("explain /etc/hosts"), undefined);
 	assert.equal(parseCommand("//not a command"), undefined);
 	assert.equal(parseCommand("/"), undefined);
