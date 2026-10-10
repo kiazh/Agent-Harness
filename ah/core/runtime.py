@@ -65,6 +65,13 @@ class RuntimeServices:
                 report["db"] = "ready" if db.connected else "unavailable"
             except Exception as e:
                 report["db"] = f"unavailable: {e}"
+            if report["db"] == "ready":
+                try:
+                    await db.initialize_growth_schema()
+                    report["personality_growth"] = "ready"
+                except Exception as error:
+                    logger.warning("Growth schema unavailable (%s)", type(error).__name__)
+                    report["personality_growth"] = "unavailable"
             try:
                 from ah.observability.audit import audit_persistence
 
@@ -345,6 +352,19 @@ def _capabilities_from_report(report: dict[str, Any]) -> list[Capability]:
         )
     )
     caps.append(Capability("research_training", "research-only", "offline workflow", ""))
+    from ah.core.config import config
+
+    growth_enabled = config.get("personality_growth_enabled") and config.get("memory_enabled")
+    caps.append(
+        Capability(
+            "personality_growth",
+            "disabled"
+            if not growth_enabled
+            else ("active" if report.get("personality_growth") == "ready" else "unavailable"),
+            "persistent notes and feedback-driven retrieval policy",
+            "",
+        )
+    )
     return caps
 
 

@@ -187,7 +187,7 @@ Secrets never echo, never enter history, never touch `config.yaml`.
 
 - **ReAct loop** — Thought → Action → Observation, streaming, configurable iterations, 50k token budget, per-tool timeouts (60s for delegation).
 - **Tool registry** — decorator-based, JSON Schema inference, `bool`-safe type checks, 20k arg cap. Built-ins: `web_search`, `web_extract`, `read_file`, `write_file`, `list_files`, `search_files`, `remember`, `recall`, `delegate`, `list_agents`, `share_memory`, `session_recall`, `skill_list`, `skill_read`, `terminal`.
-- **Skills** — `SKILL.md` + YAML frontmatter, trigger matching, curator health, hub publish/install, progressive disclosure (bodies via `skill_read` only), injection scanning on create/update.
+- **Skills** — all 302 [ECC workflows](docs/ECC_SKILLS.md) bundled offline and automatically routed for each task, with bounded instruction loading and on-demand supporting files. No manual activation or enable flag. Local skills retain YAML metadata, curator health, hub publish/install and injection scanning.
 
 ### Context & memory
 
@@ -322,7 +322,7 @@ Five test-driven gaps:
 1. **Reversible eviction** — archive-before-delete, `FOR UPDATE` claim, keep-10 floor (two concurrency wipe/double-archive bugs found by load tests).
 2. **Shared identity** — HMAC provenance per memory, recipient `validate_incoming`, quarantine on tamper.
 3. **Persona memory** — `PersonaMemoryStore` + Plutchik `EmotionTopology`, default-on rerank.
-4. **RL memory** — action/reward + GRPO trainer (baseline, not wired into runtime).
+4. **RL memory and personality growth** — offline GRPO plus a live, feedback-trained retrieval policy; persistent preferences, style and lessons across sessions and models. See [personality growth](docs/PERSONALITY_GROWTH.md).
 5. **SoulSpec** — v0.5 manifest/packages, `AgentDef` round-trip, Claude/Codex adapters, most-restrictive permission merge.
 
 Plus LoCoMo harness (`ah/research/locomo.py`), identity eval (`identity_eval.py`), memory-policy training, native-vs-LangGraph trial (`workflow_trial.py`).
@@ -385,7 +385,7 @@ agent-harness/
 ├── ui/src/              # pi-tui app + features/ (32 commands, 24 skins)
 ├── ui/test/             # node:test suites
 ├── tests/               # ~80 pytest modules + workflow_trial/
-├── skills/              # 21 SKILL.md playbooks
+├── skills/              # local playbooks + all 302 pinned ECC skills and resources
 ├── research/            # example identity scenarios
 ├── Dockerfile / Dockerfile.sandbox / docker-compose.yml
 └── pyproject.toml

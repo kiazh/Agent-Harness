@@ -55,6 +55,7 @@ packages = ["ah"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["skills/ecc"]
 
 [tool.ruff.lint]
 # Explicit so results don't change with the ruff version:
@@ -64,6 +65,7 @@ select = ["E4", "E7", "E9", "F", "B904", "I", "UP"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
 markers = [
     "db: requires the dedicated PostgreSQL test database",
     "integration: exercises service or transport integration boundaries",

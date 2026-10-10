@@ -74,6 +74,42 @@ class FakeHost implements FeatureHost {
 
 const run = (text: string, host: FakeHost) => runCommand(parseCommand(text)!, host);
 
+test("/persona shows, saves and clears the user's requested personality", async () => {
+	const host = new FakeHost();
+	host.responses["config.get"] = { config: { persona_description: "A patient mentor" }, secrets: [] };
+	await run("/persona", host);
+	assert.match(host.last().text, /A patient mentor/);
+	host.responses["config.set"] = { key: "persona_description", value: "Warm, witty and concise" };
+	await run("/persona Warm, witty and concise", host);
+	assert.deepEqual(host.calls.at(-1), { method: "config.set", params: { key: "persona_description", value: "Warm, witty and concise", persist: true } });
+	await run("/persona --clear", host);
+	assert.deepEqual(host.calls.at(-1), { method: "config.set", params: { key: "persona_description", value: "", persist: true } });
+});
+
+test("/growth teaches and rates the current session without an approval prompt", async () => {
+	const host = new FakeHost();
+	host.responses["growth.teach"] = { notes: { "style:verbosity": "Keep it short" } };
+	await run("/growth teach style verbosity Keep it short", host);
+	assert.deepEqual(host.calls[0], { method: "growth.teach", params: { sessionId: SESSION.id, kind: "style", key: "verbosity", content: "Keep it short" } });
+	host.responses["growth.get"] = { growth: { notes: {}, interactions: 1, feedback_count: 0 }, episodes: [{ id: "episode-1", completed: true, reward: null, action: "retrieve" }] };
+	host.responses["growth.feedback"] = { accepted: true };
+	await run("/growth feedback good", host);
+	assert.deepEqual(host.calls.at(-1), { method: "growth.feedback", params: { sessionId: SESSION.id, episodeId: "episode-1", reward: 1 } });
+	assert.match(host.last().text, /learned from your rating/);
+	assert.equal(host.picks.length, 0);
+});
+
+test("/growth does not rate interrupted turns and supports explicit correction", async () => {
+	const host = new FakeHost();
+	host.responses["growth.get"] = { growth: { notes: {}, interactions: 0, feedback_count: 0 }, episodes: [{ id: "unfinished", completed: false, reward: null, action: "retrieve" }] };
+	await run("/growth feedback bad", host);
+	assert.match(host.last().text, /No completed, unrated/);
+	assert.equal(host.calls.length, 1);
+	host.responses["growth.forget"] = { removed: true };
+	await run("/growth forget style:verbosity", host);
+	assert.deepEqual(host.calls.at(-1), { method: "growth.forget", params: { sessionId: SESSION.id, key: "style:verbosity" } });
+});
+
 test("/recall searches transcript evidence and opens an anchored window", async () => {
 	const host = new FakeHost();
 	const sourceId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";

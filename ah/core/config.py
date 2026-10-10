@@ -102,6 +102,8 @@ DEFAULTS: dict[str, Any] = {
     "usage_agent_token_limit": 0,
     "usage_agent_request_limit": 0,
     "memory_enabled": True,
+    "personality_growth_enabled": True,
+    "persona_description": "",
     "persona_memory_enabled": True,
     "persona_default_emotion": "trust",
     "learning_review_enabled": False,
@@ -175,6 +177,12 @@ def validate_value(key: str, value: Any) -> Any:
     across CLI/gateway/HTTP/config-file/env paths. Intentional
     zero/unlimited semantics (usage_*_limit == 0) are preserved.
     """
+    if key == "persona_description":
+        if not isinstance(value, str) or len(value) > 2000:
+            raise ValueError("persona_description must be a string of at most 2000 characters")
+        from ah.memory.redaction import redact_secrets
+
+        return redact_secrets(value.strip()).text
     if key == "execution_mode":
         normalized = str(value).strip().lower()
         if normalized not in ("ask", "workspace", "sandbox", "full"):
@@ -282,6 +290,8 @@ class Config:
     usage_agent_token_limit: int = 0
     usage_agent_request_limit: int = 0
     memory_enabled: bool = True
+    personality_growth_enabled: bool = True
+    persona_description: str = ""
     persona_memory_enabled: bool = True
     persona_default_emotion: str = "trust"
     learning_review_enabled: bool = False

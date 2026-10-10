@@ -203,6 +203,7 @@ class Database:
 
     async def initialize_schema(self, schema_path: str | None = None) -> None:
         """Apply UTF-8 schema/migrations atomically, preserving data on failure."""
+        default_schema = schema_path is None
         if schema_path is None:
             schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
         with open(schema_path, encoding="utf-8") as f:
@@ -210,6 +211,21 @@ class Database:
         async with self.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(schema_sql)
+                if default_schema:
+                    with open(
+                        os.path.join(os.path.dirname(__file__), "growth_schema.sql"),
+                        encoding="utf-8",
+                    ) as f:
+                        await conn.execute(f.read())
+
+    async def initialize_growth_schema(self) -> None:
+        """Apply only the additive growth migration on existing installations."""
+        with open(
+            os.path.join(os.path.dirname(__file__), "growth_schema.sql"), encoding="utf-8"
+        ) as f:
+            schema_sql = f.read()
+        async with self.acquire() as conn, conn.transaction():
+            await conn.execute(schema_sql)
 
     @classmethod
     def reset(cls) -> None:

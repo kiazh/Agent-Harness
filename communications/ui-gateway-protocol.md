@@ -84,3 +84,6 @@ available during turns. HTTP also exposes these authenticated methods through
 Application errors: 1001 database unavailable, 1002 session/not found, 1003 turn in
 progress, 1004 operation failed, 1005 unauthorized. JSON-RPC standard errors apply
 to malformed, missing or unknown methods/parameters.
+# Personality growth
+
+`growth.get {sessionId}` returns `{growth: {agent_id, notes, policy, interactions, feedback_count}, episodes: [...]}`. Episodes include `id`, `session_id`, `action`, `completed`, `reward` and `created_at`. `growth.teach {sessionId, kind, key, content}` saves a bounded preference/style/lesson; `growth.forget {sessionId, key}` removes a `kind:key` note. `growth.feedback {sessionId, episodeId, reward}` accepts a finite reward in [-1, 1] once for a completed decision in that session. `growth.installPolicy {sessionId, policy}` validates and installs six-action offline JSON weights with a safe live retrieval/noop mask. Teaching, feedback and installation reject requests while memory or personality growth is disabled. These methods use the existing gateway token and derive the owning agent from the session.

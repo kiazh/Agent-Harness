@@ -6,6 +6,7 @@ import type { SessionResult } from "../protocol.ts";
 import { codexCommands } from "./codex.ts";
 import { sessionCommands } from "./sessions.ts";
 import { memoryCommand } from "./memory.ts";
+import { growthCommand } from "./growth.ts";
 import { skillsCommand } from "./skills.ts";
 import { agentsCommand, delegateCommand } from "./agents.ts";
 import { jobsCommand } from "./jobs.ts";
@@ -55,6 +56,7 @@ const COMMANDS: Command[] = [
 	...codexCommands,
 	...contextCommands,
 	memoryCommand,
+	growthCommand,
 	skillsCommand,
 	agentsCommand,
 	delegateCommand,

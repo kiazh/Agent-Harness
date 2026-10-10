@@ -423,6 +423,10 @@ class Gateway:
             except Exception as e:
                 raise RpcError(DATABASE_UNAVAILABLE, f"database unavailable: {e}") from e
             self._db_ready = True
+            try:
+                await db.initialize_growth_schema()
+            except Exception as error:
+                logger.warning("Growth schema unavailable (%s)", type(error).__name__)
             from ah.core.usage import usage_store
 
             await usage_store.cleanup_orphaned_reservations()

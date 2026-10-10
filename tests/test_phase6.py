@@ -190,7 +190,7 @@ async def test_agent_lifecycle_and_tool_hooks(monkeypatch):
     from ah.plugins.registry import plugin_registry
 
     session_id = uuid.uuid4()
-    session = SimpleNamespace(id=session_id, context_budget=8000, goal=None)
+    session = SimpleNamespace(id=session_id, agent_id="harness", context_budget=8000, goal=None)
     seen = []
 
     class Recorder:

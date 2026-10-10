@@ -658,6 +658,7 @@ def test_selected_provider_key_honesty(monkeypatch):
     real_openrouter = config.openrouter_api_key
     real_openai = config.openai_api_key
     config.set("provider", "openrouter")
+    monkeypatch.setenv("AGENT_HARNESS_PROVIDER", "openrouter")
     # Blank attribute AND environment fallbacks (get() consults legacy env).
     config.openrouter_api_key = ""
     config.openai_api_key = "sk-test-wrong-family"

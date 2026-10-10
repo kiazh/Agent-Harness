@@ -81,6 +81,10 @@ BUILTIN_AGENTS: dict[str, AgentDef] = {
             "web_extract",
             "search_documents",
             "recall",
+            "learn_personality",
+            "skill_list",
+            "skill_read",
+            "skill_resource",
         ],
         source="builtin",
     ),
@@ -91,7 +95,17 @@ BUILTIN_AGENTS: dict[str, AgentDef] = {
             "You are a careful software engineer. Read before you edit, make focused "
             "changes, and run the project's tests to verify. Explain what you changed."
         ),
-        tools=["read_file", "write_file", "list_files", "search_files", "terminal"],
+        tools=[
+            "read_file",
+            "write_file",
+            "list_files",
+            "search_files",
+            "terminal",
+            "learn_personality",
+            "skill_list",
+            "skill_read",
+            "skill_resource",
+        ],
         source="builtin",
     ),
 }

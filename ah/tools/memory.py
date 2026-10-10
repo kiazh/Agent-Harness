@@ -195,3 +195,38 @@ registry.declare_effects(
         "recall": ("memory",),
     }
 )
+
+
+@registry.register(
+    name="learn_personality",
+    description=(
+        "Persist an evidenced user preference, requested conversational style, or verified "
+        "reusable lesson across sessions. Use proactively when you learn something durable. "
+        "Keep notes short, avoid secrets and transient tasks. Reuse a key to correct a note. "
+        "Core identity and permission rules cannot be changed."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": ["preference", "style", "lesson"]},
+            "key": {"type": "string", "description": "Stable short name, e.g. verbosity"},
+            "content": {"type": "string", "description": "Durable note, at most 500 characters"},
+        },
+        "required": ["kind", "key", "content"],
+    },
+)
+async def learn_personality(kind: str, key: str, content: str) -> str:
+    from ah.core.config import config
+    from ah.memory.growth import growth_store
+
+    if not config.get("personality_growth_enabled") or not config.get("memory_enabled"):
+        raise ToolError("Personality growth is disabled")
+    agent_id, _ = await active_agent_scope()
+    try:
+        await growth_store.teach(agent_id, kind, key, content)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from None
+    return f"Learned {kind}:{key}; available in future conversations."
+
+
+registry.declare_effects({"learn_personality": ("memory",)})

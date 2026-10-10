@@ -137,3 +137,14 @@ def test_missing_directory_loads_empty_and_is_cached(tmp_path, monkeypatch):
     registry.load_all()
     assert calls == []
     assert registry.list_skills() == []
+
+
+def test_telemetry_save_does_not_mask_out_of_band_instruction_edit(tmp_path):
+    _write_skill(tmp_path, "alpha")
+    registry = SkillRegistry(tmp_path)
+    registry.load_all()
+    path = tmp_path / "alpha" / "SKILL.md"
+    path.write_text(SKILL_MD.format(name="alpha") + "\nNew instruction.\n")
+    registry.record_use("alpha")
+    registry.load_all()
+    assert "New instruction." in registry.get_skill_content("alpha")

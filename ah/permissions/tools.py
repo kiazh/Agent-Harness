@@ -49,9 +49,9 @@ def action_for_tool(name: str, args: dict) -> dict:
         }
     if name in ("delegate",):
         return {"operation": "delegate", "targets": [str(args.get("agent", ""))]}
-    if name in ("share_memory", "remember", "recall"):
+    if name in ("share_memory", "remember", "recall", "learn_personality"):
         return {"operation": "memory", "targets": []}
-    if name in ("skill_list", "skill_read"):
+    if name in ("skill_list", "skill_read", "skill_resource"):
         return {"operation": "skill.read", "targets": [str(args.get("skill_name", ""))]}
     if name in ("session_recall", "session_recall_window", "list_agents"):
         return {"operation": "context.read", "targets": []}

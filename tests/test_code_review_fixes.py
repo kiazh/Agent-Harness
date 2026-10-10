@@ -388,6 +388,7 @@ class TestDeadCodeRemoval:
             "fetchrow",
             "fetchval",
             "initialize_schema",
+            "initialize_growth_schema",
             "reset",
             "acquire",
         }

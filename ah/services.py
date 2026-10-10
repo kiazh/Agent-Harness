@@ -435,7 +435,7 @@ def learn_skill(
             raise ServiceError(
                 f"Source not found: {source}. Provide a file path, URL, or existing skill name."
             )
-        content = existing.content
+        content = skill_registry.get_skill_content(existing.name) or ""
         default_name, default_desc = (
             f"{existing.name}-learned",
             f"Skill derived from {existing.name}",

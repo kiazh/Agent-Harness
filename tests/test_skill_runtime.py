@@ -52,7 +52,7 @@ async def test_skill_tools_disclose_bounded_content_and_count_actual_reads(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_matching_skill_metadata_reaches_agent_prompt_without_body(tmp_path, monkeypatch):
+async def test_matching_skill_instructions_activate_automatically(tmp_path, monkeypatch):
     import ah.skills.registry as skills_module
     from ah.core.agent import BaseReActAgent
     from ah.core.models import Session
@@ -87,12 +87,13 @@ async def test_matching_skill_metadata_reaches_agent_prompt_without_body(tmp_pat
     assert "deploy" in prompt
     assert "skill_read" in prompt
     assert "Use deploy safely" not in prompt
-    assert "PRIVATE STEPS" not in prompt
-    assert skills.get("deploy").usage_count == 0
+    assert "PRIVATE STEPS" in prompt
+    assert skills.get("deploy").usage_count == 1
 
     agent.allowed_tools = ["read_file"]
     _, messages = await agent._prepare_context(session_id, "help me deploy")
-    assert "## Relevant skills" not in messages[0]["content"]
+    assert "PRIVATE STEPS" in messages[0]["content"]
+    assert agent.allowed_tools == ["read_file"]
 
 
 @pytest.mark.asyncio

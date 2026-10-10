@@ -22,6 +22,7 @@ from rich.table import Table
 import ah.tools  # noqa: F401 — registers all built-in tools
 from ah import __version__, services
 from ah.cli import output
+from ah.cli.growth import app as growth_app
 from ah.cli.launcher import launch_ui
 from ah.cli.output import console
 from ah.core.config import config
@@ -36,6 +37,7 @@ app = typer.Typer(
     help="AgentHarness — self-hosted AI agent framework. Run `ah` to open the interactive UI.",
     invoke_without_command=True,
 )
+app.add_typer(growth_app, name="growth")
 
 
 @app.callback()
@@ -133,6 +135,10 @@ def chat(
         await db.connect()
         agent = None
         try:
+            try:
+                await db.initialize_growth_schema()
+            except Exception as error:
+                logger.warning("Growth schema unavailable (%s)", type(error).__name__)
             if continue_:
                 session = await session_manager.get_last_active()
                 if not session:

@@ -27,6 +27,13 @@ from ah.gateway.features.config import (
     profile_set,
     status,
 )
+from ah.gateway.features.growth import (
+    growth_feedback,
+    growth_forget,
+    growth_get,
+    growth_install_policy,
+    growth_teach,
+)
 from ah.gateway.features.jobs import (
     jobs_create,
     jobs_delete,
@@ -93,6 +100,11 @@ __all__ = [
 Handler = Callable[["Gateway", dict[str, Any]], Awaitable[dict[str, Any]]]
 
 METHODS: dict[str, Handler] = {
+    "growth.get": growth_get,
+    "growth.teach": growth_teach,
+    "growth.feedback": growth_feedback,
+    "growth.forget": growth_forget,
+    "growth.installPolicy": growth_install_policy,
     "session.fork": session_fork,
     "session.delete": session_delete,
     "session.rename": session_rename,

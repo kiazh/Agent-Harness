@@ -101,3 +101,6 @@ __pycache__/
 !communications/
 communications/*
 !communications/ui-gateway-protocol.md
+
+# Pinned ECC distribution includes directories otherwise ignored above.
+!skills/ecc/**

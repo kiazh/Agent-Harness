@@ -9,6 +9,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from contextvars import ContextVar
 from functools import wraps
 from typing import Any
 
@@ -43,6 +44,7 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+_growth_episode: ContextVar[uuid.UUID | None] = ContextVar("growth_episode", default=None)
 
 console = Console()
 
@@ -57,6 +59,8 @@ def instrument_run(func):
             except Exception:
                 metrics.record_error("agent.run")
                 raise
+        if not response.needs_approval:
+            await self._complete_growth()
         metrics.record_latency("agent.run", (time.monotonic() - start) * 1000)
         metrics.increment_counter("agent.run.calls")
         session = await session_manager.get(session_id)
@@ -74,6 +78,8 @@ def instrument_stream(func):
             try:
                 async for event in func(self, session_id, user_message, verbose):
                     if event.type == "done":
+                        if event.response is not None and not event.response.needs_approval:
+                            await self._complete_growth()
                         metrics.record_latency("agent.run", (time.monotonic() - start) * 1000)
                         metrics.increment_counter("agent.run.calls")
                         session = await session_manager.get(session_id)
@@ -177,6 +183,8 @@ class BaseReActAgent:
     def _tool_defs(self) -> list[ToolDefinition]:
         """Tool definitions offered to the model, honoring the allow-list."""
         defs = registry.get_tool_definitions()
+        if not config.get("personality_growth_enabled") or not config.get("memory_enabled"):
+            defs = [d for d in defs if d.name != "learn_personality"]
         if self.allowed_tools is None:
             return defs
         allowed = set(self.allowed_tools)
@@ -392,6 +400,9 @@ class BaseReActAgent:
         session = await session_manager.get(session_id)
         if session is None:
             raise SessionNotFoundError(f"Session {session_id} not found")
+        if session.agent_id != self.agent_id:
+            raise PermissionError("Session does not belong to the running agent")
+        _growth_episode.set(None)
 
         await plugin_registry.dispatch("pre_agent_run", session, user_message)
 
@@ -433,7 +444,36 @@ class BaseReActAgent:
         except Exception as _boundary_error:
             # Optional fallback preserves the primary outcome; report no payload.
             record_failure("agent._prepare_context", _boundary_error)
-        if include_memory and memory_enabled:
+        growth_enabled = (
+            include_memory and memory_enabled and config.get("personality_growth_enabled")
+        )
+        growth_prompt = ""
+        retrieve_memory = True
+        if growth_enabled:
+            try:
+                from ah.memory.growth import growth_store
+
+                growth_prompt = await asyncio.wait_for(
+                    growth_store.prompt(
+                        self.agent_id,
+                        can_learn=self.allowed_tools is None
+                        or "learn_personality" in self.allowed_tools,
+                    ),
+                    2,
+                )
+                decision = await asyncio.wait_for(
+                    growth_store.begin(
+                        self.agent_id, session_id, user_message, session.context_budget
+                    ),
+                    2,
+                )
+                _growth_episode.set(decision["id"])
+                retrieve_memory = decision["action"] == "retrieve"
+                if not retrieve_memory:
+                    self._last_retrieval_mode = "policy-noop"
+            except Exception as exc:
+                record_failure("agent.growth.prepare", exc)
+        if include_memory and memory_enabled and retrieve_memory:
             try:
                 from ah.memory.embeddings import embed_query
 
@@ -491,13 +531,32 @@ class BaseReActAgent:
             logger.warning("Archived context retrieval failed: %s", e)
 
         system_prompt = self.system_prompt
-        if self.allowed_tools is None or "skill_read" in self.allowed_tools:
-            try:
-                from ah.skills.runtime import matching_skill_catalog
+        persona_description = config.get("persona_description")
+        if persona_description:
+            system_prompt += (
+                "\n\nUser-requested persona (tone and character):\n"
+                + json.dumps(persona_description, ensure_ascii=False)
+                + "\nApply this persona to your conversational style. Preserve your core role, "
+                "safety rules and tool permissions. Adapt learned style within this requested persona."
+            )
+        system_prompt += growth_prompt
+        from ah.core.assembler import get_token_count
+        from ah.skills.runtime import automatic_skill_context
 
-                system_prompt += matching_skill_catalog(user_message)
-            except (OSError, ValueError) as exc:
-                logger.warning("Skill catalog unavailable: %s", exc)
+        query_tokens = get_token_count("\n\n## Current Query\n" + user_message)
+        available = (
+            session.context_budget
+            - min(query_tokens, session.context_budget // 2)
+            - get_token_count(system_prompt)
+            - 32
+        )
+        system_prompt += automatic_skill_context(
+            user_message,
+            budget=min(1200, session.context_budget // 5, max(0, available)),
+            can_read=self.allowed_tools is None or "skill_read" in self.allowed_tools,
+            can_search=self.allowed_tools is None or "skill_list" in self.allowed_tools,
+            can_resources=self.allowed_tools is None or "skill_resource" in self.allowed_tools,
+        )
 
         # Assemble prompt
         prompt = assembler.assemble(
@@ -1023,7 +1082,10 @@ class BaseReActAgent:
             if item.get("_needs_approval"):
                 tool_entry["needs_approval"] = item["_needs_approval"]
             tool_calls_made.append(tool_entry)
-            self._append_tool_messages(messages, response, tc, result_str[:1000])
+            # Skill pages already have bounded output. Preserve the page so its
+            # continuation offset cannot skip instructions hidden by the preview cap.
+            message_limit = 9000 if tool_name in ("skill_read", "skill_resource") else 1000
+            self._append_tool_messages(messages, response, tc, result_str[:message_limit])
 
     async def _flush_pending_chunks(self, pending_chunks: list[dict[str, Any]]) -> None:
         """Insert all pending chunks in a single batch operation."""
@@ -1207,6 +1269,18 @@ class BaseReActAgent:
         _pending_learning_reviews.add(task)
         task.add_done_callback(self._learning_tasks.discard)
         task.add_done_callback(_pending_learning_reviews.discard)
+
+    async def _complete_growth(self) -> None:
+        episode_id = _growth_episode.get()
+        if episode_id is None:
+            return
+        _growth_episode.set(None)
+        try:
+            from ah.memory.growth import growth_store
+
+            await asyncio.wait_for(growth_store.complete(self.agent_id, episode_id), 2)
+        except Exception as exc:
+            record_failure("agent.growth.complete", exc)
 
     async def _review_learning(
         self, session_id: uuid.UUID, user_message: str, response: AgentResponse

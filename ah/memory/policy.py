@@ -86,12 +86,19 @@ class MemoryPolicy:
         return sum(values) / len(values)
 
     def save(self, path: str | Path) -> None:
-        payload = {action.value: self.weights[action] for action in MemoryAction}
+        payload = self.to_dict()
         Path(path).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    def to_dict(self) -> dict[str, list[float]]:
+        return {action.value: list(self.weights[action]) for action in MemoryAction}
 
     @classmethod
     def load(cls, path: str | Path) -> MemoryPolicy:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        return cls.from_dict(payload)
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> MemoryPolicy:
         if not isinstance(payload, dict) or set(payload) != {a.value for a in MemoryAction}:
             raise ValueError("policy must contain weights for all memory actions")
         weights = {}
@@ -101,12 +108,68 @@ class MemoryPolicy:
                 not isinstance(values, list)
                 or len(values) != _FEATURE_COUNT
                 or any(
-                    type(value) not in (int, float) or not math.isfinite(value) for value in values
+                    type(value) not in (int, float)
+                    or abs(value) > 1e100
+                    or not math.isfinite(value)
+                    for value in values
                 )
             ):
                 raise ValueError(f"invalid weights for {action.value}")
             weights[action] = [float(value) for value in values]
         return cls(weights=weights)
+
+
+class RetrievalPolicy(MemoryPolicy):
+    """Safe runtime mask of the offline policy; never learns deletion authority."""
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> RetrievalPolicy:
+        policy = super().from_dict(payload)
+        if any(abs(w) > 20 for weights in policy.weights.values() for w in weights):
+            raise ValueError("runtime policy weights must be between -20 and 20")
+        return policy
+
+    def available_actions(self, state: MemoryState) -> tuple[MemoryAction, ...]:
+        return (MemoryAction.RETRIEVE, MemoryAction.NOOP)
+
+    def observe(self, state: MemoryState, action: MemoryAction, reward: float) -> None:
+        """One on-policy contextual bandit update from actual human feedback.
+
+        Zero is the neutral baseline. Offline GRPO remains separate because live
+        turns do not provide counterfactual outcomes for every memory action.
+        """
+        self.observe_features(state_features(state), action, reward)
+
+    def observe_features(
+        self,
+        features: tuple[float, ...],
+        action: MemoryAction,
+        reward: float,
+        behavior_probability: float | None = None,
+    ) -> None:
+        if type(reward) not in (int, float) or not math.isfinite(reward) or not -1 <= reward <= 1:
+            raise ValueError("reward must be a finite number between -1 and 1")
+        if len(features) != _FEATURE_COUNT or any(not math.isfinite(x) for x in features):
+            raise ValueError("invalid state features")
+        actions = (MemoryAction.RETRIEVE, MemoryAction.NOOP)
+        logits = {a: sum(w * x for w, x in zip(self.weights[a], features)) for a in actions}
+        maximum = max(logits.values())
+        probabilities = {a: math.exp(v - maximum) for a, v in logits.items()}
+        total = sum(probabilities.values())
+        probabilities = {a: p / total for a, p in probabilities.items()}
+        if action not in probabilities:
+            raise ValueError("action is outside the runtime mask")
+        correction = 1.0
+        if behavior_probability is not None:
+            if not math.isfinite(behavior_probability) or not 0 < behavior_probability <= 1:
+                raise ValueError("invalid behavior probability")
+            correction = min(1.2, probabilities[action] / behavior_probability)
+        for candidate, probability in probabilities.items():
+            gradient = correction * reward * (float(candidate == action) - probability)
+            for index, feature in enumerate(features):
+                self.weights[candidate][index] = max(
+                    -20.0, min(20.0, self.weights[candidate][index] + 0.05 * gradient * feature)
+                )
 
 
 @dataclass(frozen=True)

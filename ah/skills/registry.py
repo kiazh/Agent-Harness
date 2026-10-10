@@ -229,6 +229,8 @@ class SkillRegistry:
     """Load, match, and manage skills."""
 
     def __init__(self, skills_dir: str | Path | None = None) -> None:
+        self._include_ecc = skills_dir is None
+        self._ecc_bundle = None
         self.skills_dir = Path(skills_dir) if skills_dir is not None else default_skills_dir()
         self._skills: dict[str, Skill] = {}
         self._telemetry_file = self.skills_dir / "telemetry.json"
@@ -304,7 +306,9 @@ class SkillRegistry:
             self._telemetry_file.write_text(json.dumps(telemetry, indent=2), encoding="utf-8")
         except OSError:
             logger.warning("Failed to save telemetry", exc_info=True)
-        self._invalidate()
+        if self._signature_cache is not None:
+            # Only acknowledge our telemetry write, not concurrent source edits.
+            self._signature_cache = (self._signature_cache[0], self._signature()[1])
 
     def load_all(self, *, refresh: bool = False) -> None:
         """Load all skills from the skills directory (reload semantics, cached).
@@ -322,6 +326,12 @@ class SkillRegistry:
         if self._signature_cache is not None and signature == self._signature_cache and not refresh:
             return
         self._skills.clear()
+        if self._include_ecc:
+            if self._ecc_bundle is None:
+                from ah.skills.bundle import ECCBundle
+
+                self._ecc_bundle = ECCBundle()
+            self._skills.update((skill.name, skill) for skill in self._ecc_bundle.skills())
         if self.skills_dir.exists():
             for skill_dir in sorted(self.skills_dir.iterdir()):
                 if skill_dir.is_dir():
@@ -332,7 +342,12 @@ class SkillRegistry:
                         except (ValueError, OSError, UnicodeDecodeError) as e:
                             logger.warning("Skipping skill %s: %s", skill_file, e)
                             continue
-                        self._skills[skill.name] = skill
+                        existing = self._skills.get(skill.name.casefold())
+                        if not existing or existing.source_type != "builtin-ecc":
+                            # Local provenance cannot claim the verified bundle's trust.
+                            if skill.source_type == "builtin-ecc":
+                                skill.source_type = "local"
+                            self._skills[skill.name] = skill
             self._load_telemetry()
         self._signature_cache = signature
 
@@ -363,6 +378,8 @@ class SkillRegistry:
     def get_skill_content(self, name: str) -> str | None:
         """Get the full content of a skill (for injection into prompt)."""
         skill = self._skills.get(name)
+        if skill and skill.source_type == "builtin-ecc":
+            return self._ecc_bundle.instructions(skill)
         return skill.content if skill and skill.enabled else None
 
     # ─── Telemetry methods ─────────────────────────────────────────────────
@@ -436,6 +453,14 @@ class SkillRegistry:
         version: str = "1.0.0",
     ) -> Skill:
         """Create a new skill and persist it to the skills directory."""
+        SkillParser._validate_metadata(name, description, triggers or [])
+        if self._include_ecc:
+            self.load_all()
+            existing = self._skills.get(name.casefold())
+            if existing and existing.source_type == "builtin-ecc":
+                raise ValueError(f"skill '{name}' is a bundled default")
+        if source_type == "builtin-ecc":
+            raise ValueError("builtin-ecc provenance is reserved for the verified bundle")
         # Validate content for prompt injection (content + description/triggers).
         content = SkillParser._validate_content(content)
         triggers = triggers or []
@@ -499,6 +524,8 @@ class SkillRegistry:
         skill = self._skills.get(name)
         if not skill:
             return None
+        if skill.source_type == "builtin-ecc":
+            return None
 
         if description is not None:
             SkillParser._scan_injection(description)
@@ -534,11 +561,15 @@ class SkillRegistry:
         skill = self._skills.get(name)
         if skill is None:
             return None
+        if skill.source_type == "builtin-ecc":
+            return None
         skill.enabled = enabled
         return self.update_skill(name)
 
     def delete_skill(self, name: str) -> bool:
         """Delete a skill by name."""
+        if self._skills.get(name) and self._skills[name].source_type == "builtin-ecc":
+            return False
         skill = self._skills.pop(name, None)
         if skill:
             self._invalidate()
@@ -570,6 +601,8 @@ class SkillCurator:
         cutoff = datetime.now(UTC) - timedelta(days=days)
         archived = []
         for skill in self.registry.list_skills():
+            if skill.source_type == "builtin-ecc":
+                continue
             if skill.last_activity_at is None:
                 # Never used — check created_at
                 if skill.created_at < cutoff:
@@ -585,6 +618,8 @@ class SkillCurator:
         cutoff = datetime.now(UTC) - timedelta(days=days)
         stale = []
         for skill in self.registry.list_skills():
+            if skill.source_type == "builtin-ecc":
+                continue
             if skill.last_activity_at is None:
                 if skill.created_at < cutoff:
                     stale.append(skill)
@@ -606,6 +641,8 @@ class SkillCurator:
         unused = self.get_unused_skills()
         removed = []
         for skill in unused:
+            if skill.source_type == "builtin-ecc":
+                continue
             if not dry_run:
                 self.registry.delete_skill(skill.name)
             removed.append(skill.name)
@@ -668,7 +705,7 @@ class SkillHub:
             "name": skill.name,
             "description": skill.description,
             "triggers": skill.triggers,
-            "content": skill.content,
+            "content": self.registry.get_skill_content(skill.name),
             "version": skill.version,
             "author": author,
             "tags": tags or [],

@@ -14,6 +14,20 @@ async function setConfig(host: FeatureHost, key: string, value: string, persist:
 }
 
 export const settingsCommands: Command[] = [
+    {
+        name: "persona",
+        description: "Show or save your preferred persona description (--clear to reset)",
+        argumentHint: "[description|--clear]",
+        async run(args, host) {
+            const description = args.trim();
+            if (!description) {
+                const { config } = await host.request<ConfigGetResult>("config.get");
+                host.print(`Persona: ${config.persona_description || "agent default"}`, "plain");
+                return;
+            }
+            await setConfig(host, "persona_description", description === "--clear" ? "" : description, true);
+        },
+    },
 	{
 		name: "default-model",
 		description: "Pick the default model from a menu (saved across sessions)",

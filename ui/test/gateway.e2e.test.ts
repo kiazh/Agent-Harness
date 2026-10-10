@@ -31,6 +31,34 @@ function startClient() {
 	return { client, crashed: () => crashed };
 }
 
+test("personality survives a gateway restart and a new session", { skip, timeout: 60_000 }, async () => {
+	const key = `e2e_${Math.random().toString(36).slice(2)}`;
+	const first = startClient().client;
+	let firstSession: SessionInfo | undefined;
+	try {
+		await first.request("initialize", {}, 30_000);
+		firstSession = (await first.request<SessionResult>("session.create", { title: "growth e2e first" })).session;
+		await first.request("growth.teach", { sessionId: firstSession.id, kind: "style", key, content: "Prefer concise examples" });
+	} finally {
+		await first.stop();
+	}
+	const restarted = startClient().client;
+	let secondSession: SessionInfo | undefined;
+	try {
+		await restarted.request("initialize", {}, 30_000);
+		secondSession = (await restarted.request<SessionResult>("session.create", { title: "growth e2e second" })).session;
+		const result = await restarted.request<{ growth: { notes: Record<string, string> } }>("growth.get", { sessionId: secondSession.id });
+		assert.equal(result.growth.notes[`style:${key}`], "Prefer concise examples");
+	} finally {
+		if (secondSession) {
+			await restarted.request("growth.forget", { sessionId: secondSession.id, key: `style:${key}` });
+			await restarted.request("session.delete", { sessionId: secondSession.id });
+		}
+		if (firstSession) await restarted.request("session.delete", { sessionId: firstSession.id });
+		await restarted.stop();
+	}
+});
+
 test("talks to the real gateway", { skip, timeout: 90_000 }, async () => {
 	const { client, crashed } = startClient();
 	try {

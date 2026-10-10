@@ -31,7 +31,9 @@ async def skills_show(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     skill = _registry().get(_str(params, "name", max_len=200))
     if skill is None:
         raise RpcError(NOT_FOUND, f"skill {params.get('name')!r} not found")
-    return {"skill": _skill(skill, content=True)}
+    result = _skill(skill, content=True)
+    result["content"] = _registry().get_skill_content(skill.name)
+    return {"skill": result}
 
 
 async def skills_learn(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
@@ -62,6 +64,9 @@ async def skills_learn(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 async def skills_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     gw.require_db()
     name = _str(params, "name", max_len=200)
+    skill = _registry().get(name)
+    if skill and skill.source_type == "builtin-ecc":
+        raise RpcError(INVALID_PARAMS, "ECC skills are bundled defaults and cannot be deleted")
     if not _registry().delete_skill(name):
         raise RpcError(NOT_FOUND, f"skill {name!r} not found")
     return {"deleted": True}
