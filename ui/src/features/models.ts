@@ -39,6 +39,12 @@ export async function applyModel(host: FeatureHost, entry: ModelEntry, persist =
 	host.onConfig(providerResult);
 	const modelResult = await host.request<ConfigSetResult>("config.set", { key: "model", value: entry.model, ...extra });
 	host.onConfig(modelResult);
+	// Sessions pin model/provider at creation: without this the switch would
+	// only affect future sessions and the current chat would keep failing.
+	const session = host.session();
+	if (session) {
+		await host.request("session.setModel", { sessionId: session.id, model: entry.model, provider: entry.provider });
+	}
 	host.print(`Model: ${entry.model} (${entry.provider})${persist ? " (saved as default)" : ""}`, "success");
 }
 

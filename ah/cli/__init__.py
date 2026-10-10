@@ -98,9 +98,9 @@ def chat(
     message: str = typer.Argument(None, help="Message to send to the agent"),
     continue_: bool = typer.Option(False, "--continue", "-c", help="Continue last session"),
     session_id: str | None = typer.Option(None, "--session", "-s", help="Resume specific session"),
-    model: str = typer.Option(None, "--model", "-m", help="Model to use (e.g., openrouter/free)"),
-    provider: str = typer.Option(
-        "openrouter",
+    model: str | None = typer.Option(None, "--model", "-m", help="Model to use (e.g., openrouter/free)"),
+    provider: str | None = typer.Option(
+        None,
         "--provider",
         "-p",
         help="LLM provider (openrouter, openai, anthropic, google, mistral, groq, together, deepseek, xai, ollama)",

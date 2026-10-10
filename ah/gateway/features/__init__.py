@@ -66,6 +66,7 @@ from ah.gateway.features.sessions import (
     session_rename,
     session_search,
     session_set_goal,
+    session_set_model,
 )
 from ah.gateway.features.skills import (
     learning_approve,
@@ -96,6 +97,7 @@ METHODS: dict[str, Handler] = {
     "session.delete": session_delete,
     "session.rename": session_rename,
     "session.setGoal": session_set_goal,
+    "session.setModel": session_set_model,
     "session.search": session_search,
     "session.recall": session_recall,
     "session.recall.window": session_recall_window,

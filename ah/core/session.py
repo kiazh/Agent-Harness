@@ -227,6 +227,50 @@ class SessionManager:
         )
         await self._cache_invalidate(session_id)
 
+    async def set_model(
+        self,
+        session_id: uuid.UUID,
+        model: str | None = None,
+        provider: str | None = None,
+    ) -> None:
+        """Re-pin a session's model and/or provider.
+
+        Sessions pin model/provider at creation and the agent factory prefers
+        the pinned values over live defaults — so switching the default alone
+        never affects an existing session. Call this when the user explicitly
+        switches the model for the current session.
+        """
+        if model is None and provider is None:
+            raise ValueError("model or provider is required")
+        if model is not None:
+            model = model.strip()
+            if not model or len(model) > 200:
+                raise ValueError("invalid model")
+        if provider is not None:
+            provider = provider.strip().lower()
+            if not provider or len(provider) > 32:
+                raise ValueError("invalid provider")
+        if model is not None and provider is not None:
+            await db.execute(
+                "UPDATE sessions SET model = $2, provider = $3, last_activity = now() WHERE id = $1",
+                session_id,
+                model,
+                provider,
+            )
+        elif model is not None:
+            await db.execute(
+                "UPDATE sessions SET model = $2, last_activity = now() WHERE id = $1",
+                session_id,
+                model,
+            )
+        else:
+            await db.execute(
+                "UPDATE sessions SET provider = $2, last_activity = now() WHERE id = $1",
+                session_id,
+                provider,
+            )
+        await self._cache_invalidate(session_id)
+
     async def archive(self, session_id: uuid.UUID) -> None:
         """Archive a session."""
         await db.execute(

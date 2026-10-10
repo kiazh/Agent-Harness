@@ -334,14 +334,19 @@ test("/config sets a value and --save persists it", async () => {
 test("/default-model sets a custom id and saves it", async () => {
 	const host = new FakeHost();
 	host.responses["config.set"] = { model: "openai/gpt-4o", provider: "openrouter", key: "model", value: "openai/gpt-4o" };
+	host.responses["session.setModel"] = { sessionId: SESSION.id, model: "openai/gpt-4o", provider: "openrouter" };
 	await run("/default-model openai/gpt-4o", host);
 	assert.equal(host.configured[0]!.model, "openai/gpt-4o");
-	assert.deepEqual(host.calls.at(-1)!.params, { key: "model", value: "openai/gpt-4o", persist: true });
+	assert.deepEqual(host.calls.map((c) => [c.method, c.params]), [
+		["config.set", { key: "model", value: "openai/gpt-4o", persist: true }],
+		["session.setModel", { sessionId: SESSION.id, model: "openai/gpt-4o" }],
+	]);
 });
 
 test("/default-model with no args opens the menu and saves the pick", async () => {
 	const host = new FakeHost();
 	host.responses["config.set"] = (p: Record<string, unknown>) => ({ model: "m", provider: "p", key: p.key, value: p.value });
+	host.responses["session.setModel"] = { sessionId: SESSION.id, model: "deepseek-chat", provider: "deepseek" };
 	host.picks.push("deepseek::deepseek-chat");
 	await run("/default-model", host);
 	assert.deepEqual(
@@ -349,6 +354,7 @@ test("/default-model with no args opens the menu and saves the pick", async () =
 		[
 			["config.set", { key: "provider", value: "deepseek", persist: true }],
 			["config.set", { key: "model", value: "deepseek-chat", persist: true }],
+			["session.setModel", { sessionId: SESSION.id, model: "deepseek-chat", provider: "deepseek" }],
 		],
 	);
 	assert.match(host.last().text, /saved as default/);
@@ -357,18 +363,31 @@ test("/default-model with no args opens the menu and saves the pick", async () =
 test("/default-model resolves a curated id directly", async () => {
 	const host = new FakeHost();
 	host.responses["config.set"] = (p: Record<string, unknown>) => ({ model: "m", provider: "p", key: p.key, value: p.value });
+	host.responses["session.setModel"] = { sessionId: SESSION.id, model: "deepseek-chat", provider: "deepseek" };
 	await run("/default-model deepseek-chat", host);
 	assert.deepEqual(
 		host.calls.map((c) => [c.method, c.params]),
 		[
 			["config.set", { key: "provider", value: "deepseek", persist: true }],
 			["config.set", { key: "model", value: "deepseek-chat", persist: true }],
+			["session.setModel", { sessionId: SESSION.id, model: "deepseek-chat", provider: "deepseek" }],
 		],
 	);
 });
 
 test("/model is an alias for /default-model", () => {
 	assert.deepEqual(parseCommand("/model deepseek-chat"), { name: "default-model", args: "deepseek-chat" });
+});
+
+test("/provider re-pins the current session", async () => {
+	const host = new FakeHost();
+	host.responses["config.set"] = { model: "m", provider: "deepseek", key: "provider", value: "deepseek" };
+	host.responses["session.setModel"] = { sessionId: SESSION.id, model: "m", provider: "deepseek" };
+	await run("/provider deepseek", host);
+	assert.deepEqual(host.calls.map((c) => [c.method, c.params]), [
+		["config.set", { key: "provider", value: "deepseek", persist: false }],
+		["session.setModel", { sessionId: SESSION.id, provider: "deepseek" }],
+	]);
 });
 
 test("commands that need a session say so", async () => {
@@ -514,6 +533,7 @@ test("/keys with no args opens the picker menu", async () => {
 test("/models picker applies the curated model and provider", async () => {
 	const host = new FakeHost();
 	host.responses["config.set"] = (p: Record<string, unknown>) => ({ model: "m", provider: "p", key: p.key, value: p.value });
+	host.responses["session.setModel"] = { sessionId: SESSION.id, model: "llama3.1", provider: "ollama" };
 	host.picks.push("ollama::llama3.1");
 	await run("/models", host);
 	assert.deepEqual(
@@ -521,6 +541,7 @@ test("/models picker applies the curated model and provider", async () => {
 		[
 			["config.set", { key: "provider", value: "ollama" }],
 			["config.set", { key: "model", value: "llama3.1" }],
+			["session.setModel", { sessionId: SESSION.id, model: "llama3.1", provider: "ollama" }],
 		],
 	);
 	assert.match(host.last().text, /\/keys/);

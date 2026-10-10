@@ -50,6 +50,10 @@ export const settingsCommands: Command[] = [
 			}
 			// Off-list custom id: keep the current provider, save the model.
 			await setConfig(host, "model", query, true);
+			const session = host.session();
+			if (session) {
+				await host.request("session.setModel", { sessionId: session.id, model: query });
+			}
 			host.print("Provider unchanged — use /provider if this id belongs to another provider.", "plain");
 		},
 	},
@@ -73,7 +77,14 @@ export const settingsCommands: Command[] = [
 			if (!args) {
 				const { config } = await host.request<ConfigGetResult>("config.get");
 				host.print(`Provider: ${config.provider}`);
-			} else await setConfig(host, "provider", args.toLowerCase(), false);
+			} else {
+				const provider = args.toLowerCase();
+				await setConfig(host, "provider", provider, false);
+				const session = host.session();
+				if (session) {
+					await host.request("session.setModel", { sessionId: session.id, provider });
+				}
+			}
 		},
 	},
 	{

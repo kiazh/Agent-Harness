@@ -8,7 +8,7 @@ from ah import services
 from ah.core.context import context_manager
 from ah.core.session import session_manager
 from ah.core.session_recall import SessionRecall
-from ah.gateway.errors import TURN_IN_PROGRESS, RpcError
+from ah.gateway.errors import INVALID_PARAMS, TURN_IN_PROGRESS, RpcError
 from ah.gateway.serializers import chunk_preview, json_safe_payload, session_to_dict
 
 if TYPE_CHECKING:
@@ -59,6 +59,51 @@ async def session_set_goal(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
     session = await gw.get_session(params)
     await session_manager.set_goal(session.id, _str(params, "goal", max_len=2000))
     return {"goal": (await session_manager.get(session.id)).goal}
+
+
+async def session_set_model(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Re-pin the current session's model and/or provider.
+
+    Sessions pin model/provider at creation and the agent factory prefers the
+    pinned values — switching the default alone never affects an existing
+    session, so /models and /provider route through here for the live one.
+    """
+    gw.require_db()
+    session = await gw.get_session(params)
+    raw_model = params.get("model")
+    raw_provider = params.get("provider")
+    model = str(raw_model).strip() if raw_model is not None else None
+    provider = str(raw_provider).strip().lower() if raw_provider is not None else None
+    if (model is not None and (not model or len(model) > 200)) or (
+        provider is not None
+        and (
+            not provider
+            or len(provider) > 32
+            or provider
+            not in (
+                "openrouter",
+                "openai",
+                "anthropic",
+                "google",
+                "mistral",
+                "groq",
+                "together",
+                "deepseek",
+                "xai",
+                "ollama",
+            )
+        )
+    ):
+        raise RpcError(INVALID_PARAMS, "model or provider is invalid")
+    if model is None and provider is None:
+        raise RpcError(INVALID_PARAMS, "model or provider is required")
+    await session_manager.set_model(session.id, model=model, provider=provider)
+    updated = await session_manager.get(session.id)
+    return {
+        "sessionId": str(session.id),
+        "model": updated.model if updated else model,
+        "provider": updated.provider if updated else provider,
+    }
 
 
 async def session_search(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:

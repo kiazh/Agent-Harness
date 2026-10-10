@@ -580,6 +580,21 @@ class Gateway:
                 raise RpcError(INVALID_PARAMS, f"unknown setting: {key}")
             if persist and key in ("model", "provider"):
                 config.set(key, value, persist=True)
+                # AGENT_HARNESS_MODEL/PROVIDER from .env shadows config.yaml on
+                # restart (Config.get checks env first). Sync both so a saved
+                # default survives restarts and live config.get reads.
+                env_key = f"AGENT_HARNESS_{key.upper()}"
+                os.environ[env_key] = value
+                try:
+                    from ah.security.env_file import set_env_values
+
+                    set_env_values({env_key: value})
+                except (OSError, ValueError) as e:
+                    logger.warning(
+                        "config.set: .env sync failed for %s (%s)",
+                        env_key,
+                        type(e).__name__,
+                    )
         result: dict[str, Any] = {"model": self.model, "provider": self.provider, "key": key}
         result["value"] = getattr(self, key) if key in ("model", "provider") else config.get(key)
         return result

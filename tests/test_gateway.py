@@ -162,6 +162,53 @@ class TestProtocolErrors:
         ok = await h.call("config.set", {"key": "provider", "value": "ollama"})
         assert ok["result"]["provider"] == "ollama"
 
+    async def test_config_set_persist_syncs_env(self, monkeypatch, tmp_path):
+        """A saved default must survive restarts: AGENT_HARNESS_* in .env
+        shadows config.yaml (env wins in Config.get), so persist must sync
+        both the live env and the .env file."""
+        import sys
+
+        from ah.core.config import get_config
+
+        # NOTE: `ah.core.config` as an attribute is the singleton (the
+        # package re-exports it), so patch the real module object.
+        config_module = sys.modules["ah.core.config"]
+
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "AGENT_HARNESS_MODEL=openrouter/free\nAGENT_HARNESS_PROVIDER=openrouter\n"
+        )
+        monkeypatch.setenv("AH_ENV_FILE", str(env_file))
+        monkeypatch.setenv("AGENT_HARNESS_MODEL", "openrouter/free")
+        monkeypatch.setenv("AGENT_HARNESS_PROVIDER", "openrouter")
+        monkeypatch.setattr(
+            config_module, "DEFAULT_CONFIG_PATH", tmp_path / "config.yaml"
+        )
+        old_model, old_provider = get_config().model, get_config().provider
+        try:
+            h = Harness()
+            ok = await h.call(
+                "config.set", {"key": "model", "value": "deepseek-chat", "persist": True}
+            )
+            assert ok["result"]["model"] == "deepseek-chat"
+            ok = await h.call(
+                "config.set", {"key": "provider", "value": "deepseek", "persist": True}
+            )
+            assert ok["result"]["provider"] == "deepseek"
+            assert os.environ["AGENT_HARNESS_MODEL"] == "deepseek-chat"
+            assert os.environ["AGENT_HARNESS_PROVIDER"] == "deepseek"
+            text = env_file.read_text()
+            assert "AGENT_HARNESS_MODEL=deepseek-chat" in text
+            assert "AGENT_HARNESS_PROVIDER=deepseek" in text
+            # Live reads now see the saved default, not the stale env.
+            assert get_config().get("model") == "deepseek-chat"
+            assert get_config().get("provider") == "deepseek"
+        finally:
+            get_config().model, get_config().provider = (
+                old_model,
+                old_provider,
+            )
+
     async def test_cancel_without_turn(self):
         h = Harness()
         response = await h.call("prompt.cancel", {"sessionId": str(uuid.uuid4())})
