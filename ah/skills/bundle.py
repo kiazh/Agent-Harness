@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 from ah.skills.registry import Skill
 
 PIN = "4eb71d92a39cab44ad40ac9d8a6a5ccb4029d6c2"
-MANIFEST_SHA256 = "4fa532a994618223cedda3d8ef965b776902944ae968c7754c2eb2100e8f0fe0"
+MANIFEST_SHA256 = "01b3ca9e35a5e9d4b2cc9a80a0c27eae4d6d07d241312aa9015a26ff0e28ed36"
 
 
 class ECCBundle:

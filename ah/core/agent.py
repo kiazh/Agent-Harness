@@ -556,6 +556,8 @@ class BaseReActAgent:
             can_read=self.allowed_tools is None or "skill_read" in self.allowed_tools,
             can_search=self.allowed_tools is None or "skill_list" in self.allowed_tools,
             can_resources=self.allowed_tools is None or "skill_resource" in self.allowed_tools,
+            recent=recent,
+            goal=session.goal,
         )
 
         # Assemble prompt

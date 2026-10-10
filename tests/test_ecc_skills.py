@@ -5,12 +5,15 @@ import pytest
 from ah.skills.registry import SkillRegistry
 
 
-def test_all_ecc_skills_are_mandatory_even_with_local_override(tmp_path, monkeypatch):
+def test_curated_ecc_skills_are_mandatory_even_with_local_override(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
     skills = SkillRegistry()
     skills.load_all()
     bundled = [s for s in skills.list_skills() if s.source_type == "builtin-ecc"]
-    assert len(bundled) == 302
+    assert len(bundled) == 42
+    assert skills.get("ecc-visa-doc-translate") is None
+    assert skills.get("ecc-network-bgp-diagnostics") is None
+    assert skills.get("ecc-strategic-compact") is None
     skill = skills.get("ecc-python-patterns")
     assert skill and "Python Development Patterns" in skills.get_skill_content(skill.name)
     assert skills.set_enabled(skill.name, False) is None
@@ -27,7 +30,7 @@ def test_ecc_router_and_budget():
     for query, expected in [
         ("Write Python unit tests using pytest fixtures", "ecc-python-testing"),
         ("Optimize slow PostgreSQL queries and indexes", "ecc-postgres-patterns"),
-        ("Build a React component with hooks", "ecc-react-patterns"),
+        ("Design a FastAPI service", "ecc-fastapi-patterns"),
         ("Review API authentication security vulnerabilities", "ecc-security-review"),
     ]:
         assert expected in [s.name for s in rank_skills(skills, query)[:3]]
@@ -208,13 +211,9 @@ def test_skill_context_never_exceeds_its_budget(budget, tmp_path, monkeypatch):
     "query,expected",
     [
         ("Build Docker containers for this service", "ecc-docker-patterns"),
-        ("Write a long form article", "ecc-article-writing"),
-        ("Translate a visa application document", "ecc-visa-doc-translate"),
-        ("Investigate competitors and market demand", "ecc-market-research"),
-        ("Implement C++ coding standards", "ecc-cpp-coding-standards"),
-        ("Implement C# unit tests", "ecc-csharp-testing"),
-        ("Design Kubernetes deployments", "ecc-kubernetes-patterns"),
-        ("Build a Django app with security and tests", "ecc-django-tdd"),
+        ("Research official sources and produce a cited report", "ecc-deep-research"),
+        ("Implement safe database migrations", "ecc-database-migrations"),
+        ("Design a Python MCP server", "ecc-mcp-server-patterns"),
     ],
 )
 def test_representative_ecc_routing(query, expected):

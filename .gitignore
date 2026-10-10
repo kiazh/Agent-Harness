@@ -104,3 +104,6 @@ communications/*
 
 # Pinned ECC distribution includes directories otherwise ignored above.
 !skills/ecc/**
+# Generated caches are not part of the pinned distribution.
+skills/ecc/**/__pycache__/
+skills/ecc/**/*.py[cod]

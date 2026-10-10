@@ -187,7 +187,7 @@ Secrets never echo, never enter history, never touch `config.yaml`.
 
 - **ReAct loop** — Thought → Action → Observation, streaming, configurable iterations, 50k token budget, per-tool timeouts (60s for delegation).
 - **Tool registry** — decorator-based, JSON Schema inference, `bool`-safe type checks, 20k arg cap. Built-ins: `web_search`, `web_extract`, `read_file`, `write_file`, `list_files`, `search_files`, `remember`, `recall`, `delegate`, `list_agents`, `share_memory`, `session_recall`, `skill_list`, `skill_read`, `terminal`.
-- **Skills** — all 302 [ECC workflows](docs/ECC_SKILLS.md) bundled offline and automatically routed for each task, with bounded instruction loading and on-demand supporting files. No manual activation or enable flag. Local skills retain YAML metadata, curator health, hub publish/install and injection scanning.
+- **Skills** — 42 curated [ECC workflows](docs/ECC_SKILLS.md) bundled offline and automatically routed for each task, with bounded instruction loading and on-demand supporting files. Defaults focus on the Python/TypeScript harness, code quality, research, and MCP work. No manual activation or enable flag. Local skills retain YAML metadata, curator health, hub publish/install and injection scanning.
 
 ### Context & memory
 
@@ -385,7 +385,7 @@ agent-harness/
 ├── ui/src/              # pi-tui app + features/ (32 commands, 24 skins)
 ├── ui/test/             # node:test suites
 ├── tests/               # ~80 pytest modules + workflow_trial/
-├── skills/              # local playbooks + all 302 pinned ECC skills and resources
+├── skills/              # local playbooks + 42 curated pinned ECC skills and resources
 ├── research/            # example identity scenarios
 ├── Dockerfile / Dockerfile.sandbox / docker-compose.yml
 └── pyproject.toml

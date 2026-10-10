@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import re
+
 import ah.skills.registry as skills_module
 from ah.tools.base import registry
 
 
 @registry.register(
     name="skill_list",
-    description="Browse enabled skills by name or description. Use offset for the next page.",
+    description="Search and rank skills for a task by query, or browse with an empty query. Use offset for the next page.",
 )
 def skill_list(query: str = "", offset: int = 0) -> str:
     skills = skills_module.skill_registry
@@ -29,7 +31,7 @@ def skill_list(query: str = "", offset: int = 0) -> str:
             or any(needle in trigger.casefold() for trigger in skill.triggers)
         )
     ]
-    if needle and not matches:
+    if needle:
         matches = rank_skills(skills, query)
     visible = matches[offset : offset + 4]
     if not visible:
@@ -45,14 +47,21 @@ def skill_list(query: str = "", offset: int = 0) -> str:
 
 @registry.register(
     name="skill_read",
-    description="Read skill instructions. offset continues an excerpt; limit is 800 by default, up to 8000 characters. Read remaining workflow steps before using them.",
+    description="Read skill instructions. query jumps to a relevant heading or passage; offset continues an excerpt. limit defaults to 800, up to 8000 characters. Read relevant workflow steps before using them.",
 )
-def skill_read(skill_name: str, offset: int = 0, limit: int = 800) -> str:
+def skill_read(skill_name: str, offset: int = 0, limit: int = 800, query: str = "") -> str:
     skills = skills_module.skill_registry
     skills.load_all()
     content = skills.get_skill_content(skill_name)
     if content is None:
         return "Error: skill not found or disabled"
+    if query:
+        # Jump to a matching heading or passage instead of paging the entire manual.
+        match = re.search(re.escape(query), content[offset:], re.I)
+        if match is None:
+            return "No matching passage. Try a shorter keyword or read without query."
+        position = offset + match.start()
+        offset = content.rfind("\n", 0, position) + 1
     if offset < 0 or offset >= len(content):
         return "Error: offset is outside the skill content"
     if limit < 1 or limit > 8000:
@@ -72,7 +81,7 @@ def skill_read(skill_name: str, offset: int = 0, limit: int = 800) -> str:
 
 @registry.register(
     name="skill_resource",
-    description="List or read ECC supporting files. Empty path lists the skill's files; path is relative to ECC root (e.g. skills/python-testing/references/example.md or agents/planner.md). Paginate with offset and limit (max 8000 characters). Reading does not execute scripts.",
+    description="List or read ECC supporting files. Empty path lists files; path accepts skill-relative references/scripts or ECC-root paths such as agents/planner.md. Paginate with offset and limit (max 8000 characters). Reading does not execute scripts.",
 )
 def skill_resource(skill_name: str, path: str = "", offset: int = 0, limit: int = 4000) -> str:
     skills = skills_module.skill_registry
@@ -91,6 +100,10 @@ def skill_resource(skill_name: str, path: str = "", offset: int = 0, limit: int 
         )
     else:
         try:
+            if path not in bundle.manifest["files"]:
+                from pathlib import PurePosixPath
+
+                path = str(PurePosixPath(skill.metadata["bundle_path"]).parent / path)
             text = bundle.read_resource(path)
         except (OSError, ValueError) as exc:
             return f"Error: {exc}"

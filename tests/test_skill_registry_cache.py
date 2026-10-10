@@ -139,6 +139,19 @@ def test_missing_directory_loads_empty_and_is_cached(tmp_path, monkeypatch):
     assert registry.list_skills() == []
 
 
+def test_default_skill_usage_persists_with_a_new_local_directory(tmp_path, monkeypatch):
+    """A fresh installation must not lose builtin telemetry to a missing directory."""
+    local = tmp_path / "new" / "skills"
+    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(local))
+    registry = SkillRegistry()
+    registry.load_all()
+    registry.record_use("ecc-python-patterns")
+    assert (local / "telemetry.json").is_file()
+    restored = SkillRegistry()
+    restored.load_all()
+    assert restored.get("ecc-python-patterns").usage_count == 1
+
+
 def test_telemetry_save_does_not_mask_out_of_band_instruction_edit(tmp_path):
     _write_skill(tmp_path, "alpha")
     registry = SkillRegistry(tmp_path)

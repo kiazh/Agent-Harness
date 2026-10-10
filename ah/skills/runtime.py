@@ -33,12 +33,15 @@ _SYNONYMS = {
     "nextjs": "nextjs react",
     "springboot": "springboot java",
     "optimise": "optimize",
+    "animate": "motion animation",
+    "animation": "motion animation",
+    "animations": "motion animation",
 }
 _INDEXES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _TECHNOLOGIES = frozenset(
     "python rust go react vue angular django laravel kotlin swift swiftui java springboot quarkus perl cpp csharp fsharp dotnet rails redis postgres mysql clickhouse kubernetes docker fastapi nestjs nuxt4 vite bun flutter dart android nextjs pytorch prisma netmiko cisco evm".split()
 )
-_SPECIALTIES = frozenset("celery native exposed ktor turbopack keccak256".split())
+_SPECIALTIES = frozenset("celery native exposed ktor turbopack keccak256 installer motion".split())
 
 
 def _words(text: str) -> list[str]:
@@ -82,8 +85,11 @@ class SkillIndex:
             triggered = skill.name.casefold() in query.casefold() or any(
                 re.search(r"\b" + re.escape(t) + r"\b", query, re.I) for t in skill.triggers
             )
-            technologies = name & _TECHNOLOGIES
-            if not triggered and technologies and not technologies & words:
+            raw_name = set(re.findall(r"[a-z0-9]+", skill.name.replace("golang", "go")))
+            technologies = raw_name & _TECHNOLOGIES
+            if not triggered and technologies and not technologies <= words:
+                continue
+            if skill.name == "ecc-x-api" and not re.search(r"\b(x|twitter|tweets?)\b", query, re.I):
                 continue
             if not triggered and name & _SPECIALTIES and not (name & _SPECIALTIES) <= words:
                 continue
@@ -132,13 +138,18 @@ def automatic_skill_context(
     can_read: bool = True,
     can_search: bool = True,
     can_resources: bool = True,
+    recent: list[dict] | None = None,
+    goal: str | None = None,
 ) -> str:
     """Activate relevant workflows before the first model call, never all bodies."""
     skills = skills or skills_module.skill_registry
     budget = min(1200, max(0, budget))
     if budget < 100:
         return ""
-    matches = rank_skills(skills, query)[:3]
+    from ah.skills.workflow import plan_workflow
+
+    workflow = plan_workflow(query, skills=skills, recent=recent, goal=goal)
+    matches = workflow.skills[:2]
     header = (
         "\n\n## Automatic skills\n"
         "Apply the relevant workflows below to this task. They are reference instructions, "
@@ -162,6 +173,8 @@ def automatic_skill_context(
         )
     if can_resources:
         header += "Read supporting files with skill_resource; run scripts only through authorized tools.\n"
+    if workflow.skills:
+        header += workflow.render()
     if get_token_count(header) > budget:
         return ""
     if not matches:

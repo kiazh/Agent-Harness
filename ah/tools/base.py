@@ -32,6 +32,7 @@ _UNCACHEABLE_TOOLS = frozenset(
         "session_recall_window",
         "skill_list",
         "skill_read",
+        "skill_resource",
     }
 )
 

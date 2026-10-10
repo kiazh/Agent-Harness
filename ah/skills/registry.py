@@ -303,6 +303,7 @@ class SkillRegistry:
                 ),
             }
         try:
+            self._telemetry_file.parent.mkdir(parents=True, exist_ok=True)
             self._telemetry_file.write_text(json.dumps(telemetry, indent=2), encoding="utf-8")
         except OSError:
             logger.warning("Failed to save telemetry", exc_info=True)
