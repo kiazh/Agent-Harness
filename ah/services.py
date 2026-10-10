@@ -14,6 +14,7 @@ from ah.core.config import config
 from ah.core.context import context_manager
 from ah.core.models import Session
 from ah.db.connection import db
+from ah.observability.diagnostics import record_failure
 
 __all__ = [
     "ServiceError",
@@ -204,8 +205,9 @@ async def compress_session(
             if owned:
                 try:
                     await end_mutation(session.id, mutation_token)
-                except Exception:
-                    pass
+                except Exception as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("services.compress_session", _boundary_error)
 
 
 async def _estimate_next_request(session_id, budget: int) -> int:
@@ -227,8 +229,9 @@ async def _estimate_next_request(session_id, budget: int) -> int:
     # Stored context tokens (actual message content)
     try:
         total += await context_manager.get_token_usage(session_id)
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services._estimate_next_request", _boundary_error)
     # Effective tool schema: the session agent's allowlist when resolvable.
     try:
         from ah.core.session import session_manager as _sessions
@@ -247,8 +250,9 @@ async def _estimate_next_request(session_id, budget: int) -> int:
                 if definition is not None:
                     allowed = definition.tools
                     definition_prompt = definition.system_prompt or ""
-            except Exception:
-                pass
+            except Exception as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("services._estimate_next_request", _boundary_error)
         from ah.tools.base import registry
 
         if allowed is None:
@@ -264,8 +268,9 @@ async def _estimate_next_request(session_id, budget: int) -> int:
                     ]
                 )
             )
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services._estimate_next_request", _boundary_error)
     # Reserved output tokens
     try:
         total += int(config.get("max_tokens") or 4096)
@@ -276,8 +281,9 @@ async def _estimate_next_request(session_id, budget: int) -> int:
         from ah.core.agent import SYSTEM_PROMPT
 
         total += get_token_count(SYSTEM_PROMPT + (definition_prompt or ""))
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services._estimate_next_request", _boundary_error)
     return total
 
 
@@ -295,8 +301,9 @@ async def maybe_auto_compact(session_id) -> dict | None:
             return None
         if not config.get("compression_enabled"):
             return None
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services.maybe_auto_compact", _boundary_error)
     from ah.core.turns import begin_mutation, end_mutation
 
     token = await begin_mutation(session_id)
@@ -338,8 +345,9 @@ async def maybe_auto_compact(session_id) -> dict | None:
                 current = await _db_claim_state(session_id)
                 if current is None or current.get("claim_owner") != token:
                     return None
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("services.maybe_auto_compact", _boundary_error)
         try:
             # AH-AUDIT-018: transactional field merge preserves unrelated
             # concurrent state (emotion/watermark) instead of overwriting
@@ -347,8 +355,9 @@ async def maybe_auto_compact(session_id) -> dict | None:
             await _sessions.update_state_fields(
                 session_id, {"last_auto_compact_tokens": result.compressed_tokens}
             )
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("services.maybe_auto_compact", _boundary_error)
         # Eviction pass when configured (retention policy, distinct from
         # summarization): keep reversible via archive.
         try:
@@ -373,8 +382,9 @@ async def maybe_auto_compact(session_id) -> dict | None:
     finally:
         try:
             await end_mutation(session_id, token)
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("services.maybe_auto_compact", _boundary_error)
 
 
 def learn_skill(
@@ -490,8 +500,9 @@ async def status_summary() -> dict[str, Any]:
                 reranker = _shared.reranker_identity().get("reranker", "passthrough")
             elif _cfg.get("cohere_api_key"):
                 reranker = "cohere (key set, pipeline not initialized)"
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("services.status_summary", _boundary_error)
         auto_compact = bool(_cfg.get("auto_compaction_enabled") and _cfg.get("compression_enabled"))
         extraction = (
             "ready"

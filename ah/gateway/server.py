@@ -43,6 +43,7 @@ from ah.gateway.errors import (  # noqa: F401 — re-exported for clients and te
     RpcError,
 )
 from ah.gateway.serializers import history_from_chunks, session_to_dict
+from ah.observability.diagnostics import record_failure
 
 __all__ = [
     "Gateway",
@@ -52,6 +53,8 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+CLAIM_RENEW_INTERVAL_SECONDS = 30.0
+CANCEL_JOIN_TIMEOUT_SECONDS = 0.1
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +153,7 @@ class Gateway:
         owns_db: bool = True,
     ) -> None:
         self._write = write
+        self.protocol_version = 1
         self._agent_factory = agent_factory
         self._owns_db = owns_db
         self.model: str = config.get("model")
@@ -165,6 +169,7 @@ class Gateway:
         # AH-AUDIT-028: turn ids that already emitted their single terminal
         # completion (quarantine fallback vs late genuine completion races).
         self._turn_finished: set[str] = set()
+        self._cancel_requested: set[str] = set()
         # AH-AUDIT-029: accumulated genuine human-approval wait per turn.
         # Compute accounting pauses during these waits; approval timeout
         # stays separately bounded by the broker handler.
@@ -197,6 +202,13 @@ class Gateway:
             "shutdown": self._shutdown,
         }
         features.register(self)
+
+    def event_payload(
+        self, event_type: str, session_id: str, turn_id: str, **fields: Any
+    ) -> dict[str, Any]:
+        from ah.protocol import gateway_event
+
+        return gateway_event(event_type, session_id, turn_id, self.protocol_version, **fields)
 
     def add_method(
         self, name: str, handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -260,7 +272,7 @@ class Gateway:
             or message.get("jsonrpc") != "2.0"
             or not isinstance(message.get("method"), str)
         ):
-            logger.warning("Invalid request: %s", line[:200])
+            logger.warning("Invalid gateway request")
             self._send_error(rid, INVALID_REQUEST, "invalid request")
             return
 
@@ -290,7 +302,7 @@ class Gateway:
         try:
             result = await handler(params)
         except RpcError as e:
-            logger.warning("← %s error %d: %s (id=%s)", method, e.code, e.message, rid)
+            logger.warning("← %s error %d (id=%s)", method, e.code, rid)
             self._send_error(rid, e.code, e.message)
             return
         except Exception:  # never let a handler crash the gateway
@@ -330,12 +342,14 @@ class Gateway:
 
             try:
                 await asyncio.wait_for(audit_persistence.stop(), timeout=5)
-            except (TimeoutError, asyncio.CancelledError, Exception):
-                pass
+            except (TimeoutError, asyncio.CancelledError, Exception) as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("server.close", _boundary_error)
             try:
                 await asyncio.wait_for(db.close(), timeout=5)
-            except (TimeoutError, asyncio.CancelledError, Exception):
-                pass
+            except (TimeoutError, asyncio.CancelledError, Exception) as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("server.close", _boundary_error)
         self._db_ready = False
 
     def _start_job_runner(self) -> None:
@@ -377,6 +391,10 @@ class Gateway:
 
     # ─── methods ────────────────────────────────────────────────────────────
     async def _initialize(self, params: dict[str, Any]) -> dict[str, Any]:
+        version = params.get("protocolVersion", 1)
+        if type(version) is not int or version not in (1, 2):
+            raise RpcError(INVALID_PARAMS, "protocolVersion must be 1|2")
+        self.protocol_version = version
         logger.info("Gateway initialize: model=%s provider=%s", self.model, self.provider)
         from ah.plugins.loader import load_plugins
 
@@ -414,6 +432,7 @@ class Gateway:
             self._start_job_runner()
         return {
             "version": __version__,
+            "protocolVersion": self.protocol_version,
             "model": self.model,
             "provider": self.provider,
             # Redacted to the basename: the full working-directory path can
@@ -437,8 +456,9 @@ class Gateway:
             from ah.gateway.features.mode import grant_full_default
 
             await grant_full_default(session)
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("server._session_create", _boundary_error)
         return {"session": session_to_dict(session)}
 
     async def _session_list(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -582,11 +602,12 @@ class Gateway:
                 {
                     "jsonrpc": "2.0",
                     "method": "event",
-                    "params": {"type": event_type, "sessionId": sid, "turnId": turn_id, **fields},
+                    "params": self.event_payload(event_type, sid, turn_id, **fields),
                 }
             )
 
         def complete(final: Any = None, cancelled: bool = False) -> None:
+            cancelled = cancelled or turn_id in self._cancel_requested
             # AH-AUDIT-027: message.complete.text is the canonical complete
             # answer — the fully-redacted final content exactly once. The
             # streaming tail is already part of final.content; prepending it
@@ -604,7 +625,7 @@ class Gateway:
 
                 text = _redact(final.content).text if final is not None else ""
             except Exception:
-                text = final.content if final is not None else ""
+                text = ""
             if final is None:
                 try:
                     tail = _turn_redactor.flush()
@@ -615,14 +636,16 @@ class Gateway:
                         from ah.memory.redaction import redact_secrets as _redact2
 
                         tail = _redact2(tail).text
-                    except Exception:
-                        pass
+                    except Exception as _boundary_error:
+                        # Optional fallback preserves the primary outcome; report no payload.
+                        record_failure("server._run_turn", _boundary_error)
                     text = tail
             else:
                 try:
                     _turn_redactor.flush()
-                except Exception:
-                    pass
+                except Exception as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("server._run_turn", _boundary_error)
             emit(
                 "message.complete",
                 text=text,
@@ -641,6 +664,7 @@ class Gateway:
         final = None
         agent = None
         _cancelled = False
+        _release_failed = False
         # Streaming redaction per turn (5.1): text deltas pass the frontier
         # redactor; the withheld tail flushes at completion. A safe helper
         # unused by this transport would not be a fix.
@@ -662,25 +686,9 @@ class Gateway:
             # arguments (argv list), cwd, backend, timeout, network, and
             # file-write content identity + diff. Never a bare operation
             # name with an empty target.
-            emit(
-                "permission.required",
-                requestId=card["request_id"],
-                operation=card["operation"],
-                tool=card.get("tool", ""),
-                target="|".join(card["targets"])[:500] if card.get("targets") else "",
-                argv=list(card.get("argv") or []),
-                shell=card.get("shell", ""),  # nosec B604 — protocol field, not subprocess
-                cwd=card.get("cwd", ""),
-                backend=card.get("backend", ""),
-                timeout=card.get("timeout", 60),
-                network=list(card.get("network") or []),
-                capabilities=card.get("capabilities", []),
-                contentDigest=card.get("content_digest", ""),
-                contentPreview=card.get("content_preview", ""),
-                contentLength=card.get("content_length", 0),
-                fileDiff=card.get("file_diff") or {},
-                durable=card.get("durable"),
-            )
+            from ah.protocol import approval_fields
+
+            emit("needs_approval", **approval_fields(card))
             # AH-AUDIT-029: genuine human waits pause compute accounting
             # (tracked separately); approval timeout stays broker-bounded.
             # Renew logical ownership while waiting so a long human pause
@@ -720,8 +728,9 @@ class Gateway:
                                 raise RuntimeError("turn ownership lost during approval wait")
                 except RuntimeError:
                     raise
-                except Exception:
-                    pass
+                except Exception as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("server._run_turn", _boundary_error)
 
         _set_handler(_turn_approver, principal="tui", turn_id=turn_id)
         # AH-AUDIT-013: managed claim renewal for the whole turn (compute +
@@ -731,18 +740,17 @@ class Gateway:
         # worker renews nothing and its claim becomes reclaimable).
         _renew_stop = asyncio.Event()
         _ownership_lost = self._turn_ownership_lost.setdefault(turn_id, asyncio.Event())
+        _owned_task = asyncio.current_task()
 
         async def _renew_loop() -> None:
-            from ah.core.turns import owns_claim as _owns
             from ah.core.turns import renew_turn as _renew
 
             token = owned_token
             if not token:
                 return
-            failures = 0
             while not _renew_stop.is_set():
                 try:
-                    await asyncio.wait_for(_renew_stop.wait(), timeout=120)
+                    await asyncio.wait_for(_renew_stop.wait(), timeout=CLAIM_RENEW_INTERVAL_SECONDS)
                 except TimeoutError:
                     pass
                 if _renew_stop.is_set():
@@ -752,18 +760,16 @@ class Gateway:
                 except Exception:
                     ok = False
                 if ok:
-                    failures = 0
                     continue
-                failures += 1
-                if failures < 2:
-                    continue
-                try:
-                    if not await _owns(session_id, token):
-                        logger.warning("Turn %s lost ownership; stopping effects", turn_id)
-                        _ownership_lost.set()
-                        return
-                except Exception:
-                    pass
+                logger.warning("Turn %s lost ownership; stopping effects", turn_id)
+                _ownership_lost.set()
+                from ah.core.metrics import metrics
+
+                metrics.increment_counter("turn.ownership_lost")
+                emit("turn.ownership_lost", reason="claim_renewal_failed")
+                if _owned_task is not None:
+                    _owned_task.cancel()
+                return
 
         _renew_task = asyncio.create_task(_renew_loop())
         try:
@@ -816,7 +822,14 @@ class Gateway:
                         "iterations": 0,
                         "toolCalls": tool_count,
                     }
-                    emit("tool.start", id=tool_id, name=event.tool_name, args=event.tool_args)
+                    from ah.memory.redaction import redact_value
+
+                    emit(
+                        "tool.start",
+                        id=tool_id,
+                        name=event.tool_name,
+                        args=redact_value(event.tool_args),
+                    )
                 elif event.type == "tool_result":
                     # Pair by tool-call id when the event carries one;
                     # otherwise fall back to the oldest open call with the
@@ -836,7 +849,9 @@ class Gateway:
                                 break
                     if match_id is not None:
                         del open_tools[match_id]
-                    result = str(event.tool_result)
+                    from ah.memory.redaction import redact_secrets
+
+                    result = redact_secrets(str(event.tool_result)).text
                     truncated = len(result) > MAX_TOOL_RESULT_CHARS
                     emit(
                         "tool.complete",
@@ -871,6 +886,7 @@ class Gateway:
             _cancelled = True
             emit("message.stopping", reason="cancelled")
         except Exception:
+            _cancelled = _ownership_lost.is_set()
             logger.exception("Turn %s failed", turn_id)
             emit("error", message="agent turn failed")
         finally:
@@ -881,8 +897,9 @@ class Gateway:
                 from ah.permissions.broker import set_approval_handler as _clear
 
                 _clear(None)
-            except Exception:
-                pass
+            except Exception as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("server._run_turn", _boundary_error)
             self.cancel_turn_approvals(turn_id)
             # H-01/H-02: Bounded cleanup contract.
             # 1. Learning tasks: bounded join, then cancel leftovers.
@@ -903,8 +920,9 @@ class Gateway:
                             try:
                                 if not _t.done():
                                     _t.cancel()
-                            except Exception:
-                                pass
+                            except Exception as _boundary_error:
+                                # Optional fallback preserves the primary outcome; report no payload.
+                                record_failure("server._run_turn", _boundary_error)
             finally:
                 # Claim release in independent outer finally.
                 try:
@@ -914,29 +932,28 @@ class Gateway:
                         try:
                             from ah.core.agent_factory import close_agent_provider
 
-                            await asyncio.wait_for(
-                                close_agent_provider(agent),
-                                timeout=5,
-                            )
+                            await close_agent_provider(agent)
                         except (TimeoutError, asyncio.CancelledError):
                             logger.warning("Provider close timed out for session %s", sid)
                         except Exception:
                             logger.exception("Could not close turn provider for session %s", sid)
                 finally:
                     self._record_stage(turn_id, "releasing_ownership", session_id=sid)
-                    if registered_turn is not None and self._turns.get(sid) is registered_turn:
-                        del self._turns[sid]
                     # Owner-token release on EVERY exit (success/failure/cancel/timeout).
                     # Stale-safe: only this turn's token clears its own claim.
                     try:
                         from ah.core.turns import end_turn as _end_turn
 
-                        if self._turn_tokens.get(sid) == owned_token:
-                            self._turn_tokens.pop(sid, None)
                         if owned_token:
                             await _end_turn(session_id, owned_token)
-                    except Exception:
-                        pass
+                        if self._turn_tokens.get(sid) == owned_token:
+                            self._turn_tokens.pop(sid, None)
+                    except Exception as _boundary_error:
+                        _release_failed = True
+                        # Preserve the owner token until DB recovery or claim expiry.
+                        record_failure("server._run_turn", _boundary_error)
+                    if registered_turn is not None and self._turns.get(sid) is registered_turn:
+                        del self._turns[sid]
         # AH-AUDIT-013: stop/join renewal during release (never leaks).
         _renew_stop.set()
         try:
@@ -946,6 +963,10 @@ class Gateway:
                 _renew_task.cancel()
         finally:
             self._turn_ownership_lost.pop(turn_id, None)
+        if _release_failed:
+            emit("turn.cleanup_pending", reason="ownership release unavailable")
+            self._cancel_requested.discard(turn_id)
+            return
         # AH-AUDIT-027: emit the safe flushed tail as a delta exactly once
         # before terminal completion, so concatenated displayed text equals
         # the canonical redacted answer exactly once (also when prior
@@ -961,9 +982,11 @@ class Gateway:
                 _tail = _redact_tail(_tail).text
                 if _tail:
                     emit("message.delta", text=_tail)
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("server._run_turn", _boundary_error)
         complete(final, cancelled=_cancelled)
+        self._cancel_requested.discard(turn_id)
         self._record_stage(turn_id, "answer_complete", session_id=sid)
         # Phase C: threshold-triggered auto-compaction at the safe turn
         # boundary (ownership released above). AH-AUDIT-025: registered
@@ -978,158 +1001,91 @@ class Gateway:
             task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
             try:
                 _runtime.track(task)
-            except Exception:
-                pass
-        except Exception:
-            pass
+            except Exception as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("server._run_turn", _boundary_error)
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("server._run_turn", _boundary_error)
 
     async def _run_turn_with_timeout(self, session_id: uuid.UUID, turn_id: str, text: str) -> None:
-        """Run a turn with a configurable timeout.
+        """Observe compute time separately from approvals; retirement owns completion.
 
-        AH-AUDIT-028: exactly one terminal event. The inner turn emits
-        message.stopping, releases ownership, then emits the single
-        message.complete(cancelled=True) — so a timeout must not emit a
-        second ``complete`` when cleanup already ran. Timeout is
-        distinguished from user cancellation by the "turn timed out" error
-        event (user cancel emits none); the terminal complete carries
-        cancelled=True in both cases.
+        Timeout and cancel request termination and observe a bounded grace. A
+        resistant inner task retains its claim and strong registration; it alone
+        emits terminal completion after its actual cleanup. A late result cannot
+        turn a requested cancellation into success.
         """
-        # AH-AUDIT-029: compute and approval deadlines are tracked
-        # separately. Genuine human waits (accumulated by the approval
-        # handler) pause compute accounting: only compute time counts
-        # against the turn timeout. Approval timeout stays broker-bounded.
-        # wait_for is not used: it would bill approval waits to compute
-        # and can wait out cancellation-resistant work unboundedly.
-        try:
-            timeout = float(config.get("turn_timeout") or 300)
-        except (TypeError, ValueError):
-            timeout = 300.0
+        timeout = float(config.get("turn_timeout") or 300)
         sid = str(session_id)
         current = asyncio.current_task()
         inner = asyncio.create_task(self._run_turn(session_id, turn_id, text))
         start = asyncio.get_running_loop().time()
-        timed_out = False
-        try:
-            while not inner.done():
-                waited = self._approval_wait_total.get(turn_id, 0.0)
-                now = asyncio.get_running_loop().time()
-                approval_started = self._approval_wait_started.get(turn_id)
-                if approval_started is not None:
-                    waited += max(0.0, now - approval_started)
-                compute_used = now - start - waited
-                if compute_used >= timeout:
-                    timed_out = True
-                    break
-                await asyncio.wait({inner}, timeout=0.2)
-            if timed_out and inner.done():
-                # Finished exactly as the budget expired: normal completion
-                # already emitted; no timeout accounting.
-                timed_out = False
-            if not inner.done():
-                assert timed_out
-                logger.warning("Turn %s exceeded compute timeout after %ss", turn_id, timeout)
-                inner.cancel()
-                try:
-                    await asyncio.wait_for(asyncio.shield(inner), timeout=30)
-                except (TimeoutError, asyncio.CancelledError):
-                    # Cancellation-resistant work: quarantine and report
-                    # instead of holding the transport forever. No terminal
-                    # completion here — the runaway still owns the turn, so
-                    # a next prompt correctly gets 409 until it finishes or
-                    # its claim expires. Its late completion is terminal.
-                    logger.warning("Turn %s quarantined after cancel join bound", turn_id)
-                    self._write(
-                        {
-                            "jsonrpc": "2.0",
-                            "method": "event",
-                            "params": {
-                                "type": "error",
-                                "sessionId": sid,
-                                "turnId": turn_id,
-                                "message": "turn timed out (cleanup pending)",
-                            },
-                        }
-                    )
-                    return
-                except Exception:
-                    pass
-            else:
-                try:
-                    await inner
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    pass
-                # Normal completion within budget: the single terminal
-                # completion was already emitted inside the turn.
-                return
-            # Timeout vs user cancel: the timeout error event marks compute
-            # exhaustion (prompt.cancel emits no such error).
-            self._write(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "event",
-                    "params": {
-                        "type": "error",
-                        "sessionId": sid,
-                        "turnId": turn_id,
-                        "message": "turn timed out",
-                    },
-                }
-            )
-            if self._turns.get(sid) is not current:
-                return
-            # Inner turn did not complete (still registered): fallback
-            # terminal completion so exactly one is always emitted (the
-            # in-turn complete() guard suppresses any late duplicate).
-            if turn_id not in self._turn_finished:
-                progress = self._turn_progress.get(
-                    turn_id, {"tokens": 0, "iterations": 0, "toolCalls": 0}
-                )
-                self._turn_finished.add(turn_id)
+
+        def retired(task) -> None:
+            if not task.cancelled():
+                task.exception()
+            if self._turns.get(sid) is task:
+                self._turns.pop(sid, None)
+            self._turn_progress.pop(turn_id, None)
+            self._approval_wait_total.pop(turn_id, None)
+            self._approval_wait_started.pop(turn_id, None)
+            self._cancel_requested.discard(turn_id)
+
+        inner.add_done_callback(retired)
+
+        async def request_stop(reason: str) -> None:
+            self._cancel_requested.add(turn_id)
+            inner.cancel()
+            done, _ = await asyncio.wait({inner}, timeout=CANCEL_JOIN_TIMEOUT_SECONDS)
+            if inner not in done:
                 self._write(
                     {
                         "jsonrpc": "2.0",
                         "method": "event",
-                        "params": {
-                            "type": "message.complete",
-                            "sessionId": sid,
-                            "turnId": turn_id,
-                            "text": "",
-                            "tokens": progress.get("tokens", 0),
-                            "iterations": progress.get("iterations", 0),
-                            "toolCalls": progress.get("toolCalls", 0),
-                            "cancelled": True,
-                        },
+                        "params": self.event_payload(
+                            "turn.cleanup_pending", sid, turn_id, reason=reason
+                        ),
                     }
                 )
-            # Delete only if the stored task is still this timed-out turn.
-            if self._turns.get(sid) is current:
-                del self._turns[sid]
+
+        try:
+            while not inner.done():
+                now = asyncio.get_running_loop().time()
+                waited = self._approval_wait_total.get(turn_id, 0.0)
+                approval_started = self._approval_wait_started.get(turn_id)
+                if approval_started is not None:
+                    waited += max(0.0, now - approval_started)
+                if now - start - waited >= timeout:
+                    logger.warning("Turn %s exceeded compute timeout", turn_id)
+                    self._write(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": "event",
+                            "params": self.event_payload(
+                                "error", sid, turn_id, message="turn timed out"
+                            ),
+                        }
+                    )
+                    await request_stop("timeout")
+                    return
+                await asyncio.wait({inner}, timeout=0.2)
+            if not inner.cancelled():
+                inner.result()
         except asyncio.CancelledError:
-            # prompt.cancel won the race; the inner turn already emitted
-            # message.complete(cancelled=True). Preserve that, just tidy up.
-            if not inner.done():
-                inner.cancel()
-            if self._turns.get(sid) is current:
-                del self._turns[sid]
+            await request_stop("cancelled")
             raise
         finally:
             if self._turns.get(sid) is current:
                 if inner.done():
-                    del self._turns[sid]
+                    self._turns.pop(sid, None)
                 else:
-                    # The inner task retains ownership while cleanup runs.
                     self._turns[sid] = inner
-            self._turn_progress.pop(turn_id, None)
-            self._approval_wait_total.pop(turn_id, None)
-            self._approval_wait_started.pop(turn_id, None)
-            # Bounded turn-id retention for the exactly-once guard.
-            try:
-                if len(self._turn_finished) > 1000:
-                    self._turn_finished.clear()
-            except Exception:
-                pass
+                    from ah.core.runtime import runtime_services
+
+                    runtime_services.track(inner)
+            if len(self._turn_finished) > 1000:
+                self._turn_finished.clear()
 
 
 def _parse_session_id(params: dict[str, Any]) -> uuid.UUID:

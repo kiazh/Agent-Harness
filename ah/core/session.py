@@ -64,12 +64,15 @@ class SessionManager:
         if title is None and goal:
             title = self.generate_title(goal)
 
+        from ah.core.session_mode import get_global_default
+
+        initial_mode = get_global_default()
         state_msgpack = msgpack.packb(state or {}, use_bin_type=True)
         row = await db.fetchrow(
             """
-            INSERT INTO sessions (title, agent_id, state_msgpack, status, goal, model, provider, context_budget)
-            VALUES ($1, $2, $3, 'active', $4, $5, $6, $7)
-            RETURNING id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, created_at, last_activity
+            INSERT INTO sessions (title, agent_id, state_msgpack, status, goal, model, provider, context_budget, execution_mode)
+            VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8)
+            RETURNING id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, created_at, last_activity
             """,
             title,
             agent_id,
@@ -78,6 +81,7 @@ class SessionManager:
             model,
             provider,
             context_budget,
+            initial_mode,
         )
         session = self._row_to_session(row)
         await self._cache_put(session)
@@ -95,7 +99,7 @@ class SessionManager:
             return cached
         row = await db.fetchrow(
             """
-            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, created_at, last_activity
+            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, created_at, last_activity
             FROM sessions WHERE id = $1
             """,
             session_id,
@@ -116,7 +120,7 @@ class SessionManager:
         """
         row = await db.fetchrow(
             """
-            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, created_at, last_activity
+            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, created_at, last_activity
             FROM sessions WHERE id = $1
             """,
             session_id,
@@ -131,7 +135,7 @@ class SessionManager:
         """Get the most recently active session."""
         row = await db.fetchrow(
             """
-            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, created_at, last_activity
+            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, created_at, last_activity
             FROM sessions
             WHERE status = 'active'
             ORDER BY last_activity DESC
@@ -246,7 +250,7 @@ class SessionManager:
         """Full-text search over session titles."""
         rows = await db.fetch(
             """
-            SELECT id, title, agent_id, status, goal, model, provider, context_budget, created_at, last_activity
+            SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, created_at, last_activity
             FROM sessions
             WHERE to_tsvector('english', COALESCE(title, '')) @@ plainto_tsquery('english', $1)
             ORDER BY ts_rank(to_tsvector('english', COALESCE(title, '')), plainto_tsquery('english', $1)) DESC, last_activity DESC
@@ -273,9 +277,9 @@ class SessionManager:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     """
-                    INSERT INTO sessions (title, agent_id, state_msgpack, status, goal, model, provider, context_budget)
-                    VALUES ($1, $2, $3, 'active', $4, $5, $6, $7)
-                    RETURNING id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, created_at, last_activity
+                    INSERT INTO sessions (title, agent_id, state_msgpack, status, goal, model, provider, context_budget, execution_mode)
+                    VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8)
+                    RETURNING id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, created_at, last_activity
                     """,
                     fork_title,
                     source.agent_id,
@@ -284,6 +288,7 @@ class SessionManager:
                     source.model,
                     source.provider,
                     source.context_budget,
+                    "ask",  # Forks never inherit another session's live authority.
                 )
                 new_session = self._row_to_session(row)
 
@@ -309,7 +314,7 @@ class SessionManager:
         if status:
             rows = await db.fetch(
                 """
-                SELECT id, title, agent_id, status, goal, model, provider, context_budget, created_at, last_activity
+                SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, created_at, last_activity
                 FROM sessions
                 WHERE status = $1
                 ORDER BY last_activity DESC, id DESC
@@ -322,7 +327,7 @@ class SessionManager:
         else:
             rows = await db.fetch(
                 """
-                SELECT id, title, agent_id, status, goal, model, provider, context_budget, created_at, last_activity
+                SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, created_at, last_activity
                 FROM sessions
                 ORDER BY last_activity DESC, id DESC
                 LIMIT $1 OFFSET $2
@@ -347,6 +352,7 @@ class SessionManager:
             model=row["model"],
             provider=row["provider"],
             context_budget=row["context_budget"],
+            execution_mode=row.get("execution_mode", "ask"),
             created_at=row["created_at"],
             last_activity=row["last_activity"],
         )

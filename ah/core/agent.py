@@ -26,6 +26,7 @@ from ah.core.usage import usage_store
 from ah.memory.consolidator import MemoryConsolidator
 from ah.memory.retriever import MemoryRetriever
 from ah.memory.store import memory_store
+from ah.observability.diagnostics import record_failure
 from ah.observability.tracing import span
 from ah.plugins.registry import plugin_registry
 from ah.rag.pipeline import RAGPipeline
@@ -429,8 +430,9 @@ class BaseReActAgent:
         memory_enabled = True
         try:
             memory_enabled = bool(config.get("memory_enabled"))
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("agent._prepare_context", _boundary_error)
         if include_memory and memory_enabled:
             try:
                 from ah.memory.embeddings import embed_query
@@ -471,8 +473,9 @@ class BaseReActAgent:
         rag_enabled = True
         try:
             rag_enabled = bool(config.get("rag_enabled"))
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("agent._prepare_context", _boundary_error)
         if rag_enabled:
             rag_chunks = await self._get_rag_context(session_id, user_message)
         else:
@@ -734,25 +737,10 @@ class BaseReActAgent:
                         from ah.permissions.policy import build_request as _build_req
 
                         _spec = _perm_tools.action_for_tool(tool_name, tool_args)
-                        try:
-                            # AH-AUDIT-001: session-effective mode (session
-                            # override → global default), never the raw global
-                            # alone. A sibling session's activation cannot
-                            # alter this session's approved semantics.
-                            from ah.core.session_mode import get_effective_mode
+                        from ah.core.execution_context import resolve_execution_context
 
-                            _mode = get_effective_mode(str(session_id))
-                            from ah.core.config import config as _cfg
-
-                            _sandbox_cfg = (_cfg.get("terminal_sandbox") or "disabled").lower()
-                        except Exception:
-                            _mode, _sandbox_cfg = "ask", "disabled"
-                        _backend = (
-                            "sandbox"
-                            if (_mode == "sandbox" or _sandbox_cfg == "docker")
-                            and tool_name == "terminal"
-                            else "host"
-                        )
+                        _context = await resolve_execution_context(str(session_id), tool_name)
+                        _mode, _backend = _context.mode, _context.backend
                         _req = _build_req(
                             operation=_spec.get("operation", f"tool.{tool_name}"),
                             targets=_spec.get("targets"),
@@ -814,8 +802,11 @@ class BaseReActAgent:
                             if _aid:
                                 try:
                                     await asyncio.shield(_broker.complete(_aid, "cancelled"))
-                                except Exception:
-                                    pass
+                                except Exception as _boundary_error:
+                                    # Optional fallback preserves the primary outcome; report no payload.
+                                    record_failure(
+                                        "agent._execute_tool_calls_stream", _boundary_error
+                                    )
                             raise
                     finally:
                         try:
@@ -827,15 +818,17 @@ class BaseReActAgent:
                             )
 
                             _clear_ctx()
-                        except Exception:
-                            pass
+                        except Exception as _boundary_error:
+                            # Optional fallback preserves the primary outcome; report no payload.
+                            record_failure("agent._execute_tool_calls_stream", _boundary_error)
                         try:
                             if authority_token is not None:
                                 from ah.core.agent_factory import parent_authority_var as _pav2
 
                                 _pav2.reset(authority_token)
-                        except Exception:
-                            pass
+                        except Exception as _boundary_error:
+                            # Optional fallback preserves the primary outcome; report no payload.
+                            record_failure("agent._execute_tool_calls_stream", _boundary_error)
                         current_agent_id.reset(agent_token)
                         current_session_id.reset(token)
             except Exception as e:
@@ -990,8 +983,9 @@ class BaseReActAgent:
 
                         outcome = "failed" if result_str.startswith("Error:") else "completed"
                         await _broker2.complete(_aid, outcome)
-                    except Exception:
-                        pass
+                    except Exception as _boundary_error:
+                        # Optional fallback preserves the primary outcome; report no payload.
+                        record_failure("agent._execute_tool_calls_stream", _boundary_error)
 
             if pending_chunks is not None:
                 pending_chunks.append(
@@ -1093,8 +1087,9 @@ class BaseReActAgent:
         try:
             if not config.get("memory_consolidation_enabled"):
                 return
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("agent._schedule_memory_consolidation", _boundary_error)
         key = str(session_id)
         running = _consolidation_inflight.get(key)
         if running is not None and not running.done():
@@ -1157,8 +1152,9 @@ class BaseReActAgent:
                     if not pending:
                         logger.debug("consolidation cursor unchanged, skipping")
                         return
-                except Exception:
-                    pass
+                except Exception as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("agent._consolidate_memories", _boundary_error)
             elif cursor and newest and str(newest[0].id) == str(cursor.get("id")):
                 logger.debug("consolidation cursor unchanged, skipping")
                 return

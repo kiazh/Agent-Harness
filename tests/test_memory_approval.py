@@ -402,8 +402,8 @@ class TestUserProfile:
             "interaction_count": 5,
             "topics": {"python": 3},
             "last_topics": ["python"],
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
+            "updated_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
         }
         profile = UserProfile.from_dict(data)
         assert profile.user_id == "test"
@@ -436,8 +436,8 @@ class TestUserProfileStore:
             "interaction_count": 5,
             "topics": '{"python": 3}',
             "last_topics": '["python"]',
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
+            "created_at": datetime.now(UTC).replace(tzinfo=None),
+            "updated_at": datetime.now(UTC).replace(tzinfo=None),
         }
         row.update(overrides)
         return row

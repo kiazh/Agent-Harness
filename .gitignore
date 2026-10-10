@@ -96,3 +96,8 @@ skills/telemetry.json
 .ruff_cache/
 __pycache__/
 *.egg-info/
+
+# Keep the public wire contract; other communications remain internal.
+!communications/
+communications/*
+!communications/ui-gateway-protocol.md

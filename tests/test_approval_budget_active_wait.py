@@ -44,7 +44,7 @@ class _AccountingAsyncio:
         self.polls += 1
         if self.polls == 1:
             await self.approvals_ready.wait()
-            self.now = 100.0
+            self.now = 600.0
             return set(), set(tasks)
         if self.polls == 2:
             self.pending_poll.set()

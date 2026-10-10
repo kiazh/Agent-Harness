@@ -13,7 +13,7 @@ import json
 import os
 import tempfile
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -495,8 +495,8 @@ class TestSessionContextIntegration:
                 "model": "gpt-4",
                 "provider": "openai",
                 "context_budget": 8000,
-                "created_at": datetime.utcnow(),
-                "last_activity": datetime.utcnow(),
+                "created_at": datetime.now(UTC).replace(tzinfo=None),
+                "last_activity": datetime.now(UTC).replace(tzinfo=None),
             }
         )
         mock_db.fetch = AsyncMock(
@@ -511,8 +511,8 @@ class TestSessionContextIntegration:
                     "model": "gpt-4",
                     "provider": "openai",
                     "context_budget": 8000,
-                    "created_at": datetime.utcnow(),
-                    "last_activity": datetime.utcnow(),
+                    "created_at": datetime.now(UTC).replace(tzinfo=None),
+                    "last_activity": datetime.now(UTC).replace(tzinfo=None),
                 }
             ]
         )
@@ -557,7 +557,7 @@ class TestSessionContextIntegration:
                 "payload_msgpack": msgpack.packb({"content": "hello"}, use_bin_type=True),
                 "token_count": 5,
                 "embedding": None,
-                "created_at": datetime.utcnow(),
+                "created_at": datetime.now(UTC).replace(tzinfo=None),
                 "accessed_at": None,
             }
         )
@@ -571,7 +571,7 @@ class TestSessionContextIntegration:
                     "payload_msgpack": msgpack.packb({"content": "hello"}, use_bin_type=True),
                     "token_count": 5,
                     "embedding": None,
-                    "created_at": datetime.utcnow(),
+                    "created_at": datetime.now(UTC).replace(tzinfo=None),
                     "accessed_at": None,
                 }
             ]
@@ -624,7 +624,7 @@ class TestSessionContextIntegration:
                     "payload_msgpack": msgpack.packb({"content": f"msg {i}"}, use_bin_type=True),
                     "token_count": 5,
                     "embedding": None,
-                    "created_at": datetime.utcnow(),
+                    "created_at": datetime.now(UTC).replace(tzinfo=None),
                     "accessed_at": None,
                 }
                 for i in range(5)

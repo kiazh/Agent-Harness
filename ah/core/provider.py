@@ -24,6 +24,7 @@ from ah.core.models import (  # noqa: F401 — re-exported for backward compat
     ToolDefinition,
 )
 from ah.core.usage import usage_store
+from ah.observability.diagnostics import record_failure
 
 __all__ = [
     "audit_log",
@@ -225,8 +226,9 @@ def _quota_exhausted(resp: httpx.Response) -> bool:
         remaining = resp.headers.get("x-ratelimit-remaining")
         if remaining is not None and remaining.strip().isdigit():
             return int(remaining.strip()) == 0
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("provider._quota_exhausted", _boundary_error)
     return False
 
 
@@ -238,8 +240,9 @@ def _quota_reset_at(resp: httpx.Response) -> float | None:
             value = int(raw.strip())
             # Heuristic: 13+ digits is milliseconds, fewer is already seconds.
             return value / 1000.0 if value > 10_000_000_000 else float(value)
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("provider._quota_reset_at", _boundary_error)
     return None
 
 
@@ -267,8 +270,9 @@ def _retry_delay(attempt: int, resp: httpx.Response | None, free: bool) -> float
             ra = resp.headers.get("retry-after", "")
             if ra and ra.strip().isdigit():
                 return min(float(ra.strip()), 60.0)
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("provider._retry_delay", _boundary_error)
     import random
 
     base = _FREE_BASE_DELAY if free else _RETRY_BASE_DELAY
@@ -430,7 +434,40 @@ def _is_sensitive_audit_key(key: Any) -> bool:
 
 def audit_log(event_type: str, **kwargs) -> None:
     """Log a security-relevant event as JSON. All kwargs are sanitized to redact secrets."""
-    sanitized_kwargs = _sanitize_value(kwargs)
+    protected = {
+        "prompt",
+        "completion",
+        "content",
+        "query",
+        "query_text",
+        "search_text",
+        "response",
+        "result",
+        "tool_args",
+        "args",
+        "payload",
+        "messages",
+        "task",
+        "preview",
+        "result_preview",
+        "validation_reason",
+        "error",
+        "message",
+    }
+
+    def metadata(value):
+        if isinstance(value, dict):
+            return {
+                key: metadata(item)
+                for key, item in value.items()
+                if key.lower() not in protected
+                and not key.lower().endswith(("_content", "_preview", "_payload"))
+            }
+        if isinstance(value, (list, tuple)):
+            return [metadata(item) for item in value]
+        return value
+
+    sanitized_kwargs = _sanitize_value(metadata(kwargs))
     entry = {
         "timestamp": time.time(),
         "event": event_type,

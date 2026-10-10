@@ -53,6 +53,9 @@ def mock_session():
 @pytest.fixture
 def mock_db():
     mock = AsyncMock()
+    from tests.support.database import attach_connection
+
+    attach_connection(mock)
     mock.fetch = AsyncMock(return_value=[])
     mock.fetchrow = AsyncMock(return_value=None)
     mock.fetchval = AsyncMock(return_value=0)
@@ -1062,6 +1065,9 @@ class TestMemoryRetrieverChaos:
 
         retriever = MemoryRetriever(store=store)
         mock_db = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
 
         with patch("ah.memory.retriever.db", mock_db):
@@ -1088,6 +1094,9 @@ class TestMemoryRetrieverChaos:
 
         retriever = MemoryRetriever(store=store, llm_provider=llm, rerank=True)
         mock_db = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
 
         with patch("ah.memory.retriever.db", mock_db):
@@ -1121,6 +1130,9 @@ class TestMemoryRetrieverChaos:
 
         retriever = MemoryRetriever(store=store, llm_provider=llm, rerank=True)
         mock_db = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
 
         with patch("ah.memory.retriever.db", mock_db):
@@ -1153,6 +1165,9 @@ class TestMemoryRetrieverChaos:
 
         retriever = MemoryRetriever(store=store, llm_provider=llm, rerank=True)
         mock_db = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
 
         with patch("ah.memory.retriever.db", mock_db):

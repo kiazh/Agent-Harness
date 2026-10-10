@@ -24,6 +24,7 @@ from typing import Any
 
 from ah.core.cron import next_cron_time
 from ah.db.connection import db, parse_command_count
+from ah.observability.diagnostics import record_failure
 
 __all__ = ["Job", "JobStore", "JobRunner", "job_store", "DEFAULT_HEARTBEAT_PROMPT"]
 
@@ -523,8 +524,9 @@ class JobRunner:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("scheduler.stop", _boundary_error)
             self._task = None
 
     async def _loop(self) -> None:
@@ -612,8 +614,9 @@ class JobRunner:
                     loss_wait.cancel()
                 if loss_wait is not None:
                     await asyncio.gather(loss_wait, return_exceptions=True)
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("scheduler.run_due_once", _boundary_error)
             if exec_task is not None and not exec_task.done():
                 self._quarantine_run(job, exec_task, lease_task, claim_token, error, paused_for)
             else:
@@ -740,7 +743,7 @@ class JobRunner:
                 # content revalidates; headless pause parks the job.
                 from ah.core.assembler import get_token_count
                 from ah.core.context import context_manager
-                from ah.core.job_scripts import resolve_script_path, run_job_script
+                from ah.core.job_scripts import review_script, run_job_script, scripts_root
                 from ah.memory.redaction import redact_secrets
                 from ah.permissions.broker import (
                     ApprovalDenied as _ScriptDenied,
@@ -749,32 +752,31 @@ class JobRunner:
                 from ah.permissions.broker import permission_broker as _script_broker
                 from ah.permissions.policy import build_request as _script_req
 
-                target = resolve_script_path(job.script_path or "")
-                try:
-                    script_content = target.read_bytes()
-                except OSError as e:
-                    raise RuntimeError(f"script unreadable: {e}") from None
-                if len(script_content) > 200_000:
-                    raise RuntimeError("script exceeds 200,000 byte review bound")
+                review = review_script(job.script_path or "")
+                job_scripts_root = scripts_root()
+                target = review.target
+                script_content = review.content
                 import sys as _sys
 
                 interpreter = _sys.executable if target.suffix.lower() == ".py" else "/usr/bin/bash"
-                try:
-                    from ah.core.session_mode import get_effective_mode as _eff_mode
+                from ah.core.execution_context import resolve_execution_context
 
-                    script_mode = _eff_mode(str(job.session_id) if job.session_id else None)
-                except Exception:
-                    script_mode = "ask"
+                script_context = await resolve_execution_context(
+                    str(job.session_id) if job.session_id else None, "job_script"
+                )
                 script_proposal = _script_req(
                     operation="process.exec",
-                    targets=[str(target)],
+                    targets=[
+                        str(target),
+                        *(str(job_scripts_root / name) for name, _ in review.dependencies),
+                    ],
                     argv=[interpreter, str(target)],
                     cwd=str(target.parent),
                     # Reversible byte-to-text mapping binds the exact source
                     # without corrupting BOMs or declared Python encodings.
-                    content=script_content.decode("latin-1"),
-                    mode=script_mode,
-                    backend="host",
+                    content=review.approval_content,
+                    mode=script_context.mode,
+                    backend=script_context.backend,
                     agent_id=job.agent_name,
                     session_id=str(job.session_id),
                     capabilities=["job-script"],
@@ -795,8 +797,9 @@ class JobRunner:
                     )
                     try:
                         err.approval_request_id = _ap.get("request_id", "")  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
+                    except Exception as _boundary_error:
+                        # Optional fallback preserves the primary outcome; report no payload.
+                        record_failure("scheduler._execute", _boundary_error)
                     raise err from None
                 except _ScriptDenied as _denied:
                     raise RuntimeError(f"script denied: {_denied.reason}") from None
@@ -807,6 +810,7 @@ class JobRunner:
                             job.script_path or "",
                             approved_content=script_content,
                             approved_path=target,
+                            approved_review=review,
                         )
                     ).text
                     script_outcome = "completed"
@@ -817,8 +821,9 @@ class JobRunner:
                     if approval_id:
                         try:
                             await _script_broker.complete(approval_id, script_outcome)
-                        except Exception:
-                            pass
+                        except Exception as _boundary_error:
+                            # Optional fallback preserves the primary outcome; report no payload.
+                            record_failure("scheduler._execute", _boundary_error)
                 if output:
                     await context_manager.add_chunk(
                         session_id=job.session_id,
@@ -870,13 +875,15 @@ class JobRunner:
                         from ah.core.agent_factory import close_agent_provider
 
                         await close_agent_provider(agent)
-                    except Exception:
-                        pass
+                    except Exception as _boundary_error:
+                        # Optional fallback preserves the primary outcome; report no payload.
+                        record_failure("scheduler._execute", _boundary_error)
         finally:
             try:
                 await _end_job_turn(job.session_id, job_turn)
-            except Exception:
-                pass
+            except Exception as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("scheduler._execute", _boundary_error)
 
     async def _build_agent(
         self,

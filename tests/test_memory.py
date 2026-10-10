@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -33,8 +33,8 @@ def sample_entry():
         content="The user prefers dark mode",
         category="preference",
         importance=0.8,
-        created_at=datetime.utcnow(),
-        last_accessed=datetime.utcnow(),
+        created_at=datetime.now(UTC).replace(tzinfo=None),
+        last_accessed=datetime.now(UTC).replace(tzinfo=None),
         access_count=5,
         embedding=[0.1] * 1536,
     )
@@ -43,7 +43,7 @@ def sample_entry():
 @pytest.fixture
 def sample_entries():
     """Create a list of sample MemoryEntry objects."""
-    now = datetime.utcnow()
+    now = datetime.now(UTC).replace(tzinfo=None)
     return [
         MemoryEntry(
             id=uuid.uuid4(),
@@ -65,6 +65,9 @@ def sample_entries():
 def mock_db():
     """Create a mock database for MemoryStore tests."""
     mock = AsyncMock()
+    from tests.support.database import attach_connection
+
+    attach_connection(mock)
     mock.fetch = AsyncMock(return_value=[])
     mock.fetchrow = AsyncMock(return_value=None)
     mock.fetchval = AsyncMock(return_value=0)
@@ -81,7 +84,7 @@ def _make_row(**overrides):
         "content": "Test memory",
         "category": "fact",
         "importance": 0.5,
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(UTC).replace(tzinfo=None),
         "last_accessed": None,
         "access_count": 0,
         "embedding": None,
@@ -131,7 +134,7 @@ class TestMemoryEntry:
 
     def test_custom_values(self):
         """Test MemoryEntry with custom values."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC).replace(tzinfo=None)
         entry = MemoryEntry(
             id=uuid.uuid4(),
             session_id=uuid.uuid4(),
@@ -429,7 +432,7 @@ class TestImportanceScorer:
 
     def test_score_with_recency(self, scorer):
         """Test scoring with recency factor."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC).replace(tzinfo=None)
         recent = MemoryEntry(
             id=uuid.uuid4(),
             session_id=None,
@@ -537,7 +540,7 @@ class TestForgettingModel:
 
     def test_current_strength_decreases_over_time(self, model):
         """Test that strength decreases over time."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC).replace(tzinfo=None)
         recent = MemoryEntry(
             id=uuid.uuid4(),
             session_id=None,
@@ -589,8 +592,8 @@ class TestForgettingModel:
             category="transient",
             importance=0.1,
             access_count=0,
-            created_at=datetime.utcnow() - timedelta(days=365),
-            last_accessed=datetime.utcnow() - timedelta(days=365),
+            created_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(days=365),
+            last_accessed=datetime.now(UTC).replace(tzinfo=None) - timedelta(days=365),
         )
         assert model.should_forget(old_weak)
 
@@ -603,8 +606,8 @@ class TestForgettingModel:
             category="preference",
             importance=0.9,
             access_count=10,
-            created_at=datetime.utcnow(),
-            last_accessed=datetime.utcnow(),
+            created_at=datetime.now(UTC).replace(tzinfo=None),
+            last_accessed=datetime.now(UTC).replace(tzinfo=None),
         )
         assert not model.should_forget(recent_important)
 
@@ -692,6 +695,9 @@ class TestMemoryRetriever:
 
         # Patch db for keyword search
         mock_db = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
         with patch("ah.memory.retriever.db", mock_db):
             results = await retriever.retrieve("Python")
@@ -720,6 +726,9 @@ class TestMemoryRetriever:
         retriever.store = mock_store
 
         mock_db = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
         with patch("ah.memory.retriever.db", mock_db):
             results = await retriever.retrieve("nonexistent")
@@ -738,6 +747,9 @@ class TestMemoryRetriever:
         retriever.store = mock_store
 
         mock_db = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
         with patch("ah.memory.retriever.db", mock_db):
             results = await retriever.retrieve("test", agent_id="harness")
@@ -756,6 +768,9 @@ class TestMemoryRetriever:
         retriever.store = mock_store
 
         mock_db = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
         with patch("ah.memory.retriever.db", mock_db):
             results = await retriever.retrieve("test", category="preference")
@@ -775,6 +790,9 @@ class TestMemoryRetriever:
         retriever.store = mock_store
 
         mock_db = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
         with patch("ah.memory.retriever.db", mock_db):
             await retriever.retrieve("test")
@@ -802,6 +820,9 @@ class TestMemoryRetriever:
         retriever.store = mock_store
 
         mock_db = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
         with patch("ah.memory.retriever.db", mock_db):
             results = await retriever.retrieve(

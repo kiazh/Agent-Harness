@@ -19,6 +19,7 @@ from ah.db.connection import db
 from ah.memory.models import MemoryEntry, RetrievedMemory
 from ah.memory.persona import EmotionTopology, PersonaMemoryStore
 from ah.memory.store import MemoryStore, memory_store
+from ah.observability.diagnostics import record_failure
 
 __all__ = ["MemoryRetriever"]
 
@@ -87,8 +88,9 @@ class MemoryRetriever:
             configured = get_config().get("persona_default_emotion")
             if isinstance(configured, str) and configured.strip():
                 return configured.strip()
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("retriever._default_emotion", _boundary_error)
         return "trust"
 
     async def retrieve(

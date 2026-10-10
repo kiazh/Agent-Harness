@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -338,7 +338,7 @@ class TestRAGPipeline:
                 ),
                 "token_count": 5,
                 "embedding": "[0.1,0.2]",
-                "created_at": datetime.utcnow(),
+                "created_at": datetime.now(UTC).replace(tzinfo=None),
                 "accessed_at": None,
             }
         )

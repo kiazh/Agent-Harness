@@ -62,14 +62,18 @@ async def test_script_approval_records_its_execution_outcome(
 
     job = _job(no_agent=True)
     monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    from tests.support.scripts import allow_scripts
+
+    allow_scripts(tmp_path, {"job.py": []})
     (tmp_path / "job.py").write_text("pass", encoding="utf-8")
     monkeypatch.setattr("ah.core.session_mode.get_effective_mode", lambda _sid: "ask")
     set_approval_handler(None)
     runner = JobRunner()
 
-    async def script(script_path, *, approved_content, approved_path):
+    async def script(script_path, *, approved_content, approved_path, approved_review):
         assert script_path == "job.py"
         assert approved_content == b"pass"
+        assert approved_review.content == approved_content
         assert approved_path == (tmp_path / "job.py").resolve()
         if outcome == "failed":
             raise RuntimeError("script exited 7")

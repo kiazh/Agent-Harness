@@ -73,9 +73,11 @@ def test_out_of_band_edit_is_still_picked_up(tmp_path, monkeypatch):
     assert len(calls) == 1
 
     # Modify the file on disk, the way a curator or a human edit would.
-    _write_skill(tmp_path, "alpha")
+    path = tmp_path / "alpha" / "SKILL.md"
+    path.write_text(SKILL_MD.format(name="alpha") + "\nNew guidance.\n", encoding="utf-8")
     registry.load_all()
     assert len(calls) == 2, "a changed file must be re-parsed"
+    assert "New guidance." in registry.get("alpha").content
 
 
 def test_refresh_true_forces_a_reload(tmp_path, monkeypatch):

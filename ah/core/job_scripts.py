@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 import shutil
 import signal
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from ah.memory.redaction import redact_secrets
 
-__all__ = ["resolve_script_path", "run_job_script"]
+__all__ = ["resolve_script_path", "review_script", "run_job_script"]
 
 SCRIPT_TIMEOUT_SECONDS = 30.0
 MAX_SCRIPT_OUTPUT_BYTES = 64 * 1024
@@ -38,15 +41,134 @@ _PYTHON_SNAPSHOT_BOOTSTRAP = (
 _BASH_SNAPSHOT_BOOTSTRAP = 'snapshot=$1; shift; source "$snapshot"'
 
 
-def resolve_script_path(script_path: str) -> Path:
-    """Resolve a user-managed script inside the configured scripts directory."""
-    root = Path(
+@dataclass(frozen=True)
+class ScriptReview:
+    target: Path
+    content: bytes
+    dependencies: tuple[tuple[str, str], ...]
+    policy_digest: str
+
+    @property
+    def approval_content(self) -> str:
+        return (
+            self.content.decode("latin-1")
+            + "\x00policy:"
+            + self.policy_digest
+            + "\x00deps:"
+            + json.dumps(self.dependencies)
+        )
+
+
+def scripts_root() -> Path:
+    return Path(
         os.environ.get("AGENT_HARNESS_SCRIPTS_DIR") or Path.home() / ".agent-harness" / "scripts"
     ).resolve()
+
+
+def _read_admin_file(target: Path, root: Path, limit: int) -> bytes:
+    """Bounded descriptor read; reject symlinks, hard links, and swapped paths."""
+    import stat
+
+    if not target.is_relative_to(root):
+        raise ValueError("script dependency escapes administrator directory")
+    for part in (target, *target.parents):
+        if part == root:
+            break
+        if part.is_symlink():
+            raise ValueError("administrator script files must not be symlinks")
+    fd = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        opened, current = os.fstat(fd), target.lstat()
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+            raise ValueError("administrator script files must be regular files without hard links")
+        if (opened.st_dev, opened.st_ino) != (
+            current.st_dev,
+            current.st_ino,
+        ) or not target.resolve().is_relative_to(root):
+            raise ValueError("administrator script file changed during access")
+        if os.name != "nt" and opened.st_mode & 0o022:
+            raise ValueError("administrator script files must not be group/world writable")
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            content = stream.read(limit + 1)
+        if len(content) > limit:
+            raise ValueError("administrator script file exceeds review bound")
+        return content
+    finally:
+        os.close(fd)
+
+
+def _dependency_list(target: Path, root: Path) -> tuple[str, ...]:
+    from ah.permissions.policy import workspace_root
+
+    if root.is_relative_to(workspace_root()):
+        raise ValueError("administrator scripts directory must be outside the agent workspace")
+    try:
+        policy = json.loads(_read_admin_file(root / ".script-policy.json", root, 65_536))
+    except (OSError, ValueError) as error:
+        raise ValueError("administrator script allowlist unavailable or invalid") from error
+    if (
+        not isinstance(policy, dict)
+        or policy.get("version") != 1
+        or not isinstance(policy.get("scripts"), dict)
+    ):
+        raise ValueError("invalid administrator script allowlist")
+    entries = policy["scripts"]
+    name = target.relative_to(root).as_posix()
+    if len(entries) > 256 or name not in entries:
+        raise ValueError("script is not in the administrator allowlist")
+    dependencies = entries[name]
+    if (
+        not isinstance(dependencies, list)
+        or len(dependencies) > 32
+        or any(not isinstance(item, str) or not item or len(item) > 500 for item in dependencies)
+    ):
+        raise ValueError("invalid administrator dependency allowlist")
+    return tuple(sorted(set(dependencies)))
+
+
+def review_script(script_path: str) -> ScriptReview:
+    """Pin the entry and hash administrator-declared dependencies.
+
+    This is a trusted dependency boundary, not automatic dependency discovery.
+    Dynamic imports, runtime packages, interpreters, and undeclared resources
+    remain administrator-trusted; only listed local dependencies are hashed.
+    """
+    target = resolve_script_path(script_path)
+    root = scripts_root()
+    names = _dependency_list(target, root)
+    dependencies = []
+    for name in names:
+        path = Path(name)
+        if (
+            path.is_absolute()
+            or ".." in path.parts
+            or any(part.startswith(".") for part in path.parts)
+        ):
+            raise ValueError("invalid administrator dependency path")
+        content = _read_admin_file(root / path, root, 2_000_000)
+        dependencies.append((name, hashlib.sha256(content).hexdigest()))
+    policy_digest = hashlib.sha256(
+        json.dumps(
+            {"entry": target.relative_to(root).as_posix(), "dependencies": names}, sort_keys=True
+        ).encode()
+    ).hexdigest()
+    return ScriptReview(
+        target, _read_admin_file(target, root, 200_000), tuple(dependencies), policy_digest
+    )
+
+
+def resolve_script_path(script_path: str) -> Path:
+    """Resolve a user-managed script inside the configured scripts directory."""
+    root = scripts_root()
     candidate = Path(script_path)
     if not script_path or candidate.is_absolute():
         raise ValueError("script must be relative to the scripts directory")
     raw = root / candidate
+    for part in (raw, *raw.parents):
+        if part == root:
+            break
+        if part.is_symlink():
+            raise ValueError("script must not traverse symlinks")
     # Reject symlinks outright to close TOCTOU swaps outside the scripts dir.
     try:
         if raw.is_symlink():
@@ -71,6 +193,7 @@ def resolve_script_path(script_path: str) -> Path:
             os.close(fd)
     elif target.is_symlink():
         raise ValueError("script must not be a symlink")
+    _dependency_list(target, root)
     return target
 
 
@@ -111,51 +234,47 @@ async def _terminate_tree(process: asyncio.subprocess.Process, job_handle: int |
 
 
 async def run_job_script(
-    script_path: str, *, approved_content: bytes | None = None, approved_path: Path | None = None
+    script_path: str,
+    *,
+    approved_content: bytes | None = None,
+    approved_path: Path | None = None,
+    approved_review: ScriptReview | None = None,
 ) -> str:
-    """Run a Python or bash script with a time limit and no provider secrets."""
-    target = resolve_script_path(script_path)
-    if target.suffix.lower() == ".py":
-        command = [sys.executable, str(target)]
-    else:
-        bash = shutil.which("bash", path="/usr/bin:/bin")
-        if bash is None:
-            raise ValueError("bash is required for shell scripts")
-        command = [bash, str(target)]
-    # Re-resolve just before exec to close TOCTOU swaps.
-    target = resolve_script_path(script_path)
-    # cwd is target.parent; resolve_script_path guarantees target is inside
-    # the scripts dir, so validate the working directory stays inside it too.
-    _scripts_root = Path(
-        os.environ.get("AGENT_HARNESS_SCRIPTS_DIR") or Path.home() / ".agent-harness" / "scripts"
-    ).resolve()
-    _cwd = target.parent.resolve()
-    if not _cwd.is_relative_to(_scripts_root):
-        raise ValueError("script working directory escapes scripts directory")
-    if target.suffix.lower() == ".py":
-        command = [sys.executable, str(target)]
-    else:
-        bash = shutil.which("bash", path="/usr/bin:/bin")
-        if bash is None:
-            raise ValueError("bash is required for shell scripts")
-        command = [bash, str(target)]
+    """Execute an allowlisted administrator script using a private entry snapshot."""
+    current = review_script(script_path)
+    target = current.target
+    if approved_review is not None and (
+        current.dependencies != approved_review.dependencies
+        or current.policy_digest != approved_review.policy_digest
+    ):
+        raise ValueError("script dependencies changed after approval; fresh approval required")
     if approved_content is None:
-        return await _execute_script_command(command, _cwd)
-    if approved_path is None or target != approved_path:
+        approved_content = current.content
+    elif approved_path is None or target != approved_path:
         raise ValueError("script path changed after approval")
+    if approved_review is not None and approved_content != approved_review.content:
+        raise ValueError("approved entry content does not match reviewed snapshot")
     if len(approved_content) > 200_000:
         raise ValueError("script exceeds 200,000 byte review bound")
-    # Keep reviewed content private and immutable to changes in the scripts
-    # directory. Content never enters argv or the child environment. The
-    # snapshot remains available until every script descendant is stopped.
+    from ah.core.provider import audit_log
+
+    audit_log(
+        "job_script.dependencies",
+        entry=target.name,
+        policy_digest=current.policy_digest,
+        dependencies=dict(current.dependencies),
+    )
     with tempfile.TemporaryDirectory(prefix="ah-job-script-") as snapshot_dir:
         snapshot = Path(snapshot_dir) / target.name
         snapshot.write_bytes(approved_content)
         if target.suffix.lower() == ".py":
             command = [sys.executable, "-c", _PYTHON_SNAPSHOT_BOOTSTRAP, str(target), str(snapshot)]
         else:
+            bash = shutil.which("bash", path="/usr/bin:/bin")
+            if bash is None:
+                raise ValueError("bash is required for shell scripts")
             command = [bash, "-c", _BASH_SNAPSHOT_BOOTSTRAP, str(target), str(snapshot)]
-        return await _execute_script_command(command, _cwd)
+        return await _execute_script_command(command, target.parent)
 
 
 async def _execute_script_command(command: list[str], cwd: Path) -> str:

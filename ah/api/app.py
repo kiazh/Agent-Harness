@@ -24,6 +24,7 @@ from ah.api.auth import require_api_key
 from ah.api.rate_limit import RateLimitMiddleware
 from ah.core.config import config
 from ah.core.context import context_manager
+from ah.core.exceptions import StaleOwnershipError
 from ah.core.models import StreamEvent
 from ah.core.session import session_manager
 from ah.db.connection import db
@@ -39,8 +40,10 @@ from ah.gateway.errors import (
 from ah.gateway.serializers import chunk_preview, history_from_chunks, session_to_dict
 from ah.gateway.server import PROVIDERS, Gateway
 from ah.memory.redaction import StreamingSecretRedactor, redact_secrets
+from ah.observability.diagnostics import record_failure
 
 logger = logging.getLogger(__name__)
+CLAIM_RENEW_INTERVAL_SECONDS = 30.0
 
 
 # ─── request / response models ──────────────────────────────────────────────
@@ -76,6 +79,7 @@ class CreateJobRequest(BaseModel):
 class PromptRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=20_000)
     verbose: bool = False
+    protocolVersion: int = Field(default=1, ge=1, le=2)
 
 
 class CreateMemoryRequest(BaseModel):
@@ -107,6 +111,13 @@ class ResolveApprovalRequest(BaseModel):
     verdict: str = Field(..., min_length=1, max_length=16)
     sessionId: uuid.UUID | None = None
     grant: str = Field(default="once", min_length=1, max_length=16)
+
+
+class ResumeApprovalRequest(BaseModel):
+    protocolVersion: int = Field(default=1, ge=1, le=2)
+    sessionId: uuid.UUID
+    turnId: str = Field(..., max_length=100)
+    toolArgs: dict[str, Any] = Field(default_factory=dict)
 
 
 class RpcRequest(BaseModel):
@@ -240,8 +251,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.warning("API gateway close exceeded its bound; continuing")
     try:
         await asyncio.wait_for(runtime_services.shutdown(), timeout=15)
-    except (TimeoutError, asyncio.CancelledError, Exception):
-        pass
+    except (TimeoutError, asyncio.CancelledError, Exception) as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("app.lifespan", _boundary_error)
 
 
 # ─── app factory ───────────────────────────────────────────────────────────
@@ -461,8 +473,9 @@ def create_app() -> FastAPI:
             from ah.gateway.features.mode import grant_full_default
 
             await grant_full_default(session)
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("app.create_app", _boundary_error)
         return {"session": session_to_dict(session)}
 
     @app.get("/api/v1/sessions", dependencies=[Depends(require_api_key)])
@@ -493,6 +506,11 @@ def create_app() -> FastAPI:
     @app.post("/api/v1/sessions/{session_id}/prompt", dependencies=[Depends(require_api_key)])
     @app.post("/sessions/{session_id}/prompt", dependencies=[Depends(require_api_key)])
     async def prompt_session(session_id: str, req: PromptRequest) -> StreamingResponse:
+        return await _stream_session(session_id, req)
+
+    async def _stream_session(
+        session_id: str, req: PromptRequest, *, resume: tuple[dict, dict] | None = None
+    ) -> StreamingResponse:
         """Stream agent events as Server-Sent Events."""
         try:
             sid = uuid.UUID(session_id)
@@ -518,6 +536,28 @@ def create_app() -> FastAPI:
         # first iteration so an unconsumed stream never renews forever;
         # stopped when the generator exits; crash expiry recovery preserved.
         _renew_state: dict[str, Any] = {}
+        _ownership_lost = asyncio.Event()
+
+        async def _owned_step(awaitable, timeout: float):
+            task = asyncio.ensure_future(awaitable)
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+            _renew_state["active"] = task
+            lost = asyncio.create_task(_ownership_lost.wait())
+            try:
+                done, _ = await asyncio.wait(
+                    {task, lost}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+                )
+                if _ownership_lost.is_set():
+                    task.cancel()
+                    raise StaleOwnershipError("REST turn ownership lost")
+                if task not in done:
+                    task.cancel()
+                    raise TimeoutError("turn timed out")
+                return task.result()
+            finally:
+                lost.cancel()
+                if task.done():
+                    _renew_state.pop("active", None)
 
         async def _ensure_renewal() -> None:
             if _renew_state.get("task") is not None:
@@ -530,17 +570,27 @@ def create_app() -> FastAPI:
 
                 while not _renew_stop.is_set():
                     try:
-                        await asyncio.wait_for(_renew_stop.wait(), timeout=120)
+                        await asyncio.wait_for(
+                            _renew_stop.wait(), timeout=CLAIM_RENEW_INTERVAL_SECONDS
+                        )
                     except TimeoutError:
                         pass
                     if _renew_stop.is_set():
                         return
                     try:
-                        if not await _renew_stream_claim(sid, turn_token):
-                            logger.warning("SSE turn lost ownership for session %s", session_id)
-                            return
+                        if await _renew_stream_claim(sid, turn_token):
+                            continue
+                        logger.warning("SSE turn lost ownership for session %s", session_id)
                     except Exception:
-                        pass
+                        logger.warning("SSE claim renewal failed for session %s", session_id)
+                    _ownership_lost.set()
+                    from ah.core.metrics import metrics
+
+                    metrics.increment_counter("turn.ownership_lost")
+                    active = _renew_state.get("active")
+                    if active is not None:
+                        active.cancel()
+                    return
 
             _renew_state["task"] = asyncio.create_task(_renew_loop())
 
@@ -550,19 +600,32 @@ def create_app() -> FastAPI:
             if _renew_stop is not None:
                 try:
                     _renew_stop.set()
-                except Exception:
-                    pass
+                except Exception as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("app.create_app", _boundary_error)
             if _renew_task is not None and not _renew_task.done():
                 _renew_task.cancel()
             if _renew_task is not None:
                 try:
                     await asyncio.gather(_renew_task, return_exceptions=True)
-                except (asyncio.CancelledError, Exception):
-                    pass
+                except (asyncio.CancelledError, Exception) as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("app.create_app", _boundary_error)
+
+        def frame(data: dict[str, Any]) -> str:
+            if req.protocolVersion == 2:
+                from ah.protocol import canonical_http_event
+
+                data = canonical_http_event(data, session_id, turn_token)
+            return f"data: {json.dumps(data)}\n\n"
 
         async def event_stream() -> AsyncGenerator[str, None]:
             agent = None
+            stream = None
+            terminal_data = None
+            resume_token = None
             _stream_cancelled = False
+            _release_failed = False
             _stage = "turn_started"
             await _ensure_renewal()
 
@@ -577,12 +640,16 @@ def create_app() -> FastAPI:
             # fully-redacted concatenation, never the raw accumulation.
             stream_redactor = StreamingSecretRedactor()
             try:
+                from ah.permissions.broker import set_approval_handler
+
+                set_approval_handler(None, principal="http", turn_id=turn_token)
+                yield frame({"type": "turn.started", "sessionId": session_id, "turnId": turn_token})
                 # AH-022: definition-aware factory so specialist sessions
                 # cannot bypass allowed_tools/persona via direct HTTP.
                 from ah.core.agent_factory import build_agent_for_session
 
                 _record_stage("building_agent")
-                agent = await build_agent_for_session(session)
+                agent = await _owned_step(build_agent_for_session(session), 300)
                 _record_stage("waiting_for_provider")
                 # Total turn timeout: a per-anext wait_for against a fixed
                 # deadline so a hung provider cannot hold the stream forever.
@@ -591,13 +658,30 @@ def create_app() -> FastAPI:
                 except (TypeError, ValueError):
                     timeout = 300.0
                 deadline = asyncio.get_running_loop().time() + timeout
-                stream = agent.run_stream(sid, req.text, verbose=req.verbose)
+                if resume is None:
+                    stream = agent.run_stream(sid, req.text, verbose=req.verbose)
+                else:
+                    from ah.core.approval_resume import resume_action_stream
+                    from ah.permissions.broker import resume_approval_var
+
+                    record, arguments = resume
+                    resume_token = resume_approval_var.set(record["request_id"])
+                    yield frame(
+                        {
+                            "type": "approval.resumed",
+                            "requestId": record["request_id"],
+                            "sessionId": session_id,
+                            "turnId": turn_token,
+                            "originTurnId": record["turn_id"],
+                        }
+                    )
+                    stream = resume_action_stream(agent, sid, record, arguments)
                 while True:
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
                         raise TimeoutError("turn timed out")
                     try:
-                        event = await asyncio.wait_for(stream.__anext__(), timeout=remaining)
+                        event = await _owned_step(stream.__anext__(), remaining)
                     except StopAsyncIteration:
                         break
                     if event.type == "text":
@@ -609,7 +693,7 @@ def create_app() -> FastAPI:
                                 StreamEvent(type="text", content=safe),
                                 _pre_redacted=True,
                             )
-                            yield f"data: {json.dumps(data)}\n\n"
+                            yield frame(data)
                         continue
                     if event.type == "done" and event.response is not None:
                         tail = stream_redactor.flush()
@@ -620,7 +704,7 @@ def create_app() -> FastAPI:
                                 StreamEvent(type="text", content=tail),
                                 _pre_redacted=True,
                             )
-                            yield f"data: {json.dumps(data)}\n\n"
+                            yield frame(data)
                         # AH-AUDIT-030: typed needs_approval SSE output with
                         # request/session/turn binding and the sanitized
                         # proposal. A pause is actionable and distinct from
@@ -642,17 +726,38 @@ def create_app() -> FastAPI:
                                 },
                             )
                             data = _serialize_event(pause_event)
-                            yield f"data: {json.dumps(data)}\n\n"
+                            if req.protocolVersion == 2:
+                                from ah.permissions.store import get_approval
+                                from ah.protocol import approval_fields
+
+                                record = await get_approval(str(pause["request_id"]))
+                                if record is None:
+                                    raise RuntimeError("approval proposal is unavailable")
+                                data = {
+                                    "type": "needs_approval",
+                                    **_redact_value(approval_fields(record)),
+                                }
+                            yield frame(data)
                     data = _serialize_event(event)
-                    yield f"data: {json.dumps(data)}\n\n"
+                    if event.type == "done":
+                        terminal_data = data
+                    else:
+                        yield frame(data)
             except TimeoutError:
                 logger.warning("Prompt stream timed out for session %s", session_id)
                 error_data = {"type": "error", "message": "turn timed out"}
-                yield f"data: {json.dumps(error_data)}\n\n"
+                yield frame(error_data)
+            except StaleOwnershipError:
+                yield frame(
+                    {"type": "turn.ownership_lost", "sessionId": session_id, "turnId": turn_token}
+                )
             except Exception:
                 logger.exception("Prompt stream failed for session %s", session_id)
                 error_data = {"type": "error", "message": "prompt failed; check server logs"}
-                yield f"data: {json.dumps(error_data)}\n\n"
+                yield frame(error_data)
+            except GeneratorExit:
+                _stream_cancelled = True
+                raise
             except asyncio.CancelledError:
                 # Client disconnect / server shutdown: bounded cleanup below,
                 # then propagate (never yield DONE here — the consumer is gone
@@ -661,93 +766,153 @@ def create_app() -> FastAPI:
                 raise
             finally:
                 _record_stage("cleanup_started")
-                # H-01/H-02/H-03/H-06: Bounded cleanup contract.
-                # 1. Learning tasks: bounded join, then cancel leftovers.
-                # 2. Provider close: bounded with timeout.
-                # 3. Claim release: independent outer finally, always runs.
-                # 4. Auto-compaction: fire-and-forget, never blocks [DONE].
-                try:
-                    _learning = (
-                        tuple(getattr(agent, "_learning_tasks", ())) if agent is not None else ()
-                    )
-                    if _learning:
-                        _record_stage("joining_optional_work")
-                        # Bounded join: learning reviews must never block
-                        # normal answer completion indefinitely.
-                        try:
-                            _, pending = await asyncio.wait(_learning, timeout=2)
-                            for _t in pending:
-                                _t.cancel()
-                        except (TimeoutError, asyncio.CancelledError, Exception):
-                            for _t in _learning:
-                                try:
-                                    if not _t.done():
-                                        _t.cancel()
-                                except Exception:
-                                    pass
-                finally:
-                    # Claim release in independent outer finally so provider
-                    # close errors or cancellation cannot skip it (H-02).
-                    try:
-                        _record_stage("closing_owned_clients")
-                        # AH-023: close only owned providers, bounded.
-                        if agent is not None:
+                if resume_token is not None:
+                    from ah.permissions.broker import resume_approval_var
+
+                    resume_approval_var.reset(resume_token)
+                active = _renew_state.get("active")
+                if active is not None and not active.done():
+                    active.cancel()
+                    await asyncio.wait({active}, timeout=0.1)
+                if active is not None and not active.done():
+                    from ah.core.runtime import runtime_services
+
+                    async def retire_execution() -> None:
+                        # Keep ownership until the actual operation unwinds.
+                        # Runtime shutdown observes a bound and quarantines this
+                        # observer too; it cannot safely release a live execution.
+                        while not active.done():
                             try:
+                                await asyncio.shield(active)
+                            except asyncio.CancelledError:
+                                continue
+                            except Exception:
+                                break
+                        try:
+                            if stream is not None:
+                                await stream.aclose()
+                            if agent is not None:
                                 from ah.core.agent_factory import close_agent_provider
 
-                                await asyncio.wait_for(
-                                    close_agent_provider(agent),
-                                    timeout=5,
-                                )
-                            except (TimeoutError, asyncio.CancelledError):
-                                logger.warning(
-                                    "Provider close timed out for session %s", session_id
-                                )
-                            except Exception:
-                                logger.exception(
-                                    "Could not close prompt provider for session %s",
-                                    session_id,
-                                )
-                    finally:
-                        _record_stage("releasing_ownership")
-                        # AH-AUDIT-013: stop renewal during release.
-                        try:
+                                await close_agent_provider(agent)
+                        finally:
                             await _stop_renewal()
-                        except (asyncio.CancelledError, Exception):
-                            pass
-                        if turn_token:
-                            try:
-                                await _end_turn(sid, turn_token)
-                            except Exception:
-                                pass
-                    # H-03: Auto-compaction is fire-and-forget background work.
-                    # Never blocks [DONE] or holds the stream open.
-                    # AH-AUDIT-025: tracked by the shared runtime for bounded
-                    # shutdown joining before DB closure.
-                    if not _stream_cancelled:
-                        _record_stage("compaction_maintenance")
-                        try:
-                            from ah import services as _services
-                            from ah.core.runtime import runtime_services as _runtime
+                            await _end_turn(sid, turn_token)
 
-                            task = asyncio.create_task(_services.maybe_auto_compact(sid))
-                            task.add_done_callback(
-                                lambda t: t.exception() if not t.cancelled() else None
-                            )
+                    runtime_services.track(active)
+                    runtime_services.track(asyncio.create_task(retire_execution()))
+                    if not _stream_cancelled:
+                        yield frame(
+                            {
+                                "type": "turn.cleanup_pending",
+                                "sessionId": session_id,
+                                "turnId": turn_token,
+                            }
+                        )
+                else:
+                    # H-01/H-02/H-03/H-06: Bounded cleanup contract.
+                    # 1. Learning tasks: bounded join, then cancel leftovers.
+                    # 2. Provider close: bounded with timeout.
+                    # 3. Claim release: independent outer finally, always runs.
+                    # 4. Auto-compaction: fire-and-forget, never blocks [DONE].
+                    try:
+                        _learning = (
+                            tuple(getattr(agent, "_learning_tasks", ()))
+                            if agent is not None
+                            else ()
+                        )
+                        if _learning:
+                            _record_stage("joining_optional_work")
+                            # Bounded join: learning reviews must never block
+                            # normal answer completion indefinitely.
                             try:
-                                _runtime.track(task)
-                            except Exception:
-                                pass
-                        except Exception:
-                            pass
-                if not _stream_cancelled:
-                    _record_stage("answer_complete")
-                    yield "data: [DONE]\n\n"
+                                _, pending = await asyncio.wait(_learning, timeout=2)
+                                for _t in pending:
+                                    _t.cancel()
+                            except (TimeoutError, asyncio.CancelledError, Exception):
+                                for _t in _learning:
+                                    try:
+                                        if not _t.done():
+                                            _t.cancel()
+                                    except Exception as _boundary_error:
+                                        # Optional fallback preserves the primary outcome; report no payload.
+                                        record_failure("app.create_app", _boundary_error)
+                    finally:
+                        # Claim release in independent outer finally so provider
+                        # close errors or cancellation cannot skip it (H-02).
+                        try:
+                            _record_stage("closing_owned_clients")
+                            # AH-023: close only owned providers, bounded.
+                            if agent is not None:
+                                try:
+                                    from ah.core.agent_factory import close_agent_provider
+
+                                    await close_agent_provider(agent)
+                                except (TimeoutError, asyncio.CancelledError):
+                                    logger.warning(
+                                        "Provider close timed out for session %s", session_id
+                                    )
+                                except Exception:
+                                    logger.exception(
+                                        "Could not close prompt provider for session %s",
+                                        session_id,
+                                    )
+                        finally:
+                            _record_stage("releasing_ownership")
+                            # AH-AUDIT-013: stop renewal during release.
+                            try:
+                                await _stop_renewal()
+                            except (asyncio.CancelledError, Exception) as _boundary_error:
+                                # Optional fallback preserves the primary outcome; report no payload.
+                                record_failure("app.create_app", _boundary_error)
+                            if turn_token:
+                                try:
+                                    await _end_turn(sid, turn_token)
+                                except Exception as _boundary_error:
+                                    _release_failed = True
+                                    # Unknown ownership must not produce a terminal event.
+                                    record_failure("app.create_app", _boundary_error)
+                        # H-03: Auto-compaction is fire-and-forget background work.
+                        # Never blocks [DONE] or holds the stream open.
+                        # AH-AUDIT-025: tracked by the shared runtime for bounded
+                        # shutdown joining before DB closure.
+                        if not _stream_cancelled and not _release_failed:
+                            _record_stage("compaction_maintenance")
+                            try:
+                                from ah import services as _services
+                                from ah.core.runtime import runtime_services as _runtime
+
+                                task = asyncio.create_task(_services.maybe_auto_compact(sid))
+                                task.add_done_callback(
+                                    lambda t: t.exception() if not t.cancelled() else None
+                                )
+                                try:
+                                    _runtime.track(task)
+                                except Exception as _boundary_error:
+                                    # Optional fallback preserves the primary outcome; report no payload.
+                                    record_failure("app.create_app", _boundary_error)
+                            except Exception as _boundary_error:
+                                # Optional fallback preserves the primary outcome; report no payload.
+                                record_failure("app.create_app", _boundary_error)
+                    if not _stream_cancelled:
+                        if _release_failed:
+                            yield frame(
+                                {
+                                    "type": "turn.cleanup_pending",
+                                    "reason": "ownership release unavailable",
+                                }
+                            )
+                        else:
+                            _record_stage("answer_complete")
+                            if terminal_data is not None:
+                                yield frame(terminal_data)
+                            yield "data: [DONE]\n\n"
 
         return StreamingResponse(
             event_stream(),
             media_type="text/event-stream",
             headers={
+                "X-AH-Protocol-Version": str(req.protocolVersion),
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
             },
@@ -952,8 +1117,8 @@ def create_app() -> FastAPI:
         if req.sessionId is not None and str(rec.get("session_id")) != str(req.sessionId):
             raise HTTPException(403, "approval does not belong to this session")
         verdict = req.verdict.lower()
-        if verdict not in ("approved", "denied"):
-            raise HTTPException(400, "verdict must be approved|denied")
+        if verdict not in ("approved", "denied", "cancelled", "expired"):
+            raise HTTPException(400, "verdict must be approved|denied|cancelled|expired")
         grant = (req.grant or "once").lower()
         if grant not in ("once", "session"):
             raise HTTPException(400, "grant must be once|session")
@@ -975,7 +1140,60 @@ def create_app() -> FastAPI:
                     "digest": rec.get("digest", ""),
                 }
             )
-        return {"approval": {"requestId": request_id, "status": verdict}}
+        return {
+            "approval": {"requestId": request_id, "status": verdict},
+            "event": {
+                "type": "approval.resolved",
+                "requestId": request_id,
+                "sessionId": rec.get("session_id"),
+                "turnId": rec.get("turn_id"),
+                "status": verdict,
+            },
+            "continuation": f"/api/v1/approvals/{request_id}/resume"
+            if verdict == "approved"
+            else None,
+        }
+
+    @app.post("/api/v1/approvals/{request_id}/resume", dependencies=[Depends(require_api_key)])
+    async def resume_approval(request_id: str, req: ResumeApprovalRequest) -> StreamingResponse:
+        from ah.core.approval_resume import matches_approval, resumed_request
+        from ah.permissions import store
+        from ah.tools.base import registry
+
+        record = await store.get_approval(request_id)
+        if record is None:
+            raise HTTPException(404, "approval not found")
+        if record.get("session_id") != str(req.sessionId) or record.get("turn_id") != req.turnId:
+            raise HTTPException(403, "approval origin does not match")
+        if record.get("status") != "approved" or record.get("consumed"):
+            raise HTTPException(
+                409, {"type": "approval.unavailable", "status": record.get("status")}
+            )
+        if not record.get("proposal_complete") or not record["proposal"].get("tool"):
+            raise HTTPException(409, "reviewable tool proposal required; request fresh approval")
+        tool = registry._tools.get(record["proposal"]["tool"])
+        if tool is None:
+            raise HTTPException(409, "approved tool no longer available")
+        try:
+            registry._validate_tool_args(tool, req.toolArgs)
+            action = await resumed_request(record, req.toolArgs)
+        except ValueError:
+            raise HTTPException(400, "invalid continuation arguments") from None
+        if not matches_approval(action, record):
+            fresh = await store.create_approval(action, principal="http")
+            raise HTTPException(
+                409,
+                {
+                    "type": "needs_approval",
+                    "requestId": fresh["request_id"],
+                    "reason": "action changed; fresh approval required",
+                },
+            )
+        return await _stream_session(
+            str(req.sessionId),
+            PromptRequest(text="approval continuation", protocolVersion=req.protocolVersion),
+            resume=(record, req.toolArgs),
+        )
 
     # ── agents ──────────────────────────────────────────────────────────────
 
@@ -1053,7 +1271,14 @@ def _redact_value(value: Any) -> Any:
     return value
 
 
-def _serialize_event(event: StreamEvent, *, _pre_redacted: bool = False) -> dict[str, Any]:
+def _serialize_event(
+    event: StreamEvent,
+    *,
+    _pre_redacted: bool = False,
+    protocol_version: int = 1,
+    session_id: str = "",
+    turn_id: str = "",
+) -> dict[str, Any]:
     """Convert a StreamEvent to a JSON-serializable dict.
 
     When *_pre_redacted* is True the text content already passed through the
@@ -1101,4 +1326,10 @@ def _serialize_event(event: StreamEvent, *, _pre_redacted: bool = False) -> dict
         data["requestId"] = event.content
         data["operation"] = event.tool_name
         data["proposal"] = _redact_value(dict(event.tool_args or {}))
+    if protocol_version == 2:
+        from ah.protocol import canonical_http_event
+
+        return canonical_http_event(data, session_id, turn_id)
+    if protocol_version != 1:
+        raise ValueError("unsupported protocol version")
     return data

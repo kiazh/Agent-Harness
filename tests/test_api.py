@@ -316,6 +316,8 @@ class TestPromptSSE:
                 with patch("ah.core.agent.ReActAgent", return_value=FakeAgent()):
                     response = await prompt(str(session.id), PromptRequest(text="Hi"))
                     stream = response.body_iterator
+                    started = await anext(stream)
+                    assert '"type": "turn.started"' in started
                     await anext(stream)
                     next_event = asyncio.create_task(anext(stream))
                     await review_started.wait()

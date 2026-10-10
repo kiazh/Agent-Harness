@@ -49,7 +49,7 @@ async def _shared_rag_pipeline():
 
     Creates the pipeline on first use when enabled (so a cold restart still
     retrieves already-indexed documents through ordinary prompts), or returns
-    None when disabled/unavailable — callers keep the keyword path and report
+    None when disabled/unavailable â€” callers keep the keyword path and report
     degraded status honestly instead of failing startup.
     """
     if not _rag_enabled():
@@ -86,7 +86,7 @@ async def build_agent_for_session(
 
     Fail-closed (5.4): a requested NON-default specialist whose definition
     cannot be resolved (lookup error, unknown/deleted name, malformed row)
-    raises AgentDefinitionError — never broad all-tool access. Only the
+    raises AgentDefinitionError â€” never broad all-tool access. Only the
     general-purpose default (``harness``) falls back to unrestricted tools.
     Full-host user grants never widen a restrictive child definition.
     """
@@ -184,7 +184,7 @@ async def build_agent_for_session(
 def cap_child_authority(
     parent_authority: dict, definition_tools: list[str] | None
 ) -> list[str] | None:
-    """Child tools = definition ∩ parent caps (Phase 4.5/6, LP-08).
+    """Child tools = definition âˆ© parent caps (Phase 4.5/6, LP-08).
 
     A restricted parent cannot create an unrestricted child; broad parent
     access never expands a child's restrictive definition. Key presence/None
@@ -214,38 +214,53 @@ def check_mode_cap(parent_authority: dict | None, requested_mode: str) -> None:
 
 
 async def close_agent_provider(agent, timeout: float = 5.0) -> None:
-    """Shared owner-aware provider cleanup contract (AH-AUDIT-026).
+    """Close only owned providers, recording sanitized outcomes within a deadline.
 
-    Closes an agent's provider only when this scope owns it (never
-    injected/shared clients), with a bounded join. Claim release belongs in
-    the caller's independent outer finally so a stuck close cannot strand
-    claims. Failures are recorded without masking the primary exception.
+    Claim release remains the caller's independent finally. Resistant cleanup
+    remains strongly referenced until it retires; cancellation still propagates.
     """
+    import asyncio
+    import inspect
+    import logging
+    import time
+
+    from ah.core.metrics import metrics
+
     if not getattr(agent, "_owns_provider", False):
         return
     provider = getattr(agent, "provider", None)
     close = getattr(provider, "close", None)
     if not callable(close):
         return
-    try:
-        import asyncio as _asyncio
-        import inspect as _inspect
-        import logging as _logging
+    started = time.monotonic()
+    logger = logging.getLogger(__name__)
+    identity = type(provider).__name__
 
+    def report(outcome: str, error: BaseException | None = None) -> None:
+        elapsed = (time.monotonic() - started) * 1000
+        metrics.increment_counter(f"provider.close.{outcome}")
+        metrics.record_latency("provider.close", elapsed)
+        if outcome != "success":
+            logger.warning(
+                "owned provider close %s provider=%s elapsed_ms=%.1f error_type=%s",
+                outcome,
+                identity,
+                elapsed,
+                type(error).__name__ if error else "none",
+            )
+
+    try:
         result = close()
-        if _inspect.isawaitable(result):
-            task = _asyncio.ensure_future(result)
-            # Retrieve late errors even when cleanup is quarantined.
-            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-            try:
-                done, _ = await _asyncio.wait({task}, timeout=timeout)
-                if task in done:
-                    task.result()
-                else:
-                    task.cancel()
-                    _logging.getLogger(__name__).warning("owned provider close exceeded its bound")
-            except _asyncio.CancelledError:
-                task.cancel()
-                raise
-    except Exception:
-        pass
+        if inspect.isawaitable(result):
+            from ah.core.cleanup import bounded_cleanup
+
+            await bounded_cleanup(result, timeout, "owned provider", report=report)
+        else:
+            report("success")
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        # Async cleanup already reported its outcome; synchronous failures
+        # are secondary to the turn and must be reported here.
+        if "result" not in locals() or not inspect.isawaitable(result):
+            report("failed", error)

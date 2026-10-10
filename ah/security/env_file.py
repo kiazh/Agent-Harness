@@ -12,6 +12,8 @@ import os
 import re
 from pathlib import Path
 
+from ah.observability.diagnostics import record_failure
+
 __all__ = [
     "PROVIDER_KEYS",
     "find_env_file",
@@ -51,12 +53,14 @@ def _allowed_roots() -> tuple[Path, ...]:
     # Home and temp so tests (pytest tmp_path) and user ~/.env keep working.
     try:
         roots.append(Path.home().resolve())
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("env_file._allowed_roots", _boundary_error)
     try:
         roots.append(Path(tempfile.gettempdir()).resolve())
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("env_file._allowed_roots", _boundary_error)
     # AH_ENV_FILE explicit override parent is allowed.
     override = os.environ.get("AH_ENV_FILE", "").strip()
     if override:
@@ -65,8 +69,9 @@ def _allowed_roots() -> tuple[Path, ...]:
             if not p.is_absolute():
                 p = (cwd / p).resolve()
             roots.append(p.parent.resolve() if p.suffix else p.resolve())
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("env_file._allowed_roots", _boundary_error)
     return tuple(roots)
 
 

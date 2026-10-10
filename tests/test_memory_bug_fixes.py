@@ -68,6 +68,9 @@ class TestRejectRaceCondition:
     @pytest.fixture
     def mock_db(self):
         mock = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock)
         mock.fetch = AsyncMock(return_value=[])
         mock.fetchrow = AsyncMock(return_value=None)
         mock.fetchval = AsyncMock(return_value=0)
@@ -113,6 +116,9 @@ class TestStoreAddSourceAgent:
     @pytest.fixture
     def mock_db(self):
         mock = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock)
         mock.fetch = AsyncMock(return_value=[])
         mock.fetchrow = AsyncMock(return_value=None)
         mock.fetchval = AsyncMock(return_value=0)
@@ -169,6 +175,9 @@ class TestGetWeakMemoriesQuarantined:
     @pytest.fixture
     def mock_db(self):
         mock = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock)
         mock.fetch = AsyncMock(return_value=[])
         mock.fetchrow = AsyncMock(return_value=None)
         mock.fetchval = AsyncMock(return_value=0)
@@ -212,6 +221,9 @@ class TestEvictWeakMemoriesCTE:
     @pytest.fixture
     def mock_db(self):
         mock = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock)
         mock.fetch = AsyncMock(return_value=[])
         mock.fetchrow = AsyncMock(return_value=None)
         mock.fetchval = AsyncMock(return_value=0)
@@ -311,6 +323,9 @@ class TestKeywordSearchFTS:
         retriever.store = mock_store
 
         mock_db = AsyncMock()
+        from tests.support.database import attach_connection
+
+        attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
 
         with patch("ah.memory.retriever.db", mock_db):

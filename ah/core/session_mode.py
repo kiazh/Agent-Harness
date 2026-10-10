@@ -20,6 +20,7 @@ its session full-mode grant executes nothing.
 from __future__ import annotations
 
 import threading
+import uuid
 
 MODES = ("ask", "workspace", "sandbox", "full")
 
@@ -66,6 +67,72 @@ def get_effective_mode(session_id: str | None = None) -> str:
     if override:
         return override
     return get_global_default()
+
+
+async def resolve_effective_mode(session_id: str | None = None) -> str:
+    """Read durable authority fresh; database failures never use cached mode.
+
+    The synchronous registry supports display and explicitly DB-less execution.
+    Production proposal construction calls this resolver before broker stamping.
+    """
+    from ah.db.connection import db
+
+    if not session_id or not db.connected:
+        return get_effective_mode(session_id)
+    row = await db.fetchrow(
+        "SELECT execution_mode FROM sessions WHERE id = $1", uuid.UUID(str(session_id))
+    )
+    if row is None:
+        raise ValueError("session not found while resolving execution mode")
+    mode = row["execution_mode"]
+    set_session_mode(str(session_id), mode)
+    return mode
+
+
+async def activate_durable_mode(session_id: str, agent_id: str, mode: str) -> int:
+    """Serialize routing and full-grant changes in one row-locked transaction."""
+    from ah.db.connection import db, parse_command_count
+    from ah.permissions import store
+
+    if mode not in MODES:
+        raise ValueError("mode must be ask|workspace|sandbox|full")
+    sid = uuid.UUID(session_id)
+    async with db.acquire() as connection:
+        async with connection.transaction():
+            row = await connection.fetchrow("SELECT id FROM sessions WHERE id = $1 FOR UPDATE", sid)
+            if row is None:
+                raise ValueError("session not found while activating execution mode")
+            revoked = parse_command_count(
+                await connection.execute(
+                    "UPDATE permission_grants SET revoked = TRUE "
+                    "WHERE session_id = $1 AND revoked = FALSE",
+                    sid,
+                )
+            )
+            if mode == "full":
+                await store.save_grant(
+                    {
+                        "session_id": session_id,
+                        "agent_id": agent_id,
+                        "mode": "full",
+                        "capability": "session",
+                        "scope_path": None,
+                        "scope_type": "file",
+                        "grant_kind": "session",
+                        "digest": "full-mode-session",
+                    },
+                    connection=connection,
+                )
+            await connection.execute(
+                "UPDATE sessions SET execution_mode = $2, last_activity = now() WHERE id = $1",
+                sid,
+                mode,
+            )
+    set_session_mode(session_id, mode)
+    from ah.core.session import session_manager
+
+    await session_manager._cache_invalidate(sid)
+    return revoked
 
 
 def reset_for_tests() -> None:

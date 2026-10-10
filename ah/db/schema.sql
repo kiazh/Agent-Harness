@@ -35,6 +35,18 @@ ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_status_check;
 ALTER TABLE sessions ADD CONSTRAINT sessions_status_check CHECK (status IN ('active', 'idle', 'archived'));
 CREATE INDEX IF NOT EXISTS idx_sessions_claim ON sessions(claim_expires_at) WHERE claim_owner IS NOT NULL;
 
+-- Persist routing independently of live permission grants. Legacy sessions
+-- migrate to ask; changing the global default affects only new sessions.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS execution_mode TEXT NOT NULL DEFAULT 'ask';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conrelid = 'sessions'::regclass
+                     AND conname = 'sessions_execution_mode_check') THEN
+        ALTER TABLE sessions ADD CONSTRAINT sessions_execution_mode_check
+            CHECK (execution_mode IN ('ask', 'workspace', 'sandbox', 'full'));
+    END IF;
+END $$;
+
 -- Composite index for list_sessions query: WHERE status = $1 ORDER BY last_activity DESC
 CREATE INDEX IF NOT EXISTS idx_sessions_status_last_activity ON sessions(status, last_activity DESC);
 -- Index for get_last_active query: WHERE status = 'active' ORDER BY last_activity DESC

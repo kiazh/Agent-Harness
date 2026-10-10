@@ -130,7 +130,7 @@ export class App implements FeatureHost {
 		try {
 			const init = await this.client.request<InitializeResult>(
 				"initialize",
-				{ model: this.options.model, provider: this.options.provider, mode: this.options.mode },
+				{ protocolVersion: 2, model: this.options.model, provider: this.options.provider, mode: this.options.mode },
 				60_000,
 			);
 			this.version = init.version;
@@ -435,15 +435,22 @@ export class App implements FeatureHost {
 		// A turn's events may arrive after the user switched sessions, so match
 		// against in-flight turns, not just the current session.
 		if (!this.inFlight.has(event.sessionId)) return;
-		if (event.type === "permission.required") {
+		if ((event.type === "needs_approval" || event.type === "permission.required")) {
 			// Approval card bound to this exact session/turn — switching
 			// sessions never approves the wrong session (Phase 5.6).
 			void this.promptApproval(event);
 			this.tui.requestRender();
 			return;
 		}
-		if (event.type === "permission.resolved") {
+		if ((event.type === "approval.resolved" || event.type === "permission.resolved")) {
 			this.transcript.addNotice(`Approval ${event.requestId.slice(0, 8)} ${event.status}.`);
+			this.tui.requestRender();
+			return;
+		}
+		if (event.type === "turn.cleanup_pending" || event.type === "turn.ownership_lost") {
+			this.transcript.addNotice(event.type === "turn.cleanup_pending"
+				? "Stopping: waiting for the running action to finish cleanup."
+				: "Turn ownership was lost; stopping the running action.", "warning");
 			this.tui.requestRender();
 			return;
 		}
@@ -476,7 +483,7 @@ export class App implements FeatureHost {
 	}
 
 	/** Compact approval card: action, cwd/target, backend, grant choices. */
-	private async promptApproval(event: Extract<GatewayEvent, { type: "permission.required" }>): Promise<void> {
+	private async promptApproval(event: Extract<GatewayEvent, { type: "needs_approval" | "permission.required" }>): Promise<void> {
 		const short = event.sessionId.slice(0, 8);
 		// AH-AUDIT-003/004: render the exact command (argv, unambiguous —
 		// never a shell-looking string alone), cwd, backend, timeout, and

@@ -13,6 +13,8 @@ from typing import Any
 
 import yaml
 
+from ah.observability.diagnostics import record_failure
+
 logger = logging.getLogger(__name__)
 
 # Defaults are anchored to the project root, not the current directory, so the
@@ -46,8 +48,9 @@ def default_skills_dir() -> Path:
                 return p
         except OSError:
             pass
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("registry.default_skills_dir", _boundary_error)
     # Docker runtime image copies ./skills next to /app.
     for fallback in (Path("/app/skills"), Path.cwd() / "skills"):
         try:

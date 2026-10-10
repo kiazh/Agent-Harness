@@ -20,28 +20,28 @@ def _python_files_in_ah() -> list[Path]:
 
 
 # ===========================================================================
-# Fix 1: datetime.utcnow() deprecated — replace with datetime.now(UTC)
+# Fix 1: datetime.now(UTC).replace(tzinfo=None) deprecated — replace with datetime.now(UTC)
 # ===========================================================================
 
 
 class TestNoDatetimeUtcnow:
-    """No source file under ah/ should use the deprecated datetime.utcnow()."""
+    """No source file under ah/ should use the deprecated datetime.now(UTC).replace(tzinfo=None)."""
 
     def test_no_utcnow_in_source_files(self):
-        """Scan all .py files in ah/ for datetime.utcnow() calls."""
+        """Scan all .py files in ah/ for datetime.now(UTC).replace(tzinfo=None) calls."""
         offenders: list[str] = []
         for py_file in _python_files_in_ah():
             source = py_file.read_text(encoding="utf-8")
-            # Look for datetime.utcnow() or utcnow() in any form
+            # Look for datetime.now(UTC).replace(tzinfo=None) or utcnow() in any form
             if re.search(r"\.utcnow\s*\(", source):
                 offenders.append(str(py_file.relative_to(_PROJECT_ROOT)))
         assert not offenders, (
-            f"datetime.utcnow() is deprecated. Use datetime.now(UTC) instead.\n"
+            f"datetime.now(UTC).replace(tzinfo=None) is deprecated. Use datetime.now(UTC) instead.\n"
             f"Offending files: {offenders}"
         )
 
     def test_no_utcnow_in_comments(self):
-        """Comments should not reference datetime.utcnow() either."""
+        """Comments should not reference datetime.now(UTC).replace(tzinfo=None) either."""
         offenders: list[str] = []
         for py_file in _python_files_in_ah():
             source = py_file.read_text(encoding="utf-8")
@@ -56,7 +56,7 @@ class TestNoDatetimeUtcnow:
                     offenders.append(str(py_file.relative_to(_PROJECT_ROOT)))
                     break
         assert not offenders, (
-            f"datetime.utcnow() found in code (not just comments).\n"
+            f"datetime.now(UTC).replace(tzinfo=None) found in code (not just comments).\n"
             f"Offending files: {offenders}"
         )
 

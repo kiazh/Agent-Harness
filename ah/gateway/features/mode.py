@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from ah.core.config import config
 from ah.gateway.errors import INVALID_PARAMS, RpcError
+from ah.observability.diagnostics import record_failure
 
 if TYPE_CHECKING:
     from ah.gateway.server import Gateway
@@ -15,12 +16,13 @@ from ah.gateway.features._common import _str
 
 async def mode_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     gw.require_db()
-    from ah.core.session_mode import get_effective_mode, get_session_mode
+    from ah.core.session_mode import get_session_mode, resolve_effective_mode
 
     session_id = params.get("sessionId")
     if session_id:
+        effective = await resolve_effective_mode(str(session_id))
         return {
-            "mode": get_effective_mode(str(session_id)),
+            "mode": effective,
             "session_mode": get_session_mode(str(session_id)),
             "default": config.get("execution_mode"),
             "backend": _backend(str(session_id)),
@@ -74,6 +76,13 @@ async def mode_set(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     if session is None:
         raise RpcError(INVALID_PARAMS, "sessionId is required for session-scoped mode")
     sid = str(session.id)
+    from ah.db.connection import db
+
+    if db.connected:
+        from ah.core.session_mode import activate_durable_mode
+
+        await activate_durable_mode(sid, session.agent_id, mode)
+        return {"mode": mode, "scope": scope, "backend": _backend(sid)}
     previous = get_effective_mode(sid)
     if mode == "full":
         # Stage the override first so policy sees the intended mode, then
@@ -131,6 +140,15 @@ async def mode_revoke(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     from ah.permissions.broker import permission_broker
 
     session = await gw.get_session(params)
+    from ah.db.connection import db
+
+    if db.connected:
+        from ah.core.session_mode import activate_durable_mode
+
+        n = await activate_durable_mode(str(session.id), session.agent_id, "ask")
+        if params.get("scope") == "global":
+            config.set("execution_mode", "ask")
+        return {"revoked": n, "mode": "ask", "scope": params.get("scope", "session")}
     n = await permission_broker.revoke(str(session.id))
     if str(params.get("scope") or "session") == "global":
         config.set("execution_mode", "ask")
@@ -193,23 +211,26 @@ async def approvals_resolve(gw: Gateway, params: dict[str, Any]) -> dict[str, An
         fut = entry[0] if isinstance(entry, tuple) else entry
         if fut is not None and not fut.done():
             fut.set_result(verdict)
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("mode.approvals_resolve", _boundary_error)
     try:
         gw._write(
             {
                 "jsonrpc": "2.0",
                 "method": "event",
-                "params": {
-                    "type": "permission.resolved",
-                    "sessionId": rec.get("session_id", ""),
-                    "requestId": request_id,
-                    "status": verdict,
-                },
+                "params": gw.event_payload(
+                    "approval.resolved",
+                    str(rec.get("session_id") or ""),
+                    str(rec.get("turn_id") or ""),
+                    requestId=request_id,
+                    status=verdict,
+                ),
             }
         )
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("mode.approvals_resolve", _boundary_error)
     return {"approval": {"requestId": request_id, "status": verdict}}
 
 

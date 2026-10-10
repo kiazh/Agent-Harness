@@ -339,7 +339,9 @@ def test_011_approval_and_backend_agree(tmp_path, monkeypatch):
     other = tmp_path / "other"
     other.mkdir()
     monkeypatch.chdir(other)
-    monkeypatch.setattr(policymod, "workspace_root", lambda: ws.resolve())
+    from ah.core.config import config
+
+    monkeypatch.setattr(config, "workspace_root", str(ws))
     req = normalize_request(ActionRequest(operation="file.read", targets=["a.txt"], cwd="."))
     resolved = fmod.resolve_path("a.txt")
     assert str(resolved) == req.targets[0]

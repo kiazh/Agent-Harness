@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 
+from ah.observability.diagnostics import record_failure
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,14 +31,16 @@ async def embed_query(text: str) -> list[float] | None:
         logger.debug("embedding failed, keyword fallback: %s", e)
         try:
             await embedder.close()
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("embeddings.embed_query", _boundary_error)
         return None
     finally:
         try:
             await embedder.close()
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("embeddings.embed_query", _boundary_error)
 
 
 def embedding_status() -> dict[str, str]:
@@ -46,8 +50,9 @@ def embedding_status() -> dict[str, str]:
 
         if config.get("openai_api_key") or config.get("openrouter_api_key"):
             return {"mode": "dense+sparse", "reason": ""}
-    except Exception:
-        pass
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("embeddings.embedding_status", _boundary_error)
     return {
         "mode": "keyword-only",
         "reason": "no embedding provider configured",

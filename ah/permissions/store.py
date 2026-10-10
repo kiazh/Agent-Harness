@@ -109,13 +109,13 @@ def _row_to_grant(row: Any) -> dict:
     }
 
 
-async def save_grant(grant: dict) -> dict:
+async def save_grant(grant: dict, *, connection: Any | None = None) -> dict:
     global _last_durable
     grant = dict(grant)
     grant.setdefault("id", str(uuid.uuid4()))
     grant.setdefault("scope_type", "file")
     grant.setdefault("grant_kind", "session")
-    db = await _db()
+    db = connection if connection is not None else await _db()
     if db is None:
         logger.warning("permission grant stored in-memory only (DB unavailable)")
         _last_durable = False
@@ -241,7 +241,8 @@ def proposal_of(req: Any) -> dict:
     digest plus a separately redacted display preview.
     """
     return {
-        "version": 1,
+        "version": 2,
+        "workspace_root": getattr(req, "workspace_root", ""),
         "operation": getattr(req, "operation", ""),
         "tool": getattr(req, "tool", ""),
         "argv": list(getattr(req, "argv", None) or []),
@@ -484,8 +485,9 @@ async def get_approval(request_id: str) -> dict | None:
             )
             if row:
                 return _with_completeness(dict(row))
-        except Exception:
-            pass
+        except Exception as error:
+            logger.error("durable approval read failed (%s)", type(error).__name__)
+            raise
     return _with_completeness(mem_copy)
 
 
@@ -511,8 +513,9 @@ async def find_pending(session_id: str, digest: str) -> dict | None:
             )
             if row:
                 return dict(row)
-        except Exception:
-            pass
+        except Exception as error:
+            logger.error("durable approval read failed (%s)", type(error).__name__)
+            raise
     return None
 
 
@@ -549,8 +552,9 @@ async def find_approved_unclaimed(session_id: str, digest: str) -> dict | None:
                 if candidate.get("proposal"):
                     return _with_completeness(candidate)
                 return None
-        except Exception:
-            pass
+        except Exception as error:
+            logger.error("durable approval read failed (%s)", type(error).__name__)
+            raise
     return None
 
 
@@ -575,6 +579,7 @@ async def list_pending(session_id: str) -> list[dict]:
                 d = dict(row)
                 if d.get("request_id") not in seen:
                     out.append(d)
-        except Exception:
-            pass
+        except Exception as error:
+            logger.error("durable approval read failed (%s)", type(error).__name__)
+            raise
     return out

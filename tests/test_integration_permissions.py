@@ -665,7 +665,7 @@ def test_selected_provider_key_honesty(monkeypatch):
     try:
         from ah.security import secrets as _secrets
 
-        monkeypatch.setattr(_secrets, "get_secret", lambda name: None)
+        monkeypatch.setattr(_secrets, "get_secret", lambda name, *, env_names=None: None)
     except Exception:
         pass
     try:
@@ -699,7 +699,7 @@ def test_sandbox_binary_vs_daemon(monkeypatch):
         assert report["sandbox"] == "degraded"
     finally:
         monkeypatch.setattr(_sp, "run", real_run)
-    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr("shutil.which", lambda name, *, env_names=None: None)
     assert rt._detect_sandbox()["sandbox"] == "unavailable"
 
 

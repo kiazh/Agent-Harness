@@ -19,48 +19,15 @@ from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
+from ah.core.cleanup import cancel_and_join as _bounded_join
+
 logger = logging.getLogger(__name__)
 
 
-async def _bounded_join(
-    tasks: list[asyncio.Task], timeout: float, label: str
-) -> list[asyncio.Task]:
-    """Cancel tasks and join them within *timeout* (AH-AUDIT-024).
-
-    Returns leftover tasks that did not terminate (quarantined by the
-    caller, never awaited indefinitely). Genuine cancellations propagate;
-    a cancellation-resistant task cannot exceed the outer deadline.
-    """
-    if not tasks:
-        return []
-    for t in tasks:
-        t.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
-        try:
-            if not t.done():
-                t.cancel()
-        except Exception:
-            pass
-    # wait_for(gather(...)) waits for cancellation acknowledgement on timeout.
-    # A task that suppresses cancellation can therefore retain us indefinitely.
-    # wait() observes the deadline without joining resistant workers.
-    await asyncio.wait(tasks, timeout=timeout)
-    return [t for t in tasks if not t.done()]
-
-
 async def _bounded_cleanup(cleanup: Coroutine[Any, Any, None], timeout: float, label: str) -> None:
-    """Observe cleanup deadlines without waiting for cancellation acknowledgement."""
-    task = asyncio.create_task(cleanup)
-    task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
-    try:
-        done, _ = await asyncio.wait({task}, timeout=timeout)
-    except asyncio.CancelledError:
-        task.cancel()
-        raise
-    if task not in done:
-        task.cancel()
-        logger.warning("runtime shutdown: %s quarantined after %ss", label, timeout)
-        return
-    task.result()
+    from ah.core.cleanup import bounded_cleanup
+
+    await bounded_cleanup(cleanup, timeout, label)
 
 
 @dataclass
@@ -185,8 +152,8 @@ class RuntimeServices:
                     )
                 except asyncio.CancelledError as e:
                     cancellation = e
-                except Exception:
-                    pass
+                except Exception as error:
+                    logger.warning("audit shutdown failed (%s)", type(error).__name__)
                 try:
                     from ah.db.connection import db
 
@@ -197,8 +164,8 @@ class RuntimeServices:
                     )
                 except asyncio.CancelledError as e:
                     cancellation = e
-                except Exception:
-                    pass
+                except Exception as error:
+                    logger.warning("database shutdown failed (%s)", type(error).__name__)
                 if cancellation is not None:
                     raise cancellation
             finally:
