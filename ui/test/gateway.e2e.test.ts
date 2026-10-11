@@ -16,12 +16,12 @@ const python = process.env.AH_TEST_PYTHON;
 const dsn = process.env.AGENT_HARNESS_TEST_DATABASE_URL;
 const skip = !python || !dsn ? "AH_TEST_PYTHON / AGENT_HARNESS_TEST_DATABASE_URL not set" : false;
 
-function startClient() {
+function startClient(extraEnv: NodeJS.ProcessEnv = {}) {
 	const token = `ui-e2e-${Math.random().toString(36).slice(2)}`;
 	const client = new GatewayClient({
 		python: python!,
 		token,
-		env: { DATABASE_URL: dsn!, AH_GATEWAY_NO_SCHEDULER: "1", AH_GATEWAY_TOKEN: token },
+		env: { DATABASE_URL: dsn!, AH_GATEWAY_NO_SCHEDULER: "1", AH_GATEWAY_TOKEN: token, ...extraEnv },
 	});
 	let crashed = false;
 	client.onExit = () => {
@@ -30,6 +30,42 @@ function startClient() {
 	client.start();
 	return { client, crashed: () => crashed };
 }
+
+test("persona menu persists its default across a gateway restart", { skip, timeout: 60_000 }, async () => {
+	const home = await mkdtemp(join(tmpdir(), "ah-persona-e2e-"));
+	const env = { HOME: home, AH_ENV_FILE: join(home, ".env"), AGENT_HARNESS_PERSONA_DESCRIPTION: undefined };
+	const first = startClient(env).client;
+	const printed: Array<{ text: string; kind: NoticeKind }> = [];
+	const persona = "Give concise answers with practical examples.";
+	let asked = false;
+	const host = {
+		request: (method: string, params: Record<string, unknown>) => first.request(method, params ?? {}),
+		print: (text: string, kind: NoticeKind) => printed.push({ text, kind }),
+		pick: async (_title: string, items: SelectItem[]) => items.find((item) => item.value === "add"),
+		askText: async () => {
+			if (asked) return undefined;
+			asked = true;
+			return persona;
+		},
+		onConfig: () => {},
+	} as unknown as FeatureHost;
+	try {
+		await first.request("initialize", {}, 30_000);
+		await runCommand(parseCommand("/persona")!, host);
+		assert.equal(printed.some((notice) => notice.kind === "error"), false);
+		assert.match(await readFile(join(home, ".agent-harness", "config.yaml"), "utf8"), /Give concise answers/);
+	} finally {
+		await first.stop();
+	}
+	const restarted = startClient(env).client;
+	try {
+		await restarted.request("initialize", {}, 30_000);
+		const result = await restarted.request<{ config: { persona_description: string } }>("config.get");
+		assert.equal(result.config.persona_description, persona);
+	} finally {
+		await restarted.stop();
+	}
+});
 
 test("personality survives a gateway restart and a new session", { skip, timeout: 60_000 }, async () => {
 	const key = `e2e_${Math.random().toString(36).slice(2)}`;

@@ -389,6 +389,7 @@ class TestDeadCodeRemoval:
             "fetchval",
             "initialize_schema",
             "initialize_growth_schema",
+            "initialize_runtime_schema",
             "reset",
             "acquire",
         }

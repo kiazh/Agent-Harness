@@ -139,15 +139,18 @@ class TestBug13CdNotInAllowlist:
         }
         assert expected.issubset(ALLOWED_COMMANDS)
 
-    async def test_cd_command_rejected(self):
-        """Attempting to run 'cd' should raise ValidationError."""
+    async def test_cd_command_rejected(self, monkeypatch):
+        """Attempting to run 'cd' should raise ValidationError (ask-mode allowlist)."""
+        # Full mode deliberately permits host commands; pin ask behavior here.
+        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
         from ah.core.exceptions import ValidationError
 
         with pytest.raises(ValidationError, match="not in the allowlist"):
             await terminal("cd /tmp")
 
-    async def test_cd_with_path_rejected(self):
-        """'cd' with any path should be rejected."""
+    async def test_cd_with_path_rejected(self, monkeypatch):
+        """'cd' with any path should be rejected (ask-mode allowlist)."""
+        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
         from ah.core.exceptions import ValidationError
 
         with pytest.raises(ValidationError, match="not in the allowlist"):

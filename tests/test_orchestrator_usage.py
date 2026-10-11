@@ -1,4 +1,5 @@
 """Delegation leaves provider usage accounting to the agent."""
+
 from __future__ import annotations
 
 import os
@@ -53,9 +54,7 @@ async def test_orchestrator_delegate_does_not_double_count(monkeypatch):
     monkeypatch.setattr("ah.core.usage.usage_store.finish", finish)
 
     parent = await _parent_session()
-    result = await orch.delegate(
-        "researcher", "find the latest release", parent_session_id=parent
-    )
+    result = await orch.delegate("researcher", "find the latest release", parent_session_id=parent)
 
     assert result.status == "complete"
     reserve.assert_not_awaited()
@@ -84,9 +83,7 @@ async def test_orchestrator_error_does_not_make_phantom_reservation(monkeypatch)
     monkeypatch.setattr("ah.core.usage.usage_store.finish", finish)
 
     parent = await _parent_session()
-    result = await orch.delegate(
-        "researcher", "find the latest release", parent_session_id=parent
-    )
+    result = await orch.delegate("researcher", "find the latest release", parent_session_id=parent)
 
     assert result.status == "error"
     reserve.assert_not_awaited()

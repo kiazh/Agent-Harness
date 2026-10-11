@@ -460,9 +460,21 @@ class TestImportanceScorer:
             content="Test content",
             category="fact",
         )
-        score1 = scorer.score(entry)
-        score2 = scorer.score(entry)
+        now = datetime.now(UTC)
+        score1 = scorer.score(entry, now=now)
+        score2 = scorer.score(entry, now=now)
         assert score1 == score2
+
+    def test_breakdown_uses_one_recency_snapshot(self, scorer, monkeypatch):
+        import ah.memory.scorer as module
+
+        entry = MemoryEntry(uuid.uuid4(), None, "harness", "Test", "fact")
+        ages = iter([1.0, 20.0])
+        monkeypatch.setattr(module, "age_days", lambda *_args: next(ages))
+        breakdown = scorer.score_with_breakdown(entry)
+        assert breakdown["total"] == sum(
+            breakdown[key] for key in ("category", "recency", "frequency", "explicit")
+        )
 
     def test_score_bounds(self, scorer):
         """Test that all scores are within [0, 1]."""

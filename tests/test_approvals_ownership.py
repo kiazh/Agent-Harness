@@ -56,8 +56,11 @@ def _req(**kw):
     from ah.permissions.policy import build_request
 
     base = dict(
-        operation="file.write", targets=["/proj/note.txt"], content="hello",
-        mode="ask", agent_id="harness",
+        operation="file.write",
+        targets=["/proj/note.txt"],
+        content="hello",
+        mode="ask",
+        agent_id="harness",
     )
     base.update(kw)
     return build_request(**base)
@@ -207,17 +210,28 @@ async def test_scope_identity_and_directory_containment(isolated_db):
 
     def _grant(**kw):
         base = {
-            "id": str(uuid.uuid4()), "session_id": "s", "agent_id": "h",
-            "mode": "ask", "capability": "file.write", "scope_type": "file",
-            "grant_kind": "session", "digest": "d", "revoked": False, "expires_at": None,
+            "id": str(uuid.uuid4()),
+            "session_id": "s",
+            "agent_id": "h",
+            "mode": "ask",
+            "capability": "file.write",
+            "scope_type": "file",
+            "grant_kind": "session",
+            "digest": "d",
+            "revoked": False,
+            "expires_at": None,
         }
         base.update(kw)
         return base
 
     async def _decide(target, grant):
         req = build_request(
-            operation="file.write", targets=[target], content="x",
-            mode="ask", agent_id="h", session_id="s",
+            operation="file.write",
+            targets=[target],
+            content="x",
+            mode="ask",
+            agent_id="h",
+            session_id="s",
         )
         req.digest = "d"
         return decide(req, [grant]).verdict
@@ -235,7 +249,6 @@ async def test_scope_identity_and_directory_containment(isolated_db):
 @needs_test_db
 async def test_grant_expiry_revocation_binding(isolated_db):
     """LP-05: expired/future/revoked/foreign grants never authorize."""
-    from datetime import UTC, datetime, timedelta
 
     from ah.permissions.policy import build_request, decide
 
@@ -243,18 +256,29 @@ async def test_grant_expiry_revocation_binding(isolated_db):
 
     def _grant(**kw):
         base = {
-            "id": str(uuid.uuid4()), "session_id": "s", "agent_id": "h",
-            "mode": "ask", "capability": "file.write", "scope_type": "file",
-            "scope_path": "/proj/note.txt", "grant_kind": "session",
-            "digest": "d", "revoked": False, "expires_at": None,
+            "id": str(uuid.uuid4()),
+            "session_id": "s",
+            "agent_id": "h",
+            "mode": "ask",
+            "capability": "file.write",
+            "scope_type": "file",
+            "scope_path": "/proj/note.txt",
+            "grant_kind": "session",
+            "digest": "d",
+            "revoked": False,
+            "expires_at": None,
         }
         base.update(kw)
         return base
 
     async def _decide(grant):
         req = build_request(
-            operation="file.write", targets=["/proj/note.txt"], content="x",
-            mode="ask", agent_id="h", session_id="s",
+            operation="file.write",
+            targets=["/proj/note.txt"],
+            content="x",
+            mode="ask",
+            agent_id="h",
+            session_id="s",
         )
         req.digest = "d"
         return decide(req, [grant]).verdict
@@ -277,8 +301,12 @@ async def test_full_mode_session_isolation_and_revoke(isolated_db):
     b = await _session(title="lp-test-b")
     await st.save_grant(
         {
-            "session_id": str(a.id), "agent_id": "harness", "mode": "full",
-            "capability": "session", "scope_type": "file", "grant_kind": "session",
+            "session_id": str(a.id),
+            "agent_id": "harness",
+            "mode": "full",
+            "capability": "session",
+            "scope_type": "file",
+            "grant_kind": "session",
             "digest": "full-mode-session",
         }
     )
@@ -286,8 +314,11 @@ async def test_full_mode_session_isolation_and_revoke(isolated_db):
 
     async def _verdict(sid):
         req = build_request(
-            operation="process.exec", argv=["whoami"], mode="full",
-            agent_id="harness", session_id=str(sid),
+            operation="process.exec",
+            argv=["whoami"],
+            mode="full",
+            agent_id="harness",
+            session_id=str(sid),
         )
         return decide(req, await st.list_grants(str(sid))).verdict
 
@@ -323,7 +354,6 @@ async def test_approval_partition_across_sessions(isolated_db):
 @needs_test_db
 async def test_expired_db_grant_never_authorizes(isolated_db):
     """LP-05 DB backend: expired rows are filtered before decisions."""
-    from datetime import UTC, datetime, timedelta
 
     from ah.permissions import store as st
     from ah.permissions.policy import build_request, decide
@@ -332,17 +362,26 @@ async def test_expired_db_grant_never_authorizes(isolated_db):
     now = datetime.now(UTC)
     await st.save_grant(
         {
-            "session_id": str(s.id), "agent_id": "harness", "mode": "ask",
-            "capability": "file.write", "scope_path": "/proj/note.txt",
-            "scope_type": "file", "grant_kind": "session", "digest": "d-exp",
+            "session_id": str(s.id),
+            "agent_id": "harness",
+            "mode": "ask",
+            "capability": "file.write",
+            "scope_path": "/proj/note.txt",
+            "scope_type": "file",
+            "grant_kind": "session",
+            "digest": "d-exp",
             "expires_at": now - timedelta(days=1),
         }
     )
     live = await st.list_grants(str(s.id))
     assert all(g["digest"] != "d-exp" for g in live)
     req = build_request(
-        operation="file.write", targets=["/proj/note.txt"], content="x",
-        mode="ask", agent_id="harness", session_id=str(s.id),
+        operation="file.write",
+        targets=["/proj/note.txt"],
+        content="x",
+        mode="ask",
+        agent_id="harness",
+        session_id=str(s.id),
     )
     req.digest = "d-exp"
     assert decide(req, live).verdict == "pending"

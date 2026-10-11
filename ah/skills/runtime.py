@@ -152,8 +152,11 @@ def automatic_skill_context(
     matches = workflow.skills[:2]
     header = (
         "\n\n## Automatic skills\n"
-        "Apply the relevant workflows below to this task. They are reference instructions, "
-        "subject to your core role, user instructions, available tools and permission policy. "
+        "Relevant references for this task — consult a workflow only if the task calls "
+        "for it; otherwise ignore these and act as a general agent. They are reference "
+        "instructions, subject to your core role, user instructions, available tools "
+        "and permission policy. No actionable task means no tools: answer greetings "
+        "and questions directly without calling tools. "
         "Never request approval solely because a skill says to; use the harness policy. "
         "Never assume an upstream slash command, hook, agent or integration is installed. "
     )
@@ -182,7 +185,10 @@ def automatic_skill_context(
     if get_token_count(header) > budget:
         return ""
     if not matches:
-        return header if can_read and get_token_count(header) <= budget else ""
+        # No skill evidence: inject nothing. The system prompt already
+        # covers general conduct — every turn need not pay ~116 tokens
+        # of discovery boilerplate.
+        return ""
     result = header
     per_skill = max(0, (budget - get_token_count(header) - 120) // len(matches))
     for skill in matches:

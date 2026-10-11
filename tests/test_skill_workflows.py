@@ -276,3 +276,82 @@ def test_workflow_does_not_add_unrequested_installers_or_animation(tmp_path, mon
     assert "ecc-generating-python-installer" not in {s.name for s in python.skills}
     react = plan_workflow("Build a React component with hooks", skills=skills)
     assert not any("motion-" in s.name for s in react.skills)
+
+
+def test_weak_single_word_overlap_activates_nothing(tmp_path, monkeypatch):
+    """A vague follow-up must leave the agent a generalist (red: ADR workflow)."""
+    from ah.skills.workflow import plan_workflow
+
+    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    plan = plan_workflow("why dont you finihs", skills=SkillRegistry())
+    assert plan.skills == []
+
+
+def test_real_decision_request_keeps_adr_without_weak_specialists(tmp_path, monkeypatch):
+    from ah.skills.workflow import plan_workflow
+
+    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    plan = plan_workflow("lets record this decision", skills=SkillRegistry())
+    assert [s.name for s in plan.skills] == ["ecc-architecture-decision-records"]
+
+
+def test_coding_without_domain_skill_keeps_generic_pipeline(tmp_path, monkeypatch):
+    from ah.skills.workflow import plan_workflow
+
+    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    plan = plan_workflow("Build a React component with hooks", skills=SkillRegistry())
+    assert plan.kind == "coding"
+    assert {"ecc-tdd-workflow", "ecc-verification-loop"} <= {s.name for s in plan.skills}
+
+
+def test_skill_context_frames_workflows_as_conditional_references(tmp_path, monkeypatch):
+    from ah.skills.runtime import automatic_skill_context
+
+    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    text = automatic_skill_context("Implement a Python API", skills=SkillRegistry())
+    assert "act as a general agent" in text
+    assert "Do not go looking for work" in text
+    assert "Apply the relevant workflows" not in text
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is Python?",
+        "Thanks for the Python explanation!",
+        "Tell me a joke about Java",
+        "Can you tell me about your skills?",
+        "Explain how Python testing works",
+        "How can we implement this API?",
+        "What does ecc-python-patterns do?",
+    ],
+)
+def test_information_and_conversation_do_not_activate_execution_workflows(
+    query, tmp_path, monkeypatch
+):
+    from ah.skills.runtime import automatic_skill_context
+    from ah.skills.workflow import plan_workflow
+
+    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    skills = SkillRegistry()
+    history = [{"chunk_type": "user_message", "payload": {"content": "Build a Python API"}}]
+    assert plan_workflow(query, skills=skills, recent=history).skills == []
+    assert automatic_skill_context(query, skills=skills, recent=history) == ""
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Can you fix this Python bug?",
+        "Please review my API",
+        "Use ecc-python-testing",
+        "Why is the Python test failing? Can you fix the bug?",
+        "Thanks, please fix the Python bug",
+        "Explain the Python bug; then fix it",
+    ],
+)
+def test_polite_task_requests_still_activate_workflows(query, tmp_path, monkeypatch):
+    from ah.skills.workflow import plan_workflow
+
+    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    assert plan_workflow(query, skills=SkillRegistry()).skills

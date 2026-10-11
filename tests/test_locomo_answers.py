@@ -4,6 +4,7 @@ These tests are fully hermetic — no network calls. A StubProvider simulates
 the LLM for answer generation so the scoring pipeline is exercised
 deterministically.
 """
+
 from __future__ import annotations
 
 import json
@@ -21,7 +22,6 @@ from ah.research.locomo import (
     generate_answer,
     token_f1,
 )
-
 
 # ---------------------------------------------------------------------------
 # Token F1 — the core scoring function
@@ -89,9 +89,7 @@ def test_token_f1_handles_none_ground_truth():
 @pytest.mark.asyncio
 async def test_stub_provider_returns_configured_answer():
     provider = StubProvider(answer="Toronto")
-    response = await provider.complete(
-        [{"role": "user", "content": "Where did Ada move?"}]
-    )
+    response = await provider.complete([{"role": "user", "content": "Where did Ada move?"}])
     assert isinstance(response, LLMResponse)
     assert response.content == "Toronto"
     assert response.model == "stub"
@@ -193,7 +191,6 @@ async def test_generate_answer_retries_transient_failure():
 async def test_generate_answer_gives_up_after_retries():
     """After exhausting retries the error propagates so a run is not silently
     scored against empty answers."""
-    from ah.core.models import LLMResponse
 
     class DeadProvider:
         def __init__(self):

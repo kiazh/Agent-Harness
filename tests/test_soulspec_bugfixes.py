@@ -1,4 +1,5 @@
 """TDD tests for SoulSpec bug fixes (bugs 3, 4, 5)."""
+
 from __future__ import annotations
 
 from pathlib import Path

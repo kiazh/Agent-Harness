@@ -251,7 +251,21 @@ test("selected rows paint an accent background pill", async () => {
 	const { selectListTheme } = await import("../src/theme.ts");
 	const row = selectListTheme.selectedText("model");
 	assert.match(stripTerminalSequences(row), /model/);
-	assert.ok(row.includes("\x1b[48;2"), "selection carries a background fill");
+	assert.ok(row.includes("\x1b[48;2;") || row.includes("\x1b[48;5;"), "selection carries a background fill in the terminal's color mode");
+});
+
+test("selection bars recognize and replace truecolor and indexed backgrounds", async () => {
+	const { isSelectionRow, selectionBar } = await import("../src/theme.ts");
+	for (const fill of ["\x1b[48;2;1;2;3m", "\x1b[48;5;123m"]) {
+		const row = `${fill}\x1b[38;5;7malpha\x1b[49m`;
+		assert.equal(isSelectionRow(row), true);
+		const bar = selectionBar(row, 40);
+		assert.equal(visibleWidth(bar), 40);
+		assert.equal(stripTerminalSequences(bar), `alpha${" ".repeat(35)}`);
+		assert.ok(!bar.includes(fill), "the old partial background is removed before repainting");
+		assert.ok(bar.includes("\x1b[38;5;7m"), "foreground styling survives");
+	}
+	assert.equal(isSelectionRow("\x1b[38;5;123malpha"), false);
 });
 
 test("picker menu is a docked codex-style list with a full-width bar", async () => {

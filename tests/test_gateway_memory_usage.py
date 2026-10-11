@@ -1,4 +1,5 @@
 """Gateway memory_search passes session_id to retriever."""
+
 from __future__ import annotations
 
 import uuid
@@ -14,7 +15,9 @@ async def test_memory_search_passes_session_id_to_retriever(monkeypatch):
 
     mock_retriever = MagicMock()
     mock_retriever.retrieve = AsyncMock(return_value=[])
-    monkeypatch.setattr("ah.memory.retriever.MemoryRetriever", MagicMock(return_value=mock_retriever))
+    monkeypatch.setattr(
+        "ah.memory.retriever.MemoryRetriever", MagicMock(return_value=mock_retriever)
+    )
 
     mock_gw = MagicMock()
     mock_gw.require_db = MagicMock()
@@ -39,7 +42,9 @@ async def test_memory_search_without_session_id_passes_none(monkeypatch):
 
     mock_retriever = MagicMock()
     mock_retriever.retrieve = AsyncMock(return_value=[])
-    monkeypatch.setattr("ah.memory.retriever.MemoryRetriever", MagicMock(return_value=mock_retriever))
+    monkeypatch.setattr(
+        "ah.memory.retriever.MemoryRetriever", MagicMock(return_value=mock_retriever)
+    )
 
     mock_gw = MagicMock()
     mock_gw.require_db = MagicMock()

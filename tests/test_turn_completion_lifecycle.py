@@ -80,8 +80,8 @@ async def test_gateway_quarantine_preserves_owner_and_terminal_order(monkeypatch
 
 
 async def test_rest_timeout_quarantines_until_actual_execution_stops(monkeypatch):
-    from ah.api import app as api
     import ah.core.agent_factory as factory
+    from ah.api import app as api
     from ah.core import turns
     from ah.core.config import config
     from ah.core.session import session_manager
@@ -118,8 +118,11 @@ async def test_rest_timeout_quarantines_until_actual_execution_stops(monkeypatch
         return result
 
     monkeypatch.setattr(turns, "end_turn", release_owner)
-    endpoint = next(route.endpoint for route in api.create_app().routes
-        if route.path == "/sessions/{session_id}/prompt")
+    endpoint = next(
+        route.endpoint
+        for route in api.create_app().routes
+        if route.path == "/sessions/{session_id}/prompt"
+    )
     response = await endpoint(str(session.id), api.PromptRequest(text="work"))
 
     async def consume():

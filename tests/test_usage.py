@@ -47,7 +47,8 @@ async def test_budget_error_reaches_regular_and_streaming_clients(monkeypatch):
     session_id = uuid.uuid4()
     session = Session(id=session_id, context_budget=8000)
     monkeypatch.setattr(
-        agent, "_prepare_context",
+        agent,
+        "_prepare_context",
         AsyncMock(return_value=(session, [{"role": "user", "content": "hello"}])),
     )
     monkeypatch.setattr("ah.core.agent.session_manager.get", AsyncMock(return_value=session))
@@ -88,9 +89,16 @@ async def test_gateway_usage_get_returns_persisted_summary(monkeypatch):
     summary = AsyncMock(return_value={"sessionId": str(sid), "session": {"requests": 3}})
     monkeypatch.setattr("ah.core.usage.usage_store.summary", summary)
 
-    await gateway.handle_line(json.dumps({
-        "jsonrpc": "2.0", "id": 1, "method": "usage.get", "params": {"sessionId": str(sid)},
-    }))
+    await gateway.handle_line(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "usage.get",
+                "params": {"sessionId": str(sid)},
+            }
+        )
+    )
     assert frames[0]["result"]["session"]["requests"] == 3
     summary.assert_awaited_once_with(sid, "reviewer")
 
@@ -107,7 +115,9 @@ async def test_database_budget_survives_new_store_instance(db_pool, monkeypatch)
     messages = [{"role": "user", "content": "hello"}]
     try:
         first = await UsageStore().reserve(session_id, agent_id, "fake", "fake", messages, [], 8)
-        await UsageStore().finish(first, {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7})
+        await UsageStore().finish(
+            first, {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+        )
         summary = await UsageStore().summary(session_id, agent_id)
         assert summary["session"]["requests"] == 1
         assert summary["session"]["accountedTokens"] == 7
@@ -122,8 +132,10 @@ async def test_database_budget_survives_new_store_instance(db_pool, monkeypatch)
 async def test_agent_complete_and_stream_calls_are_persisted(db_pool, monkeypatch):
     monkeypatch.setattr("ah.core.usage.db", db_pool)
     for key in (
-        "usage_session_request_limit", "usage_session_token_limit",
-        "usage_agent_request_limit", "usage_agent_token_limit",
+        "usage_session_request_limit",
+        "usage_session_token_limit",
+        "usage_agent_request_limit",
+        "usage_agent_token_limit",
     ):
         monkeypatch.setattr(config, key, 0)
 
@@ -132,7 +144,8 @@ async def test_agent_complete_and_stream_calls_are_persisted(db_pool, monkeypatc
 
         async def complete(self, **_kwargs):
             return LLMResponse(
-                content="OK", model="routed-model",
+                content="OK",
+                model="routed-model",
                 usage={"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
             )
 
@@ -141,7 +154,8 @@ async def test_agent_complete_and_stream_calls_are_persisted(db_pool, monkeypatc
             yield StreamEvent(
                 type="done",
                 response=LLMResponse(
-                    content="OK", model="routed-model",
+                    content="OK",
+                    model="routed-model",
                     usage={"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
                 ),
             )
@@ -150,9 +164,14 @@ async def test_agent_complete_and_stream_calls_are_persisted(db_pool, monkeypatc
     agent = ReActAgent(provider=Provider(), agent_id=f"agent-{sid}")
     try:
         await agent._call_llm_with_retry([{"role": "user", "content": "Hi"}], [], sid)
-        events = [event async for event in agent._stream_llm_with_retry(
-            [{"role": "user", "content": "Hi"}], [], sid,
-        )]
+        events = [
+            event
+            async for event in agent._stream_llm_with_retry(
+                [{"role": "user", "content": "Hi"}],
+                [],
+                sid,
+            )
+        ]
         assert [event.type for event in events] == ["text", "done"]
         summary = await UsageStore().summary(sid, agent.agent_id)
         assert summary["session"]["requests"] == 2
@@ -168,16 +187,24 @@ async def test_agent_complete_and_stream_calls_are_persisted(db_pool, monkeypatc
 async def test_failed_provider_call_keeps_conservative_usage(db_pool, monkeypatch):
     monkeypatch.setattr("ah.core.usage.db", db_pool)
     for key in (
-        "usage_session_request_limit", "usage_session_token_limit",
-        "usage_agent_request_limit", "usage_agent_token_limit",
+        "usage_session_request_limit",
+        "usage_session_token_limit",
+        "usage_agent_request_limit",
+        "usage_agent_token_limit",
     ):
         monkeypatch.setattr(config, key, 0)
-    provider = SimpleNamespace(model="fake", complete=AsyncMock(side_effect=RuntimeError("offline")))
+    provider = SimpleNamespace(
+        model="fake", complete=AsyncMock(side_effect=RuntimeError("offline"))
+    )
     sid = uuid.uuid4()
     try:
         with pytest.raises(RuntimeError, match="offline"):
             await UsageStore().complete_call(
-                provider, sid, "harness", [{"role": "user", "content": "Hi"}], max_tokens=8,
+                provider,
+                sid,
+                "harness",
+                [{"role": "user", "content": "Hi"}],
+                max_tokens=8,
             )
         row = await db_pool.fetchrow(
             "SELECT status, prompt_tokens, accounted_tokens, reserved_tokens "
@@ -203,8 +230,10 @@ async def test_concurrent_agent_budget_allows_one_reservation(db_pool, monkeypat
     messages = [{"role": "user", "content": "hello"}]
     try:
         results = await asyncio.gather(
-            *(UsageStore().reserve(sid, agent_id, "fake", "fake", messages, [], 8)
-              for sid in sessions),
+            *(
+                UsageStore().reserve(sid, agent_id, "fake", "fake", messages, [], 8)
+                for sid in sessions
+            ),
             return_exceptions=True,
         )
         assert sum(isinstance(result, uuid.UUID) for result in results) == 1
@@ -229,7 +258,9 @@ def test_estimate_tokens_fallback_on_value_error(monkeypatch):
     """_estimate_tokens falls back to len(payload)//3 when tiktoken rejects input."""
     import ah.core.usage as usage_mod
 
-    monkeypatch.setattr(usage_mod, "get_token_count", lambda _text: (_ for _ in ()).throw(ValueError("bad token")))
+    monkeypatch.setattr(
+        usage_mod, "get_token_count", lambda _text: (_ for _ in ()).throw(ValueError("bad token"))
+    )
     result = _estimate_tokens([{"role": "user", "content": "hello"}], [], 100)
     assert result > 0
 
@@ -313,7 +344,9 @@ async def test_complete_call_wraps_reserve_exception_as_database_error(monkeypat
 @pytest.mark.asyncio
 async def test_complete_call_wraps_finish_exception_after_provider_error(monkeypatch):
     """complete_call() wraps finish exceptions (after provider failure) in DatabaseError."""
-    provider = SimpleNamespace(model="test", complete=AsyncMock(side_effect=RuntimeError("offline")))
+    provider = SimpleNamespace(
+        model="test", complete=AsyncMock(side_effect=RuntimeError("offline"))
+    )
     monkeypatch.setattr(UsageStore, "reserve", AsyncMock(return_value=uuid.uuid4()))
     monkeypatch.setattr(UsageStore, "finish", AsyncMock(side_effect=RuntimeError("finish failed")))
     store = UsageStore()
@@ -328,7 +361,8 @@ async def test_complete_call_wraps_finish_exception_after_provider_success(monke
         model="test",
         complete=AsyncMock(
             return_value=LLMResponse(
-                content="ok", model="test",
+                content="ok",
+                model="test",
                 usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             )
         ),
@@ -345,8 +379,10 @@ async def test_summary_filters_to_complete_status(db_pool, monkeypatch):
     """summary() only counts rows with status='complete' for requests and tokens."""
     monkeypatch.setattr("ah.core.usage.db", db_pool)
     for key in (
-        "usage_session_request_limit", "usage_session_token_limit",
-        "usage_agent_request_limit", "usage_agent_token_limit",
+        "usage_session_request_limit",
+        "usage_session_token_limit",
+        "usage_agent_request_limit",
+        "usage_agent_token_limit",
     ):
         monkeypatch.setattr(config, key, 0)
     store = UsageStore()
@@ -354,10 +390,14 @@ async def test_summary_filters_to_complete_status(db_pool, monkeypatch):
     agent_id = f"summary-filter-{sid}"
     try:
         # One complete call
-        rid = await store.reserve(sid, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8)
+        rid = await store.reserve(
+            sid, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8
+        )
         await store.finish(rid, {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5})
         # One reserved (unfinished) call — should not appear in summary
-        await store.reserve(sid, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8)
+        await store.reserve(
+            sid, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8
+        )
         summary = await store.summary(sid, agent_id)
         assert summary["session"]["requests"] == 1
         assert summary["session"]["accountedTokens"] == 5
@@ -370,6 +410,7 @@ async def test_summary_filters_to_complete_status(db_pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_totals_aggregation(monkeypatch):
     """totals() returns aggregated counts across all rows."""
+
     class FakeRow:
         def __getitem__(self, key):
             return {"requests": 10, "tokens": 500, "unknown_calls": 3}[key]

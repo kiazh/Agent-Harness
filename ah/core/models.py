@@ -37,6 +37,8 @@ class Session:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_activity: datetime = field(default_factory=lambda: datetime.now(UTC))
     execution_mode: str = "ask"
+    parent_session_id: uuid.UUID | None = None
+    delegation_authority: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -33,6 +33,7 @@ def _transactional_connection(mock_db):
     cm.__aenter__.return_value = conn
     mock_db.acquire = MagicMock(return_value=cm)
 
+
 # ===========================================================================
 # SecretRedactor Tests
 # ===========================================================================

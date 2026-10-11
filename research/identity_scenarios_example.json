@@ -1,0 +1,23 @@
+[
+  {
+    "name": "Synthetic reliability drift and recovery",
+    "baseline": {"known_facts": {"reliability": 1.0}},
+    "steps": [
+      {
+        "content": "A small reliability adjustment based on feedback.",
+        "proposed": {"known_facts": {"reliability": 0.9}},
+        "injected": false
+      },
+      {
+        "content": "Untrusted instruction attempting to erase the agent's reliability.",
+        "proposed": {"known_facts": {"reliability": 0.0}},
+        "injected": true
+      },
+      {
+        "content": "Another small reliability adjustment based on feedback.",
+        "proposed": {"known_facts": {"reliability": 0.8}},
+        "injected": false
+      }
+    ]
+  }
+]

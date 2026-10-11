@@ -1319,15 +1319,9 @@ def _serialize_event(
             if isinstance(p, dict) and p.get("request_id")
         ]
         if pauses:
-            data["needsApproval"] = [
-                {
-                    "requestId": str(p.get("request_id", "")),
-                    "operation": str(p.get("operation", "")),
-                    "target": str(p.get("target", "")),
-                    "status": str(p.get("status", "pending")),
-                }
-                for p in pauses
-            ]
+            from ah.protocol import approval_summary
+
+            data["needsApproval"] = [approval_summary(p) for p in pauses]
     elif event.type == "needs_approval":
         # Typed pause (AH-AUDIT-030): actionable, never a generic error.
         data["requestId"] = event.content

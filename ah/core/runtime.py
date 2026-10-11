@@ -67,11 +67,13 @@ class RuntimeServices:
                 report["db"] = f"unavailable: {e}"
             if report["db"] == "ready":
                 try:
-                    await db.initialize_growth_schema()
+                    await db.initialize_runtime_schema()
                     report["personality_growth"] = "ready"
                 except Exception as error:
-                    logger.warning("Growth schema unavailable (%s)", type(error).__name__)
+                    logger.warning("Runtime schema upgrade failed (%s)", type(error).__name__)
+                    report["db"] = "unavailable: runtime schema upgrade failed"
                     report["personality_growth"] = "unavailable"
+                    await db.close()
             try:
                 from ah.observability.audit import audit_persistence
 

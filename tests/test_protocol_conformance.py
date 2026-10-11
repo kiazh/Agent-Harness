@@ -72,8 +72,8 @@ def test_typescript_types_generated_from_wire_schema():
 
 
 async def test_gateway_v2_emitted_events_conform(db_pool, monkeypatch):
-    from tests.test_gateway import Harness
     from ah.protocol import validate_event
+    from tests.test_gateway import Harness
 
     monkeypatch.setattr("ah.gateway.server.db", db_pool)
     monkeypatch.setattr("ah.core.session.db", db_pool)
@@ -92,8 +92,9 @@ async def test_gateway_v2_emitted_events_conform(db_pool, monkeypatch):
         for event in h.events():
             validate_event(event)
     finally:
-        from ah.core.session import session_manager
         import uuid
+
+        from ah.core.session import session_manager
 
         if "sid" in locals():
             await session_manager.delete(uuid.UUID(sid))

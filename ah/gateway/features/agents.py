@@ -62,6 +62,8 @@ async def agents_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _delegation(r: Any) -> dict[str, Any]:
+    from ah.protocol import approval_summary
+
     return {
         "agent": r.agent,
         "task": r.task,
@@ -70,6 +72,7 @@ def _delegation(r: Any) -> dict[str, Any]:
         "tokens": r.tokens,
         "iterations": r.iterations,
         "status": r.status,
+        "needsApproval": [approval_summary(p) for p in getattr(r, "needs_approval", [])],
     }
 
 
@@ -109,7 +112,8 @@ async def agents_run(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     except AgentNotFoundError as e:
         raise RpcError(NOT_FOUND, str(e)) from None
     serialized = []
-    for (agent, task), result in zip(steps, results, strict=True):
+    # Sequential execution deliberately stops at the first approval pause.
+    for (agent, task), result in zip(steps, results, strict=False):
         if isinstance(result, BaseException):
             serialized.append(
                 {

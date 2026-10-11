@@ -8,8 +8,6 @@ test_scheduler.py (local disposable database, never production).
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 
 
@@ -154,7 +152,6 @@ async def test_concurrent_begin_does_not_hang_and_cleans_up():
 @pytest.mark.usefixtures("live_db")
 async def test_idle_delete_and_compress_take_effect():
     """Real feature handlers on idle sessions perform real effects."""
-    from ah import services
     from ah.core.context import context_manager
     from ah.core.session import session_manager
     from ah.gateway.features import sessions as feat

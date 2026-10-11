@@ -1,4 +1,5 @@
 """Tests for RPC dispatch — must reuse a single _RpcGateway across requests."""
+
 from __future__ import annotations
 
 import json
@@ -30,11 +31,13 @@ class TestRpcDispatchReuse:
             async def mock_handle(line):
                 frame = json.loads(line)
                 rid = frame.get("id")
-                shared_gw._capture({
-                    "jsonrpc": "2.0",
-                    "id": rid,
-                    "result": {"ok": True},
-                })
+                shared_gw._capture(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": rid,
+                        "result": {"ok": True},
+                    }
+                )
 
             mock_gw_instance.handle_line = mock_handle
 

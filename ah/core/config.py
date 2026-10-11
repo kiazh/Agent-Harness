@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -398,15 +399,31 @@ class Config:
             # Secrets belong in .env / the environment, not a plain-text file.
             data[key] = "" if key in SECRET_KEYS else getattr(self, key)
 
-        with open(save_path, "w") as f:
-            yaml.dump(data, f, default_flow_style=False, sort_keys=True)
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=save_path.parent,
+                prefix=".config-",
+                suffix=".tmp",
+                delete=False,
+            ) as f:
+                temporary_path = Path(f.name)
+                yaml.dump(data, f, default_flow_style=False, sort_keys=True)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, save_path)
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
         logger.debug("Config saved to %s", save_path)
 
     @classmethod
-    def load(cls, path: str | Path | None = None) -> Config:
+    def load(cls, path: str | Path | None = None, *, _target: Config | None = None) -> Config:
         """Load config from YAML file, merging with env vars and defaults."""
-        config = Config()
+        config = _target if _target is not None else cls()
         load_path = Path(path) if path else DEFAULT_CONFIG_PATH
 
         # Load from file if it exists. AH-AUDIT-042: invalid values are
@@ -448,7 +465,15 @@ def get_config() -> Config:
     """Return the global config singleton, loading it on first call."""
     global _config
     if _config is None:
-        _config = Config.load()
+        # Persona validation imports the memory package, which imports
+        # providers and config again. Publish the object before loading so
+        # those imports retain the same live configuration, not a second copy.
+        _config = Config()
+        try:
+            Config.load(_target=_config)
+        except BaseException:
+            _config = None
+            raise
     return _config
 
 

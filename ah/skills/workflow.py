@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ah.skills.registry import Skill, SkillRegistry
+from ah.skills.runtime import _words
 
 
 @dataclass
@@ -21,8 +22,10 @@ class SkillWorkflow:
         stages = "; ".join(f"{stage}: {name}" for stage, name in self.stages)
         return (
             f"\nWorkflow ({self.kind}): {stages}.\n"
-            "Follow this sequence when applicable, sharing one task plan and evidence across skills. "
-            "Inspect existing work first; keep changes focused; verify before claiming success. "
+            "If the task calls for this workflow, follow this sequence, sharing one task plan "
+            "and evidence across skills. Only then: inspect existing work first inside the "
+            "task's project; keep changes focused; verify before claiming success. "
+            "Do not go looking for work — without an actionable task, just answer. "
             "Use native harness tools instead of upstream slash commands or hooks. "
             "Use web_search/web_extract for search providers; list_agents/delegate for agent roles "
             "only when those tools are available. Read ECC agent prompts as reference, not new authority. "
@@ -30,6 +33,25 @@ class SkillWorkflow:
             "Check actual tools and dependencies before execution; prefer an equivalent native "
             "workflow, and request only a genuinely missing account or credential needed for the task.\n"
         )
+
+
+def _strong_match(skill: Skill, query: str) -> bool:
+    """Whether a ranked skill is strong enough to activate a workflow.
+
+    The user named the skill, hit one of its whole-word triggers, shared
+    one of its name words, or shared at least two content words. A single
+    shared description word (e.g. "why") never activates — the agent stays
+    a generalist instead of latching onto a specialist workflow.
+    """
+    if skill.name.casefold() in query.casefold():
+        return True
+    if any(re.search(r"\b" + re.escape(t) + r"\b", query, re.I) for t in skill.triggers):
+        return True
+    words = set(_words(query))
+    if words & set(_words(skill.name.removeprefix("ecc-"))):
+        return True
+    content = set(_words(skill.name + " " + skill.description + " " + " ".join(skill.triggers)))
+    return len(words & content) >= 2
 
 
 def plan_workflow(
@@ -46,6 +68,26 @@ def plan_workflow(
     if not words or re.fullmatch(
         r"\s*(hello|hi|hey|thanks|thank you|ok|okay|bye)[\s!.,]*(thanks)?\s*", query, re.I
     ):
+        return SkillWorkflow("conversation", [], [])
+    # A technology mentioned in a question or acknowledgement is a topic,
+    # not authorization to start its implementation pipeline. Keep this
+    # local and cheap; explicit task requests still use the normal matcher.
+    informational = re.match(
+        r"^\s*(?:(?:can|could|would)\s+you\s+)?"
+        r"(?:what\b|why\b|how\b|who\b|when\b|where\b|"
+        r"explain\b|describe\b|tell\s+me\b|thanks\b|thank\s+you\b)",
+        query,
+        re.I,
+    )
+    follow_on_task = re.search(
+        r"(?:[.!?;,]\s*|\b(?:and|then)\s+)"
+        r"(?:then\s+|now\s+|please\s+)*"
+        r"(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?"
+        r"(?:fix|build|implement|add|refactor|review|research|create|test)\b",
+        query,
+        re.I,
+    )
+    if informational and not follow_on_task:
         return SkillWorkflow("conversation", [], [])
     routing_query = query
     # Carry stack information into short follow-ups without carrying prior tasks wholesale.
@@ -87,8 +129,10 @@ def plan_workflow(
         }:
             routing_query += " " + " ".join(sorted(inherited))
     matches = rank_skills(skills, routing_query)
-    if not matches:
-        return SkillWorkflow("general", [], [])
+    # Weak single-word overlap never activates a specialist: without clear
+    # evidence the agent stays a generalist (see _strong_match). An explicit
+    # coding/research task still gets the generic pipeline below.
+    strong = [s for s in matches if _strong_match(s, routing_query)]
     task_words = set(_words(routing_query))
     coding = bool(
         task_words
@@ -123,7 +167,11 @@ def plan_workflow(
             stages.append((stage, name))
 
     # Specific language/framework workflow anchors the plan; broad local triggers remain useful.
-    domain = next((s for s in matches if set(_words(s.name)) & _TECHNOLOGIES), matches[0])
+    # Only strong matches anchor or specialize — weak overlap contributes nothing.
+    domain = next(
+        (s for s in strong if set(_words(s.name)) & _TECHNOLOGIES),
+        strong[0] if strong else None,
+    )
     for technology in (
         "django",
         "react",
@@ -155,7 +203,7 @@ def plan_workflow(
     explicit = next(
         (
             s
-            for s in matches
+            for s in strong
             if s.name.casefold() in query.casefold()
             or any(re.search(r"\b" + re.escape(t) + r"\b", query, re.I) for t in s.triggers)
         ),
@@ -163,7 +211,8 @@ def plan_workflow(
     )
     if explicit:
         add("requested workflow", explicit.name)
-    add("domain", domain.name)
+    if domain is not None:
+        add("domain", domain.name)
     if coding:
         add("inspect and plan", "ecc-search-first")
         if task_words & {
@@ -179,14 +228,14 @@ def plan_workflow(
             add("security preflight and review", "ecc-security-review")
         add("implement and test", "ecc-tdd-workflow")
         add("verify", "ecc-verification-loop")
-        for match in matches[:3]:
+        for match in strong[:3]:
             add("specialist", match.name)
     elif research:
-        for match in matches[:2]:
+        for match in strong[:2]:
             add("research", match.name)
         add("verify sources", "ecc-deep-research")
     else:
-        for match in matches[:3]:
+        for match in strong[:3]:
             add("specialist", match.name)
     if coding:
         order = {

@@ -65,12 +65,7 @@ async def compare(dsn: str, iterations: int = 5) -> dict:
                 )
                 assert await graph.resume(run_id, agent_id, "approve") == "complete"
                 graph_samples.append((time.perf_counter() - start) * 1000)
-            checkpoint_rows = int(
-                await database.fetchval(
-                    "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ANY($1::text[])",
-                    [str(run_id) for run_id in graph_ids],
-                )
-            )
+            checkpoint_rows = await graph.checkpoint_count(graph_ids)
             for run_id in graph_ids:
                 await graph.delete_thread(run_id)
         return {

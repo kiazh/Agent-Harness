@@ -1,4 +1,5 @@
 """Tests for orchestrator token estimation — must use assembler.get_token_count()."""
+
 from __future__ import annotations
 
 import uuid
@@ -36,11 +37,13 @@ class TestTokenEstimation:
         mock_agent_def.system_prompt = None
         mock_agent_def.tools = None
 
-        with patch("ah.core.orchestrator.agent_registry") as mock_registry, \
-             patch("ah.core.orchestrator.session_manager") as mock_session_mgr, \
-             patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr, \
-             patch("ah.core.orchestrator.db") as mock_db, \
-             patch("ah.core.orchestrator.get_token_count", return_value=42) as mock_get_tokens:
+        with (
+            patch("ah.core.orchestrator.agent_registry") as mock_registry,
+            patch("ah.core.orchestrator.session_manager") as mock_session_mgr,
+            patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr,
+            patch("ah.core.orchestrator.db") as mock_db,
+            patch("ah.core.orchestrator.get_token_count", return_value=42) as mock_get_tokens,
+        ):
             mock_registry.get = AsyncMock(return_value=mock_agent_def)
             mock_session = MagicMock()
             mock_session.id = uuid.uuid4()
@@ -86,11 +89,13 @@ class TestTokenEstimation:
         mock_agent_def.system_prompt = None
         mock_agent_def.tools = None
 
-        with patch("ah.core.orchestrator.agent_registry") as mock_registry, \
-             patch("ah.core.orchestrator.session_manager") as mock_session_mgr, \
-             patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr, \
-             patch("ah.core.orchestrator.db") as mock_db, \
-             patch("ah.core.orchestrator.get_token_count", return_value=10) as mock_get_tokens:
+        with (
+            patch("ah.core.orchestrator.agent_registry") as mock_registry,
+            patch("ah.core.orchestrator.session_manager") as mock_session_mgr,
+            patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr,
+            patch("ah.core.orchestrator.db") as mock_db,
+            patch("ah.core.orchestrator.get_token_count", return_value=10) as mock_get_tokens,
+        ):
             mock_registry.get = AsyncMock(return_value=mock_agent_def)
             mock_session = MagicMock()
             mock_session.id = uuid.uuid4()

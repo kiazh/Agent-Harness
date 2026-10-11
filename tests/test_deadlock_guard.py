@@ -1,4 +1,5 @@
 """Tests for orchestrator deadlock guards — hop counter prevents circular delegation."""
+
 from __future__ import annotations
 
 import uuid
@@ -36,10 +37,12 @@ class TestDeadlockGuard:
         mock_agent_def.system_prompt = None
         mock_agent_def.tools = None
 
-        with patch("ah.core.orchestrator.agent_registry") as mock_registry, \
-             patch("ah.core.orchestrator.session_manager") as mock_session_mgr, \
-             patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr, \
-             patch("ah.core.orchestrator.db") as mock_db:
+        with (
+            patch("ah.core.orchestrator.agent_registry") as mock_registry,
+            patch("ah.core.orchestrator.session_manager") as mock_session_mgr,
+            patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr,
+            patch("ah.core.orchestrator.db") as mock_db,
+        ):
             mock_registry.get = AsyncMock(return_value=mock_agent_def)
             mock_session = MagicMock()
             mock_session.id = uuid.uuid4()
@@ -57,9 +60,7 @@ class TestDeadlockGuard:
 
             # Excessive hop count should raise or return error
             with pytest.raises((ValueError, RecursionError)) as exc_info:
-                await orchestrator.delegate(
-                    "test-agent", "do something", _hop_count=100
-                )
+                await orchestrator.delegate("test-agent", "do something", _hop_count=100)
             assert "hop" in str(exc_info.value).lower() or "max" in str(exc_info.value).lower()
 
     async def test_delegate_allows_normal_hops(self, orchestrator):
@@ -81,10 +82,12 @@ class TestDeadlockGuard:
         mock_agent_def.system_prompt = None
         mock_agent_def.tools = None
 
-        with patch("ah.core.orchestrator.agent_registry") as mock_registry, \
-             patch("ah.core.orchestrator.session_manager") as mock_session_mgr, \
-             patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr, \
-             patch("ah.core.orchestrator.db") as mock_db:
+        with (
+            patch("ah.core.orchestrator.agent_registry") as mock_registry,
+            patch("ah.core.orchestrator.session_manager") as mock_session_mgr,
+            patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr,
+            patch("ah.core.orchestrator.db") as mock_db,
+        ):
             mock_registry.get = AsyncMock(return_value=mock_agent_def)
             mock_session = MagicMock()
             mock_session.id = uuid.uuid4()
@@ -101,9 +104,7 @@ class TestDeadlockGuard:
             mock_ctx_mgr.add_chunk = AsyncMock()
 
             # Normal hop count should work fine
-            result = await orchestrator.delegate(
-                "test-agent", "do something", _hop_count=0
-            )
+            result = await orchestrator.delegate("test-agent", "do something", _hop_count=0)
             assert result is not None
             assert result.status == "complete"
 
@@ -120,6 +121,4 @@ class TestDeadlockGuard:
             mock_registry.get = AsyncMock(return_value=mock_agent_def)
 
             with pytest.raises((ValueError, RecursionError)):
-                await orchestrator.delegate(
-                    "test-agent", "do something", _hop_count=-1
-                )
+                await orchestrator.delegate("test-agent", "do something", _hop_count=-1)

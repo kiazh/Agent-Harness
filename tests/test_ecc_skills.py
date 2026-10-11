@@ -211,7 +211,9 @@ def test_skill_context_tells_model_not_to_page_greetings(tmp_path, monkeypatch):
     from ah.skills.runtime import automatic_skill_context
 
     monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
-    text = automatic_skill_context("hello!", skills=SkillRegistry())
+    # No skill evidence: nothing injected at all (conduct lives in SYSTEM_PROMPT).
+    assert automatic_skill_context("hello!", skills=SkillRegistry()) == ""
+    text = automatic_skill_context("Implement a Python API", skills=SkillRegistry())
     assert "never call skill_list" in text
     assert "never enumerate the whole catalog" in text
 

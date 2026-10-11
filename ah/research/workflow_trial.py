@@ -224,6 +224,14 @@ class GraphApprovalTrial(NativeApprovalTrial):
     async def delete_thread(self, run_id: uuid.UUID) -> None:
         await self._saver.adelete_thread(str(run_id))
 
+    async def checkpoint_count(self, run_ids: list[uuid.UUID]) -> int:
+        """Count trial history through the saver API, independent of its SQL schema."""
+        count = 0
+        for run_id in run_ids:
+            async for _ in self._saver.alist(self._config(run_id)):
+                count += 1
+        return count
+
 
 async def _main() -> None:
     """Run one trial stage in its own process against the isolated test DB."""

@@ -35,7 +35,6 @@ from ah.memory.retriever import MemoryRetriever
 from ah.memory.store import MemoryStore
 from ah.rag.embedder import OpenAIEmbedder
 
-
 # ===========================================================================
 # Fixtures
 # ===========================================================================
@@ -479,7 +478,6 @@ class TestEmbedderOutage:
         """Embedder batch should only call API for uncached texts."""
         embedder = self._make_embedder()
         # Pre-populate cache
-        from ah.rag.embedder import OpenAIEmbedder as OE
 
         cache_key = embedder._cache_key("cached_text")
         embedder._cache[cache_key] = [0.1] * 1536
@@ -624,7 +622,7 @@ class TestSchedulerWorkerCrash:
 
     async def test_worker_crash_marks_job_as_error(self):
         """When worker crashes, job should be marked as error with last_error set."""
-        from ah.core.scheduler import JobStore, JobRunner
+        from ah.core.scheduler import JobRunner, JobStore
 
         store = JobStore()
         runner = JobRunner(store=store, agent_factory=MagicMock())
@@ -684,7 +682,7 @@ class TestSchedulerWorkerCrash:
 
     async def test_lease_renewal_failure_does_not_crash_runner(self, monkeypatch):
         """When lease renewal fails, runner should continue (not crash)."""
-        from ah.core.scheduler import JobStore, JobRunner, RUN_LEASE_SECONDS
+        from ah.core.scheduler import JobRunner, JobStore
 
         # Make lease renewal happen quickly so we can observe it
         monkeypatch.setattr("ah.core.scheduler.RUN_LEASE_SECONDS", 0.01)
@@ -1590,8 +1588,8 @@ class TestUsageStoreConcurrent:
     async def test_reserve_with_db_failure_propagates_and_complete_call_wraps(self, monkeypatch):
         """A DB failure inside reserve() propagates from reserve() itself, and
         complete_call() (the production entry point) wraps it in DatabaseError."""
-        from ah.core.usage import UsageStore
         from ah.core.exceptions import DatabaseError
+        from ah.core.usage import UsageStore
 
         store = UsageStore()
         mock_db = MagicMock()
@@ -1633,8 +1631,8 @@ class TestUsageStoreConcurrent:
     async def test_finish_with_db_failure_propagates_and_complete_call_wraps(self, monkeypatch):
         """A DB failure inside finish() propagates from finish(), and
         complete_call() wraps it in DatabaseError."""
-        from ah.core.usage import UsageStore
         from ah.core.exceptions import DatabaseError
+        from ah.core.usage import UsageStore
 
         store = UsageStore()
         mock_db = MagicMock()
@@ -1859,7 +1857,7 @@ class TestMemoryConsolidatorDedup:
 
         with patch("ah.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[])
-            results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
+            await consolidator.consolidate_session(uuid.uuid4(), "harness")
         # Duplicate should not be written
         mock_store.add.assert_not_called()
 
@@ -1937,7 +1935,7 @@ class TestMemoryConsolidatorDedup:
 
         with patch("ah.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[mock_chunk])
-            results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
+            await consolidator.consolidate_session(uuid.uuid4(), "harness")
         # Should not write duplicate
         mock_store.add.assert_not_called()
         # Should update access on the existing near-duplicate

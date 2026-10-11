@@ -1,4 +1,5 @@
 """Tests for the `ah serve` CLI command."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch

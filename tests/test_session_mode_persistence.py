@@ -43,7 +43,9 @@ async def durable_modes(db_pool, monkeypatch):
         session_mode.clear_session_mode(str(sid))
 
 
-async def test_mode_survives_registry_restart_and_other_worker(durable_modes):
+async def test_mode_survives_registry_restart_and_other_worker(durable_modes, monkeypatch):
+    # Pins the repo `ask` default regardless of the developer's live config.
+    monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
     database, sessions, gateway, create = durable_modes
     session = await create()
     await mode_feature.mode_set(gateway, {"sessionId": str(session.id), "mode": "workspace"})
@@ -54,9 +56,13 @@ async def test_mode_survives_registry_restart_and_other_worker(durable_modes):
     assert config.get("execution_mode") == "ask"
 
 
-async def test_global_default_affects_only_new_sessions(durable_modes):
+async def test_global_default_affects_only_new_sessions(durable_modes, monkeypatch):
     database, sessions, gateway, create = durable_modes
+    # Phase the global default explicitly: repo `ask` first, then `full`.
+    # (Never inherits the developer's live config either way.)
+    monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
     old = await create()
+    monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "full")
     await mode_feature.mode_set(gateway, {"scope": "global", "mode": "full"})
     new = await create()
     assert (await sessions.get_fresh(old.id)).execution_mode == "ask"

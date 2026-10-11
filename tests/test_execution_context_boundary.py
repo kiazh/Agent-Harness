@@ -1,7 +1,5 @@
 """Authorization and backends share a frozen workspace, mode, and backend."""
 
-import pytest
-
 from ah.core.config import config
 from ah.permissions.broker import clear_execution_context, permission_broker
 from ah.permissions.policy import build_request

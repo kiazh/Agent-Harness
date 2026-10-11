@@ -94,6 +94,18 @@ class PermissionBroker:
                             f"tool {req.tool!r} outside parent authority"
                         ) from None
                 check_mode_cap(parent, req.mode)
+                if req.mode == "full":
+                    for source in parent.get("full_grant_sources", []):
+                        grants = await _store.list_grants(source["session_id"])
+                        if not any(
+                            str(grant.get("id")) == str(source["grant_id"])
+                            and grant.get("agent_id") == source["agent_id"]
+                            and grant.get("mode") == "full"
+                            and grant.get("capability") == "session"
+                            and grant.get("digest") == "full-mode-session"
+                            for grant in grants
+                        ):
+                            raise ApprovalDenied("inherited full authority revoked or expired")
         except ApprovalDenied:
             raise
         except Exception as error:

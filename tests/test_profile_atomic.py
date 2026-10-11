@@ -1,4 +1,5 @@
 """Tests for atomic record_interaction in UserProfileStore."""
+
 from __future__ import annotations
 
 import uuid
@@ -29,17 +30,19 @@ class TestRecordInteractionAtomic:
 
     async def test_record_interaction_with_topic_no_select(self, store, mock_db):
         """record_interaction with topic must not do a separate SELECT first."""
-        mock_db.fetchrow = AsyncMock(return_value={
-            "id": uuid.uuid4(),
-            "user_id": "test",
-            "display_name": "",
-            "preferences": "{}",
-            "interaction_count": 1,
-            "topics": '{"python": 1}',
-            "last_topics": '["python"]',
-            "created_at": MagicMock(),
-            "updated_at": MagicMock(),
-        })
+        mock_db.fetchrow = AsyncMock(
+            return_value={
+                "id": uuid.uuid4(),
+                "user_id": "test",
+                "display_name": "",
+                "preferences": "{}",
+                "interaction_count": 1,
+                "topics": '{"python": 1}',
+                "last_topics": '["python"]',
+                "created_at": MagicMock(),
+                "updated_at": MagicMock(),
+            }
+        )
         with patch("ah.memory.user_profile.db", mock_db):
             result = await store.record_interaction(uuid.uuid4(), topic="python")
         assert result is not None
@@ -49,17 +52,19 @@ class TestRecordInteractionAtomic:
 
     async def test_record_interaction_without_topic_no_select(self, store, mock_db):
         """record_interaction without topic must not do a separate SELECT first."""
-        mock_db.fetchrow = AsyncMock(return_value={
-            "id": uuid.uuid4(),
-            "user_id": "test",
-            "display_name": "",
-            "preferences": "{}",
-            "interaction_count": 1,
-            "topics": "{}",
-            "last_topics": "[]",
-            "created_at": MagicMock(),
-            "updated_at": MagicMock(),
-        })
+        mock_db.fetchrow = AsyncMock(
+            return_value={
+                "id": uuid.uuid4(),
+                "user_id": "test",
+                "display_name": "",
+                "preferences": "{}",
+                "interaction_count": 1,
+                "topics": "{}",
+                "last_topics": "[]",
+                "created_at": MagicMock(),
+                "updated_at": MagicMock(),
+            }
+        )
         with patch("ah.memory.user_profile.db", mock_db):
             result = await store.record_interaction(uuid.uuid4())
         assert result is not None

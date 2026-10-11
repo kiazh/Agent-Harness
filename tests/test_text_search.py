@@ -1,7 +1,6 @@
 """Unit tests for ah.core.text_search.build_or_tsquery."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from ah.core.text_search import build_or_tsquery
 

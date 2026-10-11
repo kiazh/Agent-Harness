@@ -15,7 +15,6 @@ from typing import Any
 
 import httpx
 
-from ah.core.assembler import get_token_count
 from ah.core.config import config
 from ah.core.exceptions import ProviderError, RateLimitError, ValidationError
 from ah.core.metrics import metrics
@@ -24,7 +23,7 @@ from ah.core.models import (  # noqa: F401 — re-exported for backward compat
     StreamEvent,
     ToolDefinition,
 )
-from ah.core.usage import usage_store
+from ah.core.usage import _estimate_tokens, usage_store
 from ah.observability.diagnostics import record_failure
 
 __all__ = [
@@ -559,18 +558,21 @@ _RATE_LIMITERS: dict[str, AsyncTokenBucket] = {}
 
 # ---------------------------------------------------------------------------
 # In-memory LLM response cache — eliminates duplicate POSTs from retries with
-# identical payloads. Keyed by sha256 of (messages, tools, model), TTL 60s.
+# identical payloads. Keys include the provider and effective request, TTL 60s.
 # ---------------------------------------------------------------------------
 _RESPONSE_CACHE_TTL = 60  # seconds
 _RESPONSE_CACHE: dict[str, tuple[float, Any]] = {}
 
 
 def _cache_key(
-    messages: list[dict[str, str]], tools: list[ToolDefinition] | None, model: str
+    messages: list[dict[str, str]],
+    tools: list[ToolDefinition] | None,
+    model: str,
+    request: dict[str, Any] | None = None,
 ) -> str:
     """Build a cache key from the request parameters."""
     raw = json.dumps(
-        {"messages": messages, "tools": tools, "model": model},
+        {"messages": messages, "tools": tools, "model": model, "request": request},
         sort_keys=True,
         default=str,
     )
@@ -649,6 +651,10 @@ def _tools_payload(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 class LLMProvider:
     """Base provider interface."""
+
+    def reservation_max_tokens(self, max_tokens: int, reasoning_effort: str | None = None) -> int:
+        """Maximum output requested on the wire, including reasoning tokens."""
+        return max_tokens
 
     async def complete(
         self,
@@ -742,7 +748,9 @@ class OpenRouterProvider(LLMProvider):
             payload["reasoning"] = {"effort": effort}
 
         # Check cache before making any HTTP request
-        ckey = _cache_key(messages, tools, model)
+        if _is_free_model(model):
+            payload["max_tokens"] = min(max_tokens, 1024)
+        ckey = _cache_key(messages, tools, f"openrouter:{model}", payload)
         cached = _cache_get(ckey)
         if cached is not None:
             logger.debug("cache hit for model=%s", model)
@@ -1237,7 +1245,7 @@ class OllamaProvider(LLMProvider):
             payload["think"] = think
 
         # Check cache before making any HTTP request
-        ckey = _cache_key(messages, tools, model or self.model)
+        ckey = _cache_key(messages, tools, f"ollama:{model or self.model}", payload)
         cached = _cache_get(ckey)
         if cached is not None:
             logger.debug("cache hit for ollama model=%s", model or self.model)
@@ -1529,9 +1537,9 @@ class DirectProvider(LLMProvider):
             return {"reasoning_effort": effort}
         return {}
 
-    def _cache_key_for(self, messages, tools, model: str) -> str:
+    def _cache_key_for(self, messages, tools, model: str, request=None) -> str:
         # Namespace by provider so identical model ids on two vendors can't collide.
-        return _cache_key(messages, tools, f"{self.spec.name}:{model}")
+        return _cache_key(messages, tools, f"{self.spec.name}:{model}", request)
 
     async def complete(
         self,
@@ -1559,7 +1567,7 @@ class DirectProvider(LLMProvider):
         if tools:
             payload["tools"] = _tools_payload(tools)
 
-        ckey = self._cache_key_for(messages, tools, model)
+        ckey = self._cache_key_for(messages, tools, model, payload)
         cached = _cache_get(ckey)
         if cached is not None:
             logger.debug("cache hit for %s model=%s", self.spec.name, model)
@@ -1752,11 +1760,16 @@ class DirectProvider(LLMProvider):
             "completion_tokens": int(stream_usage.get("completion_tokens", 0)),
         }
         if not usage["prompt_tokens"] and not usage["completion_tokens"]:
-            # Vendor sent no usage chunk: estimate so turn accounting and
-            # the footer never read zero on a non-empty turn.
+            # Estimates support turn accounting and display, but must never
+            # release the conservative durable reservation as vendor usage.
             usage = {
-                "prompt_tokens": max(1, get_token_count(json.dumps(messages))),
-                "completion_tokens": max(1, len(full_content) // 4),
+                "prompt_tokens": _estimate_tokens(messages, tools or [], 0),
+                "completion_tokens": _estimate_tokens(
+                    [{"role": "assistant", "content": full_content, "tool_calls": tool_calls}],
+                    [],
+                    0,
+                ),
+                "estimated": True,
             }
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
         if reservation_id is not None:
@@ -1935,6 +1948,9 @@ class AnthropicProvider(LLMProvider):
             payload["stream"] = True
         return payload
 
+    def reservation_max_tokens(self, max_tokens: int, reasoning_effort: str | None = None) -> int:
+        return self._thinking_payload(reasoning_effort, max_tokens, 0.7)[1]
+
     async def complete(
         self,
         messages: list[dict[str, str]],
@@ -1955,7 +1971,7 @@ class AnthropicProvider(LLMProvider):
             messages, model, temperature, max_tokens, tools, reasoning_effort, False
         )
 
-        ckey = _cache_key(messages, tools, f"anthropic:{model}")
+        ckey = _cache_key(messages, tools, f"anthropic:{model}", payload)
         cached = _cache_get(ckey)
         if cached is not None:
             logger.debug("cache hit for anthropic model=%s", model)
@@ -1966,7 +1982,13 @@ class AnthropicProvider(LLMProvider):
         reservation_id = None
         if session_id is not None and agent_id is not None:
             reservation_id = await usage_store.reserve(
-                session_id, agent_id, "anthropic", model, messages, tools or [], max_tokens
+                session_id,
+                agent_id,
+                "anthropic",
+                model,
+                messages,
+                tools or [],
+                payload["max_tokens"],
             )
 
         start = time.monotonic()
@@ -2059,7 +2081,13 @@ class AnthropicProvider(LLMProvider):
         reservation_id = None
         if session_id is not None and agent_id is not None:
             reservation_id = await usage_store.reserve(
-                session_id, agent_id, "anthropic", model, messages, tools or [], max_tokens
+                session_id,
+                agent_id,
+                "anthropic",
+                model,
+                messages,
+                tools or [],
+                payload["max_tokens"],
             )
 
         text_parts: list[str] = []

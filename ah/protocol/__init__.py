@@ -74,6 +74,24 @@ def gateway_event(
     return canonical
 
 
+def approval_summary(card: dict[str, Any]) -> dict[str, str]:
+    """Keep the reviewed action's origin when it pauses a parent delegation."""
+    fields = {
+        "requestId": str(card.get("request_id") or ""),
+        "operation": str(card.get("operation") or ""),
+        "target": str(card.get("target") or ""),
+        "status": str(card.get("status") or "pending"),
+    }
+    for source, target in (
+        ("session_id", "sessionId"),
+        ("agent_id", "agentId"),
+        ("turn_id", "turnId"),
+    ):
+        if card.get(source):
+            fields[target] = str(card[source])
+    return fields
+
+
 def approval_fields(card: dict[str, Any]) -> dict[str, Any]:
     proposal = card.get("proposal") or card
     return {

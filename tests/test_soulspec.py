@@ -1,4 +1,5 @@
 """Gap 5: SoulSpec schema, merge semantics, conformance, adapters."""
+
 from __future__ import annotations
 
 import textwrap
@@ -79,6 +80,7 @@ def sample_agent_def() -> AgentDef:
 
 # ─── Phase 5A: Schema ───────────────────────────────────────────────────────
 
+
 class TestSoulSpecSchema:
     def test_soulspec_schema_creation(self, sample_spec: SoulSpec) -> None:
         """SoulSpec can be created from YAML with all sections populated."""
@@ -141,6 +143,7 @@ class TestSoulSpecSchema:
 
 # ─── AgentDef ↔ SoulSpec conversion ─────────────────────────────────────────
 
+
 class TestAgentDefConversion:
     def test_soulspec_to_agent_def(self, sample_spec: SoulSpec) -> None:
         """SoulSpec can be converted to AgentDef."""
@@ -177,6 +180,7 @@ class TestAgentDefConversion:
 
 
 # ─── Phase 5B: Merge Semantics ──────────────────────────────────────────────
+
 
 class TestMergeSemantics:
     def test_merge_scalar_override(self) -> None:
@@ -318,6 +322,7 @@ class TestMergeSemantics:
 
 # ─── Phase 5C: Conformance ──────────────────────────────────────────────────
 
+
 class TestConformance:
     def test_conformance_schema_validation(self, sample_spec: SoulSpec) -> None:
         """Schema validation works for valid and invalid specs."""
@@ -364,6 +369,7 @@ class TestConformance:
 
 
 # ─── Phase 5D: Adapters ─────────────────────────────────────────────────────
+
 
 class TestAdapters:
     def test_adapter_claude_code(self, sample_spec: SoulSpec) -> None:

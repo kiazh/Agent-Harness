@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import logging
 import uuid
 
@@ -58,21 +59,28 @@ class SessionManager:
         model: str | None = None,
         provider: str | None = None,
         context_budget: int = 8000,
+        execution_mode: str | None = None,
+        parent_session_id: uuid.UUID | None = None,
+        delegation_authority: dict | None = None,
     ) -> Session:
         """Create a new session."""
         # Auto-generate title from goal if not provided
         if title is None and goal:
             title = self.generate_title(goal)
 
-        from ah.core.session_mode import get_global_default
+        from ah.core.session_mode import MODES, get_global_default
 
-        initial_mode = get_global_default()
+        initial_mode = execution_mode if execution_mode is not None else get_global_default()
+        if initial_mode not in MODES:
+            raise ValueError("mode must be ask|workspace|sandbox|full")
         state_msgpack = msgpack.packb(state or {}, use_bin_type=True)
         row = await db.fetchrow(
             """
-            INSERT INTO sessions (title, agent_id, state_msgpack, status, goal, model, provider, context_budget, execution_mode)
-            VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8)
-            RETURNING id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, created_at, last_activity
+            INSERT INTO sessions (title, agent_id, state_msgpack, status, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, ancestor_session_ids, ancestor_agent_ids)
+            VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, $10,
+                COALESCE((SELECT ARRAY[id] || ancestor_session_ids FROM sessions WHERE id = $9), '{}'),
+                COALESCE((SELECT ARRAY[agent_id] || ancestor_agent_ids FROM sessions WHERE id = $9), '{}'))
+            RETURNING id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
             """,
             title,
             agent_id,
@@ -82,6 +90,8 @@ class SessionManager:
             provider,
             context_budget,
             initial_mode,
+            parent_session_id,
+            json.dumps(delegation_authority or {}),
         )
         session = self._row_to_session(row)
         await self._cache_put(session)
@@ -99,7 +109,7 @@ class SessionManager:
             return cached
         row = await db.fetchrow(
             """
-            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, created_at, last_activity
+            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
             FROM sessions WHERE id = $1
             """,
             session_id,
@@ -120,7 +130,7 @@ class SessionManager:
         """
         row = await db.fetchrow(
             """
-            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, created_at, last_activity
+            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
             FROM sessions WHERE id = $1
             """,
             session_id,
@@ -135,7 +145,7 @@ class SessionManager:
         """Get the most recently active session."""
         row = await db.fetchrow(
             """
-            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, created_at, last_activity
+            SELECT id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
             FROM sessions
             WHERE status = 'active'
             ORDER BY last_activity DESC
@@ -294,7 +304,7 @@ class SessionManager:
         """Full-text search over session titles."""
         rows = await db.fetch(
             """
-            SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, created_at, last_activity
+            SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
             FROM sessions
             WHERE to_tsvector('english', COALESCE(title, '')) @@ plainto_tsquery('english', $1)
             ORDER BY ts_rank(to_tsvector('english', COALESCE(title, '')), plainto_tsquery('english', $1)) DESC, last_activity DESC
@@ -311,7 +321,7 @@ class SessionManager:
         Atomic: session creation and the INSERT ... SELECT chunk copy run in
         a single transaction, so a copy failure cannot leave an orphan fork.
         """
-        source = await self.get(session_id)
+        source = await self.get_fresh(session_id)
         if source is None:
             raise ValueError(f"Session {session_id} not found")
 
@@ -321,9 +331,11 @@ class SessionManager:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     """
-                    INSERT INTO sessions (title, agent_id, state_msgpack, status, goal, model, provider, context_budget, execution_mode)
-                    VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8)
-                    RETURNING id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, created_at, last_activity
+                    INSERT INTO sessions (title, agent_id, state_msgpack, status, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, ancestor_session_ids, ancestor_agent_ids)
+                    VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, $10,
+                        COALESCE((SELECT ancestor_session_ids FROM sessions WHERE id = $11), '{}'),
+                        COALESCE((SELECT ancestor_agent_ids FROM sessions WHERE id = $11), '{}'))
+                    RETURNING id, title, agent_id, status, state_msgpack, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
                     """,
                     fork_title,
                     source.agent_id,
@@ -333,6 +345,9 @@ class SessionManager:
                     source.provider,
                     source.context_budget,
                     "ask",  # Forks never inherit another session's live authority.
+                    source.parent_session_id,
+                    json.dumps(source.delegation_authority),
+                    source.id,
                 )
                 new_session = self._row_to_session(row)
 
@@ -358,7 +373,7 @@ class SessionManager:
         if status:
             rows = await db.fetch(
                 """
-                SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, created_at, last_activity
+                SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
                 FROM sessions
                 WHERE status = $1
                 ORDER BY last_activity DESC, id DESC
@@ -371,7 +386,7 @@ class SessionManager:
         else:
             rows = await db.fetch(
                 """
-                SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, created_at, last_activity
+                SELECT id, title, agent_id, status, goal, model, provider, context_budget, execution_mode, parent_session_id, delegation_authority, created_at, last_activity
                 FROM sessions
                 ORDER BY last_activity DESC, id DESC
                 LIMIT $1 OFFSET $2
@@ -397,6 +412,12 @@ class SessionManager:
             provider=row["provider"],
             context_budget=row["context_budget"],
             execution_mode=row.get("execution_mode", "ask"),
+            parent_session_id=row.get("parent_session_id"),
+            delegation_authority=(
+                json.loads(row["delegation_authority"])
+                if isinstance(row.get("delegation_authority"), str)
+                else row.get("delegation_authority") or {}
+            ),
             created_at=row["created_at"],
             last_activity=row["last_activity"],
         )

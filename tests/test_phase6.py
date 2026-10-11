@@ -257,6 +257,9 @@ async def test_api_lifespan_starts_and_stops_scheduler(monkeypatch):
     async def connect():
         events.append("db-connect")
 
+    async def migrate():
+        events.append("db-migrate")
+
     async def close():
         events.append("db-close")
 
@@ -268,6 +271,7 @@ async def test_api_lifespan_starts_and_stops_scheduler(monkeypatch):
             events.append("runner-stop")
 
     monkeypatch.setattr(db, "connect", connect)
+    monkeypatch.setattr(db, "initialize_runtime_schema", migrate)
     monkeypatch.setattr(db, "close", close)
     # Startup gates the scheduler on real readiness (db.connected): the
     # mock connect must also present a connected pool state.
@@ -278,7 +282,7 @@ async def test_api_lifespan_starts_and_stops_scheduler(monkeypatch):
         audit_persistence, "stop", AsyncMock(side_effect=lambda: events.append("audit-stop"))
     )
     async with lifespan(create_app()):
-        assert events == ["db-connect", "audit-start", "runner-start"]
+        assert events == ["db-connect", "db-migrate", "audit-start", "runner-start"]
     assert events[-3:] == ["runner-stop", "audit-stop", "db-close"]
 
 

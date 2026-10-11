@@ -175,26 +175,59 @@ class TestMemory:
         other_agent = f"other-{uuid.uuid4()}"
         other_session = await session_manager.create(title="Other memory", agent_id=other_agent)
         try:
-            own = result(await h.call("memory.add", {
-                "sessionId": own_sid, "content": f"{tag} own", "category": "fact",
-            }))["memory"]
-            other = result(await h.call("memory.add", {
-                "sessionId": str(other_session.id), "content": f"{tag} private", "category": "fact",
-            }))["memory"]
+            own = result(
+                await h.call(
+                    "memory.add",
+                    {
+                        "sessionId": own_sid,
+                        "content": f"{tag} own",
+                        "category": "fact",
+                    },
+                )
+            )["memory"]
+            other = result(
+                await h.call(
+                    "memory.add",
+                    {
+                        "sessionId": str(other_session.id),
+                        "content": f"{tag} private",
+                        "category": "fact",
+                    },
+                )
+            )["memory"]
             listed = result(await h.call("memory.list", {"sessionId": own_sid}))["memories"]
             assert own["id"] in {item["id"] for item in listed}
             assert other["id"] not in {item["id"] for item in listed}
-            found = result(await h.call("memory.search", {
-                "sessionId": own_sid, "query": "amberheron",
-            }))["results"]
+            found = result(
+                await h.call(
+                    "memory.search",
+                    {
+                        "sessionId": own_sid,
+                        "query": "amberheron",
+                    },
+                )
+            )["results"]
             assert [item["id"] for item in found] == [own["id"]]
             denied = await h.call("memory.forget", {"sessionId": own_sid, "id": other["id"]})
             assert denied["error"]["code"] == NOT_FOUND
-            assert result(await h.call("memory.forget", {
-                "sessionId": str(other_session.id), "id": other["id"],
-            }))["deleted"] is True
+            assert (
+                result(
+                    await h.call(
+                        "memory.forget",
+                        {
+                            "sessionId": str(other_session.id),
+                            "id": other["id"],
+                        },
+                    )
+                )["deleted"]
+                is True
+            )
         finally:
-            await db.execute("DELETE FROM memories WHERE agent_id IN ('harness', $1) AND content LIKE $2", other_agent, f"{tag}%")
+            await db.execute(
+                "DELETE FROM memories WHERE agent_id IN ('harness', $1) AND content LIKE $2",
+                other_agent,
+                f"{tag}%",
+            )
             await session_manager.delete(uuid.UUID(own_sid))
             await session_manager.delete(other_session.id)
 
@@ -208,15 +241,27 @@ class TestMemory:
         own = await memory_store.add(None, "harness", "The beacon is green", "fact")
         other = await memory_store.add(None, other_agent, "The beacon is private", "fact")
         try:
-            shared = result(await h.call("memory.share", {
-                "sessionId": sid, "id": str(own.id), "recipientAgent": recipient,
-                "publisherAgent": other_agent,
-            }))
+            shared = result(
+                await h.call(
+                    "memory.share",
+                    {
+                        "sessionId": sid,
+                        "id": str(own.id),
+                        "recipientAgent": recipient,
+                        "publisherAgent": other_agent,
+                    },
+                )
+            )
             assert shared["status"] == "accepted"
             assert len(await memory_store.search(agent_id=recipient)) == 1
-            denied = await h.call("memory.share", {
-                "sessionId": sid, "id": str(other.id), "recipientAgent": recipient,
-            })
+            denied = await h.call(
+                "memory.share",
+                {
+                    "sessionId": sid,
+                    "id": str(other.id),
+                    "recipientAgent": recipient,
+                },
+            )
             assert denied["error"]["code"] == NOT_FOUND
         finally:
             await memory_store.delete(own.id)

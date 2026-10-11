@@ -45,8 +45,13 @@ class _Headers(dict):
 class _FakeResponse:
     """Minimal httpx.Response stand-in."""
 
-    def __init__(self, status_code: int, headers: dict[str, str] | None = None,
-                 payload: dict | None = None, text: str = "") -> None:
+    def __init__(
+        self,
+        status_code: int,
+        headers: dict[str, str] | None = None,
+        payload: dict | None = None,
+        text: str = "",
+    ) -> None:
         self.status_code = status_code
         self.headers = _Headers(headers)
         self._payload = payload or {}
@@ -60,9 +65,7 @@ class _FakeResponse:
         if self.status_code >= 400:
             import httpx
 
-            raise httpx.HTTPStatusError(
-                f"{self.status_code}", request=self.request, response=self
-            )
+            raise httpx.HTTPStatusError(f"{self.status_code}", request=self.request, response=self)
 
 
 class _FakeClient:
@@ -103,9 +106,7 @@ def test_is_free_model_detects_all_free_forms():
 def test_quota_exhausted_reads_remaining_header():
     assert _quota_exhausted(_FakeResponse(429, EXHAUSTED_HEADERS))
     # Remaining > 0 means per-minute throttle, not daily exhaustion.
-    assert not _quota_exhausted(
-        _FakeResponse(429, {"X-RateLimit-Remaining": "7"})
-    )
+    assert not _quota_exhausted(_FakeResponse(429, {"X-RateLimit-Remaining": "7"}))
     # No header at all: cannot claim exhaustion.
     assert not _quota_exhausted(_FakeResponse(429, {}))
     # Garbage header must not raise.

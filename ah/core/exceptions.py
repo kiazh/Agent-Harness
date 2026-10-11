@@ -24,6 +24,10 @@ class DatabaseError(AgentHarnessError, RuntimeError):
     """Raised when a database operation fails."""
 
 
+class DelegationAccountingError(DatabaseError):
+    """Child spend is unknown, so the parent turn must stop before more calls."""
+
+
 class ValidationError(AgentHarnessError, ValueError):
     """Raised when input validation fails."""
 
@@ -104,6 +108,7 @@ __all__ = [
     "ToolError",
     "ProviderError",
     "DatabaseError",
+    "DelegationAccountingError",
     "ValidationError",
     "SessionNotFoundError",
     "ContextBudgetExceededError",

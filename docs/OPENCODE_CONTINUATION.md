@@ -2,11 +2,15 @@
 
 **Start here. Updated 2026-10-10.** The user asked to stop with remaining usage and leave the work for another agent. This file supersedes the ECC counts in the older [handoff](HANDOFF.md). The handoff's detailed UI interaction and MCP plans still apply.
 
+**Subsequent work:** OpenCode implemented the interactive persona menu and additional TUI/provider changes. Read [Post-OpenCode bug-fix audit](BUGFIX_AUDIT.md) for fixes and current verification; the old remaining-failure list below is historical. MCP integration remains planned.
+
+**Current verified baseline:** Backend **1,927 passed, 5 platform-or-optional skips, no failures**; full TUI **127 passed, zero skipped**, with typecheck/lint passing. The latest wheel is 707,086 bytes; curated ECC remains 42 skills. Preserve the uncommitted audit fixes and migration files before starting the next feature. Historical failures below have been resolved.
+
 ## User's latest direction
 
 The original requirement was all 302 ECC skills as automatic defaults. The user **explicitly changed that requirement**: remove skills that do not matter to this harness, not just upstream images and tests. Do not restore all 302 merely because an older document says they are mandatory.
 
-The target is a smaller, coherent Python/TypeScript agent harness with automatic relevant skills, risk-based permissions, durable persona/growth, and future interactive TUI/MCP support. The next TUI work is planned only: `/persona` should open Add/Reset controls, Add should accept text and persist the default config, and Reset should ask yes/no. Do not mistake the documentation for an implemented UI.
+The target is a smaller, coherent Python/TypeScript agent harness with automatic relevant skills, risk-based permissions, durable persona/growth, and interactive TUI/MCP support. `/persona` now opens Add/Reset controls, Add accepts text and persists the default config, and Reset asks yes/no. The broader TUI and MCP plans remain in the handoff.
 
 ## What was completed
 

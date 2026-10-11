@@ -95,6 +95,25 @@ async def build_agent_for_session(
     from ah.core.config import config
     from ah.core.provider import get_provider
 
+    # A resumed/forked child keeps the restrictions stamped at delegation.
+    # Newly supplied authority can narrow these caps but cannot replace them.
+    durable = dict(getattr(session, "delegation_authority", {}) or {})
+    supplied = dict(authority or {})
+    merged = {**durable, **supplied}
+    full_sources = list(durable.get("full_grant_sources") or [])
+    merged["full_grant_sources"] = full_sources + [
+        source for source in supplied.get("full_grant_sources", []) if source not in full_sources
+    ]
+    merged["tools"] = cap_child_authority(durable, supplied.get("tools"))
+    if durable.get("max_mode") is not None:
+        if _MODE_RANK.get(str(supplied.get("max_mode") or "full"), 0) >= _MODE_RANK.get(
+            str(durable["max_mode"]), 0
+        ):
+            merged["max_mode"] = durable["max_mode"]
+    if durable.get("terminal_backend") == "sandbox":
+        merged["terminal_backend"] = "sandbox"
+    authority = merged
+
     requested = session.agent_id or "harness"
     try:
         definition = await agent_registry.get(requested)

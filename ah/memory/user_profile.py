@@ -35,6 +35,7 @@ def _clean_preferences(preferences: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         return preferences
 
+
 __all__ = [
     "UserProfile",
     "UserProfileStore",

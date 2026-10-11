@@ -12,7 +12,7 @@ import asyncio
 import logging
 import uuid
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ah.core.agent import ReActAgent
 from ah.core.agent_def import AgentDef, agent_registry
@@ -42,7 +42,8 @@ class DelegationResult:
     session_id: uuid.UUID
     tokens: int
     iterations: int
-    status: str  # "complete" or "error"
+    status: str  # "complete", "waiting_approval", or "error"
+    needs_approval: list[dict] = field(default_factory=list)
 
 
 class Orchestrator:
@@ -171,31 +172,89 @@ class Orchestrator:
 
         handoff = await self._parent_context(parent_session_id) if parent_session_id else ""
 
+        from ah.core.agent_factory import cap_child_authority, check_mode_cap, parent_authority_var
+        from ah.core.session_mode import resolve_effective_mode
+
+        parent = dict(parent_authority_var.get() or {})
+        inherited_full_sources = list(parent.get("full_grant_sources") or [])
+        if authority:
+            # An explicit restriction cannot erase an ambient restriction.
+            parent["tools"] = cap_child_authority(parent, authority.get("tools"))
+            if authority.get("max_mode") is not None:
+                check_mode_cap(parent, authority["max_mode"])
+            parent.update({k: v for k, v in authority.items() if k != "tools"})
+        parent["full_grant_sources"] = inherited_full_sources + [
+            source
+            for source in parent.get("full_grant_sources", [])
+            if source not in inherited_full_sources
+        ]
+        parent_mode = await resolve_effective_mode(
+            str(parent_session_id) if parent_session_id else None
+        )
+        # A cap can restrict an otherwise broader durable mode. Never switch a
+        # sandbox parent to a host mode merely because the global default changed.
+        try:
+            check_mode_cap(parent, parent_mode)
+        except Exception:
+            parent_mode = str(parent.get("max_mode") or "ask")
+        child_authority = dict(parent)
+        child_authority["max_mode"] = parent_mode
+        child_authority["tools"] = cap_child_authority(parent, definition.tools or None)
+        if parent_mode == "sandbox" or config.get("terminal_sandbox") == "docker":
+            child_authority["terminal_backend"] = "sandbox"
+
+        inherited_grant = None
+        if parent_mode == "full" and parent_session_id is not None:
+            from ah.permissions import store as permission_store
+
+            parent_session = await session_manager.get_fresh(parent_session_id)
+            for grant in await permission_store.list_grants(str(parent_session_id)):
+                if (
+                    parent_session is not None
+                    and grant.get("agent_id") == parent_session.agent_id
+                    and grant.get("mode") == "full"
+                    and grant.get("capability") == "session"
+                    and grant.get("digest") == "full-mode-session"
+                ):
+                    inherited_grant = grant
+                    child_authority["full_grant_sources"].append(
+                        {
+                            "session_id": str(parent_session_id),
+                            "agent_id": parent_session.agent_id,
+                            "grant_id": str(grant["id"]),
+                        }
+                    )
+                    break
+
         child = await session_manager.create(
             title=f"{agent_name}: {task[:50]}",
             agent_id=agent_name,
             model=definition.model or config.get("model"),
             provider=definition.provider or config.get("provider"),
             context_budget=config.get("context_budget"),
+            execution_mode=parent_mode,
+            parent_session_id=parent_session_id,
+            delegation_authority=child_authority,
         )
+        if inherited_grant is not None:
+            await permission_store.save_grant(
+                {
+                    "session_id": str(child.id),
+                    "agent_id": agent_name,
+                    "mode": "full",
+                    "capability": "session",
+                    "scope_path": None,
+                    "scope_type": "file",
+                    "grant_kind": "session",
+                    "digest": "full-mode-session",
+                    "expires_at": inherited_grant.get("expires_at"),
+                }
+            )
         message_id = await self._record_start(parent_session_id, from_agent, agent_name, task)
 
         # Phase 4.5/6 + LP-08: same factory/accounting/cancellation pipeline
         # as normal turns. Child authority = definition ∩ parent caps, and the
         # broker enforces it at execution (not just on the stored agent).
-        from ah.core.agent_factory import cap_child_authority, parent_authority_var
-
-        ambient = parent_authority_var.get() or {}
-        parent = dict(ambient)
-        if authority:
-            parent.update(authority)
-        from ah.core.agent_factory import check_mode_cap
-
-        check_mode_cap(parent or None, "ask")  # delegation itself stays ask-level
-        capped_tools = cap_child_authority(parent, definition.tools or None)
-        child_authority: dict = {"tools": capped_tools}
-        if parent.get("max_mode") is not None:
-            child_authority["max_mode"] = parent["max_mode"]
         if self._agent_factory is not None:
             agent = self._agent_factory(definition)
         else:
@@ -213,15 +272,25 @@ class Orchestrator:
                 timeout=max(0, delegation_deadline.get() - loop.time()),
             )
         except asyncio.CancelledError:
-            await self._record_end(message_id, status="cancelled", response="cancelled", tokens=0)
+            try:
+                tokens = await self._charged_child_tokens(child.id, agent_name)
+                await self._record_end(
+                    message_id, status="cancelled", response="cancelled", tokens=tokens
+                )
+            except Exception as accounting_error:
+                # Accounting failures must not swallow the parent's cancellation.
+                record_failure("orchestrator.delegate", accounting_error)
             raise
         except Exception as e:
             logger.exception("Delegation to %s failed", agent_name)
             detail = "delegation timed out" if isinstance(e, TimeoutError) else str(e)
+            tokens = await self._charged_child_tokens(child.id, agent_name)
             await self._record_end(
-                message_id, status="error", response=f"{type(e).__name__}: {detail}", tokens=0
+                message_id, status="error", response=f"{type(e).__name__}: {detail}", tokens=tokens
             )
-            return DelegationResult(agent_name, task, f"Error: {detail}", child.id, 0, 0, "error")
+            return DelegationResult(
+                agent_name, task, f"Error: {detail}", child.id, tokens, 0, "error"
+            )
         finally:
             delegation_depth.reset(depth_token)
             delegation_deadline.reset(deadline_token)
@@ -243,9 +312,18 @@ class Orchestrator:
                     # Optional fallback preserves the primary outcome; report no payload.
                     record_failure("orchestrator.delegate", _boundary_error)
 
-        await self._record_end(
-            message_id, status="complete", response=response.content, tokens=response.tokens_used
+        tokens = await self._charged_child_tokens(child.id, agent_name, response.tokens_used)
+        pauses = getattr(response, "needs_approval", None)
+        pauses = (
+            [dict(pause) for pause in pauses if isinstance(pause, dict)]
+            if isinstance(pauses, list)
+            else []
         )
+        for pause in pauses:
+            pause.setdefault("session_id", str(child.id))
+            pause.setdefault("agent_id", agent_name)
+        status = "waiting_approval" if pauses else "complete"
+        await self._record_end(message_id, status=status, response=response.content, tokens=tokens)
         if parent_session_id is not None:
             await context_manager.add_chunk(
                 session_id=parent_session_id,
@@ -259,10 +337,35 @@ class Orchestrator:
             task=task,
             response=response.content,
             session_id=child.id,
-            tokens=response.tokens_used,
+            tokens=tokens,
             iterations=response.iterations,
-            status="complete",
+            status=status,
+            needs_approval=pauses,
         )
+
+    async def _charged_child_tokens(
+        self, session_id: uuid.UUID, agent_name: str, known_tokens: int = 0
+    ) -> int:
+        """Read spend for this fresh child, including descendant reservations.
+
+        Reading the ledger adds no wrapper charge. The returned response may
+        already include descendants, so take the maximum rather than adding it.
+        """
+        from ah.core.exceptions import DelegationAccountingError
+        from ah.core.usage import db as usage_db
+        from ah.core.usage import usage_store
+
+        try:
+            summary = await usage_store.summary(session_id, agent_name)
+            return max(known_tokens, int(summary["session"]["chargedTokens"]))
+        except Exception as error:
+            if usage_db.connected:
+                raise DelegationAccountingError(
+                    "delegation usage accounting unavailable"
+                ) from error
+            # Explicitly DB-less runs have no durable ledger; retain any known
+            # successful response usage supplied by the injected child agent.
+            return known_tokens
 
     async def _parent_context(self, session_id: uuid.UUID) -> str:
         """Pass a bounded summary of recent parent activity to a child agent."""
@@ -305,6 +408,8 @@ class Orchestrator:
                     _hop_count=_hop_count + 1,
                 )
             )
+            if results[-1].needs_approval:
+                break
         return results
 
     async def run_parallel(

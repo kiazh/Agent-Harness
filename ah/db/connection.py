@@ -210,13 +210,26 @@ class Database:
             schema_sql = f.read()
         async with self.acquire() as conn:
             async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended('ah:runtime_migrations', 0))"
+                )
                 await conn.execute(schema_sql)
                 if default_schema:
-                    with open(
-                        os.path.join(os.path.dirname(__file__), "growth_schema.sql"),
-                        encoding="utf-8",
-                    ) as f:
-                        await conn.execute(f.read())
+                    for name in ("growth_schema.sql", "delegation_schema.sql"):
+                        with open(
+                            os.path.join(os.path.dirname(__file__), name), encoding="utf-8"
+                        ) as f:
+                            await conn.execute(f.read())
+
+    async def initialize_runtime_schema(self) -> None:
+        """Upgrade required runtime features on an initialized native database."""
+        async with self.acquire() as conn, conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended('ah:runtime_migrations', 0))"
+            )
+            for name in ("growth_schema.sql", "delegation_schema.sql"):
+                with open(os.path.join(os.path.dirname(__file__), name), encoding="utf-8") as f:
+                    await conn.execute(f.read())
 
     async def initialize_growth_schema(self) -> None:
         """Apply only the additive growth migration on existing installations."""

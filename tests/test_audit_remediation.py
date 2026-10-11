@@ -48,7 +48,10 @@ def _req(**kw):
 # ─── AH-001: session-local mode ────────────────────────────────────────────
 
 
-def test_001_session_full_does_not_leak_to_future_sessions():
+def test_001_session_full_does_not_leak_to_future_sessions(monkeypatch):
+    # Pins the repo `ask` default: the test asserts session-locality against
+    # a non-full global, regardless of the developer's live config.
+    monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
 
     from ah.core import session_mode as sm
     from ah.core.config import config
@@ -78,6 +81,8 @@ def test_001_session_full_does_not_leak_to_future_sessions():
             grants_b = await st.list_grants(b)
             assert not [g for g in grants_b if g.get("digest") == "full-mode-session"]
             # Explicit persistent default only affects subsequently created sessions.
+            # Drop the ask pin so the global set below is observable.
+            monkeypatch.delenv("AGENT_HARNESS_EXECUTION_MODE", raising=False)
             await modefeat.mode_set(gw, {"mode": "full", "scope": "global"})
             assert config.get("execution_mode") == "full"
             assert sm.get_effective_mode(b) == "full"
@@ -90,7 +95,9 @@ def test_001_session_full_does_not_leak_to_future_sessions():
     asyncio.run(_scenario())
 
 
-def test_001_grant_failure_leaves_no_elevation():
+def test_001_grant_failure_leaves_no_elevation(monkeypatch):
+    # Pins ask-mode behavior regardless of the developer's live config.
+    monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
 
     from ah.core import session_mode as sm
     from ah.permissions import store as st

@@ -1,4 +1,5 @@
 """UsageStore cleanup: mark orphaned reserved rows as failed."""
+
 from __future__ import annotations
 
 import os
@@ -32,11 +33,17 @@ async def test_cleanup_orphaned_reservations_marks_them_failed(db_pool):
     agent_id = f"cleanup-test-{session_id}"
 
     # Create some reserved rows
-    res1 = await store.reserve(session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8)
-    res2 = await store.reserve(session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8)
+    res1 = await store.reserve(
+        session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8
+    )
+    res2 = await store.reserve(
+        session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8
+    )
 
     # Create a completed row (should NOT be touched)
-    res3 = await store.reserve(session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8)
+    res3 = await store.reserve(
+        session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8
+    )
     await store.finish(res3, {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7})
 
     # Run cleanup
@@ -78,6 +85,8 @@ async def test_gateway_startup_calls_cleanup(monkeypatch):
 
     mock_cleanup = AsyncMock(return_value=0)
     monkeypatch.setattr("ah.core.usage.usage_store.cleanup_orphaned_reservations", mock_cleanup)
+    migration = AsyncMock()
+    monkeypatch.setattr("ah.db.connection.db.initialize_runtime_schema", migration)
 
     frames = []
     gateway = Gateway(frames.append, owns_db=False)
@@ -85,6 +94,7 @@ async def test_gateway_startup_calls_cleanup(monkeypatch):
 
     # Mock db.connect to avoid real DB
     import ah.db.connection as db_mod
+
     original_connect = db_mod.db.connect
     db_mod.db.connect = AsyncMock()
 
@@ -94,6 +104,7 @@ async def test_gateway_startup_calls_cleanup(monkeypatch):
 
     try:
         await gateway._initialize({})
+        migration.assert_awaited_once()
         mock_cleanup.assert_awaited_once()
     finally:
         db_mod.db.connect = original_connect

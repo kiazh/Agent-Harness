@@ -90,40 +90,50 @@ class TestConsistentTokenBudget:
     """run() and run_stream() must derive the budget the same way."""
 
     def test_run_uses_session_context_budget(self):
-        """run() source must reference session.context_budget."""
+        """run() must derive the budget from the session via the shared helper."""
         from ah.core import agent as agent_mod
 
         src = inspect.getsource(agent_mod.ReActAgent.run)
-        assert "session.context_budget" in src, "run() must use session.context_budget"
+        assert "_effective_turn_budget(session, self.provider)" in src
         assert "effective_budget" in src
+        helper_src = inspect.getsource(agent_mod._effective_turn_budget)
+        assert "session.context_budget" in helper_src
 
     def test_run_stream_uses_session_context_budget(self):
         from ah.core import agent as agent_mod
 
         src = inspect.getsource(agent_mod.ReActAgent.run_stream)
-        assert "session.context_budget" in src
+        assert "_effective_turn_budget(session, self.provider)" in src
         assert "effective_budget" in src
 
     def test_both_clamp_to_max_token_budget(self):
-        """Both loops clamp the session budget to MAX_TOKEN_BUDGET."""
+        """The shared helper clamps to MAX_TOKEN_BUDGET; both loops use it."""
         from ah.core import agent as agent_mod
 
         run_src = inspect.getsource(agent_mod.ReActAgent.run)
         stream_src = inspect.getsource(agent_mod.ReActAgent.run_stream)
         for src in (run_src, stream_src):
-            assert "min(session.context_budget, MAX_TOKEN_BUDGET)" in src
+            assert "_effective_turn_budget(session, self.provider)" in src
+        helper_src = inspect.getsource(agent_mod._effective_turn_budget)
+        assert "MAX_TOKEN_BUDGET" in helper_src
 
     def test_budget_values_agree(self):
         """Effective budget computed identically for the same session budget."""
-        from ah.core.agent import MAX_TOKEN_BUDGET
+        from ah.core.agent import MAX_TOKEN_BUDGET, _effective_turn_budget
         from ah.core.assembler import get_token_count
+        from ah.core.models import Session
 
         assert MAX_TOKEN_BUDGET == 50_000
         # Spot-check the shared token-count path used for budgeting.
         assert get_token_count("hello") > 0
+        import uuid
+
+        # Unknown model behaves exactly as before (legacy 8000 default).
+        # Explicit session model keeps this hermetic regardless of saved defaults.
         expected = {100: 100, 5000: 5000, 8000: 8000, 50_000: 50_000, 999_999: 50_000}
         for budget, want in expected.items():
-            assert min(budget, MAX_TOKEN_BUDGET) == want
+            session = Session(id=uuid.uuid4(), context_budget=budget, model="unmapped-test-model")
+            assert _effective_turn_budget(session, object()) == want
 
 
 # ===========================================================================

@@ -518,17 +518,13 @@ class TestValidationProperties:
     @settings(max_examples=100)
     def test_validate_messages_rejects_empty(self, messages):
         """Property: Empty message list is rejected; non-empty valid passes."""
-        from hypothesis import assume
         if not messages:
             with pytest.raises(ValueError):
                 _validate_messages(messages)
         else:
             # Only assert no-raise for well-formed messages; invalid shapes
             # must raise (hypothesis generates both).
-            valid = all(
-                isinstance(m, dict) and "role" in m and "content" in m
-                for m in messages
-            )
+            valid = all(isinstance(m, dict) and "role" in m and "content" in m for m in messages)
             if valid:
                 _validate_messages(messages)
             else:

@@ -62,7 +62,6 @@ docs/roadmap.md
 docs/plugins.md
 communications/
 research/results/
-research/identity_scenarios_example.json
 verify_issues.py
 scripts/
 agents/
@@ -84,7 +83,6 @@ docs/roadmap.md
 docs/plugins.md
 communications/
 research/results/
-research/identity_scenarios_example.json
 verify_issues.py
 scripts/
 agents/

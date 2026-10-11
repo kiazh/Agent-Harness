@@ -424,9 +424,10 @@ class Gateway:
                 raise RpcError(DATABASE_UNAVAILABLE, f"database unavailable: {e}") from e
             self._db_ready = True
             try:
-                await db.initialize_growth_schema()
+                await db.initialize_runtime_schema()
             except Exception as error:
-                logger.warning("Growth schema unavailable (%s)", type(error).__name__)
+                self._db_ready = False
+                raise RpcError(DATABASE_UNAVAILABLE, "runtime schema upgrade failed") from error
             from ah.core.usage import usage_store
 
             await usage_store.cleanup_orphaned_reservations()
@@ -561,6 +562,7 @@ class Gateway:
         key, value = params.get("key"), params.get("value")
         persist = bool(params.get("persist"))
         async with self._config_lock:
+            previous_route = getattr(self, key) if key in ("model", "provider") else None
             if key == "model":
                 self._set_model(value)
                 value = self.model
@@ -583,7 +585,11 @@ class Gateway:
             else:
                 raise RpcError(INVALID_PARAMS, f"unknown setting: {key}")
             if persist and key in ("model", "provider"):
-                config.set(key, value, persist=True)
+                try:
+                    config.set(key, value, persist=True)
+                except Exception:
+                    setattr(self, key, previous_route)
+                    raise
                 # AGENT_HARNESS_MODEL/PROVIDER from .env shadows config.yaml on
                 # restart (Config.get checks env first). Sync both so a saved
                 # default survives restarts and live config.get reads.
@@ -667,16 +673,11 @@ class Gateway:
                     record_failure("server._run_turn", _boundary_error)
             pauses = []
             try:
-                for p in (getattr(final, "needs_approval", None) or []):
+                for p in getattr(final, "needs_approval", None) or []:
                     if isinstance(p, dict) and p.get("request_id"):
-                        pauses.append(
-                            {
-                                "requestId": str(p.get("request_id", "")),
-                                "operation": str(p.get("operation", "")),
-                                "target": str(p.get("target", "")),
-                                "status": str(p.get("status", "pending")),
-                            }
-                        )
+                        from ah.protocol import approval_summary
+
+                        pauses.append(approval_summary(p))
             except Exception:
                 pauses = []
             emit(

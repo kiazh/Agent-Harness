@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -18,7 +19,12 @@ from rich.console import Console
 from ah.core.assembler import PromptAssembler
 from ah.core.config import config
 from ah.core.context import context_manager
-from ah.core.exceptions import DatabaseError, SessionNotFoundError, UsageBudgetExceededError
+from ah.core.exceptions import (
+    DatabaseError,
+    DelegationAccountingError,
+    SessionNotFoundError,
+    UsageBudgetExceededError,
+)
 from ah.core.metrics import metrics
 from ah.core.models import AgentResponse, LLMResponse, StreamEvent, ToolDefinition
 from ah.core.provider import LLMProvider, audit_log, get_provider
@@ -94,6 +100,10 @@ def instrument_stream(func):
 
 SYSTEM_PROMPT = """You are AgentHarness, a self-hosted AI agent. You have access to tools and persistent context stored in PostgreSQL.
 
+You are a general-purpose agent first: answer greetings and questions directly, act on tasks with the right tool for the job, and never go looking for work. No actionable task means no tools. Never enumerate skill catalogs or directories unprompted; when you need a capability, search for it with a specific query.
+
+Delegation: when a task splits into independent subtasks, fan out — issue one delegate call per subtask in a single block so they run in parallel (no more than three). Call list_agents first if you don't know the roster: researcher gathers information (read-only), coder edits code and runs tests, harness does mixed work. Give each subagent a complete standalone task; synthesize their answers yourself. Subagents inherit your restrictions, cannot approve actions, and time out quickly — never delegate to evade an approval, and never delegate what you can do or answer directly.
+
 When you need to do something, use the available tools. Think step by step:
 1. Understand the task
 2. Decide what tools to use
@@ -105,14 +115,37 @@ Be concise. Don't over-explain. Get things done."""
 # Maximum token budget for a single agent run (fallback, session.context_budget takes precedence)
 MAX_TOKEN_BUDGET = 50_000
 
+# Earlier-round tool results shrink to a head+tail preview before the next
+# LLM call (append-time caps already bound each result to ~1k / 9k for
+# skill pages). Stale rounds keep orientation at roughly two-thirds size.
+_TOOL_RESULT_STALE_HEAD = 350
+_TOOL_RESULT_STALE_TAIL = 350
+_TOOL_RESULT_STALE_CAP = _TOOL_RESULT_STALE_HEAD + _TOOL_RESULT_STALE_TAIL
+# Positionally addressed skill pages must keep resolving their offsets.
+_SKILL_PAGE_RE = re.compile(r"^(Skill \S+|ECC resource \S+) \[\d+:\d+/\d+\]:")
+
+
+def _stale_tool_preview(content: str) -> str:
+    """Head+tail preview of a stale-round tool result (verdicts live in tails)."""
+    return (
+        f"{content[:_TOOL_RESULT_STALE_HEAD]}"
+        f"\n…[earlier output condensed to {_TOOL_RESULT_STALE_HEAD}+{_TOOL_RESULT_STALE_TAIL} chars"
+        f" of {len(content)}; re-run the tool for the full output]…\n"
+        f"{content[-_TOOL_RESULT_STALE_TAIL:]}"
+    )
+
 
 def _turn_model(session, provider) -> str | None:
     """Best-known model id for budget purposes: session, else provider, else config."""
-    model = getattr(session, "model", None) or getattr(provider, "model", None)
-    if model:
-        return model
+    for candidate in (
+        getattr(session, "model", None),
+        getattr(provider, "model", None),
+    ):
+        if isinstance(candidate, str) and candidate:
+            return candidate
     try:
-        return config.get("model") or None
+        configured = config.get("model")
+        return configured if isinstance(configured, str) and configured else None
     except Exception:
         return None
 
@@ -258,6 +291,7 @@ class BaseReActAgent:
                     self.agent_id,
                     messages,
                     tools=tools,
+                    max_tokens=int(config.get("max_tokens")),
                 )
             except (UsageBudgetExceededError, DatabaseError):
                 raise
@@ -310,6 +344,7 @@ class BaseReActAgent:
                     async for event in self.provider.stream_complete(
                         messages=messages,
                         tools=tools,
+                        max_tokens=int(config.get("max_tokens")),
                     ):
                         emitted = True
                         if event.type == "done" and event.response is not None:
@@ -366,6 +401,10 @@ class BaseReActAgent:
             return None
         model = str(getattr(self.provider, "model", "unknown"))
         provider_name = type(self.provider).__name__.removesuffix("Provider").lower()
+        max_tokens = int(config.get("max_tokens"))
+        output_limit = getattr(type(self.provider), "reservation_max_tokens", None)
+        if callable(output_limit):
+            max_tokens = output_limit(self.provider, max_tokens)
         try:
             return await usage_store.reserve(
                 session_id,
@@ -374,7 +413,7 @@ class BaseReActAgent:
                 model,
                 messages,
                 tools,
-                4096,
+                max_tokens,
             )
         except UsageBudgetExceededError:
             raise
@@ -604,14 +643,17 @@ class BaseReActAgent:
         tc: dict[str, Any],
         content: str,
     ) -> None:
-        """Append the assistant tool-call turn and its tool result to *messages*."""
-        messages.append(
-            {
-                "role": "assistant",
-                "content": response.content,
-                "tool_calls": [tc],
-            }
-        )
+        """Append one assistant batch followed by each of its tool results."""
+        # The execution loop replays results in provider order. Only its first
+        # result introduces the assistant message; later results share it.
+        if not response.tool_calls or tc is response.tool_calls[0]:
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": response.content,
+                    "tool_calls": response.tool_calls or [tc],
+                }
+            )
         messages.append(
             {
                 "role": "tool",
@@ -619,6 +661,36 @@ class BaseReActAgent:
                 "tool_call_id": tc.get("id", ""),
             }
         )
+
+    @staticmethod
+    def _condense_history(messages: list[dict[str, Any]]) -> None:
+        """Shrink stale tool results in place before the next LLM call.
+
+        Tool messages from earlier rounds keep a head+tail preview; the
+        latest batch keeps its append-time previews (normally 1000 chars;
+        skill pages up to 9000 chars), including every result in that batch.
+        Heads preserve listings, tails preserve verdicts ("1 passed"); the
+        marker points back at the tool for the full output. Positionally
+        addressed skill pages (``Skill name [o:e/n]`` / ``ECC resource``)
+        are never condensed — offsets into them must keep resolving.
+        Context storage keeps a separate 500-character result preview, not
+        the full output. Re-run the tool when more output is needed.
+        """
+        last_assistant = -1
+        for i, message in enumerate(messages):
+            if message.get("role") == "assistant" and message.get("tool_calls"):
+                last_assistant = i
+        for message in messages[: last_assistant + 1]:
+            if message.get("role") != "tool":
+                continue
+            content = message.get("content", "")
+            if (
+                isinstance(content, str)
+                and len(content) > _TOOL_RESULT_STALE_CAP
+                and not _SKILL_PAGE_RE.match(content)
+                and "\n…[earlier output condensed to " not in content
+            ):
+                message["content"] = _stale_tool_preview(content)
 
     async def _execute_tool_calls(
         self,
@@ -792,11 +864,25 @@ class BaseReActAgent:
                     # LP-08: publish this agent's authority for delegation
                     # children (restored afterwards like all caller scope).
                     try:
+                        from ah.core.agent_factory import cap_child_authority
                         from ah.core.agent_factory import parent_authority_var as _pav
 
                         # R-02: Preserve inherited authority (max_mode, etc.)
                         # and intersect its tools with this agent's definition.
-                        _inherited = _pav.get() or {}
+                        _inherited = dict(getattr(self, "_authority", {}) or {})
+                        _ambient = _pav.get() or {}
+                        _full_sources = list(_inherited.get("full_grant_sources") or [])
+                        _inherited["tools"] = cap_child_authority(_inherited, _ambient.get("tools"))
+                        from ah.core.agent_factory import check_mode_cap
+
+                        if _ambient.get("max_mode") is not None:
+                            check_mode_cap(_inherited, _ambient["max_mode"])
+                        _inherited.update({k: v for k, v in _ambient.items() if k != "tools"})
+                        _inherited["full_grant_sources"] = _full_sources + [
+                            source
+                            for source in _ambient.get("full_grant_sources", [])
+                            if source not in _full_sources
+                        ]
                         _merged = dict(_inherited)
                         _parent_tools = _inherited.get("tools")
                         if _parent_tools is None:
@@ -807,7 +893,9 @@ class BaseReActAgent:
                             _merged["tools"] = [t for t in self.allowed_tools if t in _parent_tools]
                         authority_token = _pav.set(_merged)
                     except Exception:
-                        authority_token = None
+                        current_agent_id.reset(agent_token)
+                        current_session_id.reset(token)
+                        raise
                     try:
                         # Phase D: permission broker gates every tool path.
                         # Validation errors stay distinct from authorization:
@@ -825,6 +913,15 @@ class BaseReActAgent:
 
                         _context = await resolve_execution_context(str(session_id), tool_name)
                         _mode, _backend = _context.mode, _context.backend
+                        # Children inherit the parent's current execution mode,
+                        # including sandbox isolation, rather than a global default.
+                        check_mode_cap(_merged, _mode)
+                        _merged["max_mode"] = _mode
+                        if tool_name == "terminal" and _merged.get("terminal_backend") == "sandbox":
+                            _backend = "sandbox"
+                        if _mode == "sandbox" or _backend == "sandbox":
+                            _merged["terminal_backend"] = "sandbox"
+                        _pav.set(_merged)
                         _req = _build_req(
                             operation=_spec.get("operation", f"tool.{tool_name}"),
                             targets=_spec.get("targets"),
@@ -861,6 +958,8 @@ class BaseReActAgent:
                             item["_needs_approval"] = {
                                 "request_id": _ap.get("request_id", ""),
                                 "session_id": _ap.get("session_id", ""),
+                                "agent_id": _ap.get("agent_id", self.agent_id),
+                                "turn_id": _ap.get("turn_id", ""),
                                 "operation": _ap.get("operation", ""),
                                 "target": _ap.get("target", ""),
                                 "status": _ap.get("status", "pending"),
@@ -879,6 +978,11 @@ class BaseReActAgent:
                                 registry.execute(tool_name, **tool_args),
                                 timeout=tool_timeout,
                             )
+                            from ah.tools.agents import DelegationToolResult
+
+                            if isinstance(result, DelegationToolResult):
+                                item["_needs_approvals"] = result.needs_approval
+                                item["_delegated_tokens"] = result.tokens_used
                         except asyncio.CancelledError:
                             # LP-01 lifecycle: a claimed approval must not hang
                             # in 'claimed' when its execution is cancelled.
@@ -915,6 +1019,10 @@ class BaseReActAgent:
                             record_failure("agent._execute_tool_calls_stream", _boundary_error)
                         current_agent_id.reset(agent_token)
                         current_session_id.reset(token)
+            except DelegationAccountingError:
+                # Unknown child spend is fatal for this turn, not a recoverable
+                # tool failure that permits another provider call.
+                raise
             except Exception as e:
                 logger.exception("Tool execution failed for '%s'", tool_name)
                 audit_log(
@@ -950,6 +1058,8 @@ class BaseReActAgent:
                 for coro in asyncio.as_completed(tasks):
                     try:
                         finished = await coro
+                    except DelegationAccountingError:
+                        raise
                     except Exception:
                         continue
                     completion_order.append(finished)
@@ -971,8 +1081,12 @@ class BaseReActAgent:
                     )
                     # AH-AUDIT-030: typed pause alongside the result so live
                     # consumers need not wait for the terminal response.
-                    _pause_c = finished.get("_needs_approval")
-                    if isinstance(_pause_c, dict) and _pause_c.get("request_id"):
+                    _pauses_c = finished.get("_needs_approvals") or [
+                        finished.get("_needs_approval")
+                    ]
+                    for _pause_c in _pauses_c:
+                        if not isinstance(_pause_c, dict) or not _pause_c.get("request_id"):
+                            continue
                         yield StreamEvent(
                             type="needs_approval",
                             content=str(_pause_c.get("request_id", "")),
@@ -991,7 +1105,9 @@ class BaseReActAgent:
                 for t in tasks:
                     if not t.done():
                         t.cancel()
-                # Do not await here (we are yielding); Phase D handles records.
+                # Cancellation is complete only when children retire their
+                # claims, reservations, and owned providers.
+                await asyncio.gather(*tasks, return_exceptions=True)
 
         # ── Phase D: metrics for denied + persistence in provider order ───
         # Provider message order must follow the original tool_calls order
@@ -1106,6 +1222,11 @@ class BaseReActAgent:
             # schedulers/transports never parse prose to detect pauses.
             if item.get("_needs_approval"):
                 tool_entry["needs_approval"] = item["_needs_approval"]
+            if item.get("_needs_approvals"):
+                tool_entry["needs_approvals"] = item["_needs_approvals"]
+                tool_entry["needs_approval"] = item["_needs_approvals"][0]
+            if item.get("_delegated_tokens"):
+                tool_entry["delegated_tokens"] = item["_delegated_tokens"]
             tool_calls_made.append(tool_entry)
             # Skill pages already have bounded output. Preserve the page so its
             # continuation offset cannot skip instructions hidden by the preview cap.
@@ -1384,6 +1505,9 @@ class ReActAgent(BaseReActAgent):
                     iterations=iteration,
                 )
 
+            # Shrink stale tool rounds before paying to re-send them.
+            self._condense_history(messages)
+
             # Get tool definitions
             tool_defs = self._tool_defs()
 
@@ -1462,6 +1586,7 @@ class ReActAgent(BaseReActAgent):
                 return completed
 
             # Execute tool calls
+            batch_start = len(tool_calls_made)
             try:
                 await self._execute_tool_calls(
                     response, messages, tool_calls_made, session_id, verbose, pending_chunks
@@ -1471,9 +1596,30 @@ class ReActAgent(BaseReActAgent):
                 # do not misrepresent partial effects as complete.
                 await self._flush_pending_cancellation_safe(pending_chunks, session_id)
                 raise
+            except DelegationAccountingError:
+                await self._flush_pending_cancellation_safe(
+                    pending_chunks, session_id, note="delegation accounting unavailable"
+                )
+                raise
             # AH-015: incremental persistence — flush each batch so a later
             # cancellation loses at most the in-flight batch, not all history.
             await self._flush_pending_chunks(pending_chunks)
+            batch = tool_calls_made[batch_start:]
+            total_tokens += sum(entry.get("delegated_tokens", 0) for entry in batch)
+            pauses = [
+                pause
+                for entry in batch
+                for pause in (entry.get("needs_approvals") or [entry.get("needs_approval")])
+                if isinstance(pause, dict) and pause.get("request_id")
+            ]
+            if pauses:
+                return AgentResponse(
+                    content="Waiting for approval.",
+                    tool_calls=tool_calls_made,
+                    tokens_used=total_tokens,
+                    iterations=iteration + 1,
+                    needs_approval=pauses,
+                )
 
         # Max iterations reached
         audit_log(
@@ -1560,6 +1706,9 @@ class ReActAgent(BaseReActAgent):
                     ),
                 )
                 return
+
+            # Shrink stale tool rounds before paying to re-send them.
+            self._condense_history(messages)
 
             # Get tool definitions
             tool_defs = self._tool_defs()
@@ -1662,6 +1811,7 @@ class ReActAgent(BaseReActAgent):
                 return
 
             # Execute tool calls with streaming events.
+            batch_start = len(tool_calls_made)
             # AH-015: run_stream previously held ALL history in pending until
             # the final done event — a CancelledError bypassed `except
             # Exception` and dropped user/tool records. Flush incrementally
@@ -1675,12 +1825,39 @@ class ReActAgent(BaseReActAgent):
             except asyncio.CancelledError:
                 await self._flush_pending_cancellation_safe(pending_chunks, session_id)
                 raise
-            # Incremental persistence: do not wait for done.
+
+            except DelegationAccountingError:
+                await self._flush_pending_cancellation_safe(
+                    pending_chunks, session_id, note="delegation accounting unavailable"
+                )
+                raise
+
+            # Persist completed child/tool records before yielding a pause.
             try:
                 await self._flush_pending_chunks(pending_chunks)
             except asyncio.CancelledError:
                 await self._flush_pending_cancellation_safe(pending_chunks, session_id)
                 raise
+            batch = tool_calls_made[batch_start:]
+            total_tokens += sum(entry.get("delegated_tokens", 0) for entry in batch)
+            pauses = [
+                pause
+                for entry in batch
+                for pause in (entry.get("needs_approvals") or [entry.get("needs_approval")])
+                if isinstance(pause, dict) and pause.get("request_id")
+            ]
+            if pauses:
+                yield StreamEvent(
+                    type="done",
+                    response=AgentResponse(
+                        content="Waiting for approval.",
+                        tool_calls=tool_calls_made,
+                        tokens_used=total_tokens,
+                        iterations=iteration + 1,
+                        needs_approval=pauses,
+                    ),
+                )
+                return
 
         # Max iterations reached
         audit_log(

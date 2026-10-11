@@ -829,8 +829,10 @@ class TestErrorHandling:
             with pytest.raises(ToolError, match="Not a file"):
                 asyncio.run(read_file(str(temp_dir)))
 
-    def test_write_file_invalid_path(self):
-        """Test write_file with invalid path."""
+    def test_write_file_invalid_path(self, monkeypatch):
+        """Test write_file with invalid path (ask-mode boundaries)."""
+        # Full mode deliberately widens the writable scope; pin ask here.
+        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
         from ah.core.exceptions import ToolError
 
         with pytest.raises(ToolError, match="escapes the allowed base directory"):
@@ -854,8 +856,10 @@ class TestErrorHandling:
             with pytest.raises(ToolError, match="Not a directory"):
                 asyncio.run(list_files(str(test_file)))
 
-    def test_terminal_invalid_command(self):
-        """Test terminal with invalid command."""
+    def test_terminal_invalid_command(self, monkeypatch):
+        """Test terminal with invalid command (ask-mode allowlist)."""
+        # Full mode deliberately resolves host commands instead; pin ask here.
+        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
         from ah.core.exceptions import ValidationError
         from ah.tools.terminal import terminal as terminal_fn
 
@@ -1413,8 +1417,12 @@ class TestReActAgent:
                 assert response.iterations == 1
                 assert response.tokens_used == 10
 
-    async def test_agent_run_with_tool_calls(self, mock_provider, mock_session):
+    async def test_agent_run_with_tool_calls(self, mock_provider, mock_session, monkeypatch):
         """Test agent run with tool calls."""
+        from ah.core.config import config
+
+        monkeypatch.setattr(config, "workspace_root", "/tmp")
+        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
         # First call returns tool call, second returns final answer
         tool_call_response = LLMResponse(
             content="",
@@ -1463,8 +1471,12 @@ class TestReActAgent:
             with pytest.raises(ValueError, match="not found"):
                 await agent.run(uuid.uuid4(), "test message")
 
-    async def test_agent_max_iterations(self, mock_provider, mock_session):
+    async def test_agent_max_iterations(self, mock_provider, mock_session, monkeypatch):
         """Test agent reaching max iterations."""
+        from ah.core.config import config
+
+        monkeypatch.setattr(config, "workspace_root", "/tmp")
+        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
         # Always return tool calls
         tool_call_response = LLMResponse(
             content="",

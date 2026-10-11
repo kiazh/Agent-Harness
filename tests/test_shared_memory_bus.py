@@ -46,13 +46,20 @@ async def test_delivery_is_scoped_idempotent_and_rejects_tampering(db_pool, monk
         assert rejected.status == "rejected"
         assert rejected.target_memory_id is None
         assert await store.search(agent_id=other_agent) == []
-        assert (await bus.deliver(tampered.id, other_agent, publisher_agent=source_agent)).status == "rejected"
+        assert (
+            await bus.deliver(tampered.id, other_agent, publisher_agent=source_agent)
+        ).status == "rejected"
         with pytest.raises(PermissionError):
             await bus.deliver(source.id, other_agent, publisher_agent=target_agent)
     finally:
-        await db_pool.execute("DELETE FROM memories WHERE agent_id = ANY($1::text[])", [
-            source_agent, target_agent, other_agent,
-        ])
+        await db_pool.execute(
+            "DELETE FROM memories WHERE agent_id = ANY($1::text[])",
+            [
+                source_agent,
+                target_agent,
+                other_agent,
+            ],
+        )
 
 
 async def test_delivery_without_signing_key_is_rejected(db_pool, monkeypatch):
@@ -72,9 +79,13 @@ async def test_delivery_without_signing_key_is_rejected(db_pool, monkeypatch):
         assert result.target_memory_id is None
         assert await store.search(agent_id=target_agent) == []
     finally:
-        await db_pool.execute("DELETE FROM memories WHERE agent_id = ANY($1::text[])", [
-            source_agent, target_agent,
-        ])
+        await db_pool.execute(
+            "DELETE FROM memories WHERE agent_id = ANY($1::text[])",
+            [
+                source_agent,
+                target_agent,
+            ],
+        )
 
 
 async def test_delivery_works_with_a_single_database_connection(db_pool, monkeypatch):
@@ -123,9 +134,7 @@ async def test_memory_and_share_tools_use_the_running_agent_scope(db_pool, monke
         owned = await MemoryStore().search(agent_id=source_agent)
         assert len(owned) == 1
         assert owned[0].session_id == session_id
-        assert "purple deployment" in await registry.execute(
-            "recall", query="purple deployment"
-        )
+        assert "purple deployment" in await registry.execute("recall", query="purple deployment")
         shared = await registry.execute(
             "share_memory", memory_id=str(owned[0].id), recipient_agent=target_agent
         )

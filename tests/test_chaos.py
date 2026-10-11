@@ -250,8 +250,8 @@ class TestLLMChaos:
                 # Should not crash — should return a valid response
                 response = await agent.run(mock_session.id, "test", verbose=False)
                 assert response is not None
-                assert hasattr(response, 'content')
-                assert hasattr(response, 'iterations')
+                assert hasattr(response, "content")
+                assert hasattr(response, "iterations")
 
     async def test_agent_handles_very_long_llm_response(self, mock_session):
         """Agent should handle very long LLM response."""

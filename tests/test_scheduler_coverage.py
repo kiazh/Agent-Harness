@@ -13,9 +13,7 @@ from ah.core.scheduler import (
     DEFAULT_HEARTBEAT_PROMPT,
     JobRunner,
     JobStore,
-    job_store,
 )
-
 
 # ─── Validation (no DB needed) ────────────────────────────────────────────────
 

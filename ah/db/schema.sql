@@ -267,10 +267,7 @@ CREATE TABLE IF NOT EXISTS agent_messages (
     completed_at TIMESTAMPTZ
 );
 
--- Migration for existing databases: CREATE TABLE IF NOT EXISTS does not update
--- the CHECK constraint, so re-create it to allow 'cancelled'.
-ALTER TABLE agent_messages DROP CONSTRAINT IF EXISTS agent_messages_status_check;
-ALTER TABLE agent_messages ADD CONSTRAINT agent_messages_status_check CHECK (status IN ('pending', 'complete', 'error', 'cancelled'));
+-- Delegation status upgrades are applied by delegation_schema.sql.
 
 CREATE INDEX IF NOT EXISTS idx_agent_messages_session ON agent_messages(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_messages_to ON agent_messages(to_agent, status);
@@ -384,6 +381,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_llm_usage_session ON llm_usage(session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_agent ON llm_usage(agent_id, created_at DESC);
+-- Delegation attribution upgrades are applied by delegation_schema.sql.
 -- Composite index for UsageStore.summary(): WHERE session_id = $1 [FILTER status]
 CREATE INDEX IF NOT EXISTS idx_llm_usage_session_status ON llm_usage(session_id, status);
 -- Composite index for UsageStore.summary(): WHERE agent_id = $1 [FILTER status]

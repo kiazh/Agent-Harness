@@ -1,4 +1,5 @@
 """Provider usage tracking: reserve/finish when session_id and agent_id are provided."""
+
 from __future__ import annotations
 
 import uuid
@@ -199,6 +200,7 @@ async def test_openrouter_stream_complete_calls_usage_store_when_session_id_prov
     class MockStreamContext:
         async def __aenter__(self):
             return mock_response
+
         async def __aexit__(self, *args):
             pass
 
@@ -251,6 +253,7 @@ async def test_openrouter_stream_complete_skips_usage_store_when_no_session_id(m
     class MockStreamContext:
         async def __aenter__(self):
             return mock_response
+
         async def __aexit__(self, *args):
             pass
 

@@ -299,7 +299,8 @@ async def test_review_returns_none_when_max_reviews_is_zero(db_pool, monkeypatch
     reviewer = LearningReviewer(registry=SkillRegistry(tmp_path / "skills"))
     try:
         result = await reviewer.review_turn(
-            session.id, agent_id,
+            session.id,
+            agent_id,
             "Document the deployment workflow and steps",
             "First do health checks then inspect logs and verify readiness.",
             provider,
@@ -318,7 +319,8 @@ async def test_review_raises_lookup_error_for_missing_session(db_pool, monkeypat
     reviewer = LearningReviewer(registry=SkillRegistry(tmp_path / "skills"))
     with pytest.raises(LookupError, match="session not found"):
         await reviewer.review_turn(
-            uuid.uuid4(), agent_id,
+            uuid.uuid4(),
+            agent_id,
             "Document the deployment workflow and steps",
             "First do health checks then inspect logs and verify readiness.",
             FakeProvider("null"),
@@ -336,7 +338,8 @@ async def test_review_raises_permission_error_for_foreign_session(db_pool, monke
     try:
         with pytest.raises(PermissionError, match="different agent"):
             await reviewer.review_turn(
-                session.id, agent_id,
+                session.id,
+                agent_id,
                 "Document the deployment workflow and steps",
                 "First do health checks then inspect logs and verify readiness.",
                 FakeProvider("null"),
@@ -352,17 +355,20 @@ async def test_review_includes_tool_calls_in_prompt(db_pool, monkeypatch, tmp_pa
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
     provider = FakeProvider(
-        json.dumps({
-            "name": "tool-checks",
-            "description": "Verify tool usage",
-            "triggers": ["check"],
-            "content": "Check health and readiness before declaring success.",
-        })
+        json.dumps(
+            {
+                "name": "tool-checks",
+                "description": "Verify tool usage",
+                "triggers": ["check"],
+                "content": "Check health and readiness before declaring success.",
+            }
+        )
     )
     reviewer = LearningReviewer(registry=SkillRegistry(tmp_path / "skills"))
     try:
         await reviewer.review_turn(
-            session.id, agent_id,
+            session.id,
+            agent_id,
             "Document the deployment workflow and steps",
             "First do health checks then inspect logs and verify readiness.",
             provider,
@@ -392,7 +398,8 @@ async def test_review_marks_error_when_provider_raises(db_pool, monkeypatch, tmp
     reviewer = LearningReviewer(registry=SkillRegistry(tmp_path / "skills"))
     try:
         result = await reviewer.review_turn(
-            session.id, agent_id,
+            session.id,
+            agent_id,
             "Document the deployment workflow and steps",
             "First do health checks then inspect logs and verify readiness.",
             FailingProvider(),
@@ -473,17 +480,20 @@ async def test_approve_raises_value_error_when_skill_exists(db_pool, monkeypatch
     session = await SessionManager().create(title="review", agent_id=agent_id)
     registry = SkillRegistry(tmp_path / "skills")
     provider = FakeProvider(
-        json.dumps({
-            "name": "existing-skill",
-            "description": "A skill that already exists",
-            "triggers": ["test"],
-            "content": "This content is definitely long enough to pass validation.",
-        })
+        json.dumps(
+            {
+                "name": "existing-skill",
+                "description": "A skill that already exists",
+                "triggers": ["test"],
+                "content": "This content is definitely long enough to pass validation.",
+            }
+        )
     )
     reviewer = LearningReviewer(registry=registry)
     try:
         proposal = await reviewer.review_turn(
-            session.id, agent_id,
+            session.id,
+            agent_id,
             "Document the deployment workflow and steps",
             "First do health checks then inspect logs and verify readiness.",
             provider,
@@ -514,17 +524,20 @@ async def test_reject_raises_permission_error_for_foreign_review(db_pool, monkey
     session = await SessionManager().create(title="review", agent_id=agent_id)
     registry = SkillRegistry(tmp_path / "skills")
     provider = FakeProvider(
-        json.dumps({
-            "name": "reject-test",
-            "description": "A skill for rejection testing",
-            "triggers": ["test"],
-            "content": "This content is definitely long enough to pass validation.",
-        })
+        json.dumps(
+            {
+                "name": "reject-test",
+                "description": "A skill for rejection testing",
+                "triggers": ["test"],
+                "content": "This content is definitely long enough to pass validation.",
+            }
+        )
     )
     reviewer = LearningReviewer(registry=registry)
     try:
         proposal = await reviewer.review_turn(
-            session.id, agent_id,
+            session.id,
+            agent_id,
             "Document the deployment workflow and steps",
             "First do health checks then inspect logs and verify readiness.",
             provider,
@@ -544,17 +557,20 @@ async def test_reject_returns_current_for_non_pending_review(db_pool, monkeypatc
     session = await SessionManager().create(title="review", agent_id=agent_id)
     registry = SkillRegistry(tmp_path / "skills")
     provider = FakeProvider(
-        json.dumps({
-            "name": "non-pending-test",
-            "description": "A skill for non-pending rejection testing",
-            "triggers": ["test"],
-            "content": "This content is definitely long enough to pass validation.",
-        })
+        json.dumps(
+            {
+                "name": "non-pending-test",
+                "description": "A skill for non-pending rejection testing",
+                "triggers": ["test"],
+                "content": "This content is definitely long enough to pass validation.",
+            }
+        )
     )
     reviewer = LearningReviewer(registry=registry)
     try:
         proposal = await reviewer.review_turn(
-            session.id, agent_id,
+            session.id,
+            agent_id,
             "Document the deployment workflow and steps",
             "First do health checks then inspect logs and verify readiness.",
             provider,
@@ -584,28 +600,37 @@ async def test_orphaned_reviewing_row_is_recovered_after_restart(db_pool, monkey
     # Simulate a review that was in-flight when the process died:
     # insert a row directly in 'reviewing' status.
     import hashlib
+
     user_msg = "Document the deployment workflow and steps"
     response_text = "First do health checks then inspect logs and verify readiness."
     digest = hashlib.sha256((user_msg + "\0" + response_text).encode()).hexdigest()
     row = await db_pool.fetchrow(
         """INSERT INTO learning_reviews (session_id, agent_id, turn_hash, status)
            VALUES ($1, $2, $3, 'reviewing') RETURNING id""",
-        session.id, agent_id, digest,
+        session.id,
+        agent_id,
+        digest,
     )
     review_id = row["id"]
 
     # Now a fresh reviewer (simulating restart) should recover it.
     provider = FakeProvider(
-        json.dumps({
-            "name": "recovery-test",
-            "description": "A skill for recovery testing",
-            "triggers": ["test"],
-            "content": "This content is definitely long enough to pass validation.",
-        })
+        json.dumps(
+            {
+                "name": "recovery-test",
+                "description": "A skill for recovery testing",
+                "triggers": ["test"],
+                "content": "This content is definitely long enough to pass validation.",
+            }
+        )
     )
     reviewer = LearningReviewer(registry=registry)
     result = await reviewer.review_turn(
-        session.id, agent_id, user_msg, response_text, provider,
+        session.id,
+        agent_id,
+        user_msg,
+        response_text,
+        provider,
     )
     # The orphaned review should have been recovered and completed.
     assert result is not None
@@ -625,13 +650,16 @@ async def test_claim_prevents_double_processing(db_pool, monkeypatch, tmp_path):
     registry = SkillRegistry(tmp_path / "skills")
 
     import hashlib
+
     user_msg = "Document the deployment workflow and steps"
     response_text = "First do health checks then inspect logs and verify readiness."
     digest = hashlib.sha256((user_msg + "\0" + response_text).encode()).hexdigest()
     await db_pool.execute(
         """INSERT INTO learning_reviews (session_id, agent_id, turn_hash, status)
            VALUES ($1, $2, $3, 'reviewing')""",
-        session.id, agent_id, digest,
+        session.id,
+        agent_id,
+        digest,
     )
 
     class BlockingProvider(FakeProvider):
@@ -649,12 +677,14 @@ async def test_claim_prevents_double_processing(db_pool, monkeypatch, tmp_path):
             return LLMResponse(content=self.content, model=self.model, usage={"total_tokens": 30})
 
     provider = BlockingProvider(
-        json.dumps({
-            "name": "double-process-test",
-            "description": "A skill for double-processing test",
-            "triggers": ["test"],
-            "content": "This content is definitely long enough to pass validation.",
-        })
+        json.dumps(
+            {
+                "name": "double-process-test",
+                "description": "A skill for double-processing test",
+                "triggers": ["test"],
+                "content": "This content is definitely long enough to pass validation.",
+            }
+        )
     )
     reviewer = LearningReviewer(registry=registry)
 
@@ -688,14 +718,16 @@ async def test_claim_prevents_double_processing(db_pool, monkeypatch, tmp_path):
 async def test_review_cap_still_enforced_after_recovery(db_pool, monkeypatch, tmp_path):
     """The MAX_PENDING_LEARNING_REVIEWS cap is preserved even with recovery."""
     from ah.core.agent import MAX_PENDING_LEARNING_REVIEWS
+
     monkeypatch.setattr("ah.skills.learning.db", db_pool)
     monkeypatch.setattr("ah.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
-    registry = SkillRegistry(tmp_path / "skills")
+    SkillRegistry(tmp_path / "skills")
 
     # Fill up to the cap with 'reviewing' rows
     import hashlib
+
     for i in range(MAX_PENDING_LEARNING_REVIEWS):
         user_msg = f"Document workflow number {i}"
         response_text = f"Check health and readiness before declaring task {i} complete."
@@ -703,11 +735,14 @@ async def test_review_cap_still_enforced_after_recovery(db_pool, monkeypatch, tm
         await db_pool.execute(
             """INSERT INTO learning_reviews (session_id, agent_id, turn_hash, status)
                VALUES ($1, $2, $3, 'reviewing')""",
-            session.id, agent_id, digest,
+            session.id,
+            agent_id,
+            digest,
         )
 
     # Now try to schedule a new review — should be capped
     from ah.core.agent import _pending_learning_reviews
+
     _pending_learning_reviews.clear()  # simulate fresh process
     # Manually fill to cap
     for _ in range(MAX_PENDING_LEARNING_REVIEWS):
@@ -715,6 +750,7 @@ async def test_review_cap_still_enforced_after_recovery(db_pool, monkeypatch, tm
 
     from ah.core.agent import BaseReActAgent
     from ah.core.models import AgentResponse
+
     agent = BaseReActAgent(provider=FakeProvider("null"), agent_id=agent_id)
     session_id = uuid.uuid4()
     agent._schedule_learning_review(

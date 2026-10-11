@@ -125,7 +125,6 @@ def test_approval_digest_invalidated_on_change():
 
 
 def test_scoped_grant_no_cross_path():
-    import asyncio
 
     from ah.permissions.policy import build_request, decide
 
@@ -303,7 +302,7 @@ def test_no_secret_values_in_approval_view():
 
 
 def test_windows_paths_supported():
-    from ah.permissions.policy import normalize_request, ActionRequest
+    from ah.permissions.policy import ActionRequest, normalize_request
 
     req = normalize_request(
         ActionRequest(operation="file.read", targets=["C:\\Users\\a\\b"], cwd="C:\\Users\\a")
@@ -368,8 +367,6 @@ def test_scheduler_adverse_fencing_sequence():
     import uuid as _uuid
 
     from ah.core.scheduler import JobStore
-
-    rows = {}
 
     class _Conn:
         def __init__(self, db):
@@ -590,12 +587,10 @@ def test_parent_caps_enforced_at_broker_despite_grants():
     import asyncio
 
     from ah.core.agent_factory import parent_authority_var
-    from ah.permissions.broker import ApprovalDenied
+    from ah.permissions.broker import ApprovalDenied, permission_broker
     from ah.permissions.policy import build_request
-    from ah.permissions.broker import permission_broker
 
     async def _go():
-        import os as _os
 
         from ah.permissions.policy import workspace_root
 
@@ -782,7 +777,7 @@ def test_memory_backend_grant_lifecycle_and_durability():
     async def _go():
         st._last_durable = None
         assert st.is_durable() is None
-        g = await st.save_grant(
+        await st.save_grant(
             {
                 "session_id": "mem-sess",
                 "agent_id": "h",
@@ -1031,10 +1026,9 @@ def _subprocess_env(tmp_path):
 def test_cli_mode_separate_processes():
     """LP-13: separate `ah mode` invocations honor declared semantics."""
     import subprocess
+    import tempfile
 
     from ah.cli.launcher import ui_dir  # noqa: F401 (ensures CLI imports)
-
-    import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
         from pathlib import Path

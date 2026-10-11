@@ -136,9 +136,10 @@ def chat(
         agent = None
         try:
             try:
-                await db.initialize_growth_schema()
+                await db.initialize_runtime_schema()
             except Exception as error:
-                logger.warning("Growth schema unavailable (%s)", type(error).__name__)
+                output.error("Runtime schema upgrade failed. Run ah db init and retry.")
+                raise typer.Exit(1) from error
             if continue_:
                 session = await session_manager.get_last_active()
                 if not session:

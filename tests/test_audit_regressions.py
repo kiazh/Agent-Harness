@@ -20,6 +20,8 @@ from ah.core.provider import AsyncTokenBucket
 
 @pytest.mark.asyncio
 async def test_tool_allowlist_is_enforced_at_execution_and_ollama_arguments_work(monkeypatch):
+    # Pins ask-mode broker behavior regardless of the developer's live config.
+    monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
     from ah.core.context import context_manager
     from ah.tools.base import registry
 

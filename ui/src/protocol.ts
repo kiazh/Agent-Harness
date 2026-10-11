@@ -215,6 +215,7 @@ export interface DelegationResult {
 	tokens: number;
 	iterations: number;
 	status: string;
+    needsApproval?: Record<string, string>[];
 }
 
 export interface AgentMessage {

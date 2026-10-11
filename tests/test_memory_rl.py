@@ -3,6 +3,7 @@
 Covers MemoryAction enum, MemoryState, MemoryDecision, and MemoryReward
 with step-level, trajectory-level, and consistency rewards.
 """
+
 from __future__ import annotations
 
 import uuid

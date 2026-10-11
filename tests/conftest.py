@@ -84,7 +84,7 @@ def init_test_database():
 
 
 @pytest.fixture(autouse=True)
-def reset_singletons():
+def reset_singletons(monkeypatch):
     """Reset mutable global singleton state before each test.
 
     Modules import the singletons by name (``from ah.core.context import
@@ -114,7 +114,35 @@ def reset_singletons():
 
     provider_module._cache_clear()
 
+    # In-memory config is process-global: one test's config.set would leak
+    # into the next. Snapshot non-secret values and session overrides.
+    from ah.core.config import DEFAULTS, SECRET_KEYS, config
+
+    saved_config = {key: getattr(config, key, None) for key in DEFAULTS if key not in SECRET_KEYS}
+    saved_overrides = dict(getattr(config, "_session_overrides", {}) or {})
+    # Test defaults must not depend on a developer's saved full-host mode,
+    # workspace, persona, or live environment overrides. Individual tests
+    # explicitly configure the behavior they exercise after this fixture.
+    from ah.core.config import LEGACY_ENV_VARS
+
+    for key, value in DEFAULTS.items():
+        if key not in SECRET_KEYS:
+            setattr(config, key, value)
+            monkeypatch.delenv(f"AGENT_HARNESS_{key.upper()}", raising=False)
+            if key in LEGACY_ENV_VARS:
+                monkeypatch.delenv(LEGACY_ENV_VARS[key], raising=False)
+    config._session_overrides.clear()
+    from ah.core.session_mode import reset_for_tests as reset_session_modes
+
+    reset_session_modes()
+
     yield
+
+    for key, value in saved_config.items():
+        setattr(config, key, value)
+    config._session_overrides.clear()
+    config._session_overrides.update(saved_overrides)
+    reset_session_modes()
 
 
 @pytest.fixture

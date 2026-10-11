@@ -1,4 +1,5 @@
 """Tests for batch operations in MemoryApprovalGate — N+1 query elimination."""
+
 from __future__ import annotations
 
 import uuid
@@ -59,8 +60,10 @@ class TestApproveAllBatch:
         mock_db.acquire.return_value.__aenter__.return_value.fetch = AsyncMock(return_value=rows)
         mock_memory = AsyncMock()
         mock_memory.add = AsyncMock(side_effect=[MagicMock(id=uuid.uuid4()) for _ in range(3)])
-        with patch("ah.memory.approval.db", mock_db), \
-             patch("ah.memory.approval.memory_store", mock_memory):
+        with (
+            patch("ah.memory.approval.db", mock_db),
+            patch("ah.memory.approval.memory_store", mock_memory),
+        ):
             count = await gate.approve_all()
         assert count == 3
         # fetchrow is only used in approve() for individual records — batch must not call it
@@ -72,8 +75,10 @@ class TestApproveAllBatch:
         mock_db.acquire.return_value.__aenter__.return_value.fetch = AsyncMock(return_value=rows)
         mock_memory = AsyncMock()
         mock_memory.add = AsyncMock(side_effect=[MagicMock(id=uuid.uuid4()) for _ in range(2)])
-        with patch("ah.memory.approval.db", mock_db), \
-             patch("ah.memory.approval.memory_store", mock_memory):
+        with (
+            patch("ah.memory.approval.db", mock_db),
+            patch("ah.memory.approval.memory_store", mock_memory),
+        ):
             count = await gate.approve_all(agent_id="harness")
         assert count == 2
         mock_db.fetchrow.assert_not_called()

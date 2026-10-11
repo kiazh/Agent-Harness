@@ -246,9 +246,12 @@ asyncio.run(main())
         )
         assert process.returncode == 0, process.stderr
         assert process.stdout.strip() == str(chunk_id)
-        assert await db_pool.fetchval(
-            "SELECT resurrection_count FROM context_archive WHERE chunk_id = $1", chunk_id
-        ) == 0
+        assert (
+            await db_pool.fetchval(
+                "SELECT resurrection_count FROM context_archive WHERE chunk_id = $1", chunk_id
+            )
+            == 0
+        )
     finally:
         await db_pool.execute("DELETE FROM context_archive WHERE session_id = $1", session_id)
         await db_pool.execute("DELETE FROM sessions WHERE id = $1", session_id)

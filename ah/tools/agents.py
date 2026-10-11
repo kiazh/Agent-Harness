@@ -7,7 +7,7 @@ import logging
 import uuid
 from contextvars import ContextVar
 
-from ah.core.exceptions import ToolError
+from ah.core.exceptions import DelegationAccountingError, ToolError
 from ah.db.connection import db
 from ah.tools.base import registry
 
@@ -17,6 +17,16 @@ logger = logging.getLogger(__name__)
 # sessions isolated and avoids accepting a model-supplied parent session ID.
 current_session_id: ContextVar[uuid.UUID | None] = ContextVar("agent_session_id", default=None)
 current_agent_id: ContextVar[str | None] = ContextVar("agent_tool_owner_id", default=None)
+
+
+class DelegationToolResult(str):
+    """Readable tool output carrying typed child pauses and cumulative spend."""
+
+    def __new__(cls, text: str, *, needs_approval: list[dict], tokens_used: int):
+        result = super().__new__(cls, text)
+        result.needs_approval = needs_approval
+        result.tokens_used = tokens_used
+        return result
 
 
 async def active_agent_scope() -> tuple[str, uuid.UUID]:
@@ -36,6 +46,8 @@ async def active_agent_scope() -> tuple[str, uuid.UUID]:
     description=(
         "Hand a self-contained task to another agent and get its result. Use for work "
         "that suits a specialist (e.g. 'researcher' to gather info, 'coder' to edit code). "
+        "Independent subtasks fan out: issue one delegate call per subtask in a single "
+        "block (no more than three) and they run in parallel. "
         "Call list_agents first to see who is available."
     ),
     parameters={
@@ -52,7 +64,12 @@ async def active_agent_scope() -> tuple[str, uuid.UUID]:
 )
 async def delegate(agent: str, task: str) -> str:
     """Delegate *task* to *agent* and return its response."""
-    from ah.core.orchestrator import AgentNotFoundError, delegation_depth, orchestrator
+    from ah.core.orchestrator import (
+        AgentNotFoundError,
+        delegation_deadline,
+        delegation_depth,
+        orchestrator,
+    )
 
     if not task.strip():
         raise ToolError("task must not be empty")
@@ -68,27 +85,45 @@ async def delegate(agent: str, task: str) -> str:
         parent_authority = parent_authority_var.get()
     except Exception:
         parent_authority = None
+    # Let the orchestrator own the deadline so a timed-out child can return
+    # its usage receipt after cancellation drains the child's provider work.
+    deadline = asyncio.get_running_loop().time() + 60
+    inherited_deadline = delegation_deadline.get()
+    deadline_token = delegation_deadline.set(
+        min(deadline, inherited_deadline) if inherited_deadline is not None else deadline
+    )
     try:
-        result = await asyncio.wait_for(
-            orchestrator.delegate(
-                agent,
-                task,
-                from_agent=from_agent,
-                parent_session_id=parent_session_id,
-                _hop_count=delegation_depth.get() + 1,
-                authority=parent_authority,
-            ),
-            timeout=60,
+        result = await orchestrator.delegate(
+            agent,
+            task,
+            from_agent=from_agent,
+            parent_session_id=parent_session_id,
+            _hop_count=delegation_depth.get() + 1,
+            authority=parent_authority,
         )
     except AgentNotFoundError as e:
         raise ToolError(f"{e}. Use list_agents to see available agents.") from None
+    except DelegationAccountingError:
+        # A parent must not continue spending when its child's usage is unknown.
+        raise
     except Exception as e:
         logger.exception("delegate tool failed")
         raise ToolError(f"delegation failed: {e}") from None
+    finally:
+        delegation_deadline.reset(deadline_token)
 
-    if result.status == "error":
-        return f"[{agent} failed] {result.response}"
-    return f"[{agent} responded]\n{result.response}"
+    label = (
+        "failed"
+        if result.status == "error"
+        else "waiting for approval"
+        if result.status == "waiting_approval"
+        else "responded"
+    )
+    return DelegationToolResult(
+        f"[{agent} {label}]\n{result.response}",
+        needs_approval=getattr(result, "needs_approval", []),
+        tokens_used=getattr(result, "tokens", 0),
+    )
 
 
 @registry.register(

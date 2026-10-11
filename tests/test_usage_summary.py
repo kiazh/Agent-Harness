@@ -1,4 +1,5 @@
 """UsageStore summary() only includes complete rows."""
+
 from __future__ import annotations
 
 import os
@@ -31,14 +32,20 @@ async def test_summary_excludes_reserved_rows(db_pool):
     agent_id = f"summary-test-{session_id}"
 
     # Create a reserved row (should NOT be counted)
-    await store.reserve(session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8)
+    await store.reserve(
+        session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8
+    )
 
     # Create a completed row (should be counted)
-    res2 = await store.reserve(session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8)
+    res2 = await store.reserve(
+        session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8
+    )
     await store.finish(res2, {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7})
 
     # Create an error row (should NOT be counted)
-    res3 = await store.reserve(session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8)
+    res3 = await store.reserve(
+        session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8
+    )
     await store.finish(res3, failed=True)
 
     summary = await store.summary(session_id, agent_id)
@@ -66,12 +73,18 @@ async def test_summary_counts_only_complete_rows(db_pool):
 
     # Create multiple completed rows
     for i in range(3):
-        res = await store.reserve(session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8)
+        res = await store.reserve(
+            session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8
+        )
         await store.finish(res, {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7})
 
     # Create reserved and error rows
-    await store.reserve(session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8)
-    res_err = await store.reserve(session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8)
+    await store.reserve(
+        session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8
+    )
+    res_err = await store.reserve(
+        session_id, agent_id, "fake", "fake", [{"role": "user", "content": "hi"}], [], 8
+    )
     await store.finish(res_err, failed=True)
 
     summary = await store.summary(session_id, agent_id)

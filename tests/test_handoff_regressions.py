@@ -425,10 +425,8 @@ def test_documented_prompt_route_registered():
 
 
 async def test_agent_binds_scope_for_rag_tools():
-    import json as _json
 
     from ah.core.agent import BaseReActAgent
-    from ah.core.models import LLMResponse
     from ah.tools import agents as agents_mod
     from ah.tools.base import Tool, registry
 
@@ -486,7 +484,6 @@ async def test_researcher_factory_blocks_write_tools():
 
     session = Session(id=uuid.uuid4(), agent_id="researcher", model="m", provider="openrouter")
     # Avoid network: stub get_provider and registry.get.
-    import ah.core.agent_factory as fac
     import ah.core.agent_def as adef
 
     real_get = adef.agent_registry.get
@@ -578,8 +575,6 @@ def test_dns_timeout_returns_quickly(monkeypatch):
     import time as _time
 
     import ah.tools.builtins as bi
-
-    real = _socket.getaddrinfo
 
     def _slow(host, port, *a, **k):
         _time.sleep(0.6)
@@ -1002,9 +997,10 @@ def test_compress_session_closes_provider_on_persistence_failure(monkeypatch):
         )
         for i in range(6)
     ]
+    from types import SimpleNamespace
+
     import ah.core.provider as provmod
     from ah.core import context as ctxmod
-    from types import SimpleNamespace
 
     async def _all_chunks(session_id):
         return list(chunks)
@@ -1046,9 +1042,10 @@ def test_compress_session_closes_provider_on_cancel(monkeypatch):
         )
         for i in range(6)
     ]
+    from types import SimpleNamespace
+
     import ah.core.provider as provmod
     from ah.core import context as ctxmod
-    from types import SimpleNamespace
 
     async def _all_chunks(session_id):
         return list(chunks)

@@ -50,7 +50,8 @@ LEGACY_DEFAULT_BUDGET = 8000
 
 def context_window_for(model: str | None) -> int:
     """Documented context window for *model*, or the default for unknown ids."""
-    name = (model or "").lower()
+    # Anything non-string (e.g. test doubles) behaves like an unknown model.
+    name = model.lower() if isinstance(model, str) else ""
     best = 0
     window = DEFAULT_CONTEXT_WINDOW
     for key, value in MODEL_CONTEXT_WINDOWS.items():

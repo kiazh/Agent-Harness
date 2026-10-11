@@ -3,6 +3,7 @@
 Covers PersonaMemory dataclass, EmotionTopology retrieval weighting,
 dual-stream separation, and persona memory updates.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -243,12 +244,8 @@ class TestEmotionTopology:
         # Anger should boost high-arousal memories
         assert len(results) >= 2
         # The high-arousal memory should be ranked higher than the low-arousal one
-        high_arousal_mem = next(
-            (m for m in persona_memories if m.emotional_arousal > 0.5), None
-        )
-        low_arousal_mem = next(
-            (m for m in persona_memories if m.emotional_arousal < 0.5), None
-        )
+        high_arousal_mem = next((m for m in persona_memories if m.emotional_arousal > 0.5), None)
+        low_arousal_mem = next((m for m in persona_memories if m.emotional_arousal < 0.5), None)
         if high_arousal_mem and low_arousal_mem:
             high_idx = next(
                 (i for i, (m, _) in enumerate(results) if m.id == high_arousal_mem.id),
@@ -295,8 +292,14 @@ class TestEmotionTopology:
         """Test that all 8 basic emotions are defined."""
         topology = EmotionTopology()
         expected_emotions = {
-            "joy", "sadness", "anger", "fear",
-            "trust", "disgust", "anticipation", "surprise",
+            "joy",
+            "sadness",
+            "anger",
+            "fear",
+            "trust",
+            "disgust",
+            "anticipation",
+            "surprise",
         }
         assert expected_emotions.issubset(set(topology.EMOTION_PROFILES.keys()))
 
@@ -363,6 +366,7 @@ class TestDualStreamSeparation:
 
         # Read the schema file
         import ah.db
+
         schema_path = ah.db.__file__.replace("__init__.py", "schema.sql")
         with open(schema_path) as f:
             schema = f.read()

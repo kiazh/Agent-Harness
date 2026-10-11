@@ -431,6 +431,7 @@ class TestSkillRegistryTelemetryPersistence:
 
         # Read the file and check content
         import json
+
         telemetry_data = json.loads(telemetry_files[0].read_text())
         assert "test_skill" in telemetry_data
         assert telemetry_data["test_skill"]["usage_count"] == 1

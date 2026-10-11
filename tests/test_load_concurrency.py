@@ -17,6 +17,7 @@ Invariants asserted:
 Run with: python -m pytest tests/test_load_concurrency.py -q
 Deselect from fast suite: python -m pytest tests/ -q -m "not load"
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,6 +32,7 @@ import pytest_asyncio
 from ah.core.config import config
 
 # ─── configuration ───────────────────────────────────────────────────────────
+
 
 def _concurrency() -> int:
     """Number of concurrent tasks. Configurable via env var."""
@@ -63,22 +65,14 @@ async def load_db(db_pool):
 async def clean_load_data(db_pool):
     """Clean up any leftover data from previous load test runs."""
     await db_pool.execute("DELETE FROM llm_usage WHERE agent_id LIKE 'load-test-%'")
-    await db_pool.execute(
-        "DELETE FROM context_chunks WHERE agent_id LIKE 'load-test-%'"
-    )
-    await db_pool.execute(
-        "DELETE FROM context_archive WHERE agent_id LIKE 'load-test-%'"
-    )
+    await db_pool.execute("DELETE FROM context_chunks WHERE agent_id LIKE 'load-test-%'")
+    await db_pool.execute("DELETE FROM context_archive WHERE agent_id LIKE 'load-test-%'")
     await db_pool.execute("DELETE FROM sessions WHERE agent_id LIKE 'load-test-%'")
     yield
     # Final cleanup
     await db_pool.execute("DELETE FROM llm_usage WHERE agent_id LIKE 'load-test-%'")
-    await db_pool.execute(
-        "DELETE FROM context_chunks WHERE agent_id LIKE 'load-test-%'"
-    )
-    await db_pool.execute(
-        "DELETE FROM context_archive WHERE agent_id LIKE 'load-test-%'"
-    )
+    await db_pool.execute("DELETE FROM context_chunks WHERE agent_id LIKE 'load-test-%'")
+    await db_pool.execute("DELETE FROM context_archive WHERE agent_id LIKE 'load-test-%'")
     await db_pool.execute("DELETE FROM sessions WHERE agent_id LIKE 'load-test-%'")
 
 
@@ -112,9 +106,7 @@ async def _reserve_and_finish(
 
 @pytest.mark.load
 @pytest.mark.asyncio
-async def test_concurrent_usage_reservations_no_deadlock(
-    load_db, clean_load_data, monkeypatch
-):
+async def test_concurrent_usage_reservations_no_deadlock(load_db, clean_load_data, monkeypatch):
     """N concurrent tasks reserving usage for the same agent but different
     sessions must not deadlock. The fixed agent→session advisory-lock ordering
     in UsageStore.reserve() prevents deadlocks.
@@ -142,10 +134,7 @@ async def test_concurrent_usage_reservations_no_deadlock(
 
     start = time.monotonic()
     results = await asyncio.gather(
-        *(
-            _reserve_and_finish(store, sid, agent_id, messages)
-            for sid in session_ids
-        ),
+        *(_reserve_and_finish(store, sid, agent_id, messages) for sid in session_ids),
         return_exceptions=True,
     )
     elapsed = time.monotonic() - start
@@ -183,9 +172,7 @@ async def test_concurrent_usage_reservations_no_deadlock(
 
 @pytest.mark.load
 @pytest.mark.asyncio
-async def test_concurrent_usage_with_failures_balances(
-    load_db, clean_load_data, monkeypatch
-):
+async def test_concurrent_usage_with_failures_balances(load_db, clean_load_data, monkeypatch):
     """When some calls fail, the usage accounting must still balance:
     - Failed calls get status='error' with accounted_tokens = reserved_tokens
     - Successful calls get status='complete' with real token counts
@@ -209,9 +196,7 @@ async def test_concurrent_usage_with_failures_balances(
     fail_flags = [i % 3 == 0 for i in range(N)]
 
     async def _task(sid: uuid.UUID, fail: bool) -> uuid.UUID | None:
-        return await _reserve_and_finish(
-            store, sid, agent_id, messages, fail=fail
-        )
+        return await _reserve_and_finish(store, sid, agent_id, messages, fail=fail)
 
     results = await asyncio.gather(
         *(_task(sid, fail) for sid, fail in zip(session_ids, fail_flags)),
@@ -244,9 +229,7 @@ async def test_concurrent_usage_with_failures_balances(
     assert error_count == expected_errors
 
     # Total rows = N
-    total = await load_db.fetchval(
-        "SELECT COUNT(*) FROM llm_usage WHERE agent_id = $1", agent_id
-    )
+    total = await load_db.fetchval("SELECT COUNT(*) FROM llm_usage WHERE agent_id = $1", agent_id)
     assert total == N
 
 
@@ -318,8 +301,7 @@ async def test_concurrent_context_writes_no_loss_or_duplication(
     # Each session must have exactly M chunks — no loss, no duplication
     for i, count in enumerate(read_results):
         assert count == M, (
-            f"Session {i}: expected {M} chunks, got {count} "
-            f"(lost={M - count}, extra={count - M})"
+            f"Session {i}: expected {M} chunks, got {count} (lost={M - count}, extra={count - M})"
         )
 
     # Verify total across all sessions
@@ -331,9 +313,7 @@ async def test_concurrent_context_writes_no_loss_or_duplication(
 
 @pytest.mark.load
 @pytest.mark.asyncio
-async def test_concurrent_context_mixed_read_write(
-    load_db, clean_load_data, monkeypatch
-):
+async def test_concurrent_context_mixed_read_write(load_db, clean_load_data, monkeypatch):
     """Half the tasks write chunks while the other half read. After all
     writes complete, a final read must see all chunks.
 
@@ -395,17 +375,13 @@ async def test_concurrent_context_mixed_read_write(
         chunks = await mgr.get_chunks(sid, limit=M * 2)
         if i < half:
             # Writer sessions must have exactly M chunks
-            assert len(chunks) == M, (
-                f"Writer session {i}: expected {M}, got {len(chunks)}"
-            )
+            assert len(chunks) == M, f"Writer session {i}: expected {M}, got {len(chunks)}"
         # Reader sessions may have 0..M chunks depending on timing — that's OK
 
 
 @pytest.mark.load
 @pytest.mark.asyncio
-async def test_concurrent_session_creation_and_listing(
-    load_db, clean_load_data, monkeypatch
-):
+async def test_concurrent_session_creation_and_listing(load_db, clean_load_data, monkeypatch):
     """N concurrent tasks create sessions, then list them. All created
     sessions must appear in the listing — no lost creates, no duplicates.
     """
@@ -420,10 +396,7 @@ async def test_concurrent_session_creation_and_listing(
 
     # Create sessions concurrently
     created = await asyncio.gather(
-        *(
-            session_mgr.create(title=f"load-sess-{i}", agent_id=agent_id)
-            for i in range(N)
-        ),
+        *(session_mgr.create(title=f"load-sess-{i}", agent_id=agent_id) for i in range(N)),
         return_exceptions=True,
     )
 
@@ -441,17 +414,13 @@ async def test_concurrent_session_creation_and_listing(
     assert not missing, f"{len(missing)} created sessions not found in listing"
 
     # Verify count in DB
-    db_count = await load_db.fetchval(
-        "SELECT COUNT(*) FROM sessions WHERE agent_id = $1", agent_id
-    )
+    db_count = await load_db.fetchval("SELECT COUNT(*) FROM sessions WHERE agent_id = $1", agent_id)
     assert db_count == N
 
 
 @pytest.mark.load
 @pytest.mark.asyncio
-async def test_concurrent_session_state_updates(
-    load_db, clean_load_data, monkeypatch
-):
+async def test_concurrent_session_state_updates(load_db, clean_load_data, monkeypatch):
     """N concurrent tasks update the same session's state. The final state
     must be one of the written values (last-writer-wins is acceptable, but
     the state must be consistent — not a mix of values).
@@ -481,23 +450,19 @@ async def test_concurrent_session_state_updates(
     turn = final_session.state.get("turn")
     data = final_session.state.get("data")
     assert turn is not None, "Final state has no 'turn' key"
-    assert data == f"task-{turn}", (
-        f"State inconsistent: turn={turn} but data={data}"
-    )
+    assert data == f"task-{turn}", f"State inconsistent: turn={turn} but data={data}"
 
 
 @pytest.mark.load
 @pytest.mark.asyncio
-async def test_concurrent_usage_same_session_no_overspend(
-    load_db, clean_load_data, monkeypatch
-):
+async def test_concurrent_usage_same_session_no_overspend(load_db, clean_load_data, monkeypatch):
     """N concurrent tasks all reserving usage for the SAME session with a
     request limit of 1. Exactly one must succeed; the rest must get
     UsageBudgetExceededError. This tests that the advisory lock correctly
     serializes budget checks.
     """
-    from ah.core.usage import UsageStore
     from ah.core.exceptions import UsageBudgetExceededError
+    from ah.core.usage import UsageStore
 
     monkeypatch.setattr("ah.core.usage.db", load_db)
     monkeypatch.setattr(config, "usage_session_request_limit", 1)
@@ -512,17 +477,24 @@ async def test_concurrent_usage_same_session_no_overspend(
     messages = [{"role": "user", "content": "hello"}]
 
     results = await asyncio.gather(
-        *(store.reserve(session_id, agent_id, "fake", "fake-model", messages, [], 8) for _ in range(N)),
+        *(
+            store.reserve(session_id, agent_id, "fake", "fake-model", messages, [], 8)
+            for _ in range(N)
+        ),
         return_exceptions=True,
     )
 
     successes = [r for r in results if isinstance(r, uuid.UUID)]
     budget_errors = [r for r in results if isinstance(r, UsageBudgetExceededError)]
-    other_errors = [r for r in results if isinstance(r, Exception) and not isinstance(r, UsageBudgetExceededError)]
+    other_errors = [
+        r
+        for r in results
+        if isinstance(r, Exception) and not isinstance(r, UsageBudgetExceededError)
+    ]
 
     assert not other_errors, f"Unexpected errors: {other_errors}"
     assert len(successes) == 1, f"Expected exactly 1 success, got {len(successes)}"
-    assert len(budget_errors) == N - 1, f"Expected {N-1} budget errors, got {len(budget_errors)}"
+    assert len(budget_errors) == N - 1, f"Expected {N - 1} budget errors, got {len(budget_errors)}"
 
     # Finish the one successful reservation
     await store.finish(
@@ -555,16 +527,19 @@ async def test_rpc_gateway_concurrent_calls(load_db, monkeypatch):
 
         async def handle_line(self, line: str) -> None:
             import json
+
             frame = json.loads(line)
             rid = frame.get("id")
             # Simulate some async work
             await asyncio.sleep(0.001)
             # Echo back with the same id
-            self._writer({
-                "jsonrpc": "2.0",
-                "id": rid,
-                "result": {"echo": frame.get("params", {}), "id": rid},
-            })
+            self._writer(
+                {
+                    "jsonrpc": "2.0",
+                    "id": rid,
+                    "result": {"echo": frame.get("params", {}), "id": rid},
+                }
+            )
 
         async def close(self) -> None:
             pass
@@ -592,9 +567,7 @@ async def test_rpc_gateway_concurrent_calls(load_db, monkeypatch):
 
     # Each result must have the correct id — no cross-talk
     for i, result in enumerate(results):
-        assert result["id"] == i + 1, (
-            f"Task {i}: expected response id {i+1}, got {result['id']}"
-        )
+        assert result["id"] == i + 1, f"Task {i}: expected response id {i + 1}, got {result['id']}"
         assert result["echo"]["task"] == i, (
             f"Task {i}: expected echo task={i}, got {result['echo']['task']}"
         )
@@ -604,9 +577,7 @@ async def test_rpc_gateway_concurrent_calls(load_db, monkeypatch):
 
 @pytest.mark.load
 @pytest.mark.asyncio
-async def test_concurrent_eviction_preserves_recent_chunks(
-    load_db, clean_load_data, monkeypatch
-):
+async def test_concurrent_eviction_preserves_recent_chunks(load_db, clean_load_data, monkeypatch):
     """Concurrent eviction on the same session must not evict the most recent
     10 chunks. The cursor-based pagination with batch archive+delete in a
     single transaction must be safe under concurrency.
@@ -623,8 +594,6 @@ async def test_concurrent_eviction_preserves_recent_chunks(
     sid = session.id
 
     # Write 50 chunks with increasing timestamps
-    from datetime import UTC, datetime, timedelta
-    base_time = datetime(2025, 1, 1, tzinfo=UTC)
     mgr = ContextManager()
     for i in range(50):
         await mgr.add_chunk(
@@ -656,9 +625,7 @@ async def test_concurrent_eviction_preserves_recent_chunks(
         )
 
     # Total remaining should be <= 10 (the preserved recent chunks)
-    assert len(remaining) <= 10, (
-        f"Expected <= 10 remaining chunks, got {len(remaining)}"
-    )
+    assert len(remaining) <= 10, f"Expected <= 10 remaining chunks, got {len(remaining)}"
 
     # Every evicted chunk must be archived exactly once — concurrent eviction
     # must not double-archive (which would duplicate rows and corrupt the
@@ -686,9 +653,9 @@ async def test_concurrent_mixed_workload(load_db, clean_load_data, monkeypatch):
     chunks, some create sessions, some list sessions. All must complete
     without errors and the final state must be consistent.
     """
-    from ah.core.usage import UsageStore
     from ah.core.context import ContextManager
     from ah.core.session import SessionManager
+    from ah.core.usage import UsageStore
 
     monkeypatch.setattr("ah.core.usage.db", load_db)
     monkeypatch.setattr("ah.core.context.db", load_db)

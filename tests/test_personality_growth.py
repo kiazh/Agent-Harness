@@ -140,7 +140,7 @@ async def test_additive_growth_migration_is_idempotent(db_pool):
 
 
 @pytest.mark.asyncio
-async def test_ui_growth_with_real_gateway_restart(db_pool):
+async def test_ui_checks_with_real_gateway_restart(db_pool, tmp_path):
     import asyncio
     import os
     import shutil
@@ -151,33 +151,40 @@ async def test_ui_growth_with_real_gateway_restart(db_pool):
     if not shutil.which("node"):
         pytest.skip("Node is unavailable")
     root = Path(__file__).resolve().parents[1]
+    from ah.core.config import LEGACY_ENV_VARS, SECRET_KEYS
+
     env = dict(os.environ)
+    for key in SECRET_KEYS:
+        env[f"AGENT_HARNESS_{key.upper()}"] = ""
+        if key in LEGACY_ENV_VARS:
+            env[LEGACY_ENV_VARS[key]] = ""
+            env[f"{LEGACY_ENV_VARS[key]}_FILE"] = ""
+    env_file = tmp_path / ".env"
+    env_file.touch()
     env.update(
         {
+            "HOME": str(tmp_path),
+            "AH_ENV_FILE": str(env_file),
             "AH_TEST_PYTHON": sys.executable,
             "AGENT_HARNESS_TEST_DATABASE_URL": db_pool.dsn,
             "AGENT_HARNESS_DATABASE_URL": db_pool.dsn,
+            "DATABASE_URL": db_pool.dsn,
             "AGENT_HARNESS_PERSONALITY_GROWTH_ENABLED": "true",
             "AGENT_HARNESS_MEMORY_ENABLED": "true",
+            "AGENT_HARNESS_EXECUTION_MODE": "ask",
         }
     )
     result = await asyncio.to_thread(
         subprocess.run,
-        [
-            "node",
-            "--test",
-            "--test-reporter=tap",
-            "--test-name-pattern=personality survives",
-            "test/gateway.e2e.test.ts",
-        ],
+        ["npm", "run", "check"],
         cwd=root / "ui",
         env=env,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "# pass 1" in result.stdout
+    assert "skipped 0" in result.stdout
 
 
 @pytest.mark.asyncio

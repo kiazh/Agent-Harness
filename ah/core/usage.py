@@ -74,6 +74,12 @@ class UsageStore:
         if session_id is not None:
             model = str(getattr(provider, "model", "unknown"))
             provider_name = type(provider).__name__.removesuffix("Provider").lower()
+            reservation_max_tokens = max_tokens
+            reservation_limit = getattr(type(provider), "reservation_max_tokens", None)
+            if callable(reservation_limit):
+                reservation_max_tokens = reservation_limit(
+                    provider, max_tokens, kwargs.get("reasoning_effort")
+                )
             try:
                 reservation = await self.reserve(
                     session_id,
@@ -82,7 +88,7 @@ class UsageStore:
                     model,
                     messages,
                     tools or [],
-                    max_tokens,
+                    reservation_max_tokens,
                 )
             except UsageBudgetExceededError:
                 raise
@@ -126,9 +132,23 @@ class UsageStore:
             return None
 
         reserved = _estimate_tokens(messages, tools, max_tokens)
-        scopes = (("agent", agent_id), ("session", str(session_id)))
         async with db.acquire() as conn:
             async with conn.transaction():
+                lineage = await conn.fetchrow(
+                    """
+                    SELECT ancestor_session_ids AS session_ids,
+                           ancestor_agent_ids AS agent_ids
+                    FROM sessions WHERE id = $1
+                    """,
+                    session_id,
+                )
+                ancestor_sessions = list((lineage or {}).get("session_ids", []))
+                ancestor_agents = list((lineage or {}).get("agent_ids", []))
+                session_scopes = sorted({session_id, *ancestor_sessions}, key=str)
+                agent_scopes = sorted({agent_id, *ancestor_agents})
+                scopes = [("agent", aid) for aid in agent_scopes] + [
+                    ("session", str(sid)) for sid in session_scopes
+                ]
                 # Lock in a fixed order to avoid deadlocks between concurrent
                 # calls for the same agent in different sessions.
                 # Conservative accounting: budget checks count every prior row
@@ -144,44 +164,45 @@ class UsageStore:
                 # Combine both scope aggregates into a single query with UNION ALL
                 scope_rows = await conn.fetch(
                     """
-                    SELECT 'agent' AS scope, COUNT(*) AS requests,
-                           COALESCE(SUM(accounted_tokens), 0) AS tokens
-                    FROM llm_usage WHERE agent_id = $1
+                    SELECT 'agent' AS scope, identifier, COUNT(usage.id) AS requests,
+                           COALESCE(SUM(usage.accounted_tokens), 0) AS tokens
+                    FROM unnest($1::text[]) AS identifier
+                    LEFT JOIN llm_usage usage ON usage.agent_id = identifier
+                        OR usage.ancestor_agent_ids @> ARRAY[identifier]
+                    GROUP BY identifier
                     UNION ALL
-                    SELECT 'session' AS scope, COUNT(*) AS requests,
-                           COALESCE(SUM(accounted_tokens), 0) AS tokens
-                    FROM llm_usage WHERE session_id = $2
+                    SELECT 'session' AS scope, identifier::text, COUNT(usage.id) AS requests,
+                           COALESCE(SUM(usage.accounted_tokens), 0) AS tokens
+                    FROM unnest($2::uuid[]) AS identifier
+                    LEFT JOIN llm_usage usage ON usage.session_id = identifier
+                        OR usage.ancestor_session_ids @> ARRAY[identifier]
+                    GROUP BY identifier
                     """,
-                    agent_id,
-                    session_id,
+                    agent_scopes,
+                    session_scopes,
                 )
-                agent_data = next(r for r in scope_rows if r["scope"] == "agent")
-                session_data = next(r for r in scope_rows if r["scope"] == "session")
-                _check_limit(
-                    "agent",
-                    int(agent_data["requests"]),
-                    int(agent_data["tokens"]),
-                    limits["usage_agent_request_limit"],
-                    limits["usage_agent_token_limit"],
-                    reserved,
-                )
-                _check_limit(
-                    "session",
-                    int(session_data["requests"]),
-                    int(session_data["tokens"]),
-                    limits["usage_session_request_limit"],
-                    limits["usage_session_token_limit"],
-                    reserved,
-                )
+                for scope_data in scope_rows:
+                    scope = scope_data["scope"]
+                    _check_limit(
+                        scope,
+                        int(scope_data["requests"]),
+                        int(scope_data["tokens"]),
+                        limits[f"usage_{scope}_request_limit"],
+                        limits[f"usage_{scope}_token_limit"],
+                        reserved,
+                    )
                 row = await conn.fetchrow(
                     "INSERT INTO llm_usage "
-                    "(session_id, agent_id, provider, model, status, reserved_tokens, accounted_tokens) "
-                    "VALUES ($1, $2, $3, $4, 'reserved', $5, $5) RETURNING id",
+                    "(session_id, agent_id, provider, model, status, reserved_tokens, accounted_tokens, "
+                    "ancestor_session_ids, ancestor_agent_ids) "
+                    "VALUES ($1, $2, $3, $4, 'reserved', $5, $5, $6, $7) RETURNING id",
                     session_id,
                     agent_id,
                     provider,
                     model,
                     reserved,
+                    ancestor_sessions,
+                    ancestor_agents,
                 )
         return row["id"]
 
@@ -209,6 +230,7 @@ class UsageStore:
         )
         known = (
             not failed
+            and not usage.get("estimated", False)
             and isinstance(prompt, int)
             and not isinstance(prompt, bool)
             and prompt >= 0
@@ -240,7 +262,7 @@ class UsageStore:
             "COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
             "COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
             "COUNT(*) FILTER (WHERE prompt_tokens IS NULL) AS unknown_calls "
-            "FROM llm_usage WHERE session_id = $1",
+            "FROM llm_usage WHERE session_id = $1 OR ancestor_session_ids @> ARRAY[$1::uuid]",
             session_id,
         )
         agent = await db.fetchrow(
@@ -250,7 +272,7 @@ class UsageStore:
             "COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
             "COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
             "COUNT(*) FILTER (WHERE prompt_tokens IS NULL) AS unknown_calls "
-            "FROM llm_usage WHERE agent_id = $1",
+            "FROM llm_usage WHERE agent_id = $1 OR ancestor_agent_ids @> ARRAY[$1::text]",
             agent_id,
         )
 

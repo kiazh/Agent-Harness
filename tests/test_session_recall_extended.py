@@ -1,4 +1,5 @@
 """Extended tests for ah.core.session_recall — discover() and window()."""
+
 from __future__ import annotations
 
 import uuid
@@ -98,7 +99,6 @@ async def test_discover_all_three_sources(db_pool, monkeypatch):
         "INSERT INTO sessions (agent_id, title) VALUES ($1, 'Granitekingfisher log') RETURNING id",
         agent,
     )
-    live_chunk_id = uuid.uuid4()
     arch_chunk_id = uuid.uuid4()
     try:
         # Live chunk
@@ -178,8 +178,12 @@ async def test_discover_agent_scoping(db_pool, monkeypatch):
         assert all(hit.session_id == session_b for hit in hits_b)
         assert all(hit.session_id != session_a for hit in hits_b)
     finally:
-        await db_pool.execute("DELETE FROM context_chunks WHERE session_id = ANY($1::uuid[])", [session_a, session_b])
-        await db_pool.execute("DELETE FROM sessions WHERE id = ANY($1::uuid[])", [session_a, session_b])
+        await db_pool.execute(
+            "DELETE FROM context_chunks WHERE session_id = ANY($1::uuid[])", [session_a, session_b]
+        )
+        await db_pool.execute(
+            "DELETE FROM sessions WHERE id = ANY($1::uuid[])", [session_a, session_b]
+        )
 
 
 async def test_discover_agent_scoping_archive(db_pool, monkeypatch):
@@ -219,8 +223,12 @@ async def test_discover_agent_scoping_archive(db_pool, monkeypatch):
         hits_b = await recall.discover(agent_b, "archkeyword")
         assert all(hit.session_id == session_b for hit in hits_b)
     finally:
-        await db_pool.execute("DELETE FROM context_archive WHERE session_id = ANY($1::uuid[])", [session_a, session_b])
-        await db_pool.execute("DELETE FROM sessions WHERE id = ANY($1::uuid[])", [session_a, session_b])
+        await db_pool.execute(
+            "DELETE FROM context_archive WHERE session_id = ANY($1::uuid[])", [session_a, session_b]
+        )
+        await db_pool.execute(
+            "DELETE FROM sessions WHERE id = ANY($1::uuid[])", [session_a, session_b]
+        )
 
 
 async def test_discover_empty_agent_id_raises(db_pool, monkeypatch):
@@ -338,9 +346,7 @@ async def test_window_clamping_at_start(db_pool, monkeypatch):
         agent,
     )
     try:
-        first = await context.add_chunk(
-            session_id, agent, "user_message", {"content": "first"}
-        )
+        first = await context.add_chunk(session_id, agent, "user_message", {"content": "first"})
         second = await context.add_chunk(
             session_id, agent, "assistant_message", {"content": "second"}
         )
@@ -366,9 +372,7 @@ async def test_window_clamping_at_end(db_pool, monkeypatch):
         agent,
     )
     try:
-        first = await context.add_chunk(
-            session_id, agent, "user_message", {"content": "first"}
-        )
+        first = await context.add_chunk(session_id, agent, "user_message", {"content": "first"})
         second = await context.add_chunk(
             session_id, agent, "assistant_message", {"content": "second"}
         )
@@ -412,21 +416,11 @@ async def test_window_ordering_chronological(db_pool, monkeypatch):
     )
     try:
         # Add chunks with explicit time ordering
-        c1 = await context.add_chunk(
-            session_id, agent, "user_message", {"content": "msg1"}
-        )
-        c2 = await context.add_chunk(
-            session_id, agent, "assistant_message", {"content": "msg2"}
-        )
-        c3 = await context.add_chunk(
-            session_id, agent, "user_message", {"content": "msg3"}
-        )
-        c4 = await context.add_chunk(
-            session_id, agent, "assistant_message", {"content": "msg4"}
-        )
-        c5 = await context.add_chunk(
-            session_id, agent, "user_message", {"content": "msg5"}
-        )
+        c1 = await context.add_chunk(session_id, agent, "user_message", {"content": "msg1"})
+        c2 = await context.add_chunk(session_id, agent, "assistant_message", {"content": "msg2"})
+        c3 = await context.add_chunk(session_id, agent, "user_message", {"content": "msg3"})
+        c4 = await context.add_chunk(session_id, agent, "assistant_message", {"content": "msg4"})
+        c5 = await context.add_chunk(session_id, agent, "user_message", {"content": "msg5"})
         # Stagger created_at to ensure ordering
         for i, c in enumerate([c1, c2, c3, c4, c5]):
             minutes = 5 - i
@@ -455,15 +449,9 @@ async def test_window_before_zero(db_pool, monkeypatch):
         agent,
     )
     try:
-        c1 = await context.add_chunk(
-            session_id, agent, "user_message", {"content": "first"}
-        )
-        c2 = await context.add_chunk(
-            session_id, agent, "assistant_message", {"content": "second"}
-        )
-        c3 = await context.add_chunk(
-            session_id, agent, "user_message", {"content": "third"}
-        )
+        await context.add_chunk(session_id, agent, "user_message", {"content": "first"})
+        c2 = await context.add_chunk(session_id, agent, "assistant_message", {"content": "second"})
+        c3 = await context.add_chunk(session_id, agent, "user_message", {"content": "third"})
         window = await recall.window(agent, session_id, c2.id, before=0, after=1)
         assert len(window) == 2
         assert window[0].chunk_id == c2.id
@@ -485,15 +473,9 @@ async def test_window_after_zero(db_pool, monkeypatch):
         agent,
     )
     try:
-        c1 = await context.add_chunk(
-            session_id, agent, "user_message", {"content": "first"}
-        )
-        c2 = await context.add_chunk(
-            session_id, agent, "assistant_message", {"content": "second"}
-        )
-        c3 = await context.add_chunk(
-            session_id, agent, "user_message", {"content": "third"}
-        )
+        c1 = await context.add_chunk(session_id, agent, "user_message", {"content": "first"})
+        c2 = await context.add_chunk(session_id, agent, "assistant_message", {"content": "second"})
+        await context.add_chunk(session_id, agent, "user_message", {"content": "third"})
         window = await recall.window(agent, session_id, c2.id, before=1, after=0)
         assert len(window) == 2
         assert window[0].chunk_id == c1.id
@@ -515,15 +497,11 @@ async def test_window_both_zero(db_pool, monkeypatch):
         agent,
     )
     try:
-        await context.add_chunk(
-            session_id, agent, "user_message", {"content": "first"}
-        )
+        await context.add_chunk(session_id, agent, "user_message", {"content": "first"})
         anchor = await context.add_chunk(
             session_id, agent, "assistant_message", {"content": "anchor"}
         )
-        await context.add_chunk(
-            session_id, agent, "user_message", {"content": "third"}
-        )
+        await context.add_chunk(session_id, agent, "user_message", {"content": "third"})
         window = await recall.window(agent, session_id, anchor.id, before=0, after=0)
         assert len(window) == 1
         assert window[0].chunk_id == anchor.id
@@ -608,15 +586,11 @@ async def test_window_includes_archived_chunks(db_pool, monkeypatch):
         agent,
     )
     try:
-        c1 = await context.add_chunk(
-            session_id, agent, "user_message", {"content": "before arch"}
-        )
+        c1 = await context.add_chunk(session_id, agent, "user_message", {"content": "before arch"})
         c2 = await context.add_chunk(
             session_id, agent, "assistant_message", {"content": "archived middle"}
         )
-        c3 = await context.add_chunk(
-            session_id, agent, "user_message", {"content": "after arch"}
-        )
+        c3 = await context.add_chunk(session_id, agent, "user_message", {"content": "after arch"})
         # Archive the middle chunk
         archive_row = await db_pool.fetchrow(
             "SELECT payload_msgpack, created_at FROM context_chunks WHERE id = $1", c2.id
@@ -659,9 +633,7 @@ async def test_window_max_boundary_values(db_pool, monkeypatch):
     try:
         chunks = []
         for i in range(3):
-            c = await context.add_chunk(
-                session_id, agent, "user_message", {"content": f"msg{i}"}
-            )
+            c = await context.add_chunk(session_id, agent, "user_message", {"content": f"msg{i}"})
             chunks.append(c)
         # Should not raise
         window = await recall.window(agent, session_id, chunks[1].id, before=20, after=20)
@@ -684,9 +656,7 @@ async def test_discover_preview_truncated(db_pool, monkeypatch):
     )
     try:
         long_content = "previewword " + "x" * 500
-        await context.add_chunk(
-            session_id, agent, "user_message", {"content": long_content}
-        )
+        await context.add_chunk(session_id, agent, "user_message", {"content": long_content})
         hits = await recall.discover(agent, "previewword")
         assert len(hits) == 1
         assert len(hits[0].preview) <= 240
@@ -711,18 +681,18 @@ async def test_discover_multiple_sessions_same_agent(db_pool, monkeypatch):
         agent,
     )
     try:
-        await context.add_chunk(
-            session1, agent, "user_message", {"content": "multisession alpha"}
-        )
-        await context.add_chunk(
-            session2, agent, "user_message", {"content": "multisession beta"}
-        )
+        await context.add_chunk(session1, agent, "user_message", {"content": "multisession alpha"})
+        await context.add_chunk(session2, agent, "user_message", {"content": "multisession beta"})
         hits = await recall.discover(agent, "multisession")
         session_ids = {h.session_id for h in hits}
         assert session_ids == {session1, session2}
     finally:
-        await db_pool.execute("DELETE FROM context_chunks WHERE session_id = ANY($1::uuid[])", [session1, session2])
-        await db_pool.execute("DELETE FROM sessions WHERE id = ANY($1::uuid[])", [session1, session2])
+        await db_pool.execute(
+            "DELETE FROM context_chunks WHERE session_id = ANY($1::uuid[])", [session1, session2]
+        )
+        await db_pool.execute(
+            "DELETE FROM sessions WHERE id = ANY($1::uuid[])", [session1, session2]
+        )
 
 
 async def test_window_nonexistent_chunk_returns_empty(db_pool, monkeypatch):
@@ -736,9 +706,7 @@ async def test_window_nonexistent_chunk_returns_empty(db_pool, monkeypatch):
         agent,
     )
     try:
-        await ContextManager().add_chunk(
-            session_id, agent, "user_message", {"content": "existing"}
-        )
+        await ContextManager().add_chunk(session_id, agent, "user_message", {"content": "existing"})
         window = await recall.window(agent, session_id, uuid.uuid4(), before=2, after=2)
         assert window == []
     finally:

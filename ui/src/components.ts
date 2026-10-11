@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import {
 	Box,
 	type Component,
+	CURSOR_MARKER,
 	Editor,
 	type EditorOptions,
 	type EditorTheme,
@@ -455,7 +456,7 @@ export class TextForm implements Component {
 	}
 
 	getValue(): string {
-		return this.editor.getText();
+		return this.editor.getExpandedText();
 	}
 
 	handleInput(data: string): void {
@@ -466,7 +467,7 @@ export class TextForm implements Component {
 		}
 		// Explicit save shortcut alongside Enter (the Editor submits on Enter).
 		if (data === "\x13") {
-			this.onSubmit?.(this.editor.getText());
+			this.onSubmit?.(this.getValue());
 			return;
 		}
 		this.editor.focused = true;
@@ -475,33 +476,49 @@ export class TextForm implements Component {
 
 	render(width: number): string[] {
 		const content = Math.max(1, width);
-		const out: string[] = [];
-		out.push(truncateToWidth(theme.dim(this.title), content));
-		if (this.description) {
-			for (const line of this.description.split("\n").flatMap((l) => wrapTextWithAnsi(l, content))) {
-				out.push(truncateToWidth(theme.dim(line), content));
-			}
-		}
+		// Match App's 70% sheet capped by its five-row bottom margin. Optional
+		// guidance yields space to the cursor, count, errors, and controls.
+		const rows = this.tui.terminal.rows;
+		const height = Math.max(1, Math.min(Math.floor(rows * 70 / 100), rows - 5));
+		const wrap = (text: string): string[] => text.split("\n").flatMap((line) => wrapTextWithAnsi(line, content));
+		const value = this.getValue();
+		// Reserve one editable row first, then controls and count. On the
+		// shortest screens the title and editor borders yield to these tasks.
+		const statusRows = Math.min(2, height - 1);
+		const errorBudget = Math.max(0, Math.min(Math.max(1, height - 6), height - statusRows - 1));
+		const errors = this.error ? wrap(this.error).slice(0, errorBudget) : [];
+		const guidance = [
+			...(this.description ? wrap(this.description) : []),
+			...(!value && this.placeholder ? wrap(this.placeholder) : []),
+			...(this.example ? wrap(`Example: ${this.example}`) : []),
+		].slice(0, Math.max(0, height - 6 - errors.length));
+		const out = [
+			...(height - statusRows - errors.length >= 2 ? [truncateToWidth(theme.dim(this.title), content)] : []),
+			...guidance.map(theme.dim),
+		];
 		this.editor.focused = this.focused;
-		for (const line of this.editor.render(content)) out.push(line);
-		const value = this.editor.getText();
-		if (!value && this.placeholder) {
-			out.push(truncateToWidth(theme.dim(this.placeholder), content));
+		const editorRows = this.editor.render(content);
+		const editorHeight = Math.max(1, height - out.length - errors.length - statusRows);
+		if (editorRows.length > editorHeight) {
+			// pi-tui's Editor has a minimum of five text rows; retain a window
+			// around its cursor instead of letting the overlay clip its tail.
+			const textRows = editorRows.slice(1, -1);
+			const showBorders = editorHeight >= 3;
+			const visible = editorHeight - (showBorders ? 2 : 0);
+			const cursor = textRows.findIndex((line) => line.includes(CURSOR_MARKER) || line.includes("\x1b[7m"));
+			const start = Math.max(0, Math.min(textRows.length - visible, cursor - visible + 1));
+			if (showBorders) out.push(start > 0 ? theme.dim("↑ more") : editorRows[0]!);
+			out.push(...textRows.slice(start, start + visible));
+			if (showBorders) out.push(start + visible < textRows.length ? theme.dim("↓ more") : editorRows.at(-1)!);
+		} else {
+			out.push(...editorRows);
 		}
 		const count = Array.from(value).length;
 		const countText = this.maxLength ? `${count} / ${this.maxLength} characters` : `${count} characters`;
-		out.push(truncateToWidth(theme.dim(countText), content));
-		if (this.example) {
-			for (const line of `Example: ${this.example}`.split("\n").flatMap((l) => wrapTextWithAnsi(l, content))) {
-				out.push(truncateToWidth(theme.dim(line), content));
-			}
-		}
-		if (this.error) {
-			for (const line of this.error.split("\n").flatMap((l) => wrapTextWithAnsi(`✗ ${l}`, content))) {
-				out.push(truncateToWidth(theme.error(line), content));
-			}
-		}
-		out.push(truncateToWidth(theme.dim("enter save · shift+enter newline · ctrl+s save · esc cancel"), content));
+		if (statusRows >= 2) out.push(truncateToWidth(theme.dim(countText), content));
+		out.push(...errors.map((line) => truncateToWidth(theme.error(`✗ ${line}`), content)));
+		const hints = content >= 56 ? "enter save · shift+enter newline · ctrl+s save · esc cancel" : "enter save · ctrl+s save · esc cancel";
+		if (statusRows >= 1) out.push(truncateToWidth(theme.dim(hints), content));
 		return out;
 	}
 

@@ -493,7 +493,9 @@ function selectedRow(text: string): string {
 	});
 }
 
-const BG_OPEN = "\x1b[48;2;";
+// ANSI background sequences necessarily contain the ESC control character.
+// eslint-disable-next-line no-control-regex
+const BG_OPEN = /\x1b\[48;(?:2;\d+;\d+;\d+|5;\d+)m/;
 const BG_CLOSE = "\x1b[49m";
 const FULL_RESET = "\x1b[0m";
 
@@ -517,20 +519,12 @@ export function repairFill(bg: PaletteName, filledLine: string): string {
 
 /** Remove background color sequences while keeping foreground styling. */
 function stripBackground(line: string): string {
-	let out = line;
-	for (;;) {
-		const start = out.indexOf(BG_OPEN);
-		if (start === -1) break;
-		const end = out.indexOf("m", start);
-		if (end === -1) break;
-		out = out.slice(0, start) + out.slice(end + 1);
-	}
-	return out.split(BG_CLOSE).join("");
+	return line.split(BG_OPEN).join("").split(BG_CLOSE).join("");
 }
 
 /** True when a rendered line carries the selection background. */
 export function isSelectionRow(line: string): boolean {
-	return line.includes(BG_OPEN);
+	return BG_OPEN.test(line);
 }
 
 /**

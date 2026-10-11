@@ -1,5 +1,6 @@
 """Session snapshots must not expose mutable objects owned by the cache."""
 
+import json
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -36,7 +37,19 @@ class SessionRows:
 
     async def fetchrow(self, query, *args):
         if "INSERT INTO sessions" in query:
-            title, agent_id, state, goal, model, provider, budget, mode = args
+            (
+                title,
+                agent_id,
+                state,
+                goal,
+                model,
+                provider,
+                budget,
+                mode,
+                parent_id,
+                authority,
+                *_source_id,
+            ) = args
             row = {
                 **self.rows[self.session_id],
                 "id": uuid.uuid4(),
@@ -47,6 +60,9 @@ class SessionRows:
                 "model": model,
                 "provider": provider,
                 "context_budget": budget,
+                "execution_mode": mode,
+                "parent_session_id": parent_id,
+                "delegation_authority": json.loads(authority),
             }
             self.rows[row["id"]] = row
             return row.copy()

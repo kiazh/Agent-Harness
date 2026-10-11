@@ -181,9 +181,7 @@ class TestProtocolErrors:
         monkeypatch.setenv("AH_ENV_FILE", str(env_file))
         monkeypatch.setenv("AGENT_HARNESS_MODEL", "openrouter/free")
         monkeypatch.setenv("AGENT_HARNESS_PROVIDER", "openrouter")
-        monkeypatch.setattr(
-            config_module, "DEFAULT_CONFIG_PATH", tmp_path / "config.yaml"
-        )
+        monkeypatch.setattr(config_module, "DEFAULT_CONFIG_PATH", tmp_path / "config.yaml")
         old_model, old_provider = get_config().model, get_config().provider
         try:
             h = Harness()
@@ -471,10 +469,20 @@ def test_gateway_process_speaks_clean_json_over_stdio():
     token = "test-token-for-e2e"
     requests = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"token": token}},
-        {"jsonrpc": "2.0", "id": 2, "method": "session.create", "params": {"title": "e2e", "token": token}},
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session.create",
+            "params": {"title": "e2e", "token": token},
+        },
         {"jsonrpc": "2.0", "id": 3, "method": "shutdown", "params": {"token": token}},
     ]
-    env = {**os.environ, "DATABASE_URL": TEST_DSN, "PYTHONIOENCODING": "utf-8", "AH_GATEWAY_TOKEN": token}
+    env = {
+        **os.environ,
+        "DATABASE_URL": TEST_DSN,
+        "PYTHONIOENCODING": "utf-8",
+        "AH_GATEWAY_TOKEN": token,
+    }
     proc = subprocess.run(
         [sys.executable, "-m", "ah.gateway"],
         input="".join(json.dumps(r) + "\n" for r in requests),

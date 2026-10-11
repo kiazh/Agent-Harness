@@ -186,6 +186,7 @@ class TestAgentWithRealTools:
 
         monkeypatch.setattr(config, "execution_mode", "workspace")
         monkeypatch.setattr(config, "workspace_root", str(temp_dir))
+        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "workspace")
 
         provider = FakeProvider(
             [
@@ -325,8 +326,12 @@ class TestAgentWithRealTools:
                 assert len(response.tool_calls) == 1
                 assert response.tool_calls[0]["tool"] == "terminal"
 
-    async def test_agent_multiple_tool_calls(self, mock_session, temp_dir):
+    async def test_agent_multiple_tool_calls(self, mock_session, temp_dir, monkeypatch):
         """Test agent executing multiple tools in sequence."""
+        from ah.core.config import config
+
+        monkeypatch.setattr(config, "workspace_root", str(temp_dir))
+        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
         test_file = temp_dir / "multi.txt"
 
         provider = FakeProvider(
@@ -761,8 +766,12 @@ class TestProviderHTTPIntegration:
 class TestFullFlowIntegration:
     """Full flow integration tests: session → context → agent → response."""
 
-    async def test_full_agent_flow_with_mocked_db(self, mock_session, temp_dir):
+    async def test_full_agent_flow_with_mocked_db(self, mock_session, temp_dir, monkeypatch):
         """Test the complete agent flow with mocked database."""
+        from ah.core.config import config
+
+        monkeypatch.setattr(config, "workspace_root", str(temp_dir))
+        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
         test_file = temp_dir / "flow_test.txt"
         test_file.write_text("integration test content", encoding="utf-8")
 

@@ -50,9 +50,7 @@ class TestEvictionArchivesBeforeDelete:
         # The cursor query has LIMIT 1 (remaining_evictable = max(0, 11 - 10) = 1),
         # so the mock must return only 1 row, not all 11.
         mock_db.fetch = AsyncMock(return_value=rows[:1])
-        mock_db.fetchrow = AsyncMock(
-            return_value={"total_chunks": 11, "total_tokens": 1100}
-        )
+        mock_db.fetchrow = AsyncMock(return_value={"total_chunks": 11, "total_tokens": 1100})
         connection = AsyncMock()
         connection.fetchrow.return_value = {"id": uuid.uuid4()}
         connection.fetch = AsyncMock(return_value=[{"id": r["id"]} for r in rows[:1]])

@@ -5,6 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
 	Container,
+	type Component,
 	type Editor,
 	isViewportTUI,
 	Key,
@@ -72,7 +73,7 @@ export class App implements FeatureHost {
 	private sessionTokens = 0;
 	/** Preserved token counts per session so switchTo does not lose them. */
 	private readonly sessionTokensById = new Map<string, number>();
-	private overlay: OverlayHandle | undefined;
+	private readonly dialogs: Array<{ handle: OverlayHandle; cancel: () => void }> = [];
 	private exiting = false;
 	private resolveExit: () => void = () => {};
 	private inputListenerDisposer: (() => void) | undefined;
@@ -218,51 +219,42 @@ export class App implements FeatureHost {
 	}
 
 	pick(title: string, items: SelectItem[]): Promise<SelectItem | undefined> {
-		return new Promise((done) => {
-			const close = (item?: SelectItem) => {
-				this.overlay?.hide();
-				this.overlay = undefined;
-				this.tui.setFocus(this.editor);
-				this.tui.requestRender();
-				done(item);
-			};
-			const picker = new Picker(title, items, (item) => close(item), () => close());
-			// Codex menu style: full-bleed sheet docked above the composer.
-			this.overlay = this.tui.showOverlay(picker, {
-				width: "100%",
-				maxHeight: "70%",
-				anchor: "bottom-center",
-				margin: { bottom: 5 },
-			});
-			this.tui.requestRender();
-		});
+		return this.openDialog<SelectItem>((close) => new Picker(title, items, close, () => close()));
 	}
 
 	askText(options: AskTextOptions): Promise<string | undefined> {
-		if (this.overlay) {
-			this.transcript.addNotice("Finish the current dialog first.", "warning");
-			this.tui.requestRender();
-			return Promise.resolve(undefined);
-		}
+		return this.openDialog<string>((close) => {
+			const form = new TextForm(this.tui, editorTheme, options);
+			form.onSubmit = close;
+			form.onCancel = () => close();
+			return form;
+		});
+	}
+
+	private openDialog<T>(create: (close: (value?: T) => void) => Component): Promise<T | undefined> {
+		if (this.exiting) return Promise.resolve(undefined);
 		return new Promise((done) => {
-			const close = (value?: string) => {
-				this.overlay?.hide();
-				this.overlay = undefined;
-				this.tui.setFocus(this.editor);
+			let settled = false;
+			const close = (value?: T) => {
+				if (settled) return;
+				settled = true;
+				dialog.handle.hide();
+				this.dialogs.splice(this.dialogs.indexOf(dialog), 1);
+				const previous = this.dialogs.at(-1);
+				if (previous) previous.handle.focus();
+				else if (!this.exiting) this.tui.setFocus(this.editor);
 				this.tui.requestRender();
 				done(value);
 			};
-			const form = new TextForm(this.tui, editorTheme, options);
-			form.focused = true;
-			form.onSubmit = (value) => close(value);
-			form.onCancel = () => close(undefined);
-			// Same sheet placement as pick() so management flows share one control style.
-			this.overlay = this.tui.showOverlay(form, {
+			// Each dialog owns its handle, including when approvals interrupt a form.
+			const handle = this.tui.showOverlay(create(close), {
 				width: "100%",
 				maxHeight: "70%",
 				anchor: "bottom-center",
 				margin: { bottom: 5 },
 			});
+			const dialog = { handle, cancel: () => close() };
+			this.dialogs.push(dialog);
 			this.tui.requestRender();
 		});
 	}
@@ -293,6 +285,7 @@ export class App implements FeatureHost {
 	async exit(): Promise<void> {
 		if (this.exiting) return;
 		this.exiting = true;
+		for (const dialog of [...this.dialogs].reverse()) dialog.cancel();
 		this.inputListenerDisposer?.();
 		this.tui.stop();
 		await this.client.stop();
@@ -301,7 +294,7 @@ export class App implements FeatureHost {
 
 	// ─── input ────────────────────────────────────────────────────────────
 	private onKey(data: string): { consume: boolean } | undefined {
-		if (this.overlay) return undefined; // the picker handles its own keys
+		if (this.dialogs.length) return undefined; // dialogs own their cancellation keys
 
 		if (matchesKey(data, Key.ctrl("c"))) {
 			if (this.running) this.cancel();

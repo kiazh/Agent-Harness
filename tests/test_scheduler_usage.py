@@ -1,4 +1,5 @@
 """Scheduled jobs leave provider accounting to the agent."""
+
 from __future__ import annotations
 
 import os
