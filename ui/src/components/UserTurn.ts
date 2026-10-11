@@ -3,6 +3,7 @@
 
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { BLOCK_GAP } from "../design/tokens.ts";
+import { transcriptInset } from "../design/spacing.ts";
 import { sanitizeDisplay, wrapDisplay } from "../design/text.ts";
 import { theme } from "../theme.ts";
 
@@ -20,7 +21,8 @@ export class UserTurn implements Component {
 
 	render(width: number): string[] {
 		const total = Math.max(0, width);
-		const inner = Math.max(1, width - 2);
+		const gutter = " ".repeat(transcriptInset(width));
+		const inner = Math.max(1, width - gutter.length - 2);
 		const lines = sanitizeDisplay(this.raw)
 			.split("\n")
 			.flatMap((line) => wrapDisplay(line, inner));
@@ -28,7 +30,7 @@ export class UserTurn implements Component {
 			i === 0 ? `${theme.dim(">")} ${truncateToWidth(line, inner)}` : `  ${truncateToWidth(line, inner)}`,
 		);
 		const body = out.length ? out : [`${theme.dim(">")} `];
-		return [...BLOCK_GAP, ...body.map((line) => truncateToWidth(line, total))];
+		return [...BLOCK_GAP, ...body.map((line) => truncateToWidth(gutter + line, total))];
 	}
 
 	invalidate(): void {}

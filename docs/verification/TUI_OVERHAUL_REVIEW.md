@@ -1,13 +1,13 @@
 # Screenshot-driven TUI correction and MCP inspection
 
-Date: 2026-10-11. Base HEAD: `0ea164e`, branch `main`. The existing OpenCode
+Date: 2026-10-11. Latest base HEAD: `1d80ba0`, branch `main`. The existing OpenCode
 working changes were preserved. Changes remain uncommitted.
 
 ## What changed
 
 The user’s supplied screenshot supersedes the earlier borderless-tool/two-row
 footer specification. The native TUI now has a single header with workspace right,
-plain messages, padded rectangular tool frames (104-column cap/3-column indentation),
+plain messages, padded rectangular tool frames (104-column cap/4-column indentation),
 vertical approval controls above the composer, retained transcript evidence, a thin
 composer bar and one footer. Actual model/branch/mode/state and observed tokens are
 used. Saved themes remain respected; `/theme codex` selects the reference palette.
@@ -43,6 +43,55 @@ adapters cannot close another consumer’s service. Real SDK fixtures prove conn
 disconnected and subprocess retirement. Inventory remains in-memory/default-empty:
 configuration ingestion, persistence, connection controls, OAuth and agent-loop
 remote tool dispatch remain deferred. OpenCode/Codex inventory is outside this worker.
+
+## Transcript gutter and feature awareness follow-up
+
+The latest follow-up is based on clean HEAD `1d80ba0` on `main`. The screenshot
+showed frames indented separately from flush-left reply text. Message/notice/
+thinking markers now share a two-column outer gutter; reply text and frame edges
+align at column four. Widths below 40 omit extra gutters. A shared spacing module
+keeps wrap budgets and frame positioning consistent without changing Markdown or
+whitespace fidelity. Three margin assertions failed before the change; the focused
+native panel/reference run then passed all 14 tests. The revised native PNG/GIF
+use this spacing; the independent narrow layout/panel run passed 15 tests.
+
+The model previously received learned notes and tool signatures without an
+implementation guide. Its speculation in the screenshot is consistent with that
+missing context. The new shared brief explicitly explains persona tone, stored
+fact interpretations/emotional retrieval, saved learning and runtime RSI, along
+with memory, skills, execution, UI controls and deferred MCP functionality. Empty
+notes are not treated as absent features. Allowlisted current settings distinguish
+configuration from observed success. Normal and streamed execution, custom prompts,
+restricted toolsets and failed growth preparation are covered through actual
+provider-call fixtures. The tested brief is at most 650 tokens and needs no extra
+database read or model request.
+
+`harness_status` verifies the active session owner, performs read-only learning
+lookups with a two-second timeout, and redacts a bounded valid JSON response.
+It uses existing `context.read` broker authorization and is excluded from global
+read caching. Real DB-backed ordinary/streamed agent loops verify current scoped
+notes reach the next model call without an approval request. Initially the normal
+1000-character tool-preview cap cut its JSON in half; a failing regression led
+to preserving the complete bounded result. Oversized notes/persona/trials retain
+counts and explicit omission markers; remaining oversized state is safely refused.
+
+Independent review reproduced an unsafe unrestricted emotion setting in the brief.
+Secret-shaped/oversized inputs and an oversized status snapshot failed three
+regressions before allowlisting topology names and enforcing the final bound.
+The bounded re-review passed five non-DB checks and found no remaining
+Critical/Important issue in that fix. Final focused context/boundary/lifecycle/
+property checks passed **15 tests**. No live production model prose or measured
+quality improvement is claimed; fixtures prove context delivery and tool execution.
+
+The first full backend run returned **2113 passed, 5 skipped, 2 failed**: an older
+session test double lacked `execution_mode` (a new compatibility bug, corrected to
+an honest unknown label), and Hypothesis exceeded its 200 ms deadline without a
+failed budget assertion (317 ms initially, 26 ms replay). Clean HEAD `1d80ba0`
+in `/Users/shadow/.codex/worktrees/38df/Agent-Harness1` passed the lifecycle check
+and reproduced the same property-test timing failure (**1 passed, 1 failed**;
+576 ms deadline). Assembler and property-test sources are unchanged. No deadline
+was relaxed to suppress the failure. The current focused rerun passed both checks.
+Final full verification is recorded below.
 
 ## Reproducible visual evidence
 
@@ -84,6 +133,17 @@ in the bounded output/motion correction.
 
 ## Verification
 
+- Latest full backend verification after gutter/context/boundary fixes:
+  **2119 passed / 5 skipped / 0 failed in 168.11 s**, including the real-gateway
+  UI wrapper with all 256 UI tests running and zero UI skips. Command:
+  `AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/Users/shadow/Agent-Harness1 .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`.
+- Latest touched-file Ruff check/format check passed on seven Python files.
+  Bandit `-q ah/core/self_knowledge.py ah/tools/harness.py -ll` emitted no medium+
+  findings. Scoped Impeccable layout detector returned `[]`; `git diff --check`
+  passed. Current standalone UI results remain the 256-test run below.
+- After clarifying that empty notes mean none are *currently* saved (they may
+  have been explicitly forgotten), the complete self-knowledge test file passed
+  again: **13 passed in 0.86 s**. No runtime behavior changed after the full run.
 - `npm --prefix ui run check`: typecheck, **256 tests / 251 passed / 5 environment-
   gated real-gateway skips / 0 failures**, eslint clean.
 - Real gateway restart wrapper runs the same UI checks with **zero skipped tests**:

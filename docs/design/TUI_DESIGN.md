@@ -11,8 +11,11 @@ state, approval, output, ui, dialogs, layout, features, app).
   accent; muted green/amber/red for confirmed success, warning and failure.
 - Terminal monospace only. No gradients, shadows, large colored panels,
   emoji controls or decorative ASCII art.
-- User and assistant messages stay plain. Tool output and approval evidence use
-  neutral rectangular frames, indented three columns at widths ≥40 and capped at
+- User and assistant messages stay plain, with a shared two-column outer gutter
+  at widths ≥40. Markers occupy two more columns; wrapped reply text and the
+  left edge of tool frames align at column four. Notices and thinking activity
+  use the same outer gutter. Below 40 columns, extra gutters disappear.
+  Tool output and approval evidence use neutral rectangular frames, capped at
   104 columns, with inset padding and space outside. Codex uses a distinct
   `#17171c` panel fill and `#606069` border; emitted border/fill contrast is
   tested in truecolor and 256-color modes. Frames do not turn red/green on outcome changes. The composer
@@ -103,6 +106,24 @@ error remain distinct; negotiated protocol is displayed rather than guessed.
 Inspection is read-only and does not connect or discover tools. Default
 inventory is empty and in-memory. Durable setup, connect/disconnect UI, OAuth,
 external app inventory and agent tool dispatch remain outside this feature.
+
+## Feature awareness
+
+Both ordinary and streamed agent calls receive the same compact implementation
+brief, including agents with custom prompts and turns where growth preparation
+fails. It distinguishes requested persona tone, stored fact interpretations,
+emotion-weighted recall, saved learning and runtime RSI. Recalled conversations
+are not implementation documentation; empty notes are not missing features.
+The guide does not claim model-weight training, application self-rewriting,
+expanded permissions or completed MCP remote dispatch.
+
+Current flags are allowlisted; emotion values are recognized topology names or
+an explicit neutral-fallback label, and unknown modes remain unknown. The
+`harness_status` model tool, when offered, uses existing `context.read` authorization,
+verifies active session ownership, reads only that agent's learning state and
+redacts output. Oversized notes/persona/trials have explicit omission markers;
+an oversized remaining snapshot is refused rather than truncated into invalid
+JSON. This mutable, agent-specific result is never cached globally.
 
 The screenshot supersedes the earlier borderless-tool/two-footer-row direction.
 See [visual verification](../verification/TUI_OVERHAUL_REVIEW.md) and the

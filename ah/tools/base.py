@@ -26,6 +26,7 @@ _SIDE_EFFECT_TOOLS = frozenset(
 _UNCACHEABLE_TOOLS = frozenset(
     {
         "recall",
+        "harness_status",
         "search_documents",
         "list_agents",
         "session_recall",

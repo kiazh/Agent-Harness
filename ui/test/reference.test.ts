@@ -17,8 +17,8 @@ test("reference tools have quiet indented frames with bounded reading width", ()
  const tool = new ToolTurn("read_file", {path:"install.sh"}, {frame: f => f[0] ?? ""});
  tool.settle({text:"Homebrew fallback configuration", backendTruncated:false, locallyTruncated:false}, "success");
  const rows = tool.render(160);
- assert.match(plain(rows)[1]!, /^ {3}┌─/);
- assert.ok(rows.every(row => visibleWidth(row) <= 107));
+ assert.match(plain(rows)[1]!, /^ {4}┌─/);
+ assert.ok(rows.every(row => visibleWidth(row) <= 108));
  assert.match(plain(rows).join("\n"), /read_file.*install.sh/);
  assert.match(plain(rows).join("\n"), /Homebrew fallback/);
 });

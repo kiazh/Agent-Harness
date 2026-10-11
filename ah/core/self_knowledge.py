@@ -1,0 +1,71 @@
+"""Small implementation brief and safe current flags, shared by prompts and inspection.
+
+No filesystem, database, provider requests or secret configuration enumeration.
+Feature facts are distinct from configuration and observed learning evidence.
+"""
+
+from __future__ import annotations
+
+import json
+
+from ah.core.config import config
+from ah.core.models import Session
+from ah.core.session_mode import MODES
+from ah.memory.persona import EmotionTopology
+
+FEATURES = {
+    "persona": "persona_description sets conversational tone (/persona). persona_memory_enabled adds stored fact interpretations and emotion-weighted recall using persona_default_emotion; these are retrieval settings, not feelings.",
+    "growth": "Per-agent preferences, style and verified lessons persist across sessions/models (learn_personality; /growth). empty notes mean no notes currently saved, not a missing feature.",
+    "rsi": "RSI/online RL adapts retrieval policy, relevant skill ranking, allowed-tool order and task approach using execution evidence and human ratings. /growth inspects feedback, persona trials, revisions and rollback. It never trains model weights, rewrites application code or expands permissions.",
+    "memory": "remember/recall retrieve facts; session_recall searches conversations, not implementation documentation. RAG searches explicitly indexed documents.",
+    "skills": "Relevant bundled workflows activate automatically with bounded context; skill tools discover/read more when offered. Skills do not grant permissions.",
+    "execution": "Offered tools define this agent's access. Delegation inherits authority; jobs schedule runs; sessions, context compaction and usage budgets are supported.",
+    "controls": "TUI /persona, /growth, /profile, /sessions, /models, /provider, /jobs, /usage and /mode manage the respective features; these are UI commands, not model tools.",
+    "mcp": "Read-only TUI /mcp inspects worker inventory/status; durable setup, OAuth and agent-loop remote tool dispatch remain deferred.",
+}
+
+
+def configuration(session: Session) -> dict:
+    """Allowlisted knobs only; enabled configuration does not prove readiness."""
+    memory = bool(config.get("memory_enabled"))
+    growth = memory and bool(config.get("personality_growth_enabled"))
+    emotion = config.get("persona_default_emotion")
+    # This string setting is not enum-validated on input. Never expose arbitrary
+    # text in the always-on prompt; unknown values use the topology's neutral profile.
+    emotion = emotion.strip().lower() if isinstance(emotion, str) else ""
+    if emotion not in EmotionTopology.EMOTION_PROFILES:
+        emotion = "unrecognized (neutral fallback)"
+    mode = getattr(session, "execution_mode", None)
+    mode = mode if mode in MODES else "unknown"
+    return {
+        "memory": memory,
+        "growth": growth,
+        "rsi": growth and bool(config.get("rsi_enabled")),
+        "persona_lenses": bool(config.get("persona_memory_enabled")),
+        "default_emotion": emotion,
+        "persona_set": bool(config.get("persona_description")),
+        "learning_review": bool(config.get("learning_review_enabled")),
+        "rag": bool(config.get("rag_enabled")),
+        "compaction": bool(config.get("compression_enabled")),
+        "mode": mode,
+    }
+
+
+def capability_context(session: Session, *, tool_names: set[str], growth_state: str) -> str:
+    """Always explain features, even with a custom prompt or failed growth store."""
+    facts = "\n".join(f"{name}: {description}" for name, description in FEATURES.items())
+    flags = {**configuration(session), "growth_turn": growth_state}
+    inspection = (
+        " Use harness_status only for requested live settings or learning state."
+        if "harness_status" in tool_names
+        else " Live inspection is unavailable to this agent; offer the relevant UI command."
+    )
+    return (
+        "\n\nHarness capabilities (implementation facts):\n"
+        + facts
+        + "\nCurrent configuration (enabled is not proof of successful learning): "
+        + json.dumps(flags, separators=(",", ":"))
+        + "\nAnswer feature questions directly from this brief. Do not infer features "
+        "from recalled chat or empty notes, claim unobserved improvement, or invent unavailable tools."
+        + inspection
+    )

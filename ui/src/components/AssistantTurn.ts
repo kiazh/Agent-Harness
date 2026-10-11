@@ -3,6 +3,7 @@
 
 import { Markdown, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { BLOCK_GAP } from "../design/tokens.ts";
+import { transcriptInset } from "../design/spacing.ts";
 import { markdownTheme } from "../theme.ts";
 import { theme } from "../theme.ts";
 
@@ -37,12 +38,13 @@ export class AssistantTurn implements Component {
 
 	render(width: number): string[] {
 		const total = Math.max(0, width);
-		const inner = Math.max(1, Math.min(110, width - 2));
+		const gutter = " ".repeat(transcriptInset(width));
+		const inner = Math.max(1, Math.min(110, width - gutter.length - 2));
 		const rows = this.md.render(inner);
 		const out = rows.map((line, i) =>
 			i === 0 ? `${theme.dim("●")} ${truncateToWidth(line, inner)}` : `  ${truncateToWidth(line, inner)}`,
 		);
-		return [...BLOCK_GAP, ...out.map((line) => truncateToWidth(line, total))];
+		return [...BLOCK_GAP, ...out.map((line) => truncateToWidth(gutter + line, total))];
 	}
 
 	invalidate(): void {

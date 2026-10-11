@@ -20,6 +20,7 @@ import { ICONS } from "./design/icons.ts";
 import { ACTIVITY_INTERVAL_MS, type AnimationCoordinator, type AnimationSubscription } from "./design/motion.ts";
 import { sanitizeDisplay } from "./design/text.ts";
 import { LIMITS } from "./design/tokens.ts";
+import { transcriptInset } from "./design/spacing.ts";
 import { Menu } from "./components/Menu.ts";
 import { repairFill, theme } from "./theme.ts";
 
@@ -61,7 +62,8 @@ export class ThinkingIndicator implements Component {
 		const dots = this.activity.frame([...ICONS.toolActiveFrames], ACTIVITY_INTERVAL_MS, this.startedAt);
 		const secs = Math.floor((Date.now() - this.startedAt) / 1000);
 		const msg = secs > 0 ? `${this.baseMessage} ${secs}s` : this.baseMessage;
-		return [truncateToWidth(`${theme.accent(dots)} ${theme.muted(msg)}`, width)];
+		const gutter = " ".repeat(transcriptInset(width));
+		return [truncateToWidth(`${gutter}${theme.accent(dots)} ${theme.muted(msg)}`, width)];
 	}
 
 	invalidate(): void {}

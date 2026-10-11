@@ -38,9 +38,12 @@ for (const trueColor of [true, false]) {
 		const resultRow = plain.findIndex(row => row.includes("Homebrew fallback"));
 		assert.ok(resultRow >= 0);
 		const topRow = resultRow - 2;
-		assert.match(plain[topRow]!, /^ {3}┌─+┐\s*$/);
-		assert.match(plain[resultRow]!, /^ {3}│ {3}Example inspection.* │\s*$/);
-		assert.match(plain[resultRow + 1]!, /^ {3}└─+┘\s*$/);
+		assert.match(plain[topRow]!, /^ {4}┌─+┐\s*$/);
+		assert.match(plain[resultRow]!, /^ {4}│ {3}Example inspection.* │\s*$/);
+		assert.match(plain[resultRow + 1]!, /^ {4}└─+┘\s*$/);
+		const assistant = plain.find(row => row.includes("I’ll inspect"));
+		assert.match(assistant!, /^ {2}● /, "chat keeps its marker away from the terminal edge");
+		assert.equal(plain[topRow]!.indexOf("┌"), assistant!.indexOf("●") + 2, "panel edge aligns with the assistant text column");
 		assert.equal(plain[topRow - 1]?.trim(), "", "space outside the panel");
 		const edge = luminance(color(screen[topRow]!));
 		const fill = luminance(color(screen[resultRow]!, true));
@@ -48,7 +51,7 @@ for (const trueColor of [true, false]) {
 		assert.ok((edge + 0.05) / (fill + 0.05) >= 2.5, "rectangle remains visible against its inset surface");
 		assert.ok((fill + 0.05) / (backdrop + 0.05) >= 1.1, "panel fill differs visibly from the transcript background");
 		const evidence = plain.findIndex(row => row.includes("needs approval"));
-		assert.match(plain[evidence - 1]!, /^ {3}┌─+┐\s*$/);
+		assert.match(plain[evidence - 1]!, /^ {4}┌─+┐\s*$/);
 		assert.deepEqual(color(screen[evidence - 1]!), color(screen[topRow]!), "approval and tool frames share the same palette");
 	});
 }

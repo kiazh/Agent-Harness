@@ -7,6 +7,7 @@ from ah.tools import (
     agents,  # noqa: F401 — delegate, list_agents
     builtins,  # noqa: F401 — web_search, web_extract, search_files
     file,  # noqa: F401 — read_file, write_file, list_files
+    harness,  # noqa: F401 — read-only feature/configuration/learning inspection
     memory,  # noqa: F401 — remember, recall
     rag,  # noqa: F401 — index_document, search_documents
     session_recall,  # noqa: F401 — transcript recall
@@ -21,6 +22,7 @@ __all__ = [
     "registry",
     "builtins",
     "file",
+    "harness",
     "terminal",
     "memory",
     "rag",

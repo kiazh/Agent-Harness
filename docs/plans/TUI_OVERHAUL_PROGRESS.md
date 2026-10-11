@@ -55,6 +55,39 @@ full UI check and isolated real-gateway wrapper pass; see current verification d
 The full backend run above remains the prior verified run (UI/docs-only follow-up).
 Independent bounded review found no Critical/Important issue. Changes uncommitted.
 
+## Consistent gutters and model feature awareness — 2026-10-11
+
+The latest screenshot showed tool frames indented independently from flush-left
+replies, and the model guessing about persona/growth from tool signatures and
+recalled chat. These were separate presentation and context defects. Current
+base is `1d80ba0` on `main`; changes remain uncommitted.
+
+- Shared spacing gives messages, notices and thinking activity a two-column
+  outer gutter at widths ≥40. The tool-frame edge is at column four, aligned
+  with reply text. Frames retain their cap, padding and fill; narrow viewports
+  drop extra gutters and retain width bounds.
+- `ah/core/self_knowledge.py` shares implementation facts between model prompts
+  and live inspection. Both execution paths include the brief, even with custom
+  prompts, disabled growth, empty notes or failed preparation. Settings are
+  allowlisted; arbitrary emotion text is never copied into the brief. The
+  tested brief stays within 650 tokens without extra model/DB calls.
+- `harness_status` is an owned-session, read-only `context.read` tool. It exposes
+  current persona and this agent's learning/RSI evidence, redacts results, bounds
+  them to valid JSON and bypasses the global read cache. Oversized fields have
+  omission markers; remaining oversized state is safely refused. Agent messages
+  retain the complete snapshot instead of cutting it at 1000 characters.
+- Feature facts distinguish tone, persona-conditioned recall, persistent notes
+  and runtime adaptation. Enabled settings/evidence are not proof of improved
+  quality. Model-weight training, application-code self-rewriting, permission
+  expansion and completed MCP remote dispatch are not claimed.
+
+Margin, context-delivery, live agent-loop and adversarial-boundary regressions
+were observed failing before fixes. Independent review reproduced the unsafe
+emotion field and confirmed its correction, finding no remaining
+Critical/Important defect in that bounded scope. Exact counts and the clean-HEAD
+timing comparison are in `docs/verification/TUI_OVERHAUL_REVIEW.md`. Native
+artifacts use revised spacing; no production-provider/PTY validation is implied.
+
 ## T0 — Reconnaissance and baseline — COMPLETE 2026-10-11
 
 Working directory: `/Users/shadow/agent-harness1` (spec says `/Users/shadow/Agent-Harness1`; macOS case-insensitive, same checkout).

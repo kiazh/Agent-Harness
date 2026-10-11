@@ -4,6 +4,7 @@
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { NoticeKind } from "../features/types.ts";
 import { BLOCK_GAP } from "../design/tokens.ts";
+import { transcriptInset } from "../design/spacing.ts";
 import { theme } from "../theme.ts";
 
 export class Notice extends Text {
@@ -11,7 +12,7 @@ export class Notice extends Text {
 	private readonly kind: NoticeKind;
 
 	constructor(text: string, kind: NoticeKind = "info") {
-		super("", 1, 0);
+		super("", 0, 0);
 		this.raw = text;
 		this.kind = kind;
 		this.refreshSkin();
@@ -39,6 +40,7 @@ export class Notice extends Text {
 
 	override render(width: number): string[] {
 		const total = Math.max(0, width);
-		return [...BLOCK_GAP, ...super.render(Math.max(1, width)).map((line) => truncateToWidth(line, total))];
+		const gutter = " ".repeat(transcriptInset(width));
+		return [...BLOCK_GAP, ...super.render(Math.max(1, width - gutter.length)).map((line) => truncateToWidth(gutter + line, total))];
 	}
 }

@@ -902,3 +902,80 @@ The capture script emits four real timed native frames in addition to the nine
 viewport/theme captures. No production model/provider or real-PTY compatibility
 claim is implied. MCP configuration ingestion/persistence, connect controls,
 OAuth and agent-loop exposure remain deferred as documented previously.
+
+## 2026-10-11 — Transcript margins and model feature knowledge
+
+Latest screenshot reported mismatched margins and an agent claiming it could
+not verify persona/growth internals. Fixes remain uncommitted on `main`, based
+on `1d80ba0`; no commit, push, deployment or git configuration change was made.
+
+UI: `ui/src/design/spacing.ts` is the shared gutter rule. At widths ≥40, user/
+assistant/notice/thinking markers get two outer columns, and tool frame edges
+align with reply text at column four. Below 40, extra gutters disappear. Keep
+the 104-column frame cap, inset padding, distinct fill, plain conversational
+messages, wrap fidelity and existing calm motion. Native preview PNG/GIF and
+design/progress docs reflect the new spacing. Do not restore a separate
+hardcoded indent in ToolPanel or make every assistant response a card.
+
+Model context: `ah/core/self_knowledge.py` shares implementation facts between
+the always-on brief and `ah/tools/harness.py`. Agent preparation injects it in
+both ordinary and streaming paths, with custom prompts, empty/disabled growth
+and failed preparation. It explains tone separately from persona-conditioned
+fact recall and persistent growth, describes actual runtime RSI, and marks MCP
+remote dispatch as deferred. The guide uses allowlisted live flags, costs at
+most 650 tokens in the tested configurations and adds no model/DB request.
+Update this shared manifest when implementation boundaries change; old chat
+retrieved through session_recall is not authoritative documentation.
+
+The new `harness_status` tool verifies active session ownership, reads only the
+current agent's growth/RSI state, uses existing broker `context.read`, redacts
+results and times out after two seconds. It is explicitly uncacheable because
+the global read cache is otherwise argument-based and could reuse another
+agent's state. Its valid JSON is bounded below the agent's 9000-character
+structured-output allowance. Omitted notes/persona/trials carry explicit labels
+and preserve counts; remaining oversized state is refused safely. Do not restore
+the default 1000-character preview for this tool or cache its mutable results.
+
+Regression evidence: margin tests failed before correction; real model-call
+fixtures verify the brief reaches the provider; real DB-backed streamed and
+ordinary agent loops verify scoped live JSON reaches the next model call
+without approval. Those integration regressions exposed the JSON truncation
+bug. Review then exposed unrestricted persona_default_emotion in the prompt:
+secret-shaped text and a 10,000-word value defeated secrecy/token bounds.
+Adversarial regressions failed before the fix; recognized canonical topology
+names now replace arbitrary text, with an explicit neutral fallback label.
+Legacy sessions without a mode report unknown instead of crashing. Independent
+bounded confirmation passed five checks with no Critical/Important finding.
+
+Focused verification after the review fix: **15 passed**, including the two
+checks that failed in the first full run. That first run had **2113 passed,
+5 skipped, 2 failed**: the corrected legacy-session compatibility bug and an
+unchanged Hypothesis timing-only deadline. Clean HEAD `1d80ba0` in managed
+worktree `/Users/shadow/.codex/worktrees/38df/Agent-Harness1` passed lifecycle
+and reproduced the timing failure (576 ms vs 200 ms; **1 passed, 1 failed**).
+No budget assertion failed and no deadline was relaxed. Final full-run evidence
+is recorded in `docs/verification/TUI_OVERHAUL_REVIEW.md` and below.
+
+All Python checks use disposable home lookup/env isolation and only the dedicated
+`agentharness_test` DB. No live credentials, production DB, shell startup files,
+operator config or terminal was used. Fixture evidence does not guarantee a live
+model's wording or prove measured learning gains. Permission expansion, model-
+weight training, application-code self-rewriting, durable MCP configuration,
+OAuth and agent-loop remote dispatch are not part of this fix. Restart `ah`
+after applying changes so the worker and TUI load the new code.
+
+Final full backend verification after the fixes: **2119 passed / 5 skipped /
+0 failed in 168.11 s**, including the real gateway UI wrapper (all **256 UI
+tests**, zero UI skips). Actual command used the disposable bootstrap through
+`PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/Users/shadow/Agent-Harness1`
+and the dedicated test DSN, with `.venv/bin/python -m pytest -q --tb=short
+-p no:cacheprovider`. Standalone UI: 251 passed/5 gated skips, typecheck/eslint
+clean. Ruff check/format passed on seven touched Python files; Bandit on the
+new brief/status modules found no medium+ issues; scoped Impeccable layout scan
+returned `[]`; `git diff --check` passed. The unchanged timing flake did not
+recur in the final full run. No unresolved failure is waived.
+
+Final copy clarification says empty notes mean none are currently saved, without
+implying the agent has never learned (notes can be explicitly forgotten).
+The complete self-knowledge test file then passed again: **13 passed in 0.86 s**;
+Ruff check/format and diff whitespace checks remained clean.

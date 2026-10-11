@@ -1,8 +1,9 @@
 // Neutral transcript frame shared by tool output and approval evidence.
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { repairFill, theme } from "../theme.ts";
+import { panelInset } from "../design/spacing.ts";
 export const TOOL_PANEL_MAX_WIDTH = 104;
-const indentFor = (width: number): number => width >= 40 ? 3 : 0;
+const indentFor = panelInset;
 export const panelContentWidth = (width: number): number => Math.max(1, Math.min(TOOL_PANEL_MAX_WIDTH, width - indentFor(width)) - 4);
 export function renderToolPanel(lines: string[], width: number): string[] {
  if (width <= 0) return [];

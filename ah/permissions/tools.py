@@ -53,7 +53,7 @@ def action_for_tool(name: str, args: dict) -> dict:
         return {"operation": "memory", "targets": []}
     if name in ("skill_list", "skill_read", "skill_resource"):
         return {"operation": "skill.read", "targets": [str(args.get("skill_name", ""))]}
-    if name in ("session_recall", "session_recall_window", "list_agents"):
+    if name in ("session_recall", "session_recall_window", "list_agents", "harness_status"):
         return {"operation": "context.read", "targets": []}
     # Unknown/extensible tools: declared mutating effects become approval
     # capabilities instead of silent in-process execution. Effect-free tools

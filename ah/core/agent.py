@@ -549,8 +549,10 @@ class BaseReActAgent:
             include_memory and memory_enabled and config.get("personality_growth_enabled")
         )
         growth_prompt = ""
+        growth_state = "skipped"
         retrieve_memory = True
         if growth_enabled:
+            growth_state = "unavailable"
             try:
                 from ah.memory.growth import growth_store
 
@@ -571,6 +573,7 @@ class BaseReActAgent:
                 )
                 _growth_episode.set(decision["id"])
                 _rsi_choice.set(decision.get("rsi", {}))
+                growth_state = "active"
                 retrieve_memory = decision["action"] == "retrieve"
                 if not retrieve_memory:
                     self._last_retrieval_mode = "policy-noop"
@@ -634,6 +637,13 @@ class BaseReActAgent:
             logger.warning("Archived context retrieval failed: %s", e)
 
         system_prompt = self.system_prompt
+        from ah.core.self_knowledge import capability_context
+
+        system_prompt += capability_context(
+            session,
+            tool_names={tool.name for tool in self._tool_defs()},
+            growth_state=growth_state,
+        )
         persona_description = config.get("persona_description")
         if persona_description:
             system_prompt += (
@@ -1294,9 +1304,11 @@ class BaseReActAgent:
             if item.get("_delegated_tokens"):
                 tool_entry["delegated_tokens"] = item["_delegated_tokens"]
             tool_calls_made.append(tool_entry)
-            # Skill pages already have bounded output. Preserve the page so its
-            # continuation offset cannot skip instructions hidden by the preview cap.
-            message_limit = 9000 if tool_name in ("skill_read", "skill_resource") else 1000
+            # Skill pages and status snapshots already have bounded output.
+            # Preserve continuation offsets and complete JSON beyond the preview cap.
+            message_limit = (
+                9000 if tool_name in ("skill_read", "skill_resource", "harness_status") else 1000
+            )
             self._append_tool_messages(messages, response, tc, result_str[:message_limit])
 
     async def _flush_pending_chunks(self, pending_chunks: list[dict[str, Any]]) -> None:
