@@ -153,6 +153,8 @@ test("slash commands work against the real gateway and database", { skip, timeou
 		},
 		pick: async (_title: string, items: SelectItem[]) => items.find((i) => i.value === "yes") ?? items[0],
 		askText: async () => undefined,
+		inspectOutput: async () => {},
+		pickTheme: async () => undefined,
 		writeFile: async (path, text) => {
 			const full = join(dir, path);
 			const { writeFile } = await import("node:fs/promises");
@@ -194,7 +196,11 @@ test("slash commands work against the real gateway and database", { skip, timeou
 		assert.match(await run("/compress"), /Nothing to compress/);
 		assert.match(await run("/status"), /PostgreSQL/);
 		assert.match(await run("/config"), /max_iterations/);
+		assert.match(await run("/theme dracula"), /Skin: dracula/);
+		assert.match(await run("/config theme"), /dracula/);
 		assert.match(await run("/skills"), /Name|No skills/);
+		assert.match(await run("/mcp"), /No MCP servers registered in this harness/);
+		assert.match(await run("/mcp list"), /No MCP servers registered in this harness/);
 		assert.match(await run("/agents"), /harness/);
 		assert.match(await run("/agents show researcher"), /research/i);
 

@@ -112,7 +112,7 @@ DEFAULTS: dict[str, Any] = {
     "learning_review_max_per_session": 3,
     "rag_enabled": True,
     "streaming": True,
-    "theme": "default",
+    "theme": "codex",
     "history_size": 100,
     # API keys and service URLs
     "openrouter_api_key": "",
@@ -301,7 +301,7 @@ class Config:
     learning_review_max_per_session: int = 3
     rag_enabled: bool = True
     streaming: bool = True
-    theme: str = "default"
+    theme: str = "codex"
     history_size: int = 100
     # API keys and service URLs
     openrouter_api_key: str = field(default="", repr=False)

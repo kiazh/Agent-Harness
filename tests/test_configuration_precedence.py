@@ -100,3 +100,14 @@ async def test_clear_failure_does_not_claim_durable_removal(tmp_path, monkeypatc
     with pytest.raises(RpcError):
         await secrets_clear(FakeGW(), {"key": "OPENAI_API_KEY"})
     assert os.environ["OPENAI_API_KEY"] == "previous-value"
+
+
+def test_fresh_theme_default_is_codex_without_overwriting_explicit_values(tmp_path):
+    from ah.core.config import DEFAULTS, Config
+
+    assert DEFAULTS["theme"] == "codex"
+    assert Config().theme == "codex"
+    assert Config.load(tmp_path / "missing.yaml").get("theme") == "codex"
+    explicit = tmp_path / "config.yaml"
+    explicit.write_text("theme: default\n", encoding="utf-8")
+    assert Config.load(explicit).get("theme") == "default"

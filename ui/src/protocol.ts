@@ -313,3 +313,16 @@ export interface RsiStatus {
 	tool_weights: Record<string, number>;
 	history: Array<{ revision: number; reason: string; status: string; created_at: string }>;
 }
+
+/** Sanitized public connector inventory from the shared harness runtime. */
+export interface MCPServerView {
+ id: string;
+ display_name: string;
+ enabled: boolean;
+ transport: string;
+ state: "disconnected" | "connecting" | "connected" | "error" | "disabled" | "degraded" | "auth_required";
+ server_name?: string | null;
+ server_version?: string | null;
+ protocol_version?: string | null;
+ error?: string | null;
+}

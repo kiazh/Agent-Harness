@@ -27,6 +27,7 @@ from ah.gateway.features.config import (
     profile_set,
     status,
 )
+from ah.gateway.features.connectors import mcp_list, mcp_status
 from ah.gateway.features.growth import (
     growth_feedback,
     growth_forget,
@@ -101,6 +102,8 @@ __all__ = [
 Handler = Callable[["Gateway", dict[str, Any]], Awaitable[dict[str, Any]]]
 
 METHODS: dict[str, Handler] = {
+    "mcp.list": mcp_list,
+    "mcp.status": mcp_status,
     "growth.get": growth_get,
     "growth.teach": growth_teach,
     "growth.feedback": growth_feedback,

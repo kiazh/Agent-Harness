@@ -14,6 +14,11 @@ export interface AskTextOptions {
 	placeholder?: string;
 	example?: string;
 	maxLength?: number;
+	/**
+	 * Masked single-line secret editor. The value is never rendered, never
+	 * prefilled, and never echoed. Ordinary options keep multiline behavior.
+	 */
+	secret?: boolean;
 }
 
 export type AskTextResult = string | undefined;
@@ -34,8 +39,16 @@ export interface FeatureHost {
 	/** Update details (e.g. title) of the current session. */
 	updateSession(session: SessionInfo): void;
 	pick(title: string, items: SelectItem[]): Promise<SelectItem | undefined>;
+	/**
+	 * Live theme preview: selections recolor immediately, cancel restores,
+	 * Enter commits. Returns the committed skin ID or undefined on cancel.
+	 * Persistence stays with the caller.
+	 */
+	pickTheme(): Promise<string | undefined>;
 	/** Collect free-form text in an overlay editor; undefined means cancelled. */
 	askText(options: AskTextOptions): Promise<AskTextResult>;
+	/** Inspect locally retained tool output; never re-executes tools. */
+	inspectOutput(toolId?: string): Promise<void>;
 	/** Active user profile id (preferences bucket + new-chat agent scope). */
 	profileId(): string;
 	/** Switch the active profile (existing chats keep theirs). */

@@ -17,11 +17,14 @@ import asyncio
 import logging
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ah.core.cleanup import cancel_and_join as _bounded_join
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from ah.connectors.service import ConnectorService
 
 
 async def _bounded_cleanup(cleanup: Coroutine[Any, Any, None], timeout: float, label: str) -> None:
@@ -47,6 +50,27 @@ class RuntimeServices:
     _background: set[asyncio.Task] = field(default_factory=set)
     _shutting_down: bool = False
     capabilities: list[Capability] = field(default_factory=list)
+    _connector_service: ConnectorService | None = field(default=None, repr=False)
+
+    def get_connector_service(self) -> ConnectorService:
+        """Return this worker's shared inventory without starting connections.
+
+        The inventory is in-memory until connector persistence is implemented.
+        Other applications' MCP connections are outside this runtime's scope.
+        Neither runtime startup nor inspection requires the optional MCP SDK.
+        """
+        if self._connector_service is None:
+            from ah.connectors.service import ConnectorService
+
+            self._connector_service = ConnectorService()
+        return self._connector_service
+
+    async def shutdown_connectors(self, timeout: float = 10.0) -> None:
+        """Retire owned connections without creating an unused service."""
+        if self._connector_service is not None:
+            await _bounded_cleanup(
+                self._connector_service.manager.shutdown_all(), timeout, "connector shutdown"
+            )
 
     async def startup(self) -> dict[str, Any]:
         """Connect DB, start audit, load skills, detect providers/sandbox.
@@ -151,6 +175,14 @@ class RuntimeServices:
                     cancellation = e
                 finally:
                     self._background.clear()
+                try:
+                    await self.shutdown_connectors(
+                        timeout=min(0.1 if cancellation is not None else 5, timeout)
+                    )
+                except asyncio.CancelledError as e:
+                    cancellation = e
+                except Exception as error:
+                    logger.warning("connector shutdown failed (%s)", type(error).__name__)
                 try:
                     from ah.observability.audit import audit_persistence
 

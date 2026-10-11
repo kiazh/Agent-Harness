@@ -1,7 +1,7 @@
 # MCP connector progress and successor notes
 
 Verified on 2026-10-11 in `/Users/shadow/Agent-Harness1`. This is a verified
-connector **library phase**, not a completed integration into AgentHarness.
+connector **library plus read-only inspection phase**, not completed agent-loop integration.
 Read [MCP_CONNECTORS_PLAN.md](MCP_CONNECTORS_PLAN.md) for the remaining contracts.
 
 ## Checkout and boundaries
@@ -45,11 +45,11 @@ shell startup files, or operator terminal were modified.
 | Task-safe lifecycle | Owner task enters and exits all SDK contexts; six repeated same/cross-task cycles leave no fixture processes or shutdown errors. |
 | Bounded discovery and results | Entire discovery deadline; catalog count; description and returned-result bounds; schema validation before dispatch. |
 | Manager behavior | Injected-client tests for transient-only retries, backoff, circuit open/reset, idempotence, and serialized retirement/reconnect. |
-| Management service contracts | Injected-client tests for inventory, status, connect/disconnect, list/describe, refusals, and distinct connectors. No gateway routes yet. |
+| Management service contracts | Injected-client tests for inventory, status, connect/disconnect, list/describe, refusals, and distinct connectors. Read-only gateway `mcp.list` / `mcp.status` and TUI `/mcp` inspection added on 2026-10-11. |
 | Agent tool exposure and exact broker approval | **Deferred.** There is no service `tools.call`, native tool adapter, or agent-loop wiring. |
-| Durable config, owner/scope enforcement, resume | **Deferred.** No connector PostgreSQL migration or runtime service-graph registration. |
+| Durable config, owner/scope enforcement, resume | **Deferred.** No connector PostgreSQL migration or configuration ingestion. The worker runtime now owns the shared in-memory service and its shutdown. |
 | HTTP OAuth and credential transport | **Deferred.** Configured credential profiles refuse with `auth_required`; supplied values are not silently ignored. |
-| Management CLI/TUI/HTTP UI | **Deferred.** Existing UI tests passing does not establish a connector UI. |
+| Management CLI/TUI/HTTP UI | **Partial:** TUI server picker and list/status backed by real read-only gateway routes. Configuration ingestion, persistence, connect/disconnect controls, CLI and HTTP management remain deferred. |
 | Real third-party service integration | **Deferred.** Synthetic SDK fixtures establish wire behavior, not compatibility with any particular external service. |
 
 ## Teardown blocker: empirical verdict and fix
@@ -209,3 +209,23 @@ Resources/prompts, legacy SSE, and server-initiated model/filesystem access are
 not exposed. Docker, other OSes, live-provider calls, and production deployment
 remain outside this evidence. Do not claim a completed connector product or
 zero remaining bugs from this library verification.
+
+## Read-only gateway and TUI inspection — 2026-10-11
+
+A lazy runtime-owned ConnectorService now supplies authenticated `mcp.list {}`
+(`{servers:[...]}`) and `mcp.status {id}` (`{server:{...}}`). Inspection uses no
+SDK/DB initialization and launches/discovers nothing. Unknown IDs return 1002;
+invalid IDs return -32602. Owned gateway/runtime shutdown closes connections;
+HTTP adapters borrow the runtime and cannot close other consumers’ connections.
+
+The TUI adds `/mcp` (server picker), `/mcp list`, `/mcp status <id>`, help and
+argument completion. Empty inventory is explicit. These are this harness’s
+worker connections, not servers managed by OpenCode or Codex. Inventory is still
+in memory and default-empty: adding read-only inspection does not supply durable
+server configuration, connection controls, OAuth, agent tool calls, or third-party
+service compatibility. No catalog/mock is presented as remote execution.
+
+New tests cover actual stdio gateway RPC, lazy inspection/auth/input validation,
+shared sanitized views, real SDK connected→disconnected state and PID retirement,
+owned/borrowed lifecycle, UI command dispatch and real-gateway empty inspection.
+Final aggregate evidence is in TUI_OVERHAUL_REVIEW.md and the release review.

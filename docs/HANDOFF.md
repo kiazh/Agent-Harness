@@ -1,5 +1,7 @@
 # AgentHarness succession handoff
 
+**Update 2026-10-11: TUI full overhaul implemented (T0–T8).** Presentation rebuilt over the intact Python gateway/JSON-RPC transport: semantic design tokens + one animation coordinator + compact borderless transcript (user/assistant/tool/diff/notice widgets) + responsive docked shell + searchable menus/durable forms/masked secrets + exact approval review + live theme preview. Session/turn-bound event model with honest outcomes (unknown/interrupted/historical, no guessed success), once-only final text/usage reconciliation, retained-output inspection (`/output`, 8×128 KiB/1 MiB), Deny-default session-bound approvals with `sessionId` in `approvals.resolve`, 26 skins with `codex` fresh default (explicit saved themes respected). Verified: `npm --prefix ui run check` **228 passed / 5 env-skipped** (233 total), typecheck + eslint clean; isolated real-gateway wrapper 1 passed; direct gateway e2e 5 passed / 0 skipped (incl. `/theme` persist round-trip); full backend suite **2093 passed / 5 skipped** on rerun (first run: 2 load-timing delegation flakes, green in isolation and on rerun); Ruff clean on changed Python (`ah/core/config.py` theme default only + 1 precedence test). Implementation map, gates and deferred items: `docs/plans/TUI_OVERHAUL_PROGRESS.md`; design contract: `docs/design/TUI_DESIGN.md`. Remaining: T9 docs polish is in this entry + README; T10 bounded visual review still open. No commits/pushes; MCP backend integration stays deferred (no connector RPCs invented).
+
 **Latest bug-fix audit:** Read [Post-OpenCode audit](BUGFIX_AUDIT.md) for current fixes and verification. The older measurements and remaining-failure lists below are historical snapshots, superseded by that audit.
 
 **Verified current state:** Backend **1,927 passed / 5 platform-or-optional skips / zero failures**; full TUI check **127 passed / zero skips**, including real gateway restart tests; Ruff, formatting, diff check, and wheel packaging pass. Existing databases receive additive runtime migrations automatically. All audit fixes remain uncommitted; the five skips and service limitations are detailed in the audit.
@@ -804,3 +806,99 @@ the real gateway restart checks. Command:
 `git diff --check` passed. No unrelated deadline setting or production code
 was changed to suppress the initial timing failure. This patch remains
 uncommitted on `main`; no commit, push, deploy or production DB access occurred.
+
+
+## 2026-10-11 — Screenshot correction, calm activity, real MCP inspection
+
+User’s screenshot is the current visual authority. Do not revert to the older
+Desktop instruction’s borderless-tool/two-row-footer direction. See
+`docs/design/TUI_DESIGN.md`, `docs/plans/TUI_OVERHAUL_PROGRESS.md` and
+`docs/verification/TUI_OVERHAUL_REVIEW.md`; preview is
+`docs/verification/artifacts/tui-reference.png`. Existing OpenCode changes were
+preserved and all work remains uncommitted on main at base `0ea164e`.
+
+Implemented quiet neutral tool/evidence frames (104-column cap, 3-column indent),
+one header/footer, a thin composer with a retained short-window placeholder,
+vertical bottom-docked approvals, reading-width limits, 600 ms single-cell activity
+and static/coalesced growth acknowledgment. Resize budgets update before layout
+measurement. User/assistant messages stay plain. Saved themes remain respected.
+
+Approval lifecycle now binds queued evidence to active controls; long operations/
+targets remain fully pageable; late RPC forms retain draft behind approval;
+external resolution advances the queue; terminal retirement closes unanswered
+controls without a decision. Default Deny and exact binding revalidation remain.
+Fresh bound continuation IDs are recognized before routing; cleanup freezes activity
+without releasing ownership; watchdog replacement/exit clears retained timers.
+
+MCP wiring: `ui/src/features/mcp.ts` + registry/help/protocol -> authenticated
+`ah/gateway/features/connectors.py` -> lazy `RuntimeServices.get_connector_service()`.
+`mcp.list {}` returns `{servers:[...]}`; `mcp.status {id}` returns `{server:{...}}`.
+Both read the same worker inventory without DB/SDK startup or launches/discovery.
+Runtime/owning gateway closes connections; borrowing HTTP adapters do not. Tests
+prove actual stdio gateway RPC and real SDK connected/disconnected/PID retirement.
+
+Inventory remains in-memory/default-empty. Configuration ingestion and persistence,
+connect/disconnect management UI, OAuth, agent-loop remote tool calls and another
+app’s server inventory are deferred. Empty `/mcp` is honest; do not populate it with
+mock “connected” rows or expose unbrokered remote execution to make it look complete.
+
+Independent review reproduced five issues and each was fixed with a failing test
+then verified green. Re-review found no remaining Important issue within its scope.
+Native captures are reproducible via
+`node ui/test/support/capture-reference.ts /tmp/ah-reference-review`; they use real
+renderer components with synthetic events, not a live installer change or provider.
+Standalone UI check: 252 total, 247 pass, 5 env-gated skips, no failures, typecheck and
+lint clean. Isolated real-gateway wrapper verifies zero skipped UI tests. Clean HEAD
+comparison of initial failing checks: 5 passed at `0ea164e`; corrected checkout: 5
+passed. Full backend/final commands are recorded in the visual/release review.
+
+All Python verification isolates home lookup/env and uses only `agentharness_test`.
+No commit, push, deployment, git config change, production DB, live key, shell-startup
+edit, or operator-terminal interaction was performed. Native visual review is bounded
+headless evidence; real-PTY validation and approval reopen-on-return remain explicit
+limits rather than implied completion.
+
+Final sequential verification after the review fixes: **2106 passed / 5 skipped /
+0 failed in 115.43 s**, including the real gateway restart wrapper (all **252 UI
+tests**, zero skipped UI tests). Command:
+`AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`,
+with a disposable home/env bootstrap supplied through PYTHONPATH as described in
+the visual review. Standalone UI check: 247 passed / 5 optional skips / 0 failures;
+typecheck and eslint passed. No unresolved failure remains in the recorded checks.
+
+
+## 2026-10-11 — Output rectangles and pulse correction
+
+Follow-up to the screenshot implementation: user reported missing rectangles,
+a sluggish circle and a non-pulsing corner square. Native rendering showed the
+rectangles existed but their colors nearly merged into black. Codex tool output
+and approval evidence now share visible #606069 edges, #17171c fill, three-column
+outside margins and inset padding. Tests decode emitted SGR in both truecolor
+and 256-color modes, rather than trusting palette metadata.
+
+Activity advances every 200 ms; the corner uses the same fixed small square while
+brightness rises/falls. Footer.status owns working demand on the one shared
+AnimationCoordinator, because streaming text hides the thinking indicator.
+Approval/ready/stopping/cleanup/offline retire working demand, and switching/exit
+clear subscriptions. Learning retains 800 ms/30 s bounds and immediate first render.
+Reduced motion retains static feedback without a recurring frame timer. Seven
+assertions failed before fixes; bounded independent review found no Critical or
+Important remaining defect. The ah launcher points at this checkout (read only);
+no operator configuration or live terminal was changed. Restart ah to reload.
+
+Files for this correction: ui/src/components/Footer.ts, ui/src/design/{motion,tokens}.ts,
+shortcut copy in ui/src/app.ts; ui/test/{motion,ui,panels}.test.ts and native capture
+support. README, design/progress/verification docs and native artifacts are updated.
+Other OpenCode and earlier parent changes remain uncommitted and were preserved.
+
+Verification: npm --prefix ui run check = 256 total, 251 pass, 5 gated skip,
+zero failures, typecheck/eslint clean. Isolated dedicated-test-DB wrapper
+ tests/test_personality_growth.py::test_ui_checks_with_real_gateway_restart =
+1 pass in 33.19 s, all 256 UI tests run with zero skips. Full backend was not
+repeated for this UI-only follow-up; prior full run was 2106 pass/5 skip.
+Reproduction details: docs/verification/TUI_OVERHAUL_REVIEW.md; preview artifacts
+artifacts/tui-reference.png and artifacts/tui-motion.gif beneath that directory.
+The capture script emits four real timed native frames in addition to the nine
+viewport/theme captures. No production model/provider or real-PTY compatibility
+claim is implied. MCP configuration ingestion/persistence, connect controls,
+OAuth and agent-loop exposure remain deferred as documented previously.

@@ -36,6 +36,8 @@ def test_all_feature_methods_accessible_after_split():
         "growth.forget",
         "growth.installPolicy",
         "growth.rollback",
+        "mcp.list",
+        "mcp.status",
         "skills.list",
         "skills.show",
         "skills.learn",

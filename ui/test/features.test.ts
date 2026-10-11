@@ -64,6 +64,19 @@ class FakeHost implements FeatureHost {
 		this.asked.push(options);
 		return this.textQueue.shift();
 	}
+	themeQueue: Array<string | undefined> = [];
+	async pickTheme(): Promise<string | undefined> {
+		const value = this.themeQueue.shift();
+		if (value !== undefined) {
+			const { setSkin } = await import("../src/theme.ts");
+			setSkin(value);
+		}
+		return value;
+	}
+	inspected: Array<string | undefined> = [];
+	async inspectOutput(toolId?: string): Promise<void> {
+		this.inspected.push(toolId);
+	}
 	currentProfile = "default";
 	profileId() {
 		return this.currentProfile;
@@ -727,15 +740,57 @@ test("/keys clear resolves a prefix", async () => {
 	assert.match(host.last().text, /cleared/);
 });
 
-test("/keys with no args opens the picker menu", async () => {
+test("/keys menu Set flow saves once with persist:true and never echoes the value", async () => {
 	const host = new FakeHost();
 	host.responses["secrets.list"] = {
 		secrets: [{ key: "OPENAI_API_KEY", description: "OpenAI", set: false, liveSet: false }],
 		envFile: "/tmp/.env",
 	};
-	host.picks.push("OPENAI_API_KEY");
+	host.responses["secrets.set"] = { key: "OPENAI_API_KEY", set: true, persisted: true, envFile: "/tmp/.env" };
+	host.picks.push("OPENAI_API_KEY", "set");
+	host.textQueue.push("SENTINEL-s3cr3t-value");
 	await run("/keys", host);
-	assert.match(host.last().text, /\/keys set OPENAI_API_KEY/);
+	const sets = host.calls.filter((c) => c.method === "secrets.set");
+	assert.deepEqual(sets, [{ method: "secrets.set", params: { key: "OPENAI_API_KEY", value: "SENTINEL-s3cr3t-value", persist: true } }]);
+	assert.match(host.last().text, /OPENAI_API_KEY set/);
+	assert.ok(!host.printed.some((p) => p.text.includes("SENTINEL")), "secret never echoed in notices");
+	assert.ok(!host.pickTitles.join("\n").includes("SENTINEL"), "secret never in menus");
+	assert.ok(host.asked.some((a) => a.secret === true), "value collected through a masked editor");
+});
+
+test("/keys menu Clear confirms before a single clear", async () => {
+	const host = new FakeHost();
+	host.responses["secrets.list"] = {
+		secrets: [{ key: "OPENAI_API_KEY", description: "OpenAI", set: true, liveSet: true }],
+		envFile: "/tmp/.env",
+	};
+	host.responses["secrets.clear"] = { key: "OPENAI_API_KEY" };
+	host.picks.push("OPENAI_API_KEY", "clear", "yes");
+	await run("/keys", host);
+	assert.equal(host.calls.filter((c) => c.method === "secrets.clear").length, 1);
+	assert.match(host.last().text, /OPENAI_API_KEY cleared/);
+});
+
+test("/keys menu Back and Esc persist nothing", async () => {
+	const host = new FakeHost();
+	host.responses["secrets.list"] = {
+		secrets: [{ key: "OPENAI_API_KEY", description: "OpenAI", set: false, liveSet: false }],
+		envFile: "/tmp/.env",
+	};
+	host.picks.push("OPENAI_API_KEY", "back", undefined);
+	await run("/keys", host);
+	assert.ok(!host.calls.some((c) => c.method === "secrets.set" || c.method === "secrets.clear"));
+});
+
+test("/keys expert set failure redacts the value", async () => {
+	const host = new FakeHost();
+	host.responses["secrets.set"] = () => {
+		throw new Error("store exploded on SENTINEL-s3cr3t-value boom");
+	};
+	await run("/keys set OPENAI_API_KEY SENTINEL-s3cr3t-value", host);
+	assert.match(host.last().text, /Could not save OPENAI_API_KEY/);
+	assert.ok(!host.last().text.includes("SENTINEL"), "failure text redacts the submitted value");
+	assert.match(host.last().text, /\[redacted\]/);
 });
 
 test("/models picker applies the curated model and provider", async () => {
@@ -978,4 +1033,96 @@ test("new chats carry the profile agent scope only off-default", async () => {
 		method: "session.create",
 		params: { title: "", agent: "harness-work" },
 	});
+});
+
+test("H02 /theme menu commit persists exactly once with success", async () => {
+	const { getSkin, setSkin } = await import("../src/theme.ts");
+	const host = new FakeHost();
+	host.responses["config.set"] = { key: "theme", value: "dracula" };
+	host.themeQueue.push("dracula");
+	const before = getSkin();
+	try {
+		await run("/theme", host);
+		assert.equal(getSkin(), "dracula");
+		const sets = host.calls.filter((c) => c.method === "config.set");
+		assert.deepEqual(sets, [{ method: "config.set", params: { key: "theme", value: "dracula", persist: true } }]);
+		assert.match(host.last().text, /Skin: dracula/);
+	} finally {
+		setSkin(before);
+	}
+});
+
+test("H02 /theme menu cancel restores and persists nothing", async () => {
+	const { getSkin, setSkin } = await import("../src/theme.ts");
+	const host = new FakeHost();
+	host.themeQueue.push(undefined);
+	const before = getSkin();
+	setSkin("mono");
+	try {
+		await run("/theme", host);
+		assert.equal(getSkin(), "mono", "cancel restores the original theme");
+		assert.ok(!host.calls.some((c) => c.method === "config.set"), "no persistence on cancel");
+	} finally {
+		setSkin(before);
+	}
+});
+
+test("H02 /theme save failure keeps the temporary theme with a warning", async () => {
+	const { getSkin, setSkin } = await import("../src/theme.ts");
+	const host = new FakeHost();
+	host.responses["config.set"] = () => {
+		throw new Error("database is down");
+	};
+	host.themeQueue.push("light");
+	const before = getSkin();
+	try {
+		await run("/theme", host);
+		assert.equal(getSkin(), "light", "chosen theme stays applied temporarily");
+		assert.equal(host.calls.filter((c) => c.method === "config.set").length, 1, "persist attempted exactly once");
+		assert.match(host.last().text, /applied for now/);
+		assert.equal(host.last().kind, "warning", "failed save never claims saved");
+	} finally {
+		setSkin(before);
+	}
+});
+
+test("/mcp lists real harness inventory and reports an honest empty state", async () => {
+ const host = new FakeHost();
+ host.responses["mcp.list"] = {servers:[]};
+ await run("/mcp", host);
+ assert.deepEqual(host.calls, [{method:"mcp.list", params:{}}]);
+ assert.match(host.last().text, /No MCP servers registered/);
+ assert.equal(host.pickTitles.length, 0);
+ assert.ok(SLASH_COMMANDS.some(command => command.name === "mcp"));
+});
+
+test("/mcp opens a connection picker then fetches fresh status without connecting", async () => {
+ const host = new FakeHost();
+ const server = {id:"docs", display_name:"Docs", state:"connected", enabled:true, transport:"stdio", server_name:"fixture", server_version:"", protocol_version:"2025-11-25", error:null};
+ host.responses["mcp.list"] = {servers:[server]};
+ host.responses["mcp.status"] = {server};
+ host.picks.push("docs");
+ await run("/mcp", host);
+ assert.deepEqual(host.calls.map(call => call.method), ["mcp.list", "mcp.status"]);
+ assert.deepEqual(host.calls[1]!.params, {id:"docs"});
+ assert.match(host.last().text, /Docs.*connected/s);
+ assert.match(host.last().text, /2025-11-25/);
+ assert.doesNotMatch(host.last().text, /connected.*tools available/i);
+});
+
+test("/mcp status and list inspect without launching; cancel and malformed commands are inert", async () => {
+ const host = new FakeHost();
+ host.responses["mcp.status"] = {server:{id:"docs", display_name:"Docs", state:"disconnected", enabled:false, transport:"stdio", error:null}};
+ await run("/mcp status docs", host);
+ assert.deepEqual(host.calls, [{method:"mcp.status", params:{id:"docs"}}]);
+ assert.match(host.last().text, /disabled/);
+ host.responses["mcp.list"] = {servers:[{id:"docs", display_name:"Docs", state:"disconnected", enabled:false, transport:"stdio"}]};
+ await run("/mcp list", host);
+ assert.match(host.last().text, /Docs.*disabled/);
+ await run("/mcp", host);
+ assert.equal(host.calls.at(-1)!.method, "mcp.list");
+ const count = host.calls.length;
+ await run("/mcp connect docs", host);
+ assert.equal(host.calls.length, count);
+ assert.match(host.last().text, /Usage:/);
 });

@@ -92,3 +92,21 @@ to malformed, missing or unknown methods/parameters.
 `growth.teach {sessionId, kind, key, content}` saves a bounded preference/style/lesson; `growth.forget {sessionId, key}` removes a `kind:key` note. `growth.feedback {sessionId, episodeId, reward}` accepts a finite reward in [-1, 1] once for a completed decision in that session. `growth.installPolicy {sessionId, policy}` validates and installs six-action offline JSON weights with a safe live retrieval/noop mask. `growth.rollback {sessionId, revision}` accepts a nonnegative integer, including original baseline 0, and returns `{restored: boolean}`. A successful restore creates a fresh monotonic revision containing the chosen notes and policy; history remains bounded and immutable. Missing/pruned/foreign revisions return false; malformed revisions are invalid parameters.
 
 Teaching, feedback and installation reject requests while memory or personality growth is disabled. Inspection, forgetting and rollback remain available. Disabling only `rsi_enabled` stops automatic evidence and adaptation; human management still protects existing revision history. These methods use the existing gateway token and derive the owning agent from the session. They also use the existing authenticated HTTP `POST /rpc` dispatch; callers cannot select a different owner via extra parameters.
+
+## Read-only MCP inspection (2026-10-11)
+
+The existing authenticated gateway method registry exposes:
+
+| Method | Params | Result |
+|---|---|---|
+| `mcp.list` | `{}` | `{servers: [...public connector views and current state]}` |
+| `mcp.status` | `{id: string}` | `{server: public connector view and current state}` |
+
+Invalid/missing IDs use -32602; unknown IDs use 1002. Both resolve the worker’s
+same lazy ConnectorService. Neither initializes the database/SDK, launches a
+server, discovers tools, or changes approval state. Connection states and
+negotiated protocol metadata come from the manager, without hardcoded protocol
+versions. The TUI uses these methods for `/mcp`, `/mcp list`, and `/mcp status`.
+Inventory is in-memory/default-empty until configuration ingestion/persistence
+ships; OpenCode/Codex inventory is outside this process. Connect/disconnect UI,
+OAuth and agent-loop remote execution are explicitly deferred.

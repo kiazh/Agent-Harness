@@ -52,7 +52,7 @@ const HELP_GROUPS: Array<[group: string, names: string[]]> = [
 	["Context", ["context", "compress"]],
 	["Automation", ["jobs"]],
 	["Setup", ["keys", "models", "default-model", "provider", "effort", "config", "theme", "profile", "profiles", "mode", "approvals"]],
-	["Info", ["status", "usage", "help", "exit"]],
+	["Info", ["status", "usage", "output", "mcp", "help", "exit"]],
 ];
 
 export function helpText(commands: SlashCommand[]): string {

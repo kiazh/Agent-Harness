@@ -218,3 +218,49 @@ Only the dedicated test database was used. These checks establish tested runtime
 behavior, not a comparative quality/speed gain, production deployment, LLM weight
 training, or unattended source modification. Connector agent-loop exposure,
 OAuth/UI and the existing release/production gates retain their separate status.
+
+
+## 2026-10-11 — Reference TUI and read-only connector inspection
+
+Implemented the supplied screenshot’s plain messages, restrained framed tools,
+transcript approval evidence/vertical dock, one footer, thin composer and calm
+single-cell 600 ms activity. Static growth acknowledges evidence briefly with a
+30 s cooldown. Native responsive and approval/focus/queue/overflow regressions are
+in `ui/test/reference.test.ts`; motion and turn-state tests preserve ownership and
+truthful outcomes. Independent review findings were reproduced red, fixed and
+confirmed in a bounded re-review. Preview: `artifacts/tui-reference.png`.
+
+Read-only `mcp.list`/`mcp.status` now feed `/mcp` from one lazy worker-owned
+ConnectorService. Inspection does not start DB/SDK, launch/discover or mutate.
+Authenticated RPC/input/error contracts and shared sanitized state are tested;
+actual gateway stdio and real SDK connection/PID cleanup establish live inspection
+and owned/borrowed lifecycle behavior. The optional SDK remains lazily imported.
+Inventory is in-memory/default-empty. Server configuration/persistence, connection
+management, OAuth and agent-loop brokered tool exposure remain deferred; this is
+not a completed remote-tool execution feature or third-party service certification.
+
+Standalone UI verification: 252 tests, 247 passed, 5 environment-gated skips, zero
+failures; typecheck/eslint clean. The real-gateway restart wrapper runs UI checks
+with zero skipped tests. Ruff check/format passed on 10 changed Python files.
+Bandit connector scope: zero medium/high findings (7 low in metrics).
+`git diff --check` passed. Native captures at 140×52, 80×24, 40×9 and codex/mono/light
+were inspected in a bounded pass; no real PTY/operator terminal or provider was used.
+
+Initial full-run failures were an outdated new-method inventory expectation and
+an isolation bootstrap overriding a child test’s temporary config directory.
+The expectation/bootstrap were corrected. Exact affected checks passed on clean
+HEAD `0ea164e` in a managed worktree (5 passed), and current checkout (5 passed).
+Final sequential full-backend outcome follows; no failure is waived.
+
+Tests use only the dedicated `agentharness_test` DB, isolated home lookup and empty
+.env; no live credentials, production DB or startup files were touched. No commit,
+push, deploy or git configuration modification occurred. Existing release gates and
+approval reopen-on-return remain separate from this UI/inspection evidence.
+
+Final sequential verification after the review fixes: **2106 passed / 5 skipped /
+0 failed in 115.43 s**, including the real gateway restart wrapper (all **252 UI
+tests**, zero skipped UI tests). Command:
+`AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`,
+with a disposable home/env bootstrap supplied through PYTHONPATH as described in
+the visual review. Standalone UI check: 247 passed / 5 optional skips / 0 failures;
+typecheck and eslint passed. No unresolved failure remains in the recorded checks.

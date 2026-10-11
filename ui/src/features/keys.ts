@@ -1,13 +1,15 @@
 // API-key menu: list, set and clear provider keys without leaving the UI.
 //
-// Values are never echoed back. `secrets.set` applies immediately and saves
-// to the git-ignored `.env` unless `--no-save` is given. Run `ah setup` once
-// for first-launch configuration of the same file.
+// Bare /keys runs a real flow: pick a key, then Set/Replace, Clear or Back.
+// Values are collected through a masked editor and never echoed, printed,
+// logged, or kept in history. `secrets.set` applies immediately and saves
+// to the git-ignored `.env` (persist:true). Run `ah setup` once for
+// first-launch configuration of the same file.
 
-import { keyValues, table } from "../format.ts";
+import { table } from "../format.ts";
 import type { SecretsListResult, SecretsSetResult } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
-import { options, type Command, type FeatureHost } from "./types.ts";
+import { confirm, options, type Command, type FeatureHost } from "./types.ts";
 
 // Mirrors PROVIDER_KEYS + MANAGED_ENV_KEYS in ah/security/env_file.py and
 // ah/gateway/features/secrets.py (used for completions when offline).
@@ -33,6 +35,12 @@ function statusTable(secrets: SecretsListResult["secrets"]): string {
 		secrets.map((s) => [s.key, s.set ? "set" : "not set", s.description]),
 		40,
 	);
+}
+
+/** Strip a secret from error text so failures never leak the value. */
+export function redactSecret(secret: string, text: string): string {
+	if (!secret) return text;
+	return text.split(secret).join("[redacted]");
 }
 
 export const keysCommand: Command = {
@@ -69,11 +77,15 @@ export const keysCommand: Command = {
 			const key = cleaned.slice(0, space).toUpperCase();
 			const value = cleaned.slice(space).trim();
 			if (!value) throw new Error("Usage: /keys set KEY VALUE [--no-save]");
-			const result = await host.request<SecretsSetResult>("secrets.set", { key, value, persist });
-			host.print(
-				`${result.key} set${result.persisted ? ` (saved to ${result.envFile})` : " (this session only)"}. Takes effect on the next turn.`,
-				"success",
-			);
+			try {
+				const result = await host.request<SecretsSetResult>("secrets.set", { key, value, persist });
+				host.print(
+					`${result.key} set${result.persisted ? ` (saved to ${result.envFile})` : " (this session only)"}. Takes effect on the next turn.`,
+					"success",
+				);
+			} catch (error) {
+				throw new Error(`Could not save ${key}: ${redactSecret(value, error instanceof Error ? error.message : String(error))}`);
+			}
 			return;
 		}
 		if (sub === "clear") {
@@ -100,24 +112,55 @@ async function resolveKey(host: FeatureHost, prefix: string): Promise<string> {
 }
 
 async function openMenu(host: FeatureHost): Promise<void> {
-	const { secrets, envFile } = await host.request<SecretsListResult>("secrets.list");
-	const choice = await host.pick(
-		"API keys (values never shown)",
-		secrets.map((s) => ({
-			value: s.key,
-			label: `${s.key} — ${s.set ? "set" : "not set"}`,
-			description: s.description,
-		})),
-	);
-	if (!choice) return;
-	const info = secrets.find((s) => s.key === choice.value)!;
-	host.print(
-		keyValues([
-			["Key", info.key],
-			["Status", info.set ? "set" : "not set"],
-			["About", info.description],
-			["File", envFile],
-		]) + `\n\nSet: /keys set ${info.key} VALUE [--no-save]\nClear: /keys clear ${info.key}`,
-		"plain",
-	);
+	for (;;) {
+		const { secrets } = await host.request<SecretsListResult>("secrets.list");
+		const choice = await host.pick(
+			"API keys (values never shown)",
+			secrets.map((s) => ({
+				value: s.key,
+				label: `${s.key} — ${s.set ? "set" : "not set"}`,
+				description: s.description,
+			})),
+		);
+		if (!choice) return;
+		const info = secrets.find((s) => s.key === choice.value);
+		if (!info) return;
+		const action = await host.pick(`${info.key} (${info.set ? "set" : "not set"})`, [
+			{ value: "set", label: info.set ? "Replace…" : "Set…", description: "Enter a new value (masked, never shown)" },
+			{ value: "clear", label: "Clear", description: "Remove from this session and .env" },
+			{ value: "back", label: "Back", description: "Return to the key list" },
+		]);
+		if (!action || action.value === "back") continue;
+		if (action.value === "clear") {
+			const confirmed = await confirm(host, `Clear ${info.key}?`, "Clear");
+			if (!confirmed) continue;
+			try {
+				await host.request("secrets.clear", { key: info.key });
+				host.print(`${info.key} cleared (session and .env).`, "success");
+			} catch (error) {
+				host.print(`Could not clear ${info.key}: ${error instanceof Error ? error.message : String(error)}`, "error");
+			}
+			return;
+		}
+		const value = await host.askText({
+			title: `Set ${info.key}`,
+			description: "Paste the value. It is masked and never displayed.",
+			placeholder: "••••••••",
+			secret: true,
+		});
+		if (value === undefined) continue;
+		try {
+			const result = await host.request<SecretsSetResult>("secrets.set", { key: info.key, value, persist: true });
+			host.print(
+				`${result.key} set${result.persisted ? ` (saved to ${result.envFile})` : " (this session only)"}. Takes effect on the next turn.`,
+				"success",
+			);
+		} catch (error) {
+			host.print(
+				`Could not save ${info.key}: ${redactSecret(value, error instanceof Error ? error.message : String(error))}`,
+				"error",
+			);
+		}
+		return;
+	}
 }

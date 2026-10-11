@@ -1,9 +1,10 @@
-// Skin menu: recolor the whole UI plus header art, live, no restart.
+// Skin menu: live reversible preview plus header art, no restart.
 //
-// The choice persists via `config.theme` (config.yaml). Use /theme with no
-// args for the picker, or /theme <name> to switch directly.
+// Picking previews immediately without config writes; Esc restores the
+// original theme; Enter commits. Persistence happens exactly once through
+// `config.theme`, and a failed save is reported as temporary — never claimed.
 
-import { SKIN_NAMES, getSkin, setSkin, skinDescription } from "../theme.ts";
+import { SKIN_NAMES, setSkin, skinDescription } from "../theme.ts";
 import { options, type Command, type FeatureHost } from "./types.ts";
 
 export const themeCommand: Command = {
@@ -14,16 +15,9 @@ export const themeCommand: Command = {
 	async run(args, host) {
 		const name = args.trim().toLowerCase();
 		if (!name) {
-			const choice = await host.pick(
-				`Skins (current: ${getSkin()})`,
-				SKIN_NAMES.map((skin) => ({
-					value: skin,
-					label: `${skin}${skin === getSkin() ? " (current)" : ""}`,
-					description: skinDescription(skin),
-				})),
-			);
+			const choice = await host.pickTheme();
 			if (!choice) return;
-			await applySkin(host, choice.value);
+			await applySkin(host, choice);
 			return;
 		}
 		if (!SKIN_NAMES.includes(name)) throw new Error(`Unknown skin "${name}". Available: ${SKIN_NAMES.join(", ")}`);
@@ -37,8 +31,9 @@ async function applySkin(host: FeatureHost, name: string): Promise<void> {
 	try {
 		await host.request("config.set", { key: "theme", value: name, persist: true });
 	} catch {
-		// Theme still applies for this session; persistence is best-effort
-		// (e.g. gateway started without a database).
+		// The theme stays applied for this session; persistence failed.
+		host.print(`Skin ${name} applied for now (could not save).`, "warning");
+		return;
 	}
 	host.print(`Skin: ${name} — ${skinDescription(name)}`, "success");
 }

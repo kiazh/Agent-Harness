@@ -13,6 +13,8 @@ import { jobsCommand } from "./jobs.ts";
 import { keysCommand } from "./keys.ts";
 import { approvalsCommand, modeCommand } from "./mode.ts";
 import { modelsCommand } from "./models.ts";
+import { mcpCommand } from "./mcp.ts";
+import { outputCommand } from "./output.ts";
 import { settingsCommands } from "./settings.ts";
 import { themeCommand } from "./theme.ts";
 import { contextCommands } from "./context.ts";
@@ -70,6 +72,8 @@ const COMMANDS: Command[] = [
 	approvalsCommand,
 	modelsCommand,
 	themeCommand,
+	outputCommand,
+	mcpCommand,
 	...settingsCommands,
 	...appCommands,
 ];

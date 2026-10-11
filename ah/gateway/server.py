@@ -25,6 +25,7 @@ from ah.core.config import config
 from ah.core.context import context_manager
 from ah.core.models import Session
 from ah.core.provider import PROVIDERS
+from ah.core.runtime import RuntimeServices, runtime_services
 from ah.core.session import session_manager
 from ah.db.connection import db
 from ah.gateway import features
@@ -151,11 +152,15 @@ class Gateway:
         write: Writer,
         agent_factory: Callable[[str, str], StreamingAgent] = _default_agent_factory,
         owns_db: bool = True,
+        *,
+        runtime: RuntimeServices | None = None,
     ) -> None:
         self._write = write
         self.protocol_version = 1
         self._agent_factory = agent_factory
         self._owns_db = owns_db
+        # Stdio owns process cleanup; HTTP adapters borrow the app runtime.
+        self.runtime = runtime if runtime is not None else runtime_services
         self.model: str = config.get("model")
         self.provider: str = config.get("provider")
         self.closing = False
@@ -337,6 +342,11 @@ class Gateway:
             leftovers = await _bounded_join(tasks, timeout=timeout, label="gateway turns")
             for t in leftovers:
                 logger.warning("gateway turn task quarantined on close: %s", t.get_name())
+        if self._owns_db:
+            try:
+                await self.runtime.shutdown_connectors(timeout=timeout)
+            except (asyncio.CancelledError, Exception) as _boundary_error:
+                record_failure("server.close", _boundary_error)
         if self._db_ready and self._owns_db:
             from ah.observability.audit import audit_persistence
 

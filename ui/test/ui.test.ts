@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type Component, Container, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { helpText, parseCommand } from "../src/commands.ts";
-import { Footer, formatArgs, Notice, ToolCard, UserMessage } from "../src/components.ts";
+import { Footer, formatArgs, Notice, ToolTurn, UserTurn } from "../src/components.ts";
+import { AnimationCoordinator, type ActivitySource } from "../src/design/motion.ts";
 import { SLASH_COMMANDS } from "../src/features/index.ts";
 import type { GatewayEvent } from "../src/protocol.ts";
 import { Transcript } from "../src/transcript.ts";
@@ -23,6 +24,9 @@ class FakeSpinner implements Component {
 
 const ev = (e: Record<string, unknown>) => ({ sessionId: "s", turnId: "t", ...e }) as GatewayEvent;
 
+/** Static frame source for pure widget rendering (no coordinator timer). */
+const staticActivity: ActivitySource = { frame: (frames) => frames[0] ?? "" };
+
 function plain(component: Component, width = 60): string {
 	return component
 		.render(width)
@@ -32,26 +36,30 @@ function plain(component: Component, width = 60): string {
 
 test("learning square stays at the right edge, pulses briefly and coalesces frequent updates", (t) => {
 	t.mock.timers.enable({ apis: ["Date", "setInterval", "setTimeout"], now: 1000 });
-	const footer = new Footer();
-	footer.reducedMotion = false;
 	let renders = 0;
-	const render = () => renders++;
-	t.after(() => footer.dispose());
+	const coordinator = new AnimationCoordinator(() => renders++, false);
+	const footer = new Footer(coordinator);
+	t.after(() => {
+		footer.dispose();
+		coordinator.dispose();
+	});
 	const idle = plain(footer, 80);
 	assert.match(idle, /□$/);
-	assert.equal(footer.pulseGrowth(render), true);
+	assert.equal(footer.pulseGrowth(), true);
+	const initialStyled = footer.render(80)[0];
 	const initial = plain(footer, 80);
 	assert.notEqual(initial, idle);
 	t.mock.timers.tick(200);
 	const advanced = plain(footer, 80);
-	assert.notEqual(advanced, initial);
-	assert.equal(footer.pulseGrowth(render), false);
+	assert.equal(advanced, initial, "learning square keeps the same shape and position");
+	assert.notEqual(footer.render(80)[0], initialStyled, "learning square brightness pulses");
+	assert.equal(footer.pulseGrowth(), false);
 	assert.equal(plain(footer, 80), advanced, "a burst never restarts the animation");
 	for (const width of [1, 2, 20, 40, 80, 120]) {
 		const lines = footer.render(width);
-		assert.equal(lines.length, 2);
-		assert.equal(visibleWidth(lines[1]!), width);
-		assert.match(stripTerminalSequences(lines[1]!), /[□▪■▣]$/);
+		assert.equal(lines.length, 1);
+		assert.equal(visibleWidth(lines[0]!), width);
+		assert.match(stripTerminalSequences(lines[0]!), /[□▪■▣]$/);
 		assert.ok(lines.every(line => visibleWidth(line) <= width));
 	}
 	t.mock.timers.tick(1000);
@@ -59,10 +67,11 @@ test("learning square stays at the right edge, pulses briefly and coalesces freq
 	const settled = renders;
 	t.mock.timers.tick(20000);
 	assert.equal(renders, settled, "no background rendering while idle");
-	assert.equal(footer.pulseGrowth(render), false);
+	assert.equal(footer.pulseGrowth(), false);
 	t.mock.timers.tick(10000);
-	assert.equal(footer.pulseGrowth(render), true);
+	assert.equal(footer.pulseGrowth(), true);
 	footer.dispose();
+	coordinator.dispose();
 	const stopped = renders;
 	t.mock.timers.tick(2000);
 	assert.equal(renders, stopped);
@@ -70,15 +79,20 @@ test("learning square stays at the right edge, pulses briefly and coalesces freq
 
 test("reduced motion keeps learning feedback static and clears it without animation", (t) => {
 	t.mock.timers.enable({ apis: ["Date", "setInterval", "setTimeout"], now: 1000 });
-	const footer = new Footer();
-	footer.reducedMotion = true;
-	t.after(() => footer.dispose());
-	footer.pulseGrowth(() => {});
+	let renders = 0;
+	const coordinator = new AnimationCoordinator(() => renders++, true);
+	const footer = new Footer(coordinator);
+	t.after(() => {
+		footer.dispose();
+		coordinator.dispose();
+	});
+	footer.pulseGrowth();
 	const initial = plain(footer, 40);
 	t.mock.timers.tick(400);
 	assert.equal(plain(footer, 40), initial);
 	t.mock.timers.tick(1000);
 	assert.match(plain(footer, 40), /□$/);
+	assert.equal(coordinator.timerCount, 0, "no repeating frame timer in reduced motion");
 });
 
 test("parseCommand recognizes commands, aliases and plain prompts", () => {
@@ -119,7 +133,7 @@ test("a streamed turn renders text, a tool card and a final summary", () => {
 	const out = plain(view);
 	assert.match(out, /read a\.py/);
 	assert.match(out, /Let me look\./);
-	assert.match(out, /✓ Ran read_file path=a\.py/);
+	assert.match(out, /✔ read_file a\.py/);
 	assert.match(out, /print\('hi'\)/);
 	assert.match(out, /It prints hi\./);
 	assert.equal(out.match(/It prints hi\./g)?.length, 1, "final text is not duplicated");
@@ -160,7 +174,7 @@ test("a reply with no streamed text still shows the final answer", () => {
 	assert.match(plain(view), /LLM provider error: 401/);
 });
 
-test("cancelling marks unfinished tools and says so", () => {
+test("cancelling marks unfinished tools interrupted and says so", () => {
 	const view = new Container();
 	const transcript = new Transcript(view, new FakeSpinner());
 	transcript.apply(ev({ type: "message.start" }));
@@ -170,11 +184,13 @@ test("cancelling marks unfinished tools and says so", () => {
 	);
 	assert.equal(summary?.cancelled, true);
 	const out = plain(view);
-	assert.match(out, /✗ Failed terminal/);
+	assert.match(out, /○ terminal pytest/);
+	assert.match(out, /interrupted; outcome unknown/);
 	assert.match(out, /Stopped\./);
+	assert.doesNotMatch(out, /✔ terminal/, "interruption is a presentation fact, never success");
 });
 
-test("a normal completion does not mark unfinished tools as interrupted", () => {
+test("a normal completion marks unfinished tools unknown, never success or interrupted", () => {
 	const view = new Container();
 	const transcript = new Transcript(view, new FakeSpinner());
 	transcript.apply(ev({ type: "message.start" }));
@@ -184,7 +200,10 @@ test("a normal completion does not mark unfinished tools as interrupted", () => 
 	);
 	assert.equal(summary?.cancelled, false);
 	const out = plain(view);
-	assert.doesNotMatch(out, /\(interrupted\)/, "unfinished tool is not marked interrupted on normal completion");
+	assert.match(out, /\? terminal pytest/);
+	assert.match(out, /completion not reported/, "missing completion is honestly unknown");
+	assert.doesNotMatch(out, /✔ terminal/, "missing completion is never success");
+	assert.doesNotMatch(out, /interrupted/, "unfinished tool is not marked interrupted on normal completion");
 	assert.doesNotMatch(out, /Stopped\./, "no cancellation notice on normal completion");
 });
 
@@ -204,9 +223,13 @@ test("replay renders stored history", () => {
 
 test("every widget respects the render width", async () => {
 	const { Picker, header } = await import("../src/components.ts");
-	const card = new ToolCard("search_files", { pattern: "x".repeat(200) });
-	card.complete(`${"long line ".repeat(40)}\n${Array.from({ length: 20 }, (_, i) => `row ${i}`).join("\n")}`, false);
-	const footer = new Footer();
+	const card = new ToolTurn("search_files", { pattern: "x".repeat(200) }, staticActivity);
+	card.settle(
+		{ text: `${"long line ".repeat(40)}\n${Array.from({ length: 20 }, (_, i) => `row ${i}`).join("\n")}`, backendTruncated: false, locallyTruncated: false },
+		"success",
+	);
+	const widthCoordinator = new AnimationCoordinator(() => {}, false);
+	const footer = new Footer(widthCoordinator);
 	Object.assign(footer, { cwd: "C:\\Users\\someone\\a\\very\\long\\path\\to\\a\\project", branch: "main", model: "anthropic/claude-3.5-sonnet", tokens: 123456 });
 	const picker = new Picker("Sessions", [{ value: "a", label: "session-a" }, { value: "b", label: "session-b" }], () => {}, () => {});
 
@@ -229,37 +252,51 @@ test("formatArgs summarizes arguments", () => {
 	assert.equal(formatArgs({ path: "a.py", limit: 20, flags: ["-n"] }), 'path=a.py, limit=20, flags=["-n"]');
 });
 
-test("assistant output renders boxed and respects width", async () => {
-	const { AssistantMessage, header } = await import("../src/components.ts");
-	const message = new AssistantMessage("hello **world**");
+test("assistant output renders borderless markdown and respects width", async () => {
+	const { AssistantTurn, header } = await import("../src/components.ts");
+	const message = new AssistantTurn("hello **world**");
 	message.append(" more");
 	for (const width of [20, 40, 80, 120]) {
 		for (const line of message.render(width)) {
 			assert.ok(visibleWidth(line) <= width, `line wider than ${width}`);
 		}
 	}
-	assert.match(plain(message, 80), /hello/);
+	const rendered = plain(message, 80);
+	assert.match(rendered, /hello/);
+	assert.match(rendered, /●/, "assistant turns carry a plain marker, not a card");
+	assert.doesNotMatch(rendered, /─/, "no box rules around ordinary assistant text");
 	const banner = plain(header("0.1.0"), 80);
-	assert.match(banner, />_ AgentHarness \(v0\.1\.0\)/);
+	assert.match(banner, />_ AgentHarness/);
 	assert.doesNotMatch(banner, /─/);
 });
 
-test("transcript blocks leave a margin row so box corners never touch", async () => {
-	const { AssistantMessage, Notice, ToolCard, UserMessage } = await import("../src/components.ts");
+test("user turns are plain dim-prefixed text without boxes", async () => {
+	const { UserTurn } = await import("../src/components.ts");
+	const user = new UserTurn("read a.py\nsecond line");
+	const out = plain(user, 40);
+	assert.match(out, /> read a\.py/);
+	assert.match(out, /second line/);
+	assert.doesNotMatch(out, /─/);
+	for (const line of user.render(40)) assert.ok(visibleWidth(line) <= 40);
+});
+
+test("transcript blocks leave a margin row so corners never touch", async () => {
+	const { AssistantTurn, Notice, ToolTurn, UserTurn } = await import("../src/components.ts");
+	const card = new ToolTurn("read_file", { path: "a.py" }, staticActivity);
 	const blocks = [
-		new UserMessage("hello"),
-		new AssistantMessage("hi **there**"),
+		new UserTurn("hello"),
+		new AssistantTurn("hi **there**"),
 		new Notice("a note", "plain"),
-		new ToolCard("read_file", { path: "a.py" }),
+		card,
 	];
 	for (const block of blocks) {
 		const lines = block.render(80).map((line) => stripTerminalSequences(line));
 		assert.equal(lines[0], "", `${block.constructor.name} opens with a blank margin row`);
 		assert.ok(lines.length > 1, `${block.constructor.name} still renders content after the margin`);
 	}
-	const card = new ToolCard("search_files", { pattern: "x" });
-	card.complete("ok", false);
-	for (const line of card.render(40)) assert.ok(visibleWidth(line) <= 40, "margin row respects width");
+	const tool = new ToolTurn("search_files", { pattern: "x" }, staticActivity);
+	tool.settle({ text: "ok", backendTruncated: false, locallyTruncated: false }, "success");
+	for (const line of tool.render(40)) assert.ok(visibleWidth(line) <= 40, "margin row respects width");
 });
 
 test("codex-style diff coloring marks additions and deletions", async () => {
@@ -395,15 +432,15 @@ test("composer is a filled codex-style block with no rules", async () => {
 			"no border rules in the filled composer",
 		);
 	}
-	assert.match(stripTerminalSequences(composer.render(80)[1] ?? ""), /Ask AgentHarness to do anything/);
+	assert.match(stripTerminalSequences(composer.render(80)[1] ?? ""), /Ask anything, or type \/ for commands\./);
 	for (const line of composer.render(80)) {
-		assert.match(stripTerminalSequences(line), /^┃ /);
+		assert.match(stripTerminalSequences(line), /^│ /);
 	}
 	assert.equal(composer.handleMouse({ x: 0, y: 0 } as never), undefined);
 	composer.editor.setText("hello");
 	assert.doesNotMatch(
 		composer.render(80).map((line) => stripTerminalSequences(line)).join("\n"),
-		/Ask AgentHarness/,
+		/Ask anything/,
 		"placeholder hides once typing starts",
 	);
 });
@@ -411,20 +448,25 @@ test("composer is a filled codex-style block with no rules", async () => {
 test("session header is a minimal codex-style brand line", async () => {
 	const { header } = await import("../src/components.ts");
 	const out = plain(header("0.1.0", { model: "gpt-x", provider: "acme", cwd: "/repo", branch: "main" }), 80);
-	assert.match(out, />_ AgentHarness \(v0\.1\.0\)/);
-	assert.match(out, /\/repo \(main\)/);
+	assert.match(out, />_ AgentHarness/);
+	assert.match(out, /\/repo · main/);
 	assert.doesNotMatch(out, /─/);
 });
 
-test("tool cards use codex running/ran/failed titles", async () => {
-	const { ToolCard } = await import("../src/components.ts");
-	const running = new ToolCard("terminal", { command: "pytest" });
-	assert.match(plain(running, 60), /Running terminal/);
-	running.complete("ok", false);
-	assert.match(plain(running, 60), /Ran terminal/);
-	const failed = new ToolCard("terminal", { command: "pytest" });
-	failed.complete("boom", true);
-	assert.match(plain(failed, 60), /Failed terminal/);
+test("tool turns use quiet frames and honest markers", async () => {
+	const { ToolTurn } = await import("../src/components.ts");
+	const running = new ToolTurn("terminal", { command: "pytest" }, staticActivity);
+	assert.match(plain(running, 60), /terminal/);
+	assert.match(plain(running, 60), /running/);
+	running.settle({ text: "ok", backendTruncated: false, locallyTruncated: false }, "success");
+	assert.match(plain(running, 60), /✔ terminal/);
+	const failed = new ToolTurn("terminal", { command: "pytest" }, staticActivity);
+	failed.settle({ text: "boom", backendTruncated: false, locallyTruncated: false }, "error");
+	assert.match(plain(failed, 60), /✖ terminal/);
+	for (const width of [20, 40, 80]) {
+		for (const line of failed.render(width)) assert.ok(visibleWidth(line) <= width);
+	}
+	assert.match(plain(failed, 60), /┌─/, "quiet frames bound tool output");
 });
 
 test("skins switch palette and art, unknown names throw", async () => {
@@ -453,7 +495,7 @@ test("transcript blocks re-skin live without losing content", async () => {
 	const before = getSkin();
 	try {
 		const note = new Notice("all systems go", "success");
-		const user = new UserMessage("hello");
+		const user = new UserTurn("hello");
 		const firstPaint = [...note.render(80), ...user.render(80)];
 		setSkin("tokyonight");
 		note.refreshSkin();
@@ -496,4 +538,79 @@ test("every skin keeps its accent roles distinct", async () => {
 		);
 		assert.equal(new Set(roles).size, roles.length, `${name} reuses a color across roles`);
 	}
+});
+
+test("V01 multiline user text stays plain and assistant markdown renders immediately", async () => {
+	const { AssistantTurn, UserTurn } = await import("../src/components.ts");
+	const user = new UserTurn("first line\nsecond **not markdown**");
+	const rendered = plain(user, 40);
+	assert.match(rendered, /> first line/);
+	assert.match(rendered, /second \*\*not markdown\*\*/);
+	assert.doesNotMatch(rendered, /─/);
+	const assistant = new AssistantTurn();
+	assistant.append("Hello ");
+	assistant.append("**world**");
+	const aria = plain(assistant, 60);
+	assert.match(aria, /world/);
+	assert.match(aria, /● Hello/, "single marker column, no card padding");
+	assert.doesNotMatch(aria, /─/, "no ordinary assistant cards");
+});
+
+test("V02 tool previews count wrapping with honest local and backend truncation", async () => {
+	const { ToolTurn } = await import("../src/components.ts");
+	const turn = new ToolTurn("terminal", { command: "npm test" }, staticActivity);
+	// Six short rows at width 80: four shown, two omitted.
+	turn.settle(
+		{ text: ["r1", "r2", "r3", "r4", "r5", "r6"].join("\n"), backendTruncated: false, locallyTruncated: false },
+		"success",
+	);
+	const out = plain(turn, 80);
+	assert.match(out, /✔ terminal/);
+	assert.match(out, /r4/);
+	assert.doesNotMatch(out, /r5/, "default preview keeps four physical rows");
+	assert.match(out, /… 2 more lines/, "local count covers retained rendered rows only");
+	const singular = new ToolTurn("terminal", {}, staticActivity);
+	singular.settle({ text: ["a", "b", "c", "d", "e"].join("\n"), backendTruncated: false, locallyTruncated: false }, "success");
+	assert.match(plain(singular, 80), /… 1 more line\s*│$/m, "singular omitted counts read correctly");
+	// A long wrapped row counts physical rows, not logical lines.
+	const wrapped = new ToolTurn("terminal", {}, staticActivity);
+	wrapped.settle({ text: "x".repeat(100), backendTruncated: false, locallyTruncated: false }, "success");
+	const narrow = plain(wrapped, 20).split("\n");
+	assert.ok(narrow.length > 3, "wrapping expands the physical row count");
+	// Backend truncation is reported without inventing an upstream count.
+	const truncated = new ToolTurn("terminal", {}, staticActivity);
+	truncated.settle({ text: "partial", backendTruncated: true, locallyTruncated: false }, "success");
+	const tout = plain(truncated, 60);
+	assert.match(tout, /server output truncated/);
+	assert.doesNotMatch(tout, /more lines/, "unknown upstream counts are never invented");
+	// Empty results invent no preview.
+	const empty = new ToolTurn("terminal", {}, staticActivity);
+	empty.settle({ text: "", backendTruncated: false, locallyTruncated: false }, "success");
+	assert.doesNotMatch(plain(empty, 60), /more lines/);
+});
+
+test("V03 diff headers, additions, deletions and whitespace classify correctly", async () => {
+	const { DiffBlock } = await import("../src/components/DiffBlock.ts");
+	const block = new DiffBlock(
+		[
+			"diff --git a/f b/f",
+			"+++ b/f",
+			"--- a/f",
+			"@@ -1,2 +1,2 @@",
+			"+added",
+			"-removed",
+			"  context",
+			"    indented",
+		],
+		20,
+	);
+	const out = plain(block, 80);
+	for (const line of ["diff --git", "+++ b/f", "@@", "+added", "-removed", "  context", "    indented"]) {
+		assert.match(out, new RegExp(line.replace(/[+]/g, "\\+")));
+	}
+	assert.match(out, / {4}indented/, "leading whitespace is preserved");
+	const styled = block.render(80).join("\n");
+	assert.notEqual(styled, plain(block, 80), "diff lines carry semantic styling");
+	const bounded = new DiffBlock(["a", "b", "c", "d", "e", "f"]);
+	assert.match(plain(bounded, 80), /… 2 more lines/, "default preview keeps four physical rows");
 });

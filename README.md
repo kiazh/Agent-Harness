@@ -133,19 +133,22 @@ docker compose up --build
 
 ## Terminal UI
 
-Codex-style fullscreen TUI: `>_` brand header, filled borderless composer with accent bar, accent selection rows, braille spinner, docked composer + footer (`model · dir · branch · tokens`, then `? for shortcuts · / for commands`), follow-end scrolling, `/` menu opening upward, mouse support. Response boxes never touch: one blank row separates transcript blocks and the chrome sections.
+Codex-style fullscreen TUI: a single `>_` header with workspace and branch aligned right, plain conversational messages, quiet framed tool results, a filled composer with a thin accent bar, and one footer row showing the actual model, branch, mode and status. Approval decisions dock above the composer while their action evidence stays in the transcript. The primary transcript follows new output until you scroll upward; resize budgets update immediately. The pictured palette is `/theme codex`.
 
-- **Streaming Markdown** — token-by-token output in a contrasting card; tool cards (`Running`/`Ran`/`Failed`) with diff coloring (`+` green, `-` red, `@@` info). Notices carry text markers (`✓`/`!`/`✗`) as well as color, so state survives monochrome skins.
-- **Interactive management commands** — bare `/persona`, `/growth`, `/keys`, `/models`, `/theme`, `/sessions` and friends open pickers/forms instead of making you memorize flags. Expert argument forms still work (`/persona --clear`, `/keys set …`).
+- **Streaming Markdown** — immediate plain Markdown. Tools have visible rectangular frames with inset padding and a distinct dark fill, one-cell activity on a 200 ms cadence, bounded previews, colored diffs and honest success/error/unknown/interrupted states. Frames cap at 104 columns for readable output on wide terminals and remain visible in truecolor and 256-color terminals.
+- **Tool output inspection** — `/output` browses retained results (8 most recent, 128 KiB each); `/output <tool-id>` opens one directly in a scrollable viewer (`esc` close, arrows/`pgup`/`pgdn`/`home`/`end`). Local only: never refetches or re-executes.
+- **Approval review** — exact argv, cwd, backend, capabilities, content identity and diff stay in a transcript panel; vertical Allow once / Allow for this session / Deny controls dock above the composer. Deny is the default. Queued requests keep their own evidence; long targets are reviewable with PgUp/PgDn. Clipped terminals block Allow while retaining denial controls. Session, turn and request bindings are revalidated before dispatch.
+- **MCP inspection** — `/mcp` opens the harness server picker; `/mcp list` lists states and `/mcp status <id>` fetches one server’s current state. These commands never launch servers. Inventory is currently in memory and empty by default; server configuration, connection management, OAuth and agent-loop tool exposure remain deferred. Connections owned by another app are outside this inventory.
+- **Interactive management commands** — bare `/persona`, `/growth`, `/keys`, `/models`, `/theme`, `/sessions`, `/output` and friends open searchable menus/forms instead of making you memorize flags. Expert argument forms still work (`/persona --clear`, `/keys set …`).
 - **Persona** — `/persona` opens Add/Reset: Add edits the installation default in a multiline editor (2000 chars, prefilled); Reset confirms yes/no and keeps learned notes. The chat draft is never submitted as a persona.
-- **Quiet learning feedback** — a tiny square at the bottom-right pulses briefly when growth evidence arrives, at most once every 30 seconds. Details stay in `/growth show`; routine updates do not add chat messages.
-- **21 skins** — `/theme` switches live **without clearing the chat** and persists via `config.theme`: default, `codex`, `mono`, `tokyonight`, `catppuccin`, `dracula`, `gruvbox`, `rosepine`, `nord`, `everforest`, `matrix`, `cobalt2`, `ayu`, `nightowl`, `flexoki`, `onedark`, `monokai`, `github`, `solarized`, `kanagawa`, `palenight`.
-- **Keyboard** — `?` on empty input opens shortcuts; F1 opens them while keeping your draft. Arrow keys browse the panel, Enter/Esc close it. Enter sends, Shift+Enter adds a newline, Esc stops, Tab completes, Ctrl+C stops/clears/exits, Ctrl+L clears, and double-Esc edits the last prompt. `/init`, `/review`, `/compact` (=compress), `/clear` for Codex parity.
+- **Quiet activity and learning feedback** — a tiny square at the bottom-right pulses in brightness while working and briefly when learning is saved, at most once every 30 seconds. Its shape and position stay fixed; idle, approval and cleanup states stop working motion. Details stay in `/growth show`; routine updates do not add chat messages.
+- **26 skins, codex by default** — `/theme` previews live (Esc restores, Enter applies) and persists via `config.theme` exactly once; a failed save says temporary instead of claiming saved. Fresh installations use `codex`; explicit saved themes (including legacy `default`) are respected: default, `codex`, `opencode`, `light`, `mono`, `tokyonight`, `catppuccin`, `dracula`, `gruvbox`, `rosepine`, `nord`, `everforest`, `matrix`, `cobalt2`, `ayu`, `nightowl`, `flexoki`, `onedark`, `monokai`, `github`, `solarized`, `kanagawa`, `palenight`, `one-dark`, `catppuccin-frappe`, `catppuccin-macchiato`.
+- **Keyboard** — `?` on empty input opens shortcuts; F1 opens them while keeping your draft. Type to filter any menu, arrows move, Enter selects, Esc cancels. Enter sends, Shift+Enter adds a newline, Esc stops, Tab completes, Ctrl+C stops/clears/exits, Ctrl+L clears, and double-Esc edits the last prompt. `/init`, `/review`, `/compact` (=compress), `/clear` for Codex parity.
 
 ### Keys without leaving the UI
 
 ```
-/keys                  # picker: status of every key, values never shown
+/keys                  # menu: pick a key, then Set/Replace, Clear or Back (masked, never shown)
 /keys list             # table + set/not-set
 /keys set KEY VALUE    # applies now, saves to .env (--no-save = session only)
 /keys clear KEY        # removes from session and .env
@@ -216,6 +219,7 @@ Set `rsi_enabled: false` to pause automatic RSI evidence and routing adaptation 
 | `mode`, `approvals` | Execution mode (`ask|workspace|sandbox|full`); pending approvals (`list · allow · deny · revoke`) |
 | `models`, `default-model`, `provider`, `effort` | Session picker; saved default model; provider; reasoning effort |
 | `config` | Show/set settings (`--save` persists) |
+| `mcp` | Inspect harness MCP servers: picker, `list`, `status <id>` |
 | `theme` | Switch skin (menu when empty; chat stays) |
 | `profile`, `profiles` | Preferences and topics |
 | `status`, `usage` | Health; token/request budgets |
@@ -333,7 +337,7 @@ Non-secrets in `~/.agent-harness/config.yaml` or `AGENT_HARNESS_<KEY>` env. **Se
 | `SEARXNG_URL` | Self-hosted search | — |
 | `AH_ENV_FILE` | `.env` override path | repo `.env` |
 | `AH_GATEWAY_TOKEN` | Gateway stdio token | random per launch |
-| `AH_UI_REDUCED_MOTION` | `1` or `true` uses a static, brief learning-square acknowledgment | off |
+| `AH_UI_REDUCED_MOTION` | `1` or `true` keeps all activity dots and the learning-square acknowledgment static | off |
 
 ---
 
@@ -387,8 +391,8 @@ Plus LoCoMo harness (`ah/research/locomo.py`), identity eval (`identity_eval.py`
 
 Verified checkout snapshot, 2026-10-11 (dedicated test database and synthetic providers):
 
-- **Python:** **2092 passed, 5 skipped**, including **43 RSI tests**. DB-gated suites skip without `AGENT_HARNESS_TEST_DATABASE_URL`.
-- **UI:** **147 passed, 5 environment-gated skips** in `npm --prefix ui run check`; typecheck and eslint passed. Includes quiet learning feedback, cooldown/cleanup/reduced motion, enhanced `?` key encodings, draft preservation and small-terminal shortcuts. Real Node/Python gateway restart, history and restoration checks ran through the backend suite's isolated UI integration test.
+- **Python:** last full backend run: **2106 passed, 5 skipped** (2026-10-11, before the output-frame/motion follow-up), including **43 RSI tests**. DB-gated suites skip without `AGENT_HARNESS_TEST_DATABASE_URL`.
+- **UI:** **251 passed, 5 environment-gated skips** in `npm --prefix ui run check` (256 total); typecheck and eslint passed. The isolated real Node/Python gateway wrapper runs all **256 UI tests with zero skips**, including restart, history and restoration. Coverage includes visible output frames in truecolor/256-color modes, the responsive shell, exact approval review, and the pulsing corner square.
 - **RSI verification:** touched-file Ruff check/format passed; Bandit found no issues in the RSI/growth modules; `git diff --check` passed. No live-provider requests or production DB access. Exact commands, review fixes and clean-HEAD comparison are in the [evidence plan](docs/plans/PERSONA_RSI_PLAN.md).
 - **Concurrency:** advisory-lock usage (agent→session order), atomic job claim, per-session turn locks, parallel in-block tool calls.
 - **Historical workflow trial:** native Postgres approval **~3.6 ms** vs LangGraph **~18.6 ms** (5.1x overhead); native retained. This benchmark does not measure RSI quality or performance.
@@ -440,7 +444,7 @@ agent-harness/
 │   ├── plugins/         # entry-point loader + registry
 │   ├── research/        # locomo, identity_eval, train_memory_policy, workflow_*
 │   └── cli/             # typer app (chat/setup/doctor/init/serve/…) + UI launcher
-├── ui/src/              # pi-tui app + features/ (37 commands, 21 skins)
+├── ui/src/              # pi-tui app + features/ (38 commands, 26 skins)
 ├── ui/test/             # node:test suites
 ├── tests/               # ~90 pytest modules + workflow_trial/
 ├── skills/              # local playbooks + 42 curated pinned ECC skills and resources

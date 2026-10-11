@@ -413,10 +413,12 @@ test("growth.status quietly pulses the footer after retirement without transcrip
 	};
 	const footer = widgetWith(tui, "tokens");
 	const before = footer.render(80).join("\n");
+	const rendersBefore = tui.renderCount;
 	// No turn is in flight: background evidence still receives a quiet pulse.
 	client.emit(ev({ type: "growth.status", stage: "consolidation_done", detail: "3 new memories" }));
 	assert.equal(notices.length, 0);
 	assert.notEqual(footer.render(80).join("\n"), before);
+	assert.ok(tui.renderCount > rendersBefore, "an idle growth acknowledgment requests its first visible frame");
 	for (let index = 0; index < 20; index++) client.emit(ev({ type: "growth.status", stage: "rsi_updated" }));
 	assert.equal(notices.length, 0);
 	// Another session's training never interrupts this transcript.
@@ -449,39 +451,46 @@ test("exit() calls the input listener disposer", async () => {
 	assert.equal(disposerCalled, true, "input listener disposer was called on exit");
 });
 
-test("in-flight timer auto-clears stale entries", async () => {
+test("local watchdog warns once and retains the guard (never ownership)", async (t) => {
+	t.mock.timers.enable({ apis: ["Date", "setInterval", "setTimeout"], now: 1000 });
 	const { app, client } = makeApp(SESSION_A);
 	await app.start();
 
-	// Submit a prompt
+	client.responses.set("prompt.submit", { turnId: "t" });
 	const submitPromise = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("hello");
-	await new Promise((r) => setTimeout(r, 10));
+	await submitPromise;
 
-	// Manually trigger the stale timer by calling the private method with a short timeout
-	// We'll simulate this by directly manipulating the timer
 	const internal = app as unknown as {
 		inFlight: Set<string>;
-		inFlightTimers: Map<string, NodeJS.Timeout>;
+		transcript: { apply: (event: GatewayEvent) => unknown };
 	};
-	// Clear the existing timer and set a very short one
-	const sessionId = SESSION_A.id;
-	const existingTimer = internal.inFlightTimers.get(sessionId);
-	if (existingTimer) clearTimeout(existingTimer);
+	// Exercise the real production watchdog callback with fake time.
+	t.mock.timers.tick(300_000);
+	assert.equal(internal.inFlight.has(SESSION_A.id), true, "guard retained after the diagnostic deadline");
+	await submitPromise.catch(() => {});
+	const second = (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("too soon");
+	await second;
+	assert.equal(
+		client.requests.filter((item) => item.method === "prompt.submit").length,
+		1,
+		"no resubmission is advertised or accepted on clock alone",
+	);
 
-	// Set a 50ms timer to simulate the stale entry clearing
-	const shortTimer = setTimeout(() => {
-		internal.inFlight.delete(sessionId);
-	}, 50);
-	shortTimer.unref();
-	internal.inFlightTimers.set(sessionId, shortTimer);
+	// A second deadline never repeats the warning.
+	let applied = 0;
+	const origApply = internal.transcript.apply.bind(internal.transcript);
+	internal.transcript.apply = (event) => {
+		applied++;
+		return origApply(event);
+	};
+	t.mock.timers.tick(300_000);
+	assert.equal(applied, 0, "watchdog warns once and never fabricates turn events");
 
-	// Wait for the timer to fire
-	await new Promise((r) => setTimeout(r, 100));
-
-	// inFlight should be cleared
-	assert.equal(internal.inFlight.has(sessionId), false, "stale in-flight entry auto-cleared by timer");
-
-	client.responses.set("prompt.submit", {});
-	await submitPromise;
+	// The matching completion still retires and accounts.
+	client.emit(ev({ type: "message.start", turnId: "t" }));
+	client.emit(ev({ type: "message.complete", text: "late", tokens: 11, iterations: 1, toolCalls: 0, cancelled: false }));
+	client.responses.set("prompt.submit", { turnId: "t2" });
+	await (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("after");
+	assert.equal(client.requests.filter((item) => item.method === "prompt.submit").length, 2);
 	await app.exit();
 });
