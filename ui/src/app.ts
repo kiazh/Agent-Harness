@@ -2,6 +2,7 @@
 // driven by the Python gateway. Slash commands live in features.ts.
 
 import { mkdir, writeFile } from "node:fs/promises";
+import { userInfo } from "node:os";
 import { dirname, resolve } from "node:path";
 import {
 	Container,
@@ -19,7 +20,7 @@ import { ArgumentAwareAutocompleteProvider } from "./autocomplete.ts";
 import { parseCommand } from "./commands.ts";
 import { ComposerBox, createLayout, Footer, header, type LayoutRoot, Picker, TextForm } from "./components.ts";
 import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features/index.ts";
-import type { AskTextOptions } from "./features/types.ts";
+import { type AskTextOptions, PROFILE_ID_RE } from "./features/types.ts";
 import type { GatewayClient } from "./gateway.ts";
 import type {
 	ConfigGetResult,
@@ -39,6 +40,15 @@ export interface AppOptions {
 	provider?: string;
 	sessionId?: string;
 	mode?: string;
+}
+
+/** The default profile (first-touch identity); maps to the shared agent. */
+export function defaultProfileId(): string {
+	try {
+		return userInfo().username || "default";
+	} catch {
+		return "default";
+	}
 }
 
 export class App implements FeatureHost {
@@ -63,6 +73,8 @@ export class App implements FeatureHost {
 	private lastEscAt = 0;
 	private version = "";
 	private current: SessionInfo | undefined;
+	private readonly defaultProfile = defaultProfileId();
+	private currentProfile: string = this.defaultProfile;
 	private running = false;
 	/** Session ids of turns that are still in flight (prompt submitted, no message.complete yet). */
 	private readonly inFlight = new Set<string>();
@@ -152,13 +164,23 @@ export class App implements FeatureHost {
 			} catch {
 				// Mode display is best-effort.
 			}
+			try {
+				// Guarantee the default profile exists (first-touch RL/growth/memory identity).
+				await this.client.request("profile.get", { userId: this.defaultProfile }, 30_000);
+			} catch {
+				// Profiles stay best-effort; commands surface real errors.
+			}
 			if (this.options.sessionId) {
 				const { session, history } = await this.client.request<ResumeResult>("session.resume", {
 					sessionId: this.options.sessionId,
 				});
 				this.switchTo(session, history);
 			} else {
-				const { session } = await this.client.request<SessionResult>("session.create", {});
+				const agent = this.sessionAgent();
+				const { session } = await this.client.request<SessionResult>(
+					"session.create",
+					agent ? { agent } : {},
+				);
 				this.switchTo(session, []);
 			}
 		} catch (error) {
@@ -229,6 +251,23 @@ export class App implements FeatureHost {
 			form.onCancel = () => close();
 			return form;
 		});
+	}
+
+	profileId(): string {
+		return this.currentProfile;
+	}
+
+	setProfile(userId: string): void {
+		this.currentProfile = userId;
+		this.tui.requestRender();
+	}
+
+	sessionAgent(): string | undefined {
+		// The default profile shares the harness agent (existing data intact);
+		// other profiles scope RL, growth notes, and memories via harness-<slug>.
+		if (this.currentProfile === this.defaultProfile) return undefined;
+		if (!PROFILE_ID_RE.test(this.currentProfile)) return undefined;
+		return `harness-${this.currentProfile}`;
 	}
 
 	private openDialog<T>(create: (close: (value?: T) => void) => Component): Promise<T | undefined> {
@@ -460,6 +499,16 @@ export class App implements FeatureHost {
 
 	// ─── gateway ────────────────────────────────────────────────────────────
 	private onEvent(event: GatewayEvent): void {
+		if (event.type === "growth.status") {
+			// Background training lands after the turn retires (and the
+			// in-flight entry clears), so it bypasses turn tracking. Shown
+			// only for the current session; never steals focus.
+			if (event.sessionId !== this.current?.id) return;
+			const detail = event.detail ? `: ${event.detail}` : "";
+			this.transcript.addNotice(`Growth updated${detail}.`, "plain");
+			this.tui.requestRender();
+			return;
+		}
 		// A turn's events may arrive after the user switched sessions, so match
 		// against in-flight turns, not just the current session.
 		if (!this.inFlight.has(event.sessionId)) return;

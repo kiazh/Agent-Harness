@@ -7,6 +7,7 @@ export type CanonicalEvent = { protocolVersion: 2; sessionId: string; turnId: st
 	| { type: "tool.start"; id: string; name: string; args: Record<string, unknown> }
 	| { type: "tool.complete"; id: string; name: string; result: string; isError: boolean; truncated?: boolean }
 	| { type: "usage"; tokens: number }
+	| { type: "growth.status"; stage: string; detail?: string }
 	| { type: "message.complete"; text: string; tokens: number; iterations: number; toolCalls: number; cancelled: boolean; needsApproval?: Record<string, unknown>[] }
 	| { type: "error"; message: string }
 	| { type: "needs_approval"; requestId: string; operation: string; target: string; argv: string[]; cwd: string; backend: string; capabilities: string[]; tool?: string; shell?: string; timeout?: number; network?: string[]; contentDigest?: string; contentPreview?: string; contentLength?: number; fileDiff?: Record<string, unknown>; durable?: boolean|null; status?: string; originTurnId?: string }
@@ -23,6 +24,7 @@ export type LegacyGatewayEvent = { protocolVersion?: 1; sessionId: string; turnI
 	| { type: "tool.start"; id: string; name: string; args: Record<string, unknown> }
 	| { type: "tool.complete"; id: string; name: string; result: string; isError: boolean; truncated?: boolean }
 	| { type: "usage"; tokens: number }
+	| { type: "growth.status"; stage: string; detail?: string }
 	| { type: "message.complete"; text: string; tokens: number; iterations: number; toolCalls: number; cancelled: boolean; needsApproval?: Record<string, unknown>[] }
 	| { type: "error"; message: string }
 	| { type: "permission.required"; requestId: string; operation: string; target: string; argv: string[]; cwd: string; backend: string; capabilities: string[]; tool?: string; shell?: string; timeout?: number; network?: string[]; contentDigest?: string; contentPreview?: string; contentLength?: number; fileDiff?: Record<string, unknown>; durable?: boolean|null; status?: string; originTurnId?: string }

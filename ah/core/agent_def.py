@@ -194,7 +194,46 @@ class AgentRegistry:
         )
         if row is not None:
             return self._row_to_def(row)
-        return self._file_definitions().get(name) or BUILTIN_AGENTS.get(name)
+        found = self._file_definitions().get(name) or BUILTIN_AGENTS.get(name)
+        if found is not None:
+            return found
+        return await self._profile_scope(name)
+
+    @staticmethod
+    async def _profile_scope(name: str) -> AgentDef | None:
+        """Synthesize a general-purpose definition for a user-profile scope.
+
+        `harness-<slug>` resolves to harness-equivalent tools when a matching
+        user profile exists, so per-profile RL, growth notes, and memories
+        (all keyed by agent id) work with no schema change and no stored
+        definition. Anything else still resolves None, and the agent factory
+        keeps failing closed on it. Profile scopes are intentionally absent
+        from list(): they are not specialists to delegate to.
+        """
+        import re
+
+        from ah.memory.user_profile import PROFILE_ID_RE, profile_slug, user_profile_store
+
+        match = re.fullmatch(rf"harness-({PROFILE_ID_RE})", name or "")
+        if not match:
+            return None
+        slug = match.group(1)
+        try:
+            if await user_profile_store.get_by_user_id(slug) is not None:
+                user_id = slug
+            else:
+                rows = await user_profile_store.list_all(limit=500)
+                hit = next((p for p in rows if profile_slug(p.user_id) == slug), None)
+                if hit is None:
+                    return None
+                user_id = hit.user_id
+        except Exception:
+            return None
+        return AgentDef(
+            name=name,
+            description=f"Profile scope for {user_id} (general tools).",
+            source="profile",
+        )
 
     async def list(self) -> list[AgentDef]:
         rows = await db.fetch(

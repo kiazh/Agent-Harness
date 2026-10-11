@@ -1,11 +1,85 @@
 // Settings commands: config, profile, status, model, provider.
 
-import { userInfo } from "node:os";
 import { keyValues, table } from "../format.ts";
 import type { ConfigGetResult, ConfigSetResult, ProfileInfo, ProfileListResult, StatusResult, UsageResult } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
 import { applyModel, CURATED_MODELS, filterCuratedModels, pickCuratedModel } from "./models.ts";
-import { formatValue, options, type Command, type FeatureHost } from "./types.ts";
+import { formatValue, options, PROFILE_ID_RE, type Command, type FeatureHost } from "./types.ts";
+
+function printProfile(host: FeatureHost, profile: ProfileInfo): void {
+	const prefs = Object.entries(profile.preferences);
+	host.print(
+		keyValues([
+			["User", profile.userId],
+			["Interactions", profile.interactionCount],
+			["Top topics", profile.topTopics.map((t) => `${t.topic} (${t.count})`).join(", ")],
+			...prefs.map(([k, v]): [string, unknown] => [`pref.${k}`, v]),
+		]),
+		"plain",
+	);
+}
+
+async function switchProfile(host: FeatureHost, userId: string): Promise<void> {
+	host.setProfile(userId);
+	host.print(
+		`Switched to profile ${userId}. New chats learn under it; existing chats keep theirs.`,
+		"success",
+	);
+}
+
+async function createProfile(host: FeatureHost): Promise<void> {
+	for (;;) {
+		const name = await host.askText({
+			title: "New profile",
+			description: "Lowercase letters, numbers, and dashes (this becomes the profile id).\nEach profile keeps its own learned notes, RL, and memories.",
+			maxLength: 40,
+		});
+		if (name === undefined) return;
+		const userId = name.trim().toLowerCase();
+		if (!PROFILE_ID_RE.test(userId)) {
+			host.print("Use lowercase letters, numbers, and dashes (up to 40).", "error");
+			continue;
+		}
+		await host.request("profile.get", { userId });
+		await switchProfile(host, userId);
+		return;
+	}
+}
+
+async function openProfileMenu(host: FeatureHost): Promise<void> {
+	const choice = await host.pick("Profile", [
+		{ value: "view", label: "View", description: "Show the current profile" },
+		{ value: "new", label: "New", description: "Create a profile and switch to it" },
+		{ value: "switch", label: "Switch", description: "Change the active profile" },
+	]);
+	if (!choice) return;
+	if (choice.value === "new") {
+		await createProfile(host);
+		return;
+	}
+	if (choice.value === "switch") {
+		const { profiles } = await host.request<ProfileListResult>("profile.list", { limit: 50 });
+		if (!profiles.length) {
+			host.print("No profiles yet — create one first.", "plain");
+			return;
+		}
+		const picked = await host.pick(
+			"Switch profile",
+			profiles.map((p) => ({
+				value: p.userId,
+				label: `${p.userId}${p.userId === host.profileId() ? " (current)" : ""}`,
+				description: `${p.interactionCount} interactions`,
+			})),
+		);
+		if (!picked || picked.value === host.profileId()) return;
+		await switchProfile(host, picked.value);
+		return;
+	}
+	const { profile } = await host.request<{ profile: ProfileInfo }>("profile.get", {
+		userId: host.profileId(),
+	});
+	printProfile(host, profile);
+}
 
 async function setConfig(host: FeatureHost, key: string, value: string, persist: boolean): Promise<void> {
 	const result = await host.request<ConfigSetResult>("config.set", { key, value, persist });
@@ -214,25 +288,18 @@ export const settingsCommands: Command[] = [
 	},
 	{
 		name: "profile",
-		description: "Show your profile, or set a preference",
+		description: "View, create, or switch your profile (menu when empty)",
 		argumentHint: "[key value]",
 		async run(args, host) {
-			const userId = userInfo().username || "default";
 			const [key, value] = splitSub(args);
-			if (key && !value) throw new Error("Usage: /profile <key> <value>");
-			const { profile } = key
-				? await host.request<{ profile: ProfileInfo }>("profile.set", { userId, key, value })
-				: await host.request<{ profile: ProfileInfo }>("profile.get", { userId });
-			const prefs = Object.entries(profile.preferences);
-			host.print(
-				keyValues([
-					["User", profile.userId],
-					["Interactions", profile.interactionCount],
-					["Top topics", profile.topTopics.map((t) => `${t.topic} (${t.count})`).join(", ")],
-					...prefs.map(([k, v]): [string, unknown] => [`pref.${k}`, v]),
-				]),
-				"plain",
-			);
+			if (!key) {
+				await openProfileMenu(host);
+				return;
+			}
+			if (!value) throw new Error("Usage: /profile <key> <value>");
+			const userId = host.profileId();
+			const { profile } = await host.request<{ profile: ProfileInfo }>("profile.set", { userId, key, value });
+			printProfile(host, profile);
 		},
 	},
 	{
@@ -263,16 +330,17 @@ export const settingsCommands: Command[] = [
 				host.print("No profiles found.", "plain");
 				return;
 			}
+			const current = host.profileId();
 			host.print(
 				table(
 					["User", "Interactions", "Top topics"],
 					profiles.map((p) => [
-						p.userId,
+						`${p.userId}${p.userId === current ? " (current)" : ""}`,
 						String(p.interactionCount),
 						p.topTopics.map((t) => `${t.topic} (${t.count})`).join(", ") || "—",
 					]),
 					60,
-				),
+				) + "\n\nUse /profile to view, create, or switch.",
 				"plain",
 				);
 		},

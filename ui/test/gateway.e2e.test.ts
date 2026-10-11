@@ -153,6 +153,9 @@ test("slash commands work against the real gateway and database", { skip, timeou
 		clear: () => {},
 		banner: () => {},
 		restyle: () => {},
+		profileId: () => "default",
+		setProfile: () => {},
+		sessionAgent: () => undefined,
 		exit: async () => {},
 	};
 	const run = async (text: string) => {

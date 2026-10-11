@@ -54,6 +54,62 @@ def test_every_feature_method_is_registered():
     assert set(features.METHODS) <= set(methods)
 
 
+class TestProfileScope:
+    async def test_session_create_accepts_profile_agent(self, h):
+        from ah.memory.user_profile import user_profile_store
+
+        tag = f"scope{uuid.uuid4().hex[:8]}"
+        await user_profile_store.get_or_create(user_id=tag)
+        try:
+            session = result(await h.call("session.create", {"agent": f"harness-{tag}"}))["session"]
+            assert (
+                await session_manager.get(uuid.UUID(session["id"]))
+            ).agent_id == f"harness-{tag}"
+        finally:
+            await db.execute("DELETE FROM sessions WHERE agent_id = $1", f"harness-{tag}")
+            await db.execute("DELETE FROM user_profiles WHERE user_id = $1", tag)
+
+    async def test_session_create_rejects_unknown_agent(self, h):
+        response = await h.call("session.create", {"agent": "no-such-agent"})
+        assert "error" in response, response
+        assert response["error"]["code"] == INVALID_PARAMS
+
+    async def test_profile_scope_resolves_to_general_tools(self, h, monkeypatch):
+        from ah.core.agent_def import agent_registry
+        from ah.core.agent_factory import build_agent_for_session
+
+        # Provider construction needs a key; no network calls are made.
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+        tag = f"scopedef{uuid.uuid4().hex[:8]}"
+        from ah.memory.user_profile import user_profile_store
+
+        await user_profile_store.get_or_create(user_id=tag)
+        try:
+            definition = await agent_registry.get(f"harness-{tag}")
+            assert definition is not None
+            assert definition.tools == []
+            session = await session_manager.create(title="scoped", agent_id=f"harness-{tag}")
+            try:
+                agent = await build_agent_for_session(session)
+                assert agent.agent_id == f"harness-{tag}"
+                assert agent.allowed_tools is None
+            finally:
+                await db.execute("DELETE FROM sessions WHERE id = $1", session.id)
+        finally:
+            await db.execute("DELETE FROM user_profiles WHERE user_id = $1", tag)
+
+    async def test_unknown_agent_still_fails_closed(self, h):
+        from ah.core.agent_def import agent_registry
+        from ah.core.agent_factory import AgentDefinitionError, build_agent_for_session
+
+        assert await agent_registry.get("no-such-agent") is None
+        session = await session_manager.create(title="broken", agent_id="harness")
+        session.agent_id = "no-such-agent"
+        with pytest.raises(AgentDefinitionError):
+            await build_agent_for_session(session)
+        await db.execute("DELETE FROM sessions WHERE id = $1", session.id)
+
+
 class TestSessions:
     async def test_recall_search_and_window_are_scoped_to_current_agent(self, h):
         tag = f"quartzotter{uuid.uuid4().hex[:8]}"

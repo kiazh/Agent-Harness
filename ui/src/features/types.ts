@@ -18,6 +18,9 @@ export interface AskTextOptions {
 
 export type AskTextResult = string | undefined;
 
+/** Profile ids double as agent-scope slugs: lowercase, dashes, max 40 chars. */
+export const PROFILE_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
 /** What a command can do to the app. Implemented by App. */
 export interface FeatureHost {
 	request<T>(method: string, params?: Record<string, unknown>): Promise<T>;
@@ -33,6 +36,12 @@ export interface FeatureHost {
 	pick(title: string, items: SelectItem[]): Promise<SelectItem | undefined>;
 	/** Collect free-form text in an overlay editor; undefined means cancelled. */
 	askText(options: AskTextOptions): Promise<AskTextResult>;
+	/** Active user profile id (preferences bucket + new-chat agent scope). */
+	profileId(): string;
+	/** Switch the active profile (existing chats keep theirs). */
+	setProfile(userId: string): void;
+	/** Agent name for newly created sessions (undefined = shared default). */
+	sessionAgent(): string | undefined;
 	/** Write a file relative to the working directory; returns the absolute path. */
 	writeFile(path: string, text: string): Promise<string>;
 	onConfig(result: ConfigResult): void;

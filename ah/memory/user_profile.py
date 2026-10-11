@@ -18,6 +18,16 @@ from ah.core.provider import audit_log
 from ah.db.connection import db
 from ah.memory.redaction import _default_redactor, redact_secrets
 
+#: Profile ids usable for per-profile agent scopes (`harness-<slug>`).
+PROFILE_ID_RE = r"[a-z0-9][a-z0-9-]{0,39}"
+
+
+def profile_slug(user_id: str) -> str:
+    """Slug form of a profile id (lowercase alnum/dash, max 40 chars)."""
+    import re
+
+    return re.sub(r"[^a-z0-9]+", "-", (user_id or "").strip().lower()).strip("-")[:40]
+
 
 def _clean_text(value: str) -> str:
     """Redact secret-looking substrings from free-form profile text."""
@@ -37,8 +47,10 @@ def _clean_preferences(preferences: dict[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
+    "PROFILE_ID_RE",
     "UserProfile",
     "UserProfileStore",
+    "profile_slug",
     "user_profile_store",
 ]
 

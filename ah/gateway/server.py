@@ -449,10 +449,23 @@ class Gateway:
     async def _session_create(self, params: dict[str, Any]) -> dict[str, Any]:
         self.require_db()
         title = str(params.get("title") or "").strip()[:80] or "New session"
+        agent_id = str(params.get("agent") or "harness").strip()[:100] or "harness"
+        if agent_id != "harness":
+            # Fail fast on unknown agents (including profile scopes without
+            # a profile); the turn factory would otherwise fail closed later.
+            from ah.core.agent_def import agent_registry
+
+            try:
+                definition = await agent_registry.get(agent_id)
+            except Exception as exc:
+                raise RpcError(INVALID_PARAMS, f"unknown agent: {agent_id}") from exc
+            if definition is None:
+                raise RpcError(INVALID_PARAMS, f"unknown agent: {agent_id}")
         async with self._config_lock:
             model, provider = self.model, self.provider
         session = await session_manager.create(
             title=title,
+            agent_id=agent_id,
             model=model,
             provider=provider,
             context_budget=config.get("context_budget"),
@@ -768,6 +781,19 @@ class Gateway:
                     record_failure("server._run_turn", _boundary_error)
 
         _set_handler(_turn_approver, principal="tui", turn_id=turn_id)
+        # Growth indicator: background training (consolidation wins, staged
+        # reviews) surfaces as growth.status events on this turn's stream.
+        from ah.core.agent import add_growth_listener, remove_growth_listener
+
+        def _growth_emit(notify_session: str, stage: str, detail: str) -> None:
+            if notify_session != sid:
+                return
+            try:
+                emit("growth.status", stage=stage, detail=detail)
+            except Exception as _boundary_error:
+                record_failure("server.growth_emit", _boundary_error)
+
+        add_growth_listener(_growth_emit)
         # AH-AUDIT-013: managed claim renewal for the whole turn (compute +
         # approval waits). A live renewing owner blocks takeovers; repeated
         # renewal failure means the claim lapsed — owned effects stop via
@@ -1020,7 +1046,12 @@ class Gateway:
         except Exception as _boundary_error:
             # Optional fallback preserves the primary outcome; report no payload.
             record_failure("server._run_turn", _boundary_error)
-        complete(final, cancelled=_cancelled)
+        try:
+            complete(final, cancelled=_cancelled)
+        finally:
+            # Growth notices may land with late background consolidation;
+            # keep the listener until the terminal event, then always drop it.
+            remove_growth_listener(_growth_emit)
         self._cancel_requested.discard(turn_id)
         self._record_stage(turn_id, "answer_complete", session_id=sid)
         # Phase C: threshold-triggered auto-compaction at the safe turn

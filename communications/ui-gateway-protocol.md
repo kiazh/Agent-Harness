@@ -39,6 +39,7 @@ All rows have the common envelope. A trailing `?` marks an optional field.
 | `tool.start` | `id: string`, `name: string`, `args: object` | Tool execution proposed or started; pair by id. |
 | `tool.complete` | `id: string`, `name: string`, `result: string`, `isError: boolean`, `truncated?: boolean` | Tool outcome; isError reports failure, truncated reports preview truncation. |
 | `usage` | `tokens: number` | Token accounting for the turn; nonterminal. |
+| `growth.status` | `stage: string`, `detail?: string` | Background training landed (`consolidation_done`, `review_done`); nonterminal, may arrive after turn retirement. UI shows it only for the current session. |
 | `message.complete` | `text: string`, `tokens: number`, `iterations: number`, `toolCalls: number`, `cancelled: boolean`, `needsApproval?: object[]` | Terminal after execution retirement and ownership release; cancelled reports requested cancellation. |
 | `error` | `message: string` | Sanitized failure notice; nonterminal. A live claim may still be retiring. |
 | `needs_approval` | `requestId: string`, `operation: string`, `target: string`, `argv: string[]`, `cwd: string`, `backend: string`, `capabilities: string[]`, `tool?: string`, `shell?: string`, `timeout?: number`, `network?: string[]`, `contentDigest?: string`, `contentPreview?: string`, `contentLength?: number`, `fileDiff?: object`, `durable?: boolean|null`, `status?: string`, `originTurnId?: string` | Exact reviewed action requires human decision; originTurnId binds the proposal. |

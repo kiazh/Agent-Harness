@@ -24,6 +24,10 @@
     "usage": {
       "tokens": "number"
     },
+    "growth.status": {
+      "stage": "string",
+      "detail?": "string"
+    },
     "message.complete": {
       "text": "string",
       "tokens": "number",

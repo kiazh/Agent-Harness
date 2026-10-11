@@ -64,6 +64,16 @@ class FakeHost implements FeatureHost {
 		this.asked.push(options);
 		return this.textQueue.shift();
 	}
+	currentProfile = "default";
+	profileId() {
+		return this.currentProfile;
+	}
+	setProfile(userId: string) {
+		this.currentProfile = userId;
+	}
+	sessionAgent(): string | undefined {
+		return this.currentProfile === "default" ? undefined : `harness-${this.currentProfile}`;
+	}
 	async writeFile(path: string, text: string) {
 		this.files.set(path, text);
 		return `/abs/${path}`;
@@ -816,4 +826,100 @@ test("notices mark success, warning, and error with text cues", async () => {
 	assert.match(line("error"), /✗ hello/);
 	assert.doesNotMatch(line("plain"), /[✓!✗] hello/);
 	assert.doesNotMatch(line("info"), /[✓!✗] hello/);
+});
+
+const PROFILE = {
+	userId: "default",
+	displayName: "",
+	preferences: {},
+	interactionCount: 3,
+	topTopics: [],
+	updatedAt: null,
+};
+
+test("bare /profile view shows the current profile without switching", async () => {
+	const host = new FakeHost();
+	host.responses["profile.get"] = { profile: PROFILE };
+	host.picks.push("view");
+	await run("/profile", host);
+	assert.deepEqual(host.pickTitles, ["Profile"]);
+	assert.match(host.last().text, /default/);
+	assert.equal(host.profileId(), "default");
+	assert.equal(host.submitted.length, 0);
+});
+
+test("bare /profile new creates a slug id and switches to it", async () => {
+	const host = new FakeHost();
+	host.responses["profile.get"] = { profile: { ...PROFILE, userId: "work" } };
+	host.picks.push("new");
+	host.textQueue.push("work");
+	await run("/profile", host);
+	assert.deepEqual(host.calls.at(-1), { method: "profile.get", params: { userId: "work" } });
+	assert.equal(host.profileId(), "work");
+	assert.match(host.last().text, /Switched to profile work/);
+});
+
+test("bare /profile new rejects non-slug ids without creating", async () => {
+	const host = new FakeHost();
+	host.picks.push("new");
+	host.textQueue.push("My Work!", undefined);
+	await run("/profile", host);
+	assert.match(host.printed.map((p) => p.text).join("\n"), /lowercase letters, numbers, and dashes/);
+	assert.equal(host.calls.length, 0);
+	assert.equal(host.profileId(), "default");
+});
+
+test("bare /profile switch changes the active profile only", async () => {
+	const host = new FakeHost();
+	host.responses["profile.list"] = {
+		profiles: [PROFILE, { ...PROFILE, userId: "work", interactionCount: 9 }],
+	};
+	host.picks.push("switch", "work");
+	await run("/profile", host);
+	assert.equal(host.profileId(), "work");
+	assert.match(host.last().text, /existing chats keep theirs/);
+
+	const same = new FakeHost();
+	same.responses["profile.list"] = { profiles: [PROFILE] };
+	same.picks.push("switch", "default");
+	await run("/profile", same);
+	assert.equal(same.profileId(), "default");
+	assert.equal(same.printed.length, 0);
+});
+
+test("/profile set writes to the current profile", async () => {
+	const host = new FakeHost();
+	host.currentProfile = "work";
+	host.responses["profile.set"] = { profile: { ...PROFILE, userId: "work" } };
+	await run("/profile theme dark", host);
+	assert.deepEqual(host.calls.at(-1), {
+		method: "profile.set",
+		params: { userId: "work", key: "theme", value: "dark" },
+	});
+});
+
+test("/profiles marks the current profile", async () => {
+	const host = new FakeHost();
+	host.currentProfile = "work";
+	host.responses["profile.list"] = {
+		profiles: [PROFILE, { ...PROFILE, userId: "work", interactionCount: 9 }],
+	};
+	await run("/profiles", host);
+	assert.match(host.last().text, /work \(current\)/);
+});
+
+test("new chats carry the profile agent scope only off-default", async () => {
+	const fresh = new FakeHost();
+	fresh.responses["session.create"] = { session: { ...SESSION } };
+	await run("/new", fresh);
+	assert.deepEqual(fresh.calls.at(-1), { method: "session.create", params: { title: "" } });
+
+	const scoped = new FakeHost();
+	scoped.currentProfile = "work";
+	scoped.responses["session.create"] = { session: { ...SESSION } };
+	await run("/new", scoped);
+	assert.deepEqual(scoped.calls.at(-1), {
+		method: "session.create",
+		params: { title: "", agent: "harness-work" },
+	});
 });

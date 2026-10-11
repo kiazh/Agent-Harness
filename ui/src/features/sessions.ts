@@ -62,7 +62,11 @@ export const sessionCommands: Command[] = [
 		description: "Start a new session",
 		argumentHint: "[title]",
 		async run(args, host) {
-			const { session } = await host.request<SessionResult>("session.create", { title: args });
+			const agent = host.sessionAgent();
+			const { session } = await host.request<SessionResult>(
+				"session.create",
+				agent ? { title: args, agent } : { title: args },
+			);
 			host.switchTo(session, []);
 		},
 	},
@@ -174,7 +178,11 @@ export const sessionCommands: Command[] = [
 			await host.request("session.delete", { sessionId: id });
 			host.print(`Deleted session ${shortId(id)}.`, "success");
 			if (current?.id === id) {
-				const { session } = await host.request<SessionResult>("session.create", {});
+				const agent = host.sessionAgent();
+				const { session } = await host.request<SessionResult>(
+					"session.create",
+					agent ? { agent } : {},
+				);
 				host.switchTo(session, []);
 			}
 		},

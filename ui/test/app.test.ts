@@ -399,6 +399,35 @@ test("error event keeps in-flight until completion (AH-032)", async () => {
 	await app.exit();
 });
 
+test("growth.status renders after the turn retires (no in-flight needed)", async () => {
+	const { app, client } = makeApp(SESSION_A);
+	await app.start();
+	const internal = app as unknown as {
+		transcript: { addNotice(text: string, kind?: unknown): void };
+	};
+	const notices: Array<[string, unknown]> = [];
+	const orig = internal.transcript.addNotice.bind(internal.transcript);
+	internal.transcript.addNotice = (text: string, kind?: unknown) => {
+		notices.push([text, kind]);
+		orig(text, kind);
+	};
+	// No turn is in flight: the notice must still land (current session).
+	client.emit(ev({ type: "growth.status", stage: "consolidation_done", detail: "3 new memories" }));
+	assert.equal(notices.length, 1);
+	assert.match(notices[0]![0], /Growth updated: 3 new memories/);
+	assert.equal(notices[0]![1], "plain");
+	// Another session's training never interrupts this transcript.
+	client.emit({
+		sessionId: SESSION_B.id,
+		turnId: "t",
+		type: "growth.status",
+		stage: "consolidation_done",
+		detail: "1 new memory",
+	});
+	assert.equal(notices.length, 1);
+	await app.exit();
+});
+
 test("exit() calls the input listener disposer", async () => {
 	const { app } = makeApp(SESSION_A);
 	await app.start();

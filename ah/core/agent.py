@@ -9,7 +9,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextvars import ContextVar
 from functools import wraps
 from typing import Any
@@ -114,6 +114,38 @@ Be concise. Don't over-explain. Get things done."""
 
 # Maximum token budget for a single agent run (fallback, session.context_budget takes precedence)
 MAX_TOKEN_BUDGET = 50_000
+
+# Growth-progress listeners: (session_id, stage, detail) callbacks for
+# background training moments (consolidation wins, staged learning
+# reviews). Transports with a UI register per turn; the agent never blocks
+# on them and one failing listener never affects the others or the turn.
+# Stages: "consolidation_done" (detail: "N new memories"),
+# "review_done" (detail: "staged a learning proposal").
+_GrowthListener = Callable[[str, str, str], None]
+_growth_listeners: list[_GrowthListener] = []
+
+
+def add_growth_listener(fn: _GrowthListener) -> None:
+    """Register a growth-progress callback (transports unregister per turn)."""
+    _growth_listeners.append(fn)
+
+
+def remove_growth_listener(fn: _GrowthListener) -> None:
+    """Unregister a growth-progress callback."""
+    try:
+        _growth_listeners.remove(fn)
+    except ValueError:
+        pass
+
+
+def _notify_growth(session_id: uuid.UUID | str, stage: str, detail: str = "") -> None:
+    """Fan out one growth-progress notice; never raises."""
+    for fn in list(_growth_listeners):
+        try:
+            fn(str(session_id), stage, detail)
+        except Exception as _boundary_error:
+            record_failure("agent.growth.notify", _boundary_error)
+
 
 # Earlier-round tool results shrink to a head+tail preview before the next
 # LLM call (append-time caps already bound each result to ~1k / 9k for
@@ -1398,6 +1430,9 @@ class BaseReActAgent:
                     len(new_memories),
                     session_id,
                 )
+                _notify_growth(
+                    session_id, "consolidation_done", f"{len(new_memories)} new memories"
+                )
         except Exception as e:
             logger.warning("Memory consolidation failed for session %s: %s", session_id, e)
 
@@ -1434,7 +1469,7 @@ class BaseReActAgent:
         from ah.skills.learning import learning_reviewer
 
         try:
-            await learning_reviewer.review_turn(
+            staged = await learning_reviewer.review_turn(
                 session_id,
                 self.agent_id,
                 user_message,
@@ -1442,6 +1477,8 @@ class BaseReActAgent:
                 self.provider,
                 tool_calls=response.tool_calls,
             )
+            if staged:
+                _notify_growth(session_id, "review_done", "staged a learning proposal")
         except Exception as exc:
             logger.warning("Learning review failed for session %s: %s", session_id, exc)
 
