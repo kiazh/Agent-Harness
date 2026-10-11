@@ -230,13 +230,14 @@ async def test_child_pause_reaches_parent_without_another_provider_call(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_parent_turn_budget_includes_child_spend(bare_agent, monkeypatch, streaming):
+async def test_parent_accounts_child_spend_without_implicit_turn_cutoff(
+    bare_agent, monkeypatch, streaming
+):
     from ah.core import orchestrator as module
     from ah.core.agent import registry
     from ah.tools.agents import delegate
 
     agent, session = bare_agent
-    monkeypatch.setattr("ah.core.agent.MAX_TOKEN_BUDGET", 5)
     monkeypatch.setattr("ah.tools.agents.db.fetchval", AsyncMock(return_value="harness"))
     monkeypatch.setattr(
         module.orchestrator,
@@ -275,9 +276,9 @@ async def test_parent_turn_budget_includes_child_spend(bare_agent, monkeypatch, 
         result = events[-1].response
     else:
         result = await ReActAgent.run.__wrapped__(agent, session.id, "write", False)
-    assert len(calls) == 1
-    assert result.tokens_used == 8
-    assert "token budget" in result.content
+    assert len(calls) == 2
+    assert result.tokens_used == 9
+    assert result.content == "continued"
 
 
 @pytest.mark.asyncio

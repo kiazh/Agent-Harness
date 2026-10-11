@@ -83,6 +83,7 @@ __all__ = [
 DEFAULTS: dict[str, Any] = {
     "model": "openrouter/free",
     "provider": "openrouter",
+    # Legacy storage/config compatibility only; runtime uses model context capacity.
     "context_budget": 8000,
     "max_iterations": 10,
     "turn_timeout": 300,

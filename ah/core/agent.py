@@ -43,7 +43,6 @@ __all__ = [
     "BaseReActAgent",
     "ReActAgent",
     "SYSTEM_PROMPT",
-    "MAX_TOKEN_BUDGET",
     "MAX_PENDING_LEARNING_REVIEWS",
     "instrument_run",
     "instrument_stream",
@@ -114,9 +113,6 @@ When you need to do something, use the available tools. Think step by step:
 
 Be concise. Don't over-explain. Get things done."""
 
-# Maximum token budget for a single agent run (fallback, session.context_budget takes precedence)
-MAX_TOKEN_BUDGET = 50_000
-
 # Growth-progress listeners: (session_id, stage, detail) callbacks for
 # background training moments (consolidation wins, staged learning
 # reviews). Transports with a UI register per turn; the agent never blocks
@@ -170,10 +166,10 @@ def _stale_tool_preview(content: str) -> str:
 
 
 def _turn_model(session, provider) -> str | None:
-    """Best-known model id for budget purposes: session, else provider, else config."""
+    """Best-known model id for capacity: live provider first, then session/config."""
     for candidate in (
-        getattr(session, "model", None),
         getattr(provider, "model", None),
+        getattr(session, "model", None),
     ):
         if isinstance(candidate, str) and candidate:
             return candidate
@@ -185,12 +181,31 @@ def _turn_model(session, provider) -> str | None:
 
 
 def _effective_turn_budget(session, provider) -> int:
-    """Per-turn spend cap: explicit config wins, else scaled to the model's window."""
-    from ah.core.context_windows import turn_token_budget
+    """Compatibility name for request capacity, never cumulative spend."""
+    from ah.core.context_windows import context_window_for
 
-    return min(
-        turn_token_budget(_turn_model(session, provider), session.context_budget),
-        MAX_TOKEN_BUDGET,
+    current = _turn_model(session, provider)
+    resolved = getattr(session, "context_window", None)
+    tagged = getattr(session, "context_window_model", None)
+    if type(resolved) is int and resolved > 0 and tagged == current:
+        return resolved
+    return context_window_for(current, provider)
+
+
+def _request_context_tokens(messages, tools, provider) -> int:
+    from ah.core.assembler import get_token_count
+    from ah.core.provider import _tools_payload
+
+    output = int(config.get("max_tokens"))
+    resolver = getattr(type(provider), "reservation_max_tokens", None)
+    if resolver is not None:
+        output = resolver(provider, output, config.get("reasoning_effort"))
+    return (
+        get_token_count(json.dumps(messages, ensure_ascii=False))
+        + get_token_count(json.dumps(_tools_payload(tools), ensure_ascii=False))
+        + 16
+        + 8 * len(messages)
+        + output
     )
 
 
@@ -501,13 +516,27 @@ class BaseReActAgent:
             raise SessionNotFoundError(f"Session {session_id} not found")
         if session.agent_id != self.agent_id:
             raise PermissionError("Session does not belong to the running agent")
+        resolver = getattr(type(self.provider), "context_window", None)
+        turn_model = _turn_model(session, self.provider)
+        if resolver is not None:
+            session.context_window = await resolver(self.provider, turn_model)
+        else:
+            session.context_window = _effective_turn_budget(session, self.provider)
+        session.context_window_model = turn_model
+        session.context_budget = session.context_window
         _growth_episode.set(None)
         _rsi_choice.set(None)
         _rsi_skills.set([])
 
         await plugin_registry.dispatch("pre_agent_run", session, user_message)
 
-        assembler = PromptAssembler(session.context_budget)
+        assembler = PromptAssembler(
+            max(
+                1,
+                session.context_budget
+                - _request_context_tokens([], self._tool_defs(), self.provider),
+            )
+        )
 
         # Store user message in context
         if pending_chunks is not None:
@@ -1580,38 +1609,35 @@ class ReActAgent(BaseReActAgent):
             if verbose:
                 console.print(f"[dim]Iteration {iteration + 1}/{self.max_iterations}[/dim]")
 
-            # Check token budget before calling LLM (explicit config wins,
-            # otherwise scaled to the turn model's context window)
+            # Capacity applies to this request, never cumulative billed usage.
+            self._condense_history(messages)
+            tool_defs = self._tool_defs()
             effective_budget = _effective_turn_budget(session, self.provider)
-            if total_tokens >= effective_budget:
+            request_tokens = _request_context_tokens(messages, tool_defs, self.provider)
+            if request_tokens > effective_budget:
                 logger.warning(
-                    "Token budget exceeded (%d >= %d) — stopping agent loop",
-                    total_tokens,
+                    "Model context window exceeded (%d > %d)",
+                    request_tokens,
                     effective_budget,
                 )
                 audit_log(
-                    "agent_run_budget_exceeded",
+                    "agent_request_context_exceeded",
                     session_id=str(session_id),
                     total_tokens=total_tokens,
-                    max_budget=effective_budget,
+                    request_tokens=request_tokens,
+                    context_window=effective_budget,
                 )
                 # Flush any pending chunks before returning
                 await self._flush_pending_chunks(pending_chunks)
                 # Consolidate memories before returning
                 self._schedule_memory_consolidation(session_id)
                 return AgentResponse(
-                    content="Reached maximum token budget. Partial results may be available.",
+                    content="Current request exceeds the model context window. Compact the context or select a model with a larger window.",
                     outcome="failed",
                     tool_calls=tool_calls_made,
                     tokens_used=total_tokens,
                     iterations=iteration,
                 )
-
-            # Shrink stale tool rounds before paying to re-send them.
-            self._condense_history(messages)
-
-            # Get tool definitions
-            tool_defs = self._tool_defs()
 
             # Call LLM with retry
             try:
@@ -1785,26 +1811,29 @@ class ReActAgent(BaseReActAgent):
             if verbose:
                 console.print(f"[dim]Iteration {iteration + 1}/{self.max_iterations}[/dim]")
 
-            # Check token budget before calling LLM (explicit config wins,
-            # otherwise scaled to the turn model's context window)
+            # Capacity applies to this request, never cumulative billed usage.
+            self._condense_history(messages)
+            tool_defs = self._tool_defs()
             effective_budget = _effective_turn_budget(session, self.provider)
-            if total_tokens >= effective_budget:
+            request_tokens = _request_context_tokens(messages, tool_defs, self.provider)
+            if request_tokens > effective_budget:
                 logger.warning(
-                    "Token budget exceeded (%d >= %d) — stopping agent loop",
-                    total_tokens,
+                    "Model context window exceeded (%d > %d)",
+                    request_tokens,
                     effective_budget,
                 )
                 audit_log(
-                    "agent_run_budget_exceeded",
+                    "agent_request_context_exceeded",
                     session_id=str(session_id),
                     total_tokens=total_tokens,
-                    max_budget=effective_budget,
+                    request_tokens=request_tokens,
+                    context_window=effective_budget,
                 )
                 await self._flush_pending_chunks(pending_chunks)
                 yield StreamEvent(
                     type="done",
                     response=AgentResponse(
-                        content="Reached maximum token budget. Partial results may be available.",
+                        content="Current request exceeds the model context window. Compact the context or select a model with a larger window.",
                         outcome="failed",
                         tool_calls=tool_calls_made,
                         tokens_used=total_tokens,
@@ -1812,12 +1841,6 @@ class ReActAgent(BaseReActAgent):
                     ),
                 )
                 return
-
-            # Shrink stale tool rounds before paying to re-send them.
-            self._condense_history(messages)
-
-            # Get tool definitions
-            tool_defs = self._tool_defs()
 
             # Stream LLM call with retry
             try:

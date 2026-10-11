@@ -193,7 +193,9 @@ async def test_parent_cancellation_drains_child_and_records_spend(delegation):
 
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("outcome", ["raise", "timeout", "ledger_unavailable"])
-async def test_failed_child_spend_stops_parent_turn(delegation, monkeypatch, streaming, outcome):
+async def test_failed_child_spend_is_accounted_without_implicit_turn_cutoff(
+    delegation, monkeypatch, streaming, outcome
+):
     from ah.core import orchestrator as module
     from ah.core.agent import registry
     from ah.permissions.broker import permission_broker
@@ -204,7 +206,6 @@ async def test_failed_child_spend_stops_parent_turn(delegation, monkeypatch, str
     orch = delegation.build(spending_child(delegation, outcome))
     monkeypatch.setattr(orch, "DELEGATION_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(module, "orchestrator", orch)
-    monkeypatch.setattr("ah.core.agent.MAX_TOKEN_BUDGET", 5)
     monkeypatch.setattr("ah.tools.agents.db.fetchval", AsyncMock(return_value="harness"))
     monkeypatch.setattr(agent, "_prepare_context", AsyncMock(return_value=(parent, [])))
     monkeypatch.setattr(agent, "_flush_pending_chunks", AsyncMock())
@@ -278,9 +279,10 @@ async def test_failed_child_spend_stops_parent_turn(delegation, monkeypatch, str
     finally:
         module.delegation_deadline.reset(token)
 
-    assert len(calls) == 1
     if outcome == "ledger_unavailable":
+        assert len(calls) == 1
         assert delegation.charges[delegation.child.id] == 13
         return
-    assert response.tokens_used == 14
-    assert "token budget" in response.content
+    assert len(calls) == 2
+    assert response.tokens_used == 15
+    assert response.content == "continued"

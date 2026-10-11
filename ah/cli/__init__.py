@@ -563,7 +563,10 @@ def context(
                 console.print(f"[bold]Title:[/bold] {session.title or '(untitled)'}")
                 console.print(f"[bold]Status:[/bold] {session.status}")
                 console.print(f"[bold]Goal:[/bold] {session.goal or '(none)'}")
-                console.print(f"[bold]Budget:[/bold] {session.context_budget} tokens")
+                from ah.core.context_windows import context_window_for
+
+                window = context_window_for(session.model or config.get("model"))
+                console.print(f"[bold]Context window:[/bold] {window} tokens")
                 console.print()
 
             chunks = await context_manager.get_chunks(sid, limit=limit)

@@ -652,6 +652,11 @@ def _tools_payload(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
 class LLMProvider:
     """Base provider interface."""
 
+    async def context_window(self, model: str | None = None) -> int:
+        from ah.core.context_windows import context_window_for
+
+        return context_window_for(model or getattr(self, "model", None), self)
+
     def reservation_max_tokens(self, max_tokens: int, reasoning_effort: str | None = None) -> int:
         """Maximum output requested on the wire, including reasoning tokens."""
         return max_tokens
@@ -693,6 +698,11 @@ class OpenRouterProvider(LLMProvider):
     """OpenRouter API — OpenAI-compatible, multi-model."""
 
     BASE_URL = "https://openrouter.ai/api/v1"
+
+    async def context_window(self, model: str | None = None) -> int:
+        from ah.core.context_windows import openrouter_context_window
+
+        return await openrouter_context_window(self.client, model or self.model)
 
     def __init__(
         self,

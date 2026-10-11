@@ -24,6 +24,7 @@ from ah.api.auth import require_api_key
 from ah.api.rate_limit import RateLimitMiddleware
 from ah.core.config import config
 from ah.core.context import context_manager
+from ah.core.context_windows import context_window_for
 from ah.core.exceptions import StaleOwnershipError
 from ah.core.models import StreamEvent
 from ah.core.session import session_manager
@@ -942,7 +943,7 @@ def create_app() -> FastAPI:
                 for c in chunks
             ],
             "totalTokens": await context_manager.get_token_usage(sid),
-            "budget": session.context_budget,
+            "budget": context_window_for(session.model or config.get("model")),
             "goal": session.goal,
         }
 

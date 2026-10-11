@@ -142,11 +142,22 @@ def _sensitive_capabilities(req: ActionRequest) -> list[str]:
         command_path_values,
         executable_name,
         routine_project_command,
+        routine_shell_command,
     )
 
     found = [c for c in (req.capabilities or []) if c in REVIEW_CAPABILITIES]
     first = executable_name(req.argv[0]) if req.argv else ""
     root = Path(req.workspace_root).resolve() if req.workspace_root else workspace_root()
+    if req.shell_payload:
+        from dataclasses import replace
+
+        from ah.permissions.shell import simple_shell_commands
+
+        for stage in simple_shell_commands(req.shell_payload) or []:
+            found.extend(_sensitive_capabilities(replace(req, argv=stage, shell_payload="")))
+        if not routine_shell_command(req.shell_payload, req.cwd, root):
+            found.append("opaque_execution_review")
+        return sorted(set(found))
     routine = not req.shell_payload and routine_project_command(req.argv, req.cwd, root)
     if "opaque_execution" in (req.capabilities or []) and not routine:
         found.append("opaque_execution_review")
@@ -206,9 +217,6 @@ def _sensitive_capabilities(req: ActionRequest) -> list[str]:
         found.append("destructive_system")
     if first == "find" and "-delete" in req.argv:
         found.append("destructive_system")
-    if req.shell_payload:
-        # Shell grammar and indirect execution cannot be classified as routine.
-        found.append("opaque_execution_review")
     return sorted(set(found))
 
 
@@ -365,11 +373,15 @@ def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
     if req.mode in ("ask", "workspace", "sandbox"):
         if req.operation == "network.fetch" and req.tool in {"web_search", "web_extract"}:
             return Decision("allowed", "built-in web read (backend validates URLs)", req)
-        if req.operation == "process.exec" and not req.shell_payload:
-            from ah.permissions.commands import routine_project_command
+        if req.operation == "process.exec":
+            from ah.permissions.commands import routine_project_command, routine_shell_command
 
             root = Path(req.workspace_root).resolve() if req.workspace_root else workspace_root()
-            if routine_project_command(req.argv, req.cwd, root):
+            if (
+                routine_shell_command(req.shell_payload, req.cwd, root)
+                if req.shell_payload
+                else routine_project_command(req.argv, req.cwd, root)
+            ):
                 return Decision("allowed", "routine trusted project command", req)
     # Scoped grants (LP-03/04/05): live + bound + exact scope; mutating ops
     # additionally require the EXACT action digest, so changed content/cwd/

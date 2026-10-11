@@ -34,6 +34,10 @@ class Session:
     model: str | None = None
     provider: str | None = None
     context_budget: int = 8000
+    # Derived per-request provider capacity; never persisted as authority/spend.
+    context_window: int | None = None
+    # Model id that produced context_window; guards against stale reuse.
+    context_window_model: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_activity: datetime = field(default_factory=lambda: datetime.now(UTC))
     execution_mode: str = "ask"

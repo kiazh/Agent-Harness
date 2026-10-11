@@ -157,3 +157,10 @@ def routine_project_command(argv: list[str], cwd: str, root: Path) -> bool:
     if command == "uv":
         return bool(args and args[0] == "run" and routine_project_command(args[1:], cwd, root))
     return command in _PROJECT_COMMANDS
+
+
+def routine_shell_command(payload: str, cwd: str, root: Path) -> bool:
+    from ah.permissions.shell import simple_shell_commands
+
+    stages = simple_shell_commands(payload)
+    return bool(stages and all(routine_project_command(stage, cwd, root) for stage in stages))

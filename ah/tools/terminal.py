@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shlex
 import subprocess
 import threading
 from pathlib import Path
@@ -49,9 +48,6 @@ ALLOWED_COMMANDS = frozenset(
         "diff",
     }
 )
-
-# Characters that could be used for command injection
-DANGEROUS_CHARS = frozenset(";|&$()`<>\\\n")
 
 # A command may only see the configured workspace, never the whole home
 # directory or a system temporary directory that may contain credentials.
@@ -333,20 +329,10 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
     if not isinstance(timeout, int) or timeout < 1 or timeout > 300:
         raise ValidationError(f"timeout must be an integer between 1 and 300, got {timeout}")
 
-    # Reject dangerous characters
-    found_dangerous = DANGEROUS_CHARS.intersection(command)
-    if found_dangerous:
-        chars = ", ".join(repr(c) for c in sorted(found_dangerous))
-        raise ValidationError(f"Command contains dangerous characters: {chars}")
+    from ah.permissions.shell import parse_terminal_command
 
-    # Parse command with shlex (no shell)
-    try:
-        args = shlex.split(command)
-    except ValueError as e:
-        raise ValidationError(f"Failed to parse command: {e}") from e
-
-    if not args:
-        raise ValidationError("Empty command")
+    parsed = parse_terminal_command(command)
+    args = parsed.argv
 
     # The broker already classified or obtained approval for this exact
     # command. Keep the narrow allowlist for direct, unbrokered calls.
@@ -356,6 +342,10 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
     authorized = bool(snapshot and snapshot.get("operation") == "process.exec")
     if authorized and snapshot.get("argv") != args:
         raise ValidationError("command differs from broker-authorized argv")
+    if authorized and snapshot.get("shell_payload", "") != parsed.payload:
+        raise ValidationError("command differs from broker-authorized shell payload")
+    if parsed.payload and not authorized:
+        raise ValidationError("Shell syntax requires broker authorization")
     if _mode == "full" or authorized:
         import shutil as _shutil
 
@@ -365,7 +355,8 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
         raise ValidationError(f"Command '{base_cmd}' is not in the allowlist")
 
     # Tighten allowlist: block escape hatches even for allowed commands.
-    _validate_blocked_args(args)
+    if not authorized:
+        _validate_blocked_args(args)
 
     # Relative workdirs share the policy's workspace root, not process CWD.
     from ah.core.execution_context import execution_context

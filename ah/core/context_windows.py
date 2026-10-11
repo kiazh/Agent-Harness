@@ -1,17 +1,16 @@
-"""Per-model context windows and the derived per-turn token budget.
-
-``context_budget`` (default 8000) is a per-turn *spend* cap, not the
-provider's context window: every loop iteration re-sends the full history,
-so reported totals inflate fast. A fixed 8000 stops long-context models
-long before their window fills. This module maps model ids to documented
-context windows so the loop can derive a proportional budget instead.
-
-The configured value always wins when it differs from the legacy default:
-an explicit setting is a deliberate choice and is only capped by the
-agent's absolute ceiling. Unknown models keep the legacy behavior exactly.
-"""
+"""Model context capacity, independent of cumulative billed token usage."""
 
 from __future__ import annotations
+
+import asyncio
+import logging
+import time
+
+from cachetools import TTLCache
+
+logger = logging.getLogger(__name__)
+_provider_windows: TTLCache = TTLCache(maxsize=4096, ttl=300)
+_refresh_after = 0.0
 
 # Documented context windows (tokens) for the harness's curated models.
 # Conservative where serving varies (local Ollama entries assume a modest
@@ -35,23 +34,47 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "codellama": 16_384,
 }
 
-# Unknown models behave exactly as before: this window implies exactly the
-# legacy floor (32_000 // 4 == 8000), so unmapped ids change nothing.
+# Unknown metadata has a conservative fallback; no artificial spend cap.
 DEFAULT_CONTEXT_WINDOW = 32_000
-
-# Cumulative spend cap ≈ a quarter of the window. A full window is never
-# the right cap because per-iteration re-sends inflate the summed total.
-TURN_BUDGET_DIVISOR = 4
 
 # Must match DEFAULTS["context_budget"] in ah.core.config (kept literal to
 # avoid an import cycle; a test pins them together).
 LEGACY_DEFAULT_BUDGET = 8000
 
 
-def context_window_for(model: str | None) -> int:
-    """Documented context window for *model*, or the default for unknown ids."""
+def _provider_name(provider) -> str:
+    """Normalized provider family name for metadata scoping."""
+    if provider is None:
+        return ""
+    if isinstance(provider, str):
+        return provider.lower()
+    try:
+        name = type(provider).__name__
+        if name.endswith("Provider"):
+            name = name[: -len("Provider")]
+        return name.lower()
+    except Exception:
+        return ""
+
+
+def _is_openrouter(provider) -> bool:
+    return _provider_name(provider) == "openrouter"
+
+
+def context_window_for(model: str | None, provider=None) -> int:
+    """Documented context window for *model*, or the default for unknown ids.
+
+    OpenRouter catalog metadata is provider-scoped: it only applies when
+    *provider* identifies the OpenRouter family (name or instance). Base,
+    local and other direct providers always use the curated fallback so one
+    serving's capacity never leaks into another provider's estimate.
+    """
     # Anything non-string (e.g. test doubles) behaves like an unknown model.
     name = model.lower() if isinstance(model, str) else ""
+    if _is_openrouter(provider):
+        cached = _provider_windows.get(name)
+        if cached is not None:
+            return cached
     best = 0
     window = DEFAULT_CONTEXT_WINDOW
     for key, value in MODEL_CONTEXT_WINDOWS.items():
@@ -61,14 +84,39 @@ def context_window_for(model: str | None) -> int:
     return window
 
 
-def turn_token_budget(model: str | None, configured_budget: int = LEGACY_DEFAULT_BUDGET) -> int:
-    """Effective per-turn token budget for *model*.
+def turn_token_budget(
+    model: str | None,
+    configured_budget: int = LEGACY_DEFAULT_BUDGET,
+    provider=None,
+) -> int:
+    """Compatibility helper: capacity only; legacy spend setting is ignored."""
+    return context_window_for(model, provider)
 
-    An explicit configuration (anything but the legacy default) wins
-    unchanged. Otherwise the budget scales with the model's window,
-    floored at the legacy default. The caller still applies the agent's
-    absolute ceiling.
+
+async def openrouter_context_window(client, model: str) -> int:
+    """Cached public catalog metadata; a failed lookup never stops a turn.
+
+    Only ids and valid context_length integers are retained. Errors are logged
+    by type, without provider response bodies or credential-bearing URLs.
+    The cache is OpenRouter-scoped; other providers never read it.
     """
-    if configured_budget != LEGACY_DEFAULT_BUDGET:
-        return configured_budget
-    return max(LEGACY_DEFAULT_BUDGET, context_window_for(model) // TURN_BUDGET_DIVISOR)
+    global _refresh_after
+    name = model.lower()
+    if name not in _provider_windows and time.monotonic() >= _refresh_after:
+        try:
+            response = await asyncio.wait_for(client.get("/models"), timeout=3)
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+                raise ValueError("invalid model metadata")
+            for entry in data["data"]:
+                if not isinstance(entry, dict):
+                    continue
+                window, identifier = entry.get("context_length"), entry.get("id")
+                if isinstance(identifier, str) and type(window) is int and 0 < window < 2**31:
+                    _provider_windows[identifier.lower()] = window
+            _refresh_after = time.monotonic() + 300
+        except Exception as error:
+            _refresh_after = time.monotonic() + 30
+            logger.warning("Model window metadata unavailable (%s)", type(error).__name__)
+    return context_window_for(model, "openrouter")

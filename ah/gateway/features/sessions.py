@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ah import services
+from ah.core.config import config
 from ah.core.context import context_manager
+from ah.core.context_windows import context_window_for
 from ah.core.session import session_manager
 from ah.core.session_recall import SessionRecall
 from ah.gateway.errors import INVALID_PARAMS, TURN_IN_PROGRESS, RpcError
@@ -191,7 +193,7 @@ async def context_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
             for c in chunks
         ],
         "totalTokens": await context_manager.get_token_usage(session.id),
-        "budget": session.context_budget,
+        "budget": context_window_for(session.model or config.get("model")),
         "goal": session.goal,
     }
 

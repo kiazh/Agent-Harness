@@ -86,54 +86,40 @@ class TestNoHardcodedDatabasePassword:
 # ===========================================================================
 
 
-class TestConsistentTokenBudget:
-    """run() and run_stream() must derive the budget the same way."""
+class TestRequestContextCapacity:
+    """Request capacity includes tool definitions and provider output reservation."""
 
-    def test_run_uses_session_context_budget(self):
-        """run() must derive the budget from the session via the shared helper."""
-        from ah.core import agent as agent_mod
+    def test_tool_schema_counts_towards_context(self, monkeypatch):
+        from ah.core.agent import _request_context_tokens
+        from ah.core.config import config
+        from ah.core.models import ToolDefinition
 
-        src = inspect.getsource(agent_mod.ReActAgent.run)
-        assert "_effective_turn_budget(session, self.provider)" in src
-        assert "effective_budget" in src
-        helper_src = inspect.getsource(agent_mod._effective_turn_budget)
-        assert "session.context_budget" in helper_src
+        monkeypatch.setattr(config, "max_tokens", 8)
+        messages = [{"role": "user", "content": "hello"}]
+        without = _request_context_tokens(messages, [], object())
+        tool = ToolDefinition("large", "description " * 2000, {"type": "object"})
+        assert _request_context_tokens(messages, [tool], object()) > without + 1000
 
-    def test_run_stream_uses_session_context_budget(self):
-        from ah.core import agent as agent_mod
+    def test_requested_output_is_reserved(self, monkeypatch):
+        from ah.core.agent import _request_context_tokens
+        from ah.core.config import config
 
-        src = inspect.getsource(agent_mod.ReActAgent.run_stream)
-        assert "_effective_turn_budget(session, self.provider)" in src
-        assert "effective_budget" in src
+        monkeypatch.setattr(config, "max_tokens", 8)
+        baseline = _request_context_tokens([], [], object())
+        monkeypatch.setattr(config, "max_tokens", 8192)
+        assert _request_context_tokens([], [], object()) - baseline == 8184
 
-    def test_both_clamp_to_max_token_budget(self):
-        """The shared helper clamps to MAX_TOKEN_BUDGET; both loops use it."""
-        from ah.core import agent as agent_mod
+    def test_provider_reasoning_reservation_is_counted(self, monkeypatch):
+        from ah.core.agent import _request_context_tokens
+        from ah.core.config import config
 
-        run_src = inspect.getsource(agent_mod.ReActAgent.run)
-        stream_src = inspect.getsource(agent_mod.ReActAgent.run_stream)
-        for src in (run_src, stream_src):
-            assert "_effective_turn_budget(session, self.provider)" in src
-        helper_src = inspect.getsource(agent_mod._effective_turn_budget)
-        assert "MAX_TOKEN_BUDGET" in helper_src
+        class ReasoningProvider:
+            def reservation_max_tokens(self, tokens, reasoning_effort=None):
+                return tokens + 2048
 
-    def test_budget_values_agree(self):
-        """Effective budget computed identically for the same session budget."""
-        from ah.core.agent import MAX_TOKEN_BUDGET, _effective_turn_budget
-        from ah.core.assembler import get_token_count
-        from ah.core.models import Session
-
-        assert MAX_TOKEN_BUDGET == 50_000
-        # Spot-check the shared token-count path used for budgeting.
-        assert get_token_count("hello") > 0
-        import uuid
-
-        # Unknown model behaves exactly as before (legacy 8000 default).
-        # Explicit session model keeps this hermetic regardless of saved defaults.
-        expected = {100: 100, 5000: 5000, 8000: 8000, 50_000: 50_000, 999_999: 50_000}
-        for budget, want in expected.items():
-            session = Session(id=uuid.uuid4(), context_budget=budget, model="unmapped-test-model")
-            assert _effective_turn_budget(session, object()) == want
+        monkeypatch.setattr(config, "max_tokens", 8)
+        baseline = _request_context_tokens([], [], object())
+        assert _request_context_tokens([], [], ReasoningProvider()) - baseline == 2048
 
 
 # ===========================================================================

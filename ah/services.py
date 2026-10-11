@@ -315,7 +315,9 @@ async def maybe_auto_compact(session_id) -> dict | None:
         session = await _sessions.get(session_id)
         if session is None:
             return None
-        budget = session.context_budget or 8000
+        from ah.core.context_windows import context_window_for
+
+        budget = context_window_for(session.model or config.get("model"))
         try:
             threshold = float(config.get("compression_threshold") or 0.8)
         except Exception:

@@ -268,6 +268,7 @@ def _stamp_execution(req: ActionRequest) -> None:
             "backend": req.backend,
             "operation": req.operation,
             "argv": list(req.argv),
+            "shell_payload": req.shell_payload,
             "cwd": req.cwd,
             "digest": req.digest,
             "approval_id": req.approval_id,

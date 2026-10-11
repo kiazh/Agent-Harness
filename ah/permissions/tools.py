@@ -27,14 +27,17 @@ def action_for_tool(name: str, args: dict) -> dict:
         return {"operation": "file.read", "targets": [str(args.get("path", "."))]}
     if name in ("terminal",):
         cmd = str(args.get("command", ""))
+        from ah.permissions.shell import parse_terminal_command
+
+        parsed = parse_terminal_command(cmd)
         try:
             timeout = int(args.get("timeout", 60))
         except Exception:
             timeout = 60
         return {
             "operation": "process.exec",
-            "argv": _split(cmd),
-            "shell_payload": "",
+            "argv": parsed.argv,
+            "shell_payload": parsed.payload,
             "cwd": str(args.get("workdir", ".")),
             "timeout": timeout,
         }
@@ -78,14 +81,3 @@ def _declared_effects(name: str) -> tuple[str, ...]:
 
 
 _MUTATING_EFFECTS = frozenset({"fs.write", "exec", "net", "delegate"})
-
-
-def _split(cmd: str) -> list[str]:
-    # Agreement with the terminal backend (terminal.py uses plain shlex.split):
-    # the approval card shows exactly the argv that will execute.
-    try:
-        import shlex
-
-        return shlex.split(cmd)
-    except Exception:
-        return [cmd]
