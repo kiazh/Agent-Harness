@@ -24,9 +24,9 @@ export const contextCommands: Command[] = [
 		description: "Summarize older context to free up tokens",
 		async run(_args, host) {
 			const current = requireSession(host);
-			host.print("Compressing context…");
+			host.print("Compressing context…", "plain");
 			const r = await host.request<CompressResult>("context.compress", { sessionId: current.id });
-			if (!r.compressed) host.print("Nothing to compress yet.");
+			if (!r.compressed) host.print("Nothing to compress yet.", "plain");
 			else
 				host.print(
 					`Compressed ${r.originalCount} chunks into ${r.newCount}: ${r.originalTokens} → ${r.compressedTokens} tokens (${r.method}).`,

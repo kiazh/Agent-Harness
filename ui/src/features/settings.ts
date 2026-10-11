@@ -100,7 +100,7 @@ export const settingsCommands: Command[] = [
 	},
 	{
 		name: "default-model",
-		description: "Pick the default model from a menu (saved across sessions)",
+		description: "Pick the default model (menu when empty, saved across sessions)",
 		argumentHint: "[search|model-id]",
 		getArgumentCompletions: (prefix: string) => {
 			const typed = prefix.trimStart().toLowerCase();
@@ -160,7 +160,7 @@ export const settingsCommands: Command[] = [
 		async run(args, host) {
 			if (!args) {
 				const { config } = await host.request<ConfigGetResult>("config.get");
-				host.print(`Provider: ${config.provider}`);
+				host.print(`Provider: ${config.provider}`, "plain");
 			} else {
 				const provider = args.toLowerCase();
 				await setConfig(host, "provider", provider, false);
@@ -185,7 +185,7 @@ export const settingsCommands: Command[] = [
 			const value = args.trim().toLowerCase();
 			if (!value) {
 				const { config } = await host.request<ConfigGetResult>("config.get");
-				host.print(`Reasoning effort: ${config.reasoning_effort || "off (provider default)"}`);
+				host.print(`Reasoning effort: ${config.reasoning_effort || "off (provider default)"}`, "plain");
 				return;
 			}
 			await setConfig(host, "reasoning_effort", value, false);
@@ -208,7 +208,7 @@ export const settingsCommands: Command[] = [
 				return;
 			}
 			if (!(key in config)) throw new Error(`Unknown setting "${key}". Use /config to list them.`);
-			if (!value) host.print(`${key} = ${secrets.includes(key) ? (config[key] ? "set (in .env)" : "not set") : formatValue(config[key])}`);
+			if (!value) host.print(`${key} = ${secrets.includes(key) ? (config[key] ? "set (in .env)" : "not set") : formatValue(config[key])}`, "plain");
 			else await setConfig(host, key, value, persist);
 		},
 	},

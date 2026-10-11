@@ -169,7 +169,11 @@ def automatic_skill_context(
     if can_search:
         header += (
             "For uncovered subtasks or uncertain matches, search skill_list(query) and read "
-            "applicable workflows before proceeding. "
+            "applicable workflows before proceeding. Answer greetings, acknowledgements, "
+            "and questions with no actionable task directly — never call skill_list for "
+            "those. When you do search, use a specific query and page with offset only "
+            "while the current page shows relevant matches; never enumerate the whole "
+            "catalog. "
         )
     if can_resources:
         header += "Read supporting files with skill_resource; run scripts only through authorized tools.\n"

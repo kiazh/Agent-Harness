@@ -12,6 +12,8 @@ export const agentsCommand: Command = {
 	getArgumentCompletions: options([
 		["list", "All available agents"],
 		["show", "Read an agent's definition <name>"],
+		["save", "Save the current session as an agent <name>"],
+		["history", "Recent agent activity"],
 		["delete", "Remove a custom agent <name>"],
 	]),
 	async run(args, host) {
@@ -83,7 +85,7 @@ export const agentsCommand: Command = {
 		case "delete": {
 				const name = requireArgs(rest, "/agents delete <name>");
 				if (!(await confirm(host, `Delete agent "${name}"?`, "Delete"))) {
-					host.print("Kept the agent.");
+					host.print("Kept the agent.", "plain");
 					return;
 				}
 				await host.request("agents.delete", { name });
@@ -103,7 +105,7 @@ export const delegateCommand: Command = {
 	async run(args, host) {
 		const [agent, task] = splitSub(requireArgs(args, "/delegate <agent> <task>"));
 		if (!task) throw new Error("Usage: /delegate <agent> <task>");
-		host.print(`Delegating to ${agent}…`);
+		host.print(`Delegating to ${agent}…`, "plain");
 		const { results } = await host.request<{ results: DelegationResult[] }>("agents.run", {
 			sessionId: host.session()?.id,
 			steps: [{ agent, task }],

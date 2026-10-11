@@ -30,12 +30,23 @@ function shortCwd(cwd: string): string {
 }
 
 /**
+ * One blank terminal row between transcript blocks so filled response
+ * boxes never touch corner-to-corner. Each block carries its own top
+ * margin; the first block's margin also airs out the session header.
+ */
+const BLOCK_GAP: string[] = [""];
+
+/**
  * A user turn, Codex-style: a plain transcript echo, accent marker plus
  * default-foreground text — no box, the words speak for themselves.
  */
 export class UserMessage extends Text {
 	constructor(text: string) {
 		super(`${theme.accentBold("›")} ${theme.text(text)}`, 1, 0);
+	}
+
+	override render(width: number): string[] {
+		return [...BLOCK_GAP, ...super.render(width)];
 	}
 }
 
@@ -64,7 +75,7 @@ export class AssistantMessage implements Component {
 	render(width: number): string[] {
 		// Repair the fill: model output can carry nested background resets
 		// (e.g. pasted ANSI), which would otherwise leak terminal black.
-		return this.box.render(width).map((line) => repairFill("assistantBg", line));
+		return [...BLOCK_GAP, ...this.box.render(width).map((line) => repairFill("assistantBg", line))];
 	}
 
 	invalidate(): void {
@@ -72,9 +83,16 @@ export class AssistantMessage implements Component {
 	}
 }
 
-/** A one-paragraph note: help text, command output, errors, status. */
+/**
+ * A one-paragraph note: help text, command output, errors, status.
+ * Success, warning, and error carry a text marker as well as color so
+ * state survives monochrome skins and color-blind viewing (the same
+ * marker convention as ToolCard and TextForm errors).
+ */
 export class Notice extends Text {
 	constructor(text: string, kind: NoticeKind = "info") {
+		const marked =
+			kind === "success" ? `✓ ${text}` : kind === "warning" ? `! ${text}` : kind === "error" ? `✗ ${text}` : text;
 		const style = {
 			info: theme.info,
 			plain: theme.text,
@@ -82,7 +100,11 @@ export class Notice extends Text {
 			warning: theme.warning,
 			error: theme.error,
 		}[kind];
-		super(style(text), 1, 0);
+		super(style(marked), 1, 0);
+	}
+
+	override render(width: number): string[] {
+		return [...BLOCK_GAP, ...super.render(width)];
 	}
 }
 
@@ -156,9 +178,12 @@ export class ToolCard implements Component {
 
 		// Repair the fill: tool output can carry nested background resets
 		// (e.g. colored command output), which would leak terminal black.
-		return lines.map((line) =>
-			repairFill(bgSlot, bgFn(` ${line}${" ".repeat(Math.max(0, inner - visibleWidth(line)))} `)),
-		);
+		return [
+			...BLOCK_GAP,
+			...lines.map((line) =>
+				repairFill(bgSlot, bgFn(` ${line}${" ".repeat(Math.max(0, inner - visibleWidth(line)))} `)),
+			),
+		];
 	}
 
 	invalidate(): void {}
@@ -284,11 +309,16 @@ export const COMPOSER_PLACEHOLDER = "Ask AgentHarness to do anything";
 export type LayoutRoot = VStack;
 
 export function createLayout(transcript: Component, composer: Component, footer: Component): LayoutRoot {
-	return new VStack([
-		{ component: new ScrollView(transcript, { follow: "end" }), grow: 1 },
-		{ component: composer, shrink: 0 },
-		{ component: footer, shrink: 0 },
-	]);
+	// One blank row between chrome sections so the last response box never
+	// touches the composer corners, and the input block stands off the footer.
+	return new VStack(
+		[
+			{ component: new ScrollView(transcript, { follow: "end" }), grow: 1 },
+			{ component: composer, shrink: 0 },
+			{ component: footer, shrink: 0 },
+		],
+		{ gap: 1 },
+	);
 }
 
 /**

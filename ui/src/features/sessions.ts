@@ -30,7 +30,7 @@ async function resolveSessionId(host: FeatureHost, idOrPrefix: string): Promise<
 async function openSession(host: FeatureHost, id: string): Promise<void> {
 	const { session, history } = await host.request<ResumeResult>("session.resume", { sessionId: id });
 	host.switchTo(session, history);
-	host.print(`Resumed "${session.title || "untitled"}" (${shortId(session.id)}).`);
+	host.print(`Resumed "${session.title || "untitled"}" (${shortId(session.id)}).`, "plain");
 }
 
 function sessionItems(sessions: SessionInfo[]): SelectItem[] {
@@ -48,10 +48,10 @@ async function pickAndOpen(host: FeatureHost, title: string, sessions: SessionIn
 
 const sessionsCommand: Command = {
 	name: "sessions",
-	description: "Pick a recent session to resume",
+	description: "Resume a session (menu when empty)",
 	async run(_args, host) {
 		const { sessions } = await host.request<SessionListResult>("session.list", { limit: 50 });
-		if (!sessions.length) host.print("No sessions yet.");
+		if (!sessions.length) host.print("No sessions yet.", "plain");
 		else await pickAndOpen(host, "Resume a session", sessions);
 	},
 };
@@ -69,8 +69,8 @@ export const sessionCommands: Command[] = [
 	sessionsCommand,
 	{
 		name: "resume",
-		description: "Resume a session by id (prefix ok)",
-		argumentHint: "<id>",
+		description: "Resume a session (menu when empty)",
+		argumentHint: "[id]",
 		async run(args, host) {
 			if (!args) return sessionsCommand.run("", host);
 			await openSession(host, await resolveSessionId(host, args));
@@ -83,7 +83,7 @@ export const sessionCommands: Command[] = [
 		async run(args, host) {
 			const query = requireArgs(args, "/search <words>");
 			const { sessions } = await host.request<SessionListResult>("session.search", { query, limit: 30 });
-			if (!sessions.length) host.print(`No sessions match "${query}".`);
+			if (!sessions.length) host.print(`No sessions match "${query}".`, "plain");
 			else await pickAndOpen(host, `Sessions matching "${query}"`, sessions);
 		},
 	},
@@ -96,7 +96,7 @@ export const sessionCommands: Command[] = [
 			const query = requireArgs(args, "/recall <words>");
 			const { hits } = await host.request<RecallResult>("session.recall", { sessionId: current.id, query, limit: 30 });
 			if (!hits.length) {
-				host.print(`No transcript matches for "${query}".`);
+				host.print(`No transcript matches for "${query}".`, "plain");
 				return;
 			}
 			const choice = await host.pick(`Recall "${query}"`, hits.map((hit) => ({
@@ -114,13 +114,13 @@ export const sessionCommands: Command[] = [
 			const { messages } = await host.request<RecallWindowResult>("session.recall.window", {
 				sessionId: current.id, targetSessionId: hit.sessionId, chunkId: hit.chunkId,
 			});
-			host.print(`Transcript from ${hit.title || "(untitled)"} (${shortId(hit.sessionId)}):`);
+			host.print(`Transcript from ${hit.title || "(untitled)"} (${shortId(hit.sessionId)}):`, "plain");
 			for (const message of messages) {
 				const content = message.payload.content ?? message.payload.text ?? message.payload.result_preview ?? message.payload;
 				const plain = typeof content === "string" ? content : JSON.stringify(content);
 				host.print(`${message.type} [${message.source}]: ${plain.slice(0, 4000)}`, "plain");
 			}
-			host.print(`Use /resume ${hit.sessionId} to continue that conversation.`);
+			host.print(`Use /resume ${hit.sessionId} to continue that conversation.`, "plain");
 		},
 	},
 	{
@@ -143,7 +143,7 @@ export const sessionCommands: Command[] = [
 			const current = requireSession(host);
 			if (!args) {
 				const ctx = await host.request<ContextResult>("context.get", { sessionId: current.id, limit: 1 });
-				host.print(ctx.goal ? `Goal: ${ctx.goal}` : "No goal set. Use /goal <text>.");
+				host.print(ctx.goal ? `Goal: ${ctx.goal}` : "No goal set. Use /goal <text>.", "plain");
 				return;
 			}
 			const { goal } = await host.request<{ goal: string }>("session.setGoal", { sessionId: current.id, goal: args });
@@ -168,7 +168,7 @@ export const sessionCommands: Command[] = [
 			const current = host.session();
 			const id = args ? await resolveSessionId(host, args) : requireSession(host).id;
 			if (!(await confirm(host, `Delete session ${shortId(id)}? This cannot be undone.`, "Delete"))) {
-				host.print("Kept the session.");
+				host.print("Kept the session.", "plain");
 				return;
 			}
 			await host.request("session.delete", { sessionId: id });

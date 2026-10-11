@@ -193,6 +193,24 @@ test("assistant output renders boxed and respects width", async () => {
 	assert.doesNotMatch(banner, /─/);
 });
 
+test("transcript blocks leave a margin row so box corners never touch", async () => {
+	const { AssistantMessage, Notice, ToolCard, UserMessage } = await import("../src/components.ts");
+	const blocks = [
+		new UserMessage("hello"),
+		new AssistantMessage("hi **there**"),
+		new Notice("a note", "plain"),
+		new ToolCard("read_file", { path: "a.py" }),
+	];
+	for (const block of blocks) {
+		const lines = block.render(80).map((line) => stripTerminalSequences(line));
+		assert.equal(lines[0], "", `${block.constructor.name} opens with a blank margin row`);
+		assert.ok(lines.length > 1, `${block.constructor.name} still renders content after the margin`);
+	}
+	const card = new ToolCard("search_files", { pattern: "x" });
+	card.complete("ok", false);
+	for (const line of card.render(40)) assert.ok(visibleWidth(line) <= 40, "margin row respects width");
+});
+
 test("codex-style diff coloring marks additions and deletions", async () => {
 	const { diffStyle } = await import("../src/components.ts");
 	assert.match(diffStyle("+ added"), /added/);

@@ -363,3 +363,100 @@ async def test_anthropic_complete_sends_thinking_when_effort_set():
     payload = provider.client.post.await_args.kwargs["json"]
     assert payload["thinking"] == {"type": "enabled", "budget_tokens": 10000}
     assert payload["max_tokens"] >= 11024
+
+
+# ─── streamed usage accounting ─────────────────────────────────────────────
+
+
+class _MockStreamResponse:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def raise_for_status(self):
+        pass
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _MockStreamContext:
+    def __init__(self, lines):
+        self._response = _MockStreamResponse(lines)
+
+    async def __aenter__(self):
+        return self._response
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _make_direct_stream(provider_name, lines):
+    from ah.core.provider import PROVIDER_SPECS, DirectProvider
+
+    spec = PROVIDER_SPECS[provider_name]
+    provider = DirectProvider.__new__(DirectProvider)
+    provider.spec = spec
+    provider.api_key = "test-key"
+    provider.model = spec.default_model
+    provider._default_effort = ""
+    provider._rate_limiter = AsyncMock()
+    captured = {}
+    provider.client = MagicMock()
+
+    def _stream(method, url, json=None, **kwargs):
+        captured["json"] = json
+        return _MockStreamContext(lines)
+
+    provider.client.stream = MagicMock(side_effect=_stream)
+    return provider, captured
+
+
+async def _stream_done(provider, messages):
+    events = [event async for event in provider.stream_complete(messages=messages)]
+    return next(event for event in events if event.type == "done")
+
+
+def test_stream_usage_flag_only_where_documented():
+    from ah.core.provider import PROVIDER_SPECS
+
+    assert PROVIDER_SPECS["openai"].stream_usage is True
+    assert PROVIDER_SPECS["deepseek"].stream_usage is True
+    for name in ("xai", "groq", "together", "mistral", "google"):
+        assert PROVIDER_SPECS[name].stream_usage is False, name
+
+
+@pytest.mark.asyncio
+async def test_deepseek_stream_reports_vendor_usage():
+    provider, captured = _make_direct_stream(
+        "deepseek",
+        [
+            'data: {"model": "deepseek-chat", "choices": [{"delta": {"content": "Hi"}}]}',
+            'data: {"model": "deepseek-chat", "choices": [], '
+            '"usage": {"prompt_tokens": 100, "completion_tokens": 5, "total_tokens": 105}}',
+            "data: [DONE]",
+        ],
+    )
+    done = await _stream_done(provider, [{"role": "user", "content": "hi"}])
+    assert captured["json"]["stream_options"] == {"include_usage": True}
+    assert done.response.content == "Hi"
+    assert done.response.usage["total_tokens"] == 105
+    assert done.response.usage["prompt_tokens"] == 100
+    assert done.response.usage["completion_tokens"] == 5
+
+
+@pytest.mark.asyncio
+async def test_direct_stream_without_usage_flag_estimates_instead_of_zero():
+    provider, captured = _make_direct_stream(
+        "groq",
+        [
+            'data: {"model": "x", "choices": [{"delta": {"content": "Hello world"}}]}',
+            "data: [DONE]",
+        ],
+    )
+    done = await _stream_done(provider, [{"role": "user", "content": "hi"}])
+    assert "stream_options" not in captured["json"]
+    usage = done.response.usage
+    assert usage["prompt_tokens"] > 0
+    assert usage["completion_tokens"] > 0
+    assert usage["total_tokens"] == usage["prompt_tokens"] + usage["completion_tokens"]

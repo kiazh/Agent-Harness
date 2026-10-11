@@ -10,7 +10,7 @@ from ah.tools.base import registry
 
 @registry.register(
     name="skill_list",
-    description="Search and rank skills for a task by query, or browse with an empty query. Use offset for the next page.",
+    description="Search and rank skills for a task by query (4 per page). Use a specific query; page with offset only while results stay relevant. Never enumerate the whole catalog; empty query browses.",
 )
 def skill_list(query: str = "", offset: int = 0) -> str:
     skills = skills_module.skill_registry

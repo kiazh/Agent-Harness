@@ -741,3 +741,70 @@ test("/theme switches skin and persists it", async () => {
 		setSkin(before);
 	}
 });
+
+test("read-only reports use the plain kind", async () => {
+	const host = new FakeHost();
+	host.responses["session.list"] = { sessions: [] };
+	await run("/sessions", host);
+	assert.match(host.last().text, /No sessions yet/);
+	assert.equal(host.last().kind, "plain");
+	host.responses["session.search"] = { sessions: [] };
+	await run("/search nothing-here", host);
+	assert.equal(host.last().kind, "plain");
+});
+
+test("unknown modes and keys fail as errors, not warnings", async () => {
+	const modeHost = new FakeHost();
+	await run("/mode bogus", modeHost);
+	assert.equal(modeHost.last().kind, "error");
+	assert.match(modeHost.last().text, /Unknown mode/);
+	assert.equal(modeHost.calls.length, 0);
+
+	const keysHost = new FakeHost();
+	await run("/keys frobnicate", keysHost);
+	assert.equal(keysHost.last().kind, "error");
+	assert.match(keysHost.last().text, /Unknown \/keys option/);
+	assert.equal(keysHost.calls.length, 0);
+});
+
+test("/approvals renders one table and rejects bad ids as errors", async () => {
+	const host = new FakeHost();
+	host.responses["approvals.list"] = {
+		approvals: [
+			{ request_id: "abcdef12-0000", operation: "exec", target: "ls", agent_id: "harness", status: "pending" },
+			{ request_id: "12345678-0000", operation: "write", target: "a.txt", agent_id: "harness", status: "pending" },
+		],
+	};
+	await run("/approvals", host);
+	assert.equal(host.printed.length, 1);
+	assert.match(host.last().text, /abcdef12/);
+	assert.match(host.last().text, /12345678/);
+	assert.equal(host.last().kind, "plain");
+
+	await run("/approvals allow zzzz", host);
+	assert.equal(host.last().kind, "error");
+	assert.match(host.last().text, /No pending approval/);
+
+	await run("/approvals dance", host);
+	assert.equal(host.last().kind, "error");
+	assert.match(host.last().text, /Unknown \/approvals option/);
+});
+
+test("/growth forget reports a miss as a warning", async () => {
+	const host = new FakeHost();
+	host.responses["growth.forget"] = { removed: false };
+	await run("/growth forget style:missing", host);
+	assert.equal(host.last().kind, "warning");
+	assert.match(host.last().text, /No matching note/);
+});
+
+test("notices mark success, warning, and error with text cues", async () => {
+	const { Notice } = await import("../src/components.ts");
+	const line = (kind: "info" | "plain" | "success" | "warning" | "error") =>
+		stripTerminalSequences(new Notice("hello", kind).render(40).join("\n"));
+	assert.match(line("success"), /✓ hello/);
+	assert.match(line("warning"), /! hello/);
+	assert.match(line("error"), /✗ hello/);
+	assert.doesNotMatch(line("plain"), /[✓!✗] hello/);
+	assert.doesNotMatch(line("info"), /[✓!✗] hello/);
+});

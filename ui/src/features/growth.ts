@@ -34,7 +34,7 @@ export const growthCommand: Command = {
 		}
 		if (sub === "forget") {
 			const { removed } = await host.request<{ removed: boolean }>("growth.forget", { sessionId, key: requireArgs(rest, "/growth forget <kind:key>") });
-			host.print(removed ? "Learned note removed." : "No matching note.", "info");
+			host.print(removed ? "Learned note removed." : "No matching note.", removed ? "success" : "warning");
 			return;
 		}
 		if (sub === "feedback") {

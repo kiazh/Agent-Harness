@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 
+from ah.core.assembler import get_token_count
 from ah.core.config import config
 from ah.core.exceptions import ProviderError, RateLimitError, ValidationError
 from ah.core.metrics import metrics
@@ -140,6 +141,7 @@ class ProviderSpec:
         default_model: str,
         reasoning: str = "none",
         description: str = "",
+        stream_usage: bool = False,
     ) -> None:
         self.name = name
         self.base_url = base_url
@@ -148,6 +150,9 @@ class ProviderSpec:
         self.default_model = default_model
         self.reasoning = reasoning
         self.description = description
+        # Whether the vendor honors stream_options.include_usage. Only set
+        # for vendors whose docs confirm it — others 400 on the param.
+        self.stream_usage = stream_usage
 
 
 PROVIDER_SPECS: dict[str, ProviderSpec] = {
@@ -158,6 +163,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         default_model="gpt-4o-mini",
         reasoning="openai",
         description="OpenAI (GPT models)",
+        stream_usage=True,
     ),
     "deepseek": ProviderSpec(
         name="deepseek",
@@ -166,6 +172,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         default_model="deepseek-chat",
         reasoning="openai",
         description="DeepSeek (chat + reasoner)",
+        stream_usage=True,
     ),
     "xai": ProviderSpec(
         name="xai",
@@ -1662,9 +1669,10 @@ class DirectProvider(LLMProvider):
             "stream": True,
             **self._effort_payload(reasoning_effort),
         }
-        # NOTE: no stream_options here — unlike OpenAI proper, several vendors
-        # 400 on it. Streamed turns report estimated usage via the reservation,
-        # like Ollama streams.
+        # stream_options.include_usage is only sent for vendors whose docs
+        # confirm it — others 400 on the param.
+        if self.spec.stream_usage:
+            payload["stream_options"] = {"include_usage": True}
         if tools:
             payload["tools"] = _tools_payload(tools)
 
@@ -1680,6 +1688,7 @@ class DirectProvider(LLMProvider):
 
         content_parts: list[str] = []
         tool_calls_by_index: dict[int, dict[str, str]] = {}
+        stream_usage: dict[str, int] = {}
         resolved_model = model
         try:
             async with self.client.stream("POST", "/chat/completions", json=payload) as resp:
@@ -1695,6 +1704,9 @@ class DirectProvider(LLMProvider):
                     except json.JSONDecodeError:
                         continue
                     resolved_model = chunk.get("model") or resolved_model
+                    # The usage chunk arrives with an empty choices list.
+                    if chunk.get("usage"):
+                        stream_usage = chunk["usage"]
                     choices = chunk.get("choices", [])
                     if not choices:
                         continue
@@ -1735,15 +1747,27 @@ class DirectProvider(LLMProvider):
                 }
             )
         full_content = "".join(content_parts)
+        usage = {
+            "prompt_tokens": int(stream_usage.get("prompt_tokens", 0)),
+            "completion_tokens": int(stream_usage.get("completion_tokens", 0)),
+        }
+        if not usage["prompt_tokens"] and not usage["completion_tokens"]:
+            # Vendor sent no usage chunk: estimate so turn accounting and
+            # the footer never read zero on a non-empty turn.
+            usage = {
+                "prompt_tokens": max(1, get_token_count(json.dumps(messages))),
+                "completion_tokens": max(1, len(full_content) // 4),
+            }
+        usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
         if reservation_id is not None:
-            await usage_store.finish(reservation_id, {}, model=resolved_model)
+            await usage_store.finish(reservation_id, usage, model=resolved_model)
         audit_log(
             "llm_stream_complete", provider=self.spec.name, model=model, tool_calls=len(tool_calls)
         )
         yield StreamEvent(
             type="done",
             response=LLMResponse(
-                content=full_content, model=resolved_model, usage={}, tool_calls=tool_calls
+                content=full_content, model=resolved_model, usage=usage, tool_calls=tool_calls
             ),
         )
 

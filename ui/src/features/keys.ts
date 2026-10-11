@@ -84,8 +84,7 @@ export const keysCommand: Command = {
 			host.print(`${picked.toUpperCase()} cleared (session and .env).`, "success");
 			return;
 		}
-		// Unknown word: open the interactive menu instead of failing.
-		await openMenu(host);
+		throw new Error(`Unknown /keys option "${sub}". Try: list, set, clear.`);
 	},
 };
 

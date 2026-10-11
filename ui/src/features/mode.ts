@@ -1,7 +1,8 @@
 // Mode + approvals commands: /mode, /approvals.
 
+import { shortId, table } from "../format.ts";
 import { splitSub } from "../commands.ts";
-import { options, type Command, type FeatureHost } from "./types.ts";
+import { options, requireSession, type Command, type FeatureHost } from "./types.ts";
 import type { ApprovalsListResult, ModeResult } from "../protocol.ts";
 
 const MODE_HELP = [
@@ -34,8 +35,7 @@ export const modeCommand: Command = {
 			return;
 		}
 		if (!["ask", "workspace", "sandbox", "full"].includes(sub)) {
-			host.print(`Unknown mode /mode ${sub}. Use ask|workspace|sandbox|full.`, "warning");
-			return;
+			throw new Error(`Unknown mode "${sub}". Use ask|workspace|sandbox|full.`);
 		}
 		const params: Record<string, unknown> = { mode: sub };
 		const session = host.session();
@@ -46,7 +46,7 @@ export const modeCommand: Command = {
 				{ label: "Cancel", value: "cancel" },
 			]);
 			if (!choice || choice.value === "cancel") {
-				host.print("Full mode not activated.", "warning");
+				host.print("Full mode not activated.", "plain");
 				return;
 			}
 			params.scope = "session";
@@ -65,22 +65,21 @@ export const approvalsCommand: Command = {
 	name: "approvals",
 	description: "List pending approvals, or allow/deny one",
 	argumentHint: "[list|allow <id>|deny <id>|revoke]",
+	getArgumentCompletions: options([
+		["list", "Pending approvals"],
+		["allow", "Approve a pending request <id>"],
+		["deny", "Deny a pending request <id>"],
+		["revoke", "Revoke session grants"],
+	]),
 	async run(args, host) {
-		const session = host.session();
-		if (!session) {
-			host.print("No session.", "warning");
-			return;
-		}
+		const session = requireSession(host);
 		const [sub, rest] = splitSub(args);
 		if (sub === "allow" || sub === "deny") {
 			const { approvals } = await host.request<ApprovalsListResult>("approvals.list", {
 				sessionId: session.id,
 			});
 			const match = approvals.find((a) => a.request_id.startsWith(rest));
-			if (!match) {
-				host.print(`No pending approval ${rest}.`, "warning");
-				return;
-			}
+			if (!match) throw new Error(`No pending approval starts with "${rest}".`);
 			await host.request("approvals.resolve", {
 				requestId: match.request_id,
 				verdict: sub === "allow" ? "approved" : "denied",
@@ -93,6 +92,7 @@ export const approvalsCommand: Command = {
 			host.print("Grants revoked; back to ask mode.", "success");
 			return;
 		}
+		if (sub && sub !== "list") throw new Error(`Unknown /approvals option "${sub}". Try: list, allow, deny, revoke.`);
 		const { approvals } = await host.request<ApprovalsListResult>("approvals.list", {
 			sessionId: session.id,
 		});
@@ -100,9 +100,13 @@ export const approvalsCommand: Command = {
 			host.print("No pending approvals.", "plain");
 			return;
 		}
-		for (const a of approvals) {
-			host.print(`${a.request_id.slice(0, 8)} ${a.operation} ${a.target} (agent: ${a.agent_id})`, "plain");
-		}
-		host.print("Use /approvals allow <id> or /approvals deny <id>.", "plain");
+		host.print(
+			`${table(
+				["ID", "Operation", "Target", "Agent"],
+				approvals.map((a) => [shortId(a.request_id), a.operation, a.target, a.agent_id]),
+				40,
+			)}\n\nUse /approvals allow <id> or /approvals deny <id>.`,
+			"plain",
+		);
 	},
 };

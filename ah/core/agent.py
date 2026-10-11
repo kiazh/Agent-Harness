@@ -104,6 +104,29 @@ Be concise. Don't over-explain. Get things done."""
 
 # Maximum token budget for a single agent run (fallback, session.context_budget takes precedence)
 MAX_TOKEN_BUDGET = 50_000
+
+
+def _turn_model(session, provider) -> str | None:
+    """Best-known model id for budget purposes: session, else provider, else config."""
+    model = getattr(session, "model", None) or getattr(provider, "model", None)
+    if model:
+        return model
+    try:
+        return config.get("model") or None
+    except Exception:
+        return None
+
+
+def _effective_turn_budget(session, provider) -> int:
+    """Per-turn spend cap: explicit config wins, else scaled to the model's window."""
+    from ah.core.context_windows import turn_token_budget
+
+    return min(
+        turn_token_budget(_turn_model(session, provider), session.context_budget),
+        MAX_TOKEN_BUDGET,
+    )
+
+
 MAX_PENDING_LEARNING_REVIEWS = 16
 _pending_learning_reviews: set[asyncio.Task] = set()
 # Shared per-session consolidation single-flight (LP-14): concurrent agent
@@ -1335,8 +1358,9 @@ class ReActAgent(BaseReActAgent):
             if verbose:
                 console.print(f"[dim]Iteration {iteration + 1}/{self.max_iterations}[/dim]")
 
-            # Check token budget before calling LLM (use session.context_budget)
-            effective_budget = min(session.context_budget, MAX_TOKEN_BUDGET)
+            # Check token budget before calling LLM (explicit config wins,
+            # otherwise scaled to the turn model's context window)
+            effective_budget = _effective_turn_budget(session, self.provider)
             if total_tokens >= effective_budget:
                 logger.warning(
                     "Token budget exceeded (%d >= %d) — stopping agent loop",
@@ -1510,8 +1534,9 @@ class ReActAgent(BaseReActAgent):
             if verbose:
                 console.print(f"[dim]Iteration {iteration + 1}/{self.max_iterations}[/dim]")
 
-            # Check token budget before calling LLM (use session.context_budget)
-            effective_budget = min(session.context_budget, MAX_TOKEN_BUDGET)
+            # Check token budget before calling LLM (explicit config wins,
+            # otherwise scaled to the turn model's context window)
+            effective_budget = _effective_turn_budget(session, self.provider)
             if total_tokens >= effective_budget:
                 logger.warning(
                     "Token budget exceeded (%d >= %d) — stopping agent loop",

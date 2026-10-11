@@ -28,7 +28,7 @@ async function resolvePending(host: FeatureHost, idOrPrefix: string): Promise<st
 
 export const memoryCommand: Command = {
 	name: "memory",
-	description: "Long-term memory: list, search, add, forget, share, review",
+	description: "Long-term memory: list, search, add, forget, share, pending, approve, reject, stats",
 	argumentHint: "[list|search|add|forget|share|pending|approve|reject|stats]",
 	getArgumentCompletions: options([
 		["list", "Recent memories [category]"],

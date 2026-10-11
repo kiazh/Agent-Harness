@@ -70,7 +70,9 @@ test("short transcript docks composer and footer to the bottom rows", () => {
 		assert.match(screen[0] ?? "", /hello world/);
 		assert.match(screen[22] ?? "", /test-model/);
 		assert.match(screen[23] ?? "", /\? for shortcuts/);
-		assert.match(screen[20] ?? "", /Ask AgentHarness to do anything/);
+		assert.match(screen[19] ?? "", /Ask AgentHarness to do anything/);
+		assert.equal((screen[17] ?? "").trim(), "", "one blank row separates the transcript from the composer");
+		assert.equal((screen[21] ?? "").trim(), "", "one blank row separates the composer from the footer");
 	} finally {
 		tui.stop();
 	}
@@ -82,9 +84,9 @@ test("long transcript follows the end above the docked composer", () => {
 	try {
 		const screen = plain(tui.getScreenLines());
 		assert.equal(screen.length, 24);
-		// 19-row viewport over 100 lines: last line sits directly above the composer.
-		assert.match(screen[18] ?? "", /line 99/);
-		assert.match(screen[0] ?? "", /line 81/);
+		// 17-row viewport over 100 lines: last line sits one gap row above the composer.
+		assert.match(screen[16] ?? "", /line 99/);
+		assert.match(screen[0] ?? "", /line 83/);
 		assert.match(screen[22] ?? "", /test-model/);
 		assert.match(screen[23] ?? "", /\? for shortcuts/);
 	} finally {

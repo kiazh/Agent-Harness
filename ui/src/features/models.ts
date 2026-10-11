@@ -79,7 +79,7 @@ export function filterCuratedModels(query: string): ModelEntry[] {
 
 export const modelsCommand: Command = {
 	name: "models",
-	description: "Pick a model from the curated menu",
+	description: "Pick a model (menu when empty)",
 	argumentHint: "[search]",
 	async run(args, host) {
 		const entries = filterCuratedModels(args);

@@ -239,7 +239,11 @@ export class App implements FeatureHost {
 	}
 
 	askText(options: AskTextOptions): Promise<string | undefined> {
-		if (this.overlay) return Promise.resolve(undefined);
+		if (this.overlay) {
+			this.transcript.addNotice("Finish the current dialog first.", "warning");
+			this.tui.requestRender();
+			return Promise.resolve(undefined);
+		}
 		return new Promise((done) => {
 			const close = (value?: string) => {
 				this.overlay?.hide();
@@ -249,6 +253,7 @@ export class App implements FeatureHost {
 				done(value);
 			};
 			const form = new TextForm(this.tui, editorTheme, options);
+			form.focused = true;
 			form.onSubmit = (value) => close(value);
 			form.onCancel = () => close(undefined);
 			// Same sheet placement as pick() so management flows share one control style.
@@ -468,7 +473,10 @@ export class App implements FeatureHost {
 			return;
 		}
 		if ((event.type === "approval.resolved" || event.type === "permission.resolved")) {
-			this.transcript.addNotice(`Approval ${event.requestId.slice(0, 8)} ${event.status}.`);
+			this.transcript.addNotice(
+				`Approval ${event.requestId.slice(0, 8)} ${event.status}.`,
+				event.status === "approved" ? "success" : event.status === "denied" ? "error" : "warning",
+			);
 			this.tui.requestRender();
 			return;
 		}

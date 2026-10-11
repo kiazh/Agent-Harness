@@ -7,7 +7,7 @@ import { confirm, options, requireArgs, requireSession, type Command } from "./t
 
 export const skillsCommand: Command = {
 	name: "skills",
-	description: "Skills: list, show, learn, proposals, approve, reject, delete, health report",
+	description: "Skills: list, show, learn, proposals, approve, reject, delete, curator",
 	argumentHint: "[list|show|learn|proposals|approve|reject|delete|curator]",
 	getArgumentCompletions: options([
 		["list", "All installed skills"],
@@ -77,7 +77,7 @@ export const skillsCommand: Command = {
 			case "delete": {
 				const name = requireArgs(rest, "/skills delete <name>");
 				if (!(await confirm(host, `Delete skill "${name}"?`, "Delete"))) {
-					host.print("Kept the skill.");
+					host.print("Kept the skill.", "plain");
 					return;
 				}
 				await host.request("skills.delete", { name });

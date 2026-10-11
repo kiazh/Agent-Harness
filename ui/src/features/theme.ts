@@ -8,7 +8,7 @@ import { options, type Command, type FeatureHost } from "./types.ts";
 
 export const themeCommand: Command = {
 	name: "theme",
-	description: "Switch UI skin (colors + header art)",
+	description: "Switch UI skin (menu when empty)",
 	argumentHint: "[skin]",
 	getArgumentCompletions: options(SKIN_NAMES.map((name) => [name, skinDescription(name)])),
 	async run(args, host) {

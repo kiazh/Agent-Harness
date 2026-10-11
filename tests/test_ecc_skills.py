@@ -207,6 +207,23 @@ def test_skill_context_never_exceeds_its_budget(budget, tmp_path, monkeypatch):
     assert "ecc-rust" not in text
 
 
+def test_skill_context_tells_model_not_to_page_greetings(tmp_path, monkeypatch):
+    from ah.skills.runtime import automatic_skill_context
+
+    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    text = automatic_skill_context("hello!", skills=SkillRegistry())
+    assert "never call skill_list" in text
+    assert "never enumerate the whole catalog" in text
+
+
+def test_skill_list_description_discourages_catalog_enumeration():
+    import ah.tools.skills  # noqa: F401 — registers skill_list on the global registry
+    from ah.tools.base import registry
+
+    desc = next(d.description for d in registry.get_tool_definitions() if d.name == "skill_list")
+    assert "Never enumerate the whole catalog" in desc
+
+
 @pytest.mark.parametrize(
     "query,expected",
     [
