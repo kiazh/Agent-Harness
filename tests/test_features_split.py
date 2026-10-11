@@ -35,6 +35,7 @@ def test_all_feature_methods_accessible_after_split():
         "growth.feedback",
         "growth.forget",
         "growth.installPolicy",
+        "growth.rollback",
         "skills.list",
         "skills.show",
         "skills.learn",

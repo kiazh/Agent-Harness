@@ -51,6 +51,8 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 _growth_episode: ContextVar[uuid.UUID | None] = ContextVar("growth_episode", default=None)
+_rsi_choice: ContextVar[dict | None] = ContextVar("rsi_choice", default=None)
+_rsi_skills: ContextVar[list[str] | None] = ContextVar("rsi_skills", default=None)
 
 console = Console()
 
@@ -66,7 +68,7 @@ def instrument_run(func):
                 metrics.record_error("agent.run")
                 raise
         if not response.needs_approval:
-            await self._complete_growth()
+            await self._complete_growth(response, session_id=session_id)
         metrics.record_latency("agent.run", (time.monotonic() - start) * 1000)
         metrics.increment_counter("agent.run.calls")
         session = await session_manager.get(session_id)
@@ -85,7 +87,7 @@ def instrument_stream(func):
                 async for event in func(self, session_id, user_message, verbose):
                     if event.type == "done":
                         if event.response is not None and not event.response.needs_approval:
-                            await self._complete_growth()
+                            await self._complete_growth(event.response, session_id=session_id)
                         metrics.record_latency("agent.run", (time.monotonic() - start) * 1000)
                         metrics.increment_counter("agent.run.calls")
                         session = await session_manager.get(session_id)
@@ -273,10 +275,13 @@ class BaseReActAgent:
         defs = registry.get_tool_definitions()
         if not config.get("personality_growth_enabled") or not config.get("memory_enabled"):
             defs = [d for d in defs if d.name != "learn_personality"]
-        if self.allowed_tools is None:
-            return defs
-        allowed = set(self.allowed_tools)
-        return [d for d in defs if d.name in allowed]
+        if self.allowed_tools is not None:
+            allowed = set(self.allowed_tools)
+            defs = [d for d in defs if d.name in allowed]
+        from ah.memory.rsi import enabled
+
+        weights = (_rsi_choice.get() or {}).get("tool_weights", {}) if enabled() else {}
+        return sorted(defs, key=lambda tool: -max(0.8, min(1.2, weights.get(tool.name, 1))))
 
     async def _get_rag_context(
         self,
@@ -497,6 +502,8 @@ class BaseReActAgent:
         if session.agent_id != self.agent_id:
             raise PermissionError("Session does not belong to the running agent")
         _growth_episode.set(None)
+        _rsi_choice.set(None)
+        _rsi_skills.set([])
 
         await plugin_registry.dispatch("pre_agent_run", session, user_message)
 
@@ -547,21 +554,23 @@ class BaseReActAgent:
             try:
                 from ah.memory.growth import growth_store
 
-                growth_prompt = await asyncio.wait_for(
-                    growth_store.prompt(
-                        self.agent_id,
-                        can_learn=self.allowed_tools is None
-                        or "learn_personality" in self.allowed_tools,
-                    ),
-                    2,
-                )
                 decision = await asyncio.wait_for(
                     growth_store.begin(
                         self.agent_id, session_id, user_message, session.context_budget
                     ),
                     2,
                 )
+                growth_prompt = await asyncio.wait_for(
+                    growth_store.prompt(
+                        self.agent_id,
+                        can_learn=self.allowed_tools is None
+                        or "learn_personality" in self.allowed_tools,
+                        notes=decision.get("notes"),
+                    ),
+                    2,
+                )
                 _growth_episode.set(decision["id"])
+                _rsi_choice.set(decision.get("rsi", {}))
                 retrieve_memory = decision["action"] == "retrieve"
                 if not retrieve_memory:
                     self._last_retrieval_mode = "policy-noop"
@@ -634,6 +643,9 @@ class BaseReActAgent:
                 "safety rules and tool permissions. Adapt learned style within this requested persona."
             )
         system_prompt += growth_prompt
+        from ah.memory.rsi import strategy_context
+
+        system_prompt += strategy_context(_rsi_choice.get() or {})
         from ah.core.assembler import get_token_count
         from ah.skills.runtime import automatic_skill_context
 
@@ -652,6 +664,8 @@ class BaseReActAgent:
             can_resources=self.allowed_tools is None or "skill_resource" in self.allowed_tools,
             recent=recent,
             goal=session.goal,
+            skill_weights=(_rsi_choice.get() or {}).get("skill_weights", {}),
+            activated=_rsi_skills.get(),
         )
 
         # Assemble prompt
@@ -1065,6 +1079,17 @@ class BaseReActAgent:
                     duration_ms=int((time.monotonic() - start) * 1000),
                 )
                 result = f"Error: {e}"
+            item["_failed"] = bool(getattr(result, "is_error", False)) or str(result).startswith(
+                "Error:"
+            )
+            if (
+                tool_name == "skill_read"
+                and not item["_failed"]
+                and str(result).startswith("Skill ")
+                and _rsi_skills.get() is not None
+                and len(_rsi_skills.get()) < 200
+            ):
+                _rsi_skills.get().append(tool_args.get("skill_name", ""))
             item["result"] = str(result)
             item["elapsed_ms"] = (time.monotonic() - start) * 1000
 
@@ -1213,7 +1238,11 @@ class BaseReActAgent:
                     try:
                         from ah.permissions.broker import permission_broker as _broker2
 
-                        outcome = "failed" if result_str.startswith("Error:") else "completed"
+                        outcome = (
+                            "failed"
+                            if item.get("_failed") or result_str.startswith("Error:")
+                            else "completed"
+                        )
                         await _broker2.complete(_aid, outcome)
                     except Exception as _boundary_error:
                         # Optional fallback preserves the primary outcome; report no payload.
@@ -1249,6 +1278,11 @@ class BaseReActAgent:
                 "tool": tool_name,
                 "args": tool_args,
                 "result_preview": result_str[:200],
+                "outcome": "denied"
+                if item.get("_denied") or result_str.startswith("Permission denied:")
+                else "failed"
+                if item.get("_failed") or result_str.startswith("Error:")
+                else "completed",
             }
             # AH-AUDIT-022: typed pause marker travels with the entry so
             # schedulers/transports never parse prose to detect pauses.
@@ -1451,17 +1485,35 @@ class BaseReActAgent:
         task.add_done_callback(self._learning_tasks.discard)
         task.add_done_callback(_pending_learning_reviews.discard)
 
-    async def _complete_growth(self) -> None:
+    async def _complete_growth(
+        self, response: AgentResponse | None = None, *, session_id: uuid.UUID | None = None
+    ) -> None:
         episode_id = _growth_episode.get()
         if episode_id is None:
             return
         _growth_episode.set(None)
         try:
             from ah.memory.growth import growth_store
+            from ah.memory.rsi import summarize_outcome
 
-            await asyncio.wait_for(growth_store.complete(self.agent_id, episode_id), 2)
+            await asyncio.wait_for(
+                growth_store.complete(
+                    self.agent_id,
+                    episode_id,
+                    outcome=summarize_outcome(response) if response is not None else None,
+                    skills=_rsi_skills.get(),
+                ),
+                2,
+            )
+            from ah.memory.rsi import enabled
+
+            if session_id is not None and enabled():
+                _notify_growth(session_id, "rsi_updated", "recorded execution evidence")
         except Exception as exc:
             record_failure("agent.growth.complete", exc)
+        finally:
+            _rsi_choice.set(None)
+            _rsi_skills.set(None)
 
     async def _review_learning(
         self, session_id: uuid.UUID, user_message: str, response: AgentResponse
@@ -1537,6 +1589,7 @@ class ReActAgent(BaseReActAgent):
                 self._schedule_memory_consolidation(session_id)
                 return AgentResponse(
                     content="Reached maximum token budget. Partial results may be available.",
+                    outcome="failed",
                     tool_calls=tool_calls_made,
                     tokens_used=total_tokens,
                     iterations=iteration,
@@ -1560,6 +1613,7 @@ class ReActAgent(BaseReActAgent):
                 audit_log("agent_run_budget_exceeded", session_id=str(session_id), error=str(e))
                 return AgentResponse(
                     content=str(e),
+                    outcome="failed",
                     tool_calls=tool_calls_made,
                     tokens_used=total_tokens,
                     iterations=iteration,
@@ -1577,6 +1631,7 @@ class ReActAgent(BaseReActAgent):
                 self._schedule_memory_consolidation(session_id)
                 return AgentResponse(
                     content="LLM provider error. Check server logs.",
+                    outcome="failed",
                     tool_calls=tool_calls_made,
                     tokens_used=total_tokens,
                     iterations=iteration + 1,
@@ -1671,6 +1726,7 @@ class ReActAgent(BaseReActAgent):
         self._schedule_memory_consolidation(session_id)
         return AgentResponse(
             content="Reached max iterations. Partial results may be available.",
+            outcome="failed",
             tool_calls=tool_calls_made,
             tokens_used=total_tokens,
             iterations=self.max_iterations,
@@ -1737,6 +1793,7 @@ class ReActAgent(BaseReActAgent):
                     type="done",
                     response=AgentResponse(
                         content="Reached maximum token budget. Partial results may be available.",
+                        outcome="failed",
                         tool_calls=tool_calls_made,
                         tokens_used=total_tokens,
                         iterations=iteration,
@@ -1783,6 +1840,7 @@ class ReActAgent(BaseReActAgent):
                     type="done",
                     response=AgentResponse(
                         content=str(e),
+                        outcome="failed",
                         tool_calls=tool_calls_made,
                         tokens_used=total_tokens,
                         iterations=iteration,
@@ -1802,6 +1860,7 @@ class ReActAgent(BaseReActAgent):
                     type="done",
                     response=AgentResponse(
                         content="LLM provider error. Check server logs.",
+                        outcome="failed",
                         tool_calls=tool_calls_made,
                         tokens_used=total_tokens,
                         iterations=iteration + 1,
@@ -1909,6 +1968,7 @@ class ReActAgent(BaseReActAgent):
             type="done",
             response=AgentResponse(
                 content="Reached max iterations. Partial results may be available.",
+                outcome="failed",
                 tool_calls=tool_calls_made,
                 tokens_used=total_tokens,
                 iterations=self.max_iterations,

@@ -42,6 +42,7 @@ def show(session: str = typer.Option(None, "--session", "-s")):
         return {
             "growth": await store.get(current.agent_id),
             "episodes": await store.episodes(current.agent_id, current.id),
+            "rsi": await store.rsi_status(current.agent_id),
         }
 
     _execute(session, inspect)
@@ -99,6 +100,16 @@ def forget(key: str, session: str = typer.Option(None, "--session", "-s")):
         return {"removed": await store.forget(current.agent_id, key)}
 
     _execute(session, remove)
+
+
+@app.command()
+def rollback(revision: int, session: str = typer.Option(None, "--session", "-s")):
+    """Restore an owned persona/policy revision from the retained history."""
+
+    async def restore(store, current):
+        return {"restored": await store.rollback(current.agent_id, revision)}
+
+    _execute(session, restore)
 
 
 @app.command("export-policy")

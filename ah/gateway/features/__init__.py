@@ -32,6 +32,7 @@ from ah.gateway.features.growth import (
     growth_forget,
     growth_get,
     growth_install_policy,
+    growth_rollback,
     growth_teach,
 )
 from ah.gateway.features.jobs import (
@@ -105,6 +106,7 @@ METHODS: dict[str, Handler] = {
     "growth.feedback": growth_feedback,
     "growth.forget": growth_forget,
     "growth.installPolicy": growth_install_policy,
+    "growth.rollback": growth_rollback,
     "session.fork": session_fork,
     "session.delete": session_delete,
     "session.rename": session_rename,

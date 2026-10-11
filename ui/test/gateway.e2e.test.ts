@@ -71,10 +71,14 @@ test("personality survives a gateway restart and a new session", { skip, timeout
 	const key = `e2e_${Math.random().toString(36).slice(2)}`;
 	const first = startClient().client;
 	let firstSession: SessionInfo | undefined;
+    let retainedRevision: number;
 	try {
 		await first.request("initialize", {}, 30_000);
 		firstSession = (await first.request<SessionResult>("session.create", { title: "growth e2e first" })).session;
 		await first.request("growth.teach", { sessionId: firstSession.id, kind: "style", key, content: "Prefer concise examples" });
+        const checkpoint = await first.request<{ rsi: { revision: number } }>("growth.get", { sessionId: firstSession.id });
+        retainedRevision = checkpoint.rsi.revision;
+        await first.request("growth.teach", { sessionId: firstSession.id, kind: "style", key, content: "Prefer detailed examples" });
 	} finally {
 		await first.stop();
 	}
@@ -83,8 +87,14 @@ test("personality survives a gateway restart and a new session", { skip, timeout
 	try {
 		await restarted.request("initialize", {}, 30_000);
 		secondSession = (await restarted.request<SessionResult>("session.create", { title: "growth e2e second" })).session;
-		const result = await restarted.request<{ growth: { notes: Record<string, string> } }>("growth.get", { sessionId: secondSession.id });
-		assert.equal(result.growth.notes[`style:${key}`], "Prefer concise examples");
+        const result = await restarted.request<{ growth: { notes: Record<string, string> }; rsi: { revision: number; history: Array<{ revision: number }> } }>("growth.get", { sessionId: secondSession.id });
+        assert.equal(result.growth.notes[`style:${key}`], "Prefer detailed examples");
+        assert.ok(result.rsi.history.some(item => item.revision === retainedRevision));
+        const restored = await restarted.request<{ restored: boolean }>("growth.rollback", { sessionId: secondSession.id, revision: retainedRevision });
+        assert.equal(restored.restored, true);
+        const after = await restarted.request<{ growth: { notes: Record<string, string> }; rsi: { revision: number } }>("growth.get", { sessionId: secondSession.id });
+        assert.equal(after.growth.notes[`style:${key}`], "Prefer concise examples");
+        assert.ok(after.rsi.revision > result.rsi.revision);
 	} finally {
 		if (secondSession) {
 			await restarted.request("growth.forget", { sessionId: secondSession.id, key: `style:${key}` });

@@ -17,6 +17,7 @@
   - [Option A — local](#option-a--local-python--node--postgres)
   - [Option B — Docker Compose](#option-b--docker-compose)
 - [Terminal UI](#terminal-ui)
+  - [Persona and runtime learning](#persona-and-runtime-learning)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Configuration](#configuration)
@@ -35,6 +36,8 @@
 ## What this is
 
 AgentHarness is a self-hosted AI agent framework that runs on your machine. It is a **general agent first**: it answers greetings and questions directly, acts on tasks with the right tool for the job, and never goes looking for work. Specialist skill workflows (42 curated, bundled offline) activate only on clear evidence — a named skill, a trigger hit, or genuinely matching task language. You chat in a streaming terminal UI. Agents remember things across sessions, search the web, run tools in a sandbox, follow schedules, and fan out to subagents for parallelizable work. Everything is stored in PostgreSQL with pgvector for semantic search.
+
+Default-on runtime self-improvement (RSI) retains learned preferences and uses execution evidence and human feedback to adapt memory retrieval, task approaches, relevant skill ranking and available-tool ordering. Persona revisions persist across sessions and models, with inspectable history and rollback.
 
 The production completion release is still gated on verification recorded in [the completion ledger](docs/plans/PRODUCTION_COMPLETION_PROGRESS.md).
 
@@ -133,7 +136,7 @@ docker compose up --build
 Codex-style fullscreen TUI: `>_` brand header, filled borderless composer with accent bar, accent selection rows, braille spinner, docked composer + footer (`model · dir · branch · tokens`, then `? for shortcuts · / for commands`), follow-end scrolling, `/` menu opening upward, mouse support. Response boxes never touch: one blank row separates transcript blocks and the chrome sections.
 
 - **Streaming Markdown** — token-by-token output in a contrasting card; tool cards (`Running`/`Ran`/`Failed`) with diff coloring (`+` green, `-` red, `@@` info). Notices carry text markers (`✓`/`!`/`✗`) as well as color, so state survives monochrome skins.
-- **Interactive management commands** — bare `/persona`, `/keys`, `/models`, `/theme`, `/sessions` and friends open pickers/forms instead of making you memorize flags. Expert argument forms still work (`/persona --clear`, `/keys set …`).
+- **Interactive management commands** — bare `/persona`, `/growth`, `/keys`, `/models`, `/theme`, `/sessions` and friends open pickers/forms instead of making you memorize flags. Expert argument forms still work (`/persona --clear`, `/keys set …`).
 - **Persona** — `/persona` opens Add/Reset: Add edits the installation default in a multiline editor (2000 chars, prefilled); Reset confirms yes/no and keeps learned notes. The chat draft is never submitted as a persona.
 - **21 skins** — `/theme` switches live **without clearing the chat** and persists via `config.theme`: default, `codex`, `mono`, `tokyonight`, `catppuccin`, `dracula`, `gruvbox`, `rosepine`, `nord`, `everforest`, `matrix`, `cobalt2`, `ayu`, `nightowl`, `flexoki`, `onedark`, `monokai`, `github`, `solarized`, `kanagawa`, `palenight`.
 - **Keyboard** — Enter send, Shift+Enter newline, Esc stop, Tab complete, Ctrl+C exit, Ctrl+L clear, double-Esc edits last prompt. `/init`, `/review`, `/compact` (=compress), `/clear` for Codex parity.
@@ -161,6 +164,38 @@ Secrets never echo, never enter history, never touch `config.yaml`.
 /keys set DEEPSEEK_API_KEY ... # each family uses its own direct key, never routed via OpenRouter
 ```
 
+### Persona and runtime learning
+
+RSI and personality growth are **enabled by default**. After updating, restart the harness; startup applies the additive growth migration, and `ah init` installs it on a fresh database. The same agent lifecycle serves CLI, TUI/gateway, HTTP, scheduled jobs and delegation.
+
+Use `/persona` to choose Add or Reset. Add saves your requested tone and character as the installation default; Reset keeps learned notes. Learned preferences, styles and lessons belong to each agent and carry into later sessions automatically.
+
+```text
+/persona
+/growth                         # View progress / Give feedback / Teach / Forget / Restore
+/growth teach style verbosity Prefer short answers with one concrete example
+/growth feedback good           # rate the latest completed, unrated approach
+/growth feedback bad <episode-id>
+/growth show                    # notes, operational evidence, human ratings, trial and history
+/growth rollback                # choose a retained revision and confirm restoration
+/growth rollback 0              # original baseline, if still retained
+```
+
+The model can also save a durable preference or verified lesson with `learn_personality` during normal tool use. Agent-written notes start a persona trial. Three human ratings of completed turns using that exact revision retain the trial when their average is nonnegative or restore the previous stable baseline when negative. Direct human teaching establishes a stable revision; later ratings of older trials cannot undo that choice.
+
+Actual execution outcomes provide weak operational evidence, and human ratings replace an episode's automatic reward. Successful response prose alone earns no positive evidence; cancelled and approval-paused turns do not train. Automatic evidence can adjust routing but cannot promote a persona trial. Relevant skill filters, explicit skill requests, tool allowlists and permission checks remain authoritative. RSI adds no extra per-turn model request.
+
+History retains up to 50 revisions and 500 episodes per agent. Restore replaces learned notes and retrieval-policy weights, records a new revision, and preserves routing experience. Inspection distinguishes human ratings from operational observations. These are runtime learning heuristics; LLM weight training, autonomous application rewriting and measured quality or speed gains are outside the verified feature.
+
+CLI management uses the same store:
+
+```bash
+ah growth show --session <session-id>
+ah growth rollback <revision> --session <session-id>
+```
+
+Set `rsi_enabled: false` to pause automatic RSI evidence and routing adaptation while keeping notes and human feedback available. Setting `personality_growth_enabled` or `memory_enabled` to false also stops automatic personality growth and injection. Inspection, explicit forgetting and restoration remain available. See the [operating guide](docs/PERSONALITY_GROWTH.md), [design](docs/plans/PERSONA_RSI_DESIGN.md) and [implementation evidence](docs/plans/PERSONA_RSI_PLAN.md).
+
 ### All slash commands
 
 | Command | What it does |
@@ -171,7 +206,7 @@ Secrets never echo, never enter history, never touch `config.yaml`.
 | `search`, `recall` | Full-text session search; anchored cross-session recall |
 | `context`, `compress` | Token usage; compact context |
 | `memory` | `list · search · add · forget · share · pending · approve · reject · stats` |
-| `growth` | Learned personality: `show · teach · feedback · forget` |
+| `growth` | Interactive learning menu; `show · teach · feedback · forget · rollback` |
 | `persona` | Manage the default persona (menu when empty; `--clear` resets) |
 | `skills` | `list · show · learn · proposals · approve · reject · delete · curator` |
 | `agents`, `delegate` | List/show/save agents; delegate a task (parallel fan-out) |
@@ -208,7 +243,7 @@ Secrets never echo, never enter history, never touch `config.yaml`.
 - **PostgreSQL context** — asyncpg pool, MessagePack payloads, pgvector, `context_archive` reversible eviction (paginated, transactional, keep-newest-10).
 - **Cross-session recall** — agent-scoped FTS over live + archive with anchored windows.
 - **Long-term memory** — LLM extraction with dedup (`>=` threshold + intra-batch), importance scoring (explicit always wins), Ebbinghaus forgetting, hybrid retrieval (BM25 + dense + RRF + rerank), approval gate, 17-pattern redaction (+Luhn, nested/list support), identity/belief drift gating, persona-conditioned retrieval default-on (`persona_default_emotion=trust`).
-- **Personality growth** — durable bounded preference/style/lesson notes plus a learned retrieval policy, Teach/feedback/forget via `/growth`; independent of the configured `/persona` description. See [personality growth](docs/PERSONALITY_GROWTH.md).
+- **Persona and runtime self-improvement** — durable preferences, style and lessons; evidence-backed memory retrieval, task approaches, relevant skill ranking and available-tool ordering. Enabled by default, with persona trials, revision history and rollback through the interactive `/growth` menu. No extra per-turn model request. See [personality growth](docs/PERSONALITY_GROWTH.md).
 - **Compression** — budget-aware, deep-copy safe, token recount.
 
 ### RAG
@@ -284,6 +319,10 @@ Non-secrets in `~/.agent-harness/config.yaml` or `AGENT_HARNESS_<KEY>` env. **Se
 | `AGENT_HARNESS_CONTEXT_BUDGET` | Explicit per-turn spend cap (wins over the per-model derived budget) | `8000` |
 | `AGENT_HARNESS_API_KEY` | HTTP API key (fail-closed 503 if unset) | — |
 | `AGENT_HARNESS_PROVENANCE_KEY` | HMAC key for memory sharing | — |
+| `AGENT_HARNESS_PERSONA_DESCRIPTION` | Requested tone and character; `/persona` saves the config equivalent | empty |
+| `AGENT_HARNESS_MEMORY_ENABLED` | Automatic memory retrieval and personality growth | `true` |
+| `AGENT_HARNESS_PERSONALITY_GROWTH_ENABLED` | Learned personality notes and live feedback decisions | `true` |
+| `AGENT_HARNESS_RSI_ENABLED` | Automatic runtime evidence, task strategy and capability ranking | `true` |
 | `AGENT_HARNESS_PERSONA_MEMORY_ENABLED` | Persona rerank | `true` |
 | `AGENT_HARNESS_PERSONA_DEFAULT_EMOTION` | Fallback emotion | `trust` |
 | `AGENT_HARNESS_USAGE_SESSION_TOKEN_LIMIT` / `_REQUEST_LIMIT` | Session budgets (0 = unlimited) | `0` |
@@ -335,7 +374,7 @@ Five test-driven gaps:
 1. **Reversible eviction** — archive-before-delete, `FOR UPDATE` claim, keep-10 floor (two concurrency wipe/double-archive bugs found by load tests).
 2. **Shared identity** — HMAC provenance per memory, recipient `validate_incoming`, quarantine on tamper.
 3. **Persona memory** — `PersonaMemoryStore` + Plutchik `EmotionTopology`, default-on rerank.
-4. **RL memory and personality growth** — offline GRPO plus a live, feedback-trained retrieval policy; persistent preferences, style and lessons across sessions and models. See [personality growth](docs/PERSONALITY_GROWTH.md).
+4. **RL memory and personality growth** — offline GRPO plus live runtime adaptation from execution evidence and human feedback; persistent persona trials, bounded capability ranking, history and restoration across sessions and models. See [personality growth](docs/PERSONALITY_GROWTH.md).
 5. **SoulSpec** — v0.5 manifest/packages, `AgentDef` round-trip, Claude/Codex adapters, most-restrictive permission merge.
 
 Plus LoCoMo harness (`ah/research/locomo.py`), identity eval (`identity_eval.py`), memory-policy training, native-vs-LangGraph trial (`workflow_trial.py`).
@@ -344,18 +383,20 @@ Plus LoCoMo harness (`ah/research/locomo.py`), identity eval (`identity_eval.py`
 
 ## Performance & tests
 
-Snapshot 2026-10-10 (pool, no live LLM/DB for gated suites):
+Verified checkout snapshot, 2026-10-11 (dedicated test database and synthetic providers):
 
-- **Python:** 1844 passed, 9 failed — every failure reproduced on a clean checkout (4 DB-backed usage, 1 load-concurrency, 1 provider-effort, 1 memory float, 1 research fixture, 1 schema table). DB-gated suites skip without `AGENT_HARNESS_TEST_DATABASE_URL`.
-- **UI:** 124 passed, 5 skipped without live DB (`npm --prefix ui test`); typecheck + eslint clean.
+- **Python:** **2092 passed, 5 skipped**, including **43 RSI tests**. DB-gated suites skip without `AGENT_HARNESS_TEST_DATABASE_URL`.
+- **UI:** **138 passed, 5 environment-gated skips** in `npm --prefix ui run check`; typecheck and eslint passed. Real Node/Python gateway restart, history and restoration checks ran through the backend suite's isolated UI integration test.
+- **RSI verification:** touched-file Ruff check/format passed; Bandit found no issues in the RSI/growth modules; `git diff --check` passed. No live-provider requests or production DB access. Exact commands, review fixes and clean-HEAD comparison are in the [evidence plan](docs/plans/PERSONA_RSI_PLAN.md).
 - **Concurrency:** advisory-lock usage (agent→session order), atomic job claim, per-session turn locks, parallel in-block tool calls.
-- **Workflow trial:** native Postgres approval **~3.6 ms** vs LangGraph **~18.6 ms** (5.1x overhead); native retained.
+- **Historical workflow trial:** native Postgres approval **~3.6 ms** vs LangGraph **~18.6 ms** (5.1x overhead); native retained. This benchmark does not measure RSI quality or performance.
 - **Resilience:** 429-then-200 recovers; sustained 429 raises after retries.
 
 ```bash
-pytest tests/ -q                                          # all (needs AGENT_HARNESS_TEST_DATABASE_URL for DB tests)
-pytest tests/ -q -k "not test_graph" --cov=ah --cov-fail-under=60
-npm --prefix ui test
+# Set AGENT_HARNESS_TEST_DATABASE_URL to a dedicated test database first.
+.venv/bin/python -m pytest -q --tb=short -p no:cacheprovider
+.venv/bin/python -m pytest -q tests/test_rsi.py tests/test_rsi_agent.py tests/test_rsi_management.py
+npm --prefix ui run check
 ```
 
 ---
@@ -443,9 +484,11 @@ See `FEATURE_LEDGER.md` for detailed fix mapping (H-01 through H-07, R-01 throug
 
 ## Production release status and research
 
-**Implemented:** general agent loop with gated skill routing, subagent fan-out, Postgres context + recall, persona-on memory, RAG, delegation, scheduling, HTTP API + SSE, usage budgets, tools, skills, TUI + skins, observability, Docker backend, retries. Production readiness additionally requires the [release gates](docs/plans/PRODUCTION_COMPLETION_PROGRESS.md); a passing unit suite alone is insufficient.
+**Implemented:** general agent loop with gated skill routing, subagent fan-out, Postgres context + recall, persona-on memory, default-on RSI with feedback and revision restoration, RAG, delegation, scheduling, HTTP API + SSE, usage budgets, tools, skills, TUI + skins, observability, Docker backend, retries. Production readiness additionally requires the [release gates](docs/plans/PRODUCTION_COMPLETION_PROGRESS.md); a passing unit suite alone is insufficient.
 
 **Baseline (not in hot path):** RL policy trainer output; SoulSpec cross-runs (adapters, not cert); LoCoMo accuracy (needs live LLM budget).
+
+**MCP connector development:** the connector library has real SDK stdio/loopback HTTP coverage and bounded teardown from separate gateway tasks. Agent-loop tool exposure, OAuth and connector management UI remain deferred; fixture round-trips do not establish complete harness integration. See the [connector progress and next steps](docs/plans/MCP_CONNECTORS_PROGRESS.md).
 
 ---
 

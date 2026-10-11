@@ -1,0 +1,220 @@
+# Installer and release review
+
+Date: 2026-10-11. All commands executed in the repository checkout described
+below; no live credentials, shell startup files, production databases, or the
+operator terminal were mutated by tests (isolated tmp dirs, stubbed commands,
+isolated pseudo-terminals, disposable `agentharness_test` database).
+
+## Revision and environment
+
+- Commit: `dc77017` ("profile"), branch `main`, up to date with `origin/main`
+  at review start. No `AGENTS.md` exists in the checkout (the review plan
+  asked to read it first; recorded as absent).
+- Working tree at review time:
+  - `install.sh` modified (Part 1 fixes below).
+  - New untracked: `tools/install-helpers.sh`, `tests/test_installer_env.py`
+    (`tools/` is tracked; the helpers were deliberately placed there because
+    `lib/` is gitignored).
+  - One existing test touched: `tests/test_integration_permissions.py`
+    (`test_loopback_and_reuse` follows moved code; same assertions).
+- Interpreter/toolchain: Python 3.14.5 (venv), Node v26.10.0, psql 16.15
+  (Homebrew), GNU bash 3.2.57 (the shell that runs installer tests —
+  lib code is restricted to POSIX + bash-3.2 constructs).
+- Services: local PostgreSQL 16 with `agentharness` and `agentharness_test`
+  databases reachable; **no Docker** on this machine.
+- Official MCP Python SDK index state: `mcp` 2.3.0 latest (1.0.0–2.3.0
+  listed); not yet installed at the initial installer review. The subsequent
+  connector evidence below records the installed version and actual wire probes.
+
+## Part 1 — installer defects (all three confirmed, fixed, regressed)
+
+Changed files: `install.sh`, `tools/install-helpers.sh` (new),
+`tests/test_installer_env.py` (new, 30 tests), `tests/test_integration_permissions.py`.
+
+The five provisioning/shell functions (`try_init`, `start_docker_db`,
+`start_brew_db`, `brew_vector_from_source`, `wait_for_init`) moved verbatim
+into the side-effect-free lib (one intentional behavior change each, noted
+below); `install.sh` sources the lib after `cd` and resolves the env target
+once. Regressions drive the real lib functions with stubbed commands and an
+isolated pty — never the operator terminal or database.
+
+### 1. Custom DATABASE_URL clobbered by Homebrew fallback — FIXED
+
+- Root cause: `start_brew_db` stripped `DATABASE_URL` and wrote generated
+  credentials whenever it created the role, unlike the Docker branch which
+  guarded on unset/default (`install.sh` ex-398–409).
+- Fix: both branches route through `maybe_write_db_url`, which replaces
+  only an unset URL or the documented installer placeholder
+  (`postgresql://postgres:postgres@localhost:5432/agentharness`); custom
+  URLs are preserved with a warning. Existing roles still never get password
+  resets (unchanged `ALTER USER` gating).
+- Regressions: custom+new-role unchanged; default/unset replaced;
+  existing-role password untouched (asserted via ALTER call log);
+  provisioning failure returns nonzero with byte-identical config.
+- Red/green: `test_brew_custom_url_survives_new_role` fails against a
+  copy of the lib with the guard reverted to the old unconditional write
+  (via `AH_INSTALL_LIB` override), passes against the fixed lib.
+
+### 2. AH_ENV_FILE ignored by install.sh — FIXED
+
+- Root cause: the Python resolver honored `AH_ENV_FILE` while `install.sh`
+  hardcoded `.env` for creation, secrets, and both DB branches.
+- Fix: `resolve_env_file` runs once (absolute wins; relative anchors to the
+  startup directory so the later `cd` cannot redirect it; unset means the
+  checkout `.env`); every read/write/chmod/replacement uses the resolved
+  target with same-directory atomic replace and mode 0600.
+- Regressions: unset/absolute/relative overrides; invocation outside the
+  checkout; spaces/Unicode in paths and values; gap-filling preserves
+  unrelated values; invalid keys, missing dirs, and directory targets fail
+  closed with no stray temp files.
+- Red/green: wiring assertions (`sources helpers`, `maybe_write_db_url`
+  call sites, no hidden-typing fallback, no bare `.env` file ops) fail on
+  HEAD `install.sh` (verified via `git stash`) and pass after the fix.
+
+### 3. Visible secret typing fallback — FIXED
+
+- Root cause: `stty` state-query failure fell back to an unprotected read,
+  and echo-disable failure was ignored (`|| true`).
+- Fix: `prompt_secret_hidden` fails (no output, nonzero) unless `/dev/tty`
+  opens, `stty` state is queryable, and echo actually disables; the prompt
+  prints only after hiding is on; echo restores on success, EOF, error, and
+  INT/TERM/HUP/EXIT (interruption re-raises to die by signal). No visible
+  fallback exists anymore; failure skips with secure instructions.
+- Regressions (isolated pty unless noted): hidden round-trip with
+  echo-absence proof (secret appears exactly once); no-tty failure;
+  state-query failure; echo-disable failure; hangup restores echo and dies
+  by signal. A direct-SIGINT variant was abandoned with cause: in this
+  spawner a pty session leader swallows direct SIGINT, so the test would
+  assert spawner-specific semantics; kernel hangup is deterministic.
+- Note: the shipped `bash` here is 3.2 — after a trapped signal during
+  `read`, bash re-blocks, which is why interruption re-raises instead of
+  returning.
+
+## Part 2 — exact-checkout baseline
+
+- Full suite with the test database:
+  `1965 passed, 5 skipped` (DB-gated skips), **0 failed**.
+- One real defect found by the baseline: an existing static test
+  (`test_loopback_and_reuse`) grepped `install.sh` for moved code; updated
+  to scan both files with identical assertions.
+- Historical snapshots (README 1844/9, DEBUGGING_REPORT, ledger 1702/0)
+  describe older checkouts, not this one. The nine previously recorded
+  failures were each reproduced on a clean worktree and fixed via test
+  hermeticity (live-config isolation) or were environment-missing DB
+  fixtures; none were open implementation defects at review time.
+
+## Part 3 — release verification (exact commands and results)
+
+```sh
+pytest tests/ -q --tb=short --cov=ah --cov-fail-under=60
+# 1965 passed, 5 skipped in ~113s. TOTAL 16282 stmts, 3036 missed: 81.35% (>= 60 gate).
+ruff check ah/                                  # All checks passed (133 files).
+ruff format --check ah/                         # 133 files already formatted.
+python -m bandit -r ah/ -ll -x ah/cli/          # 0 medium/high severity (42 low, nosec-annotated sites).
+npm --prefix ui run check                       # typecheck + 132 passed/5 skipped + eslint, all green.
+git diff --check                                # clean.
+```
+
+- Real integration exercised (not mocked): UI/gateway over stdio JSON-RPC
+  (137 UI tests incl. layout on a real alt-screen), PostgreSQL-backed
+  suites against disposable `agentharness_test`, installer functions
+  against stubbed OS commands, fresh non-editable install (wheel built
+  with hatchling, installed into a disposable Python 3.14 venv: 42-skill
+  bundle hash verified, agent + context-window modules importable).
+- Approval-resume, fencing, cancellation, migration, and redaction suites
+  are part of the green full run above.
+- Blockers/limitations (not verified, not claimed):
+  - No Docker on this machine: image build and Compose readiness BLOCKED.
+  - Linux/Windows installer behavior: code restricted to portable
+    constructs but executed only on macOS bash 3.2 — BLOCKED elsewhere.
+  - No live-provider calls and no real MCP service integrations (opt-in
+    only by policy); mock/SDK-backed connector evidence lives in
+    `docs/plans/MCP_CONNECTORS_PROGRESS.md`.
+  - Staging alerts, backup/restore, rollback, deployment gates: open
+    unless verified with authorization (unchanged from the ledger).
+
+Do not claim zero bugs, complete security, or production readiness from
+unit tests alone. The release gates in
+`docs/plans/PRODUCTION_COMPLETION_PROGRESS.md` remain authoritative.
+
+## Part 4 — subsequent MCP connector library verification (2026-10-11)
+
+Evidence and exact commands are maintained in
+[MCP_CONNECTORS_PROGRESS.md](../plans/MCP_CONNECTORS_PROGRESS.md). The existing
+installer changes were preserved. Checkout remains `main` at `dc77017`; no
+commit/push/deployment or git configuration changes were made.
+
+- `mcp==2.3.0` is now installed and pinned as the optional `connectors` extra.
+  Real stdio and loopback Streamable HTTP fixture handshakes both negotiated
+  `2025-11-25`; the SDK's latest constant is not treated as negotiated proof.
+- A disposable import-block probe simulated an absent optional SDK: 59 tests
+  passed and the real-client module skipped cleanly (1 skipped). The installed
+  virtualenv was not modified by this probe.
+- The original cross-task SDK shutdown error was reproduced. The fixture process
+  exited before the scope error (PIDfile, `os.kill(pid, 0)` polling, UUID-matched
+  `ps` inspection), but repeated connections could hang. Persistent task
+  ownership now covers context entry and teardown; six fixture cycles across
+  same/cross-task disconnects leave no matching processes or scope warnings.
+- A separate gated-cleanup test verifies that shutdown timeout preserves the
+  tracked owner and blocks overlapping reconnect. Arbitrary hostile subprocess
+  tree termination at the caller's deadline is not claimed.
+- Actual fixture wire tests cover normal calls, timeout/dropped-call unknown
+  outcomes without retry, bounded normalized results, known server errors,
+  secret redaction, and actual elicitation rejection with no model callback.
+  Config/policy and injected-client tests cover retries/circuits and service
+  contracts. These are not a broker-integrated agent execution test.
+
+```sh
+.venv/bin/python -m pytest -q tests/test_connectors_client.py tests/test_connectors_config.py tests/test_connectors_policy.py tests/test_connectors_manager.py tests/test_connectors_service.py --tb=short -p no:cacheprovider
+# 84 passed in 8.58s.
+AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider
+# Final: 2049 passed, 5 skipped in 78.27s; 0 failed.
+npm --prefix ui run check
+# Exit 0: typecheck, 132 tests passed / 5 skipped, eslint.
+# UI gateway/DB tests require an explicit opt-in environment and were skipped.
+.venv/bin/python -m ruff check ah/connectors tests/test_connectors_client.py tests/test_connectors_config.py tests/test_connectors_policy.py tests/test_connectors_manager.py tests/test_connectors_service.py tests/support/mcp_fixture_server.py
+# All checks passed.
+.venv/bin/python -m ruff format --check ah/connectors tests/test_connectors_client.py tests/test_connectors_config.py tests/test_connectors_policy.py tests/test_connectors_manager.py tests/test_connectors_service.py tests/support/mcp_fixture_server.py
+# 13 files already formatted (line-length 100).
+.venv/bin/python -m bandit -r ah/connectors/ -ll
+# Exit 0: 0 medium/high. Unfiltered run reports 7 low and exits 1.
+git diff --check
+# Exit 0.
+```
+
+No verification failures required a clean-HEAD comparison. Tests used only the
+dedicated test database and disposable SDK fixtures. No third-party MCP service,
+OAuth flow, live-provider call, connector management UI, or agent-loop/broker
+connector execution was exercised. Those phases remain deferred; the earlier
+Docker, operating-system, packaging, and production gates are not superseded.
+
+## 2026-10-11 — Persona RSI runtime verification
+
+The shared agent lifecycle now implements durable runtime adaptation for persona,
+memory retrieval, task strategy, relevant skills and available-tool ordering.
+It defaults on without new provider requests or dependencies. Startup/initialization
+and CLI management use the existing additive growth migration. Session-bound
+gateway and CLI operations expose status/history and restoration, including
+baseline revision 0; the TUI opens an interactive action menu.
+
+Evidence and exact commands are in
+[PERSONA_RSI_PLAN.md](../plans/PERSONA_RSI_PLAN.md). Final backend suite:
+**2092 passed / 5 skipped**; dedicated RSI suite: **43 passed**. These include
+real PostgreSQL, actual CLI subprocesses, synthetic-provider agent loops in both
+modes, real subprocess exit-status evidence, task cancellation, and Node/Python
+gateway restart/history/restoration checks. Standalone UI check passed typecheck,
+**138 tests / 5 environment-gated skips**, and lint. Ruff check/format passed on
+16 Python files. Bandit reported no findings in the RSI/growth modules. The
+scoped Impeccable detector reported no findings; `git diff --check` passed.
+
+The new method-inventory test regression was fixed. An overlapping database-test
+migration conflict disappeared in sequential final checks. Both affected tests
+passed against clean HEAD in a disposable detached worktree (2 passed); no
+unresolved failure remains in these checks. Fresh independent review defects
+were reproduced with regressions and fixed, including human-choice preservation,
+typed failures and policy-update provenance across restoration/import.
+
+Only the dedicated test database was used. These checks establish tested runtime
+behavior, not a comparative quality/speed gain, production deployment, LLM weight
+training, or unattended source modification. Connector agent-loop exposure,
+OAuth/UI and the existing release/production gates retain their separate status.

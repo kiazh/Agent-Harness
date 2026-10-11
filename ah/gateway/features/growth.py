@@ -20,6 +20,7 @@ async def growth_get(gw, params):
     return {
         "growth": await growth_store.get(session.agent_id),
         "episodes": await growth_store.episodes(session.agent_id, session.id),
+        "rsi": await growth_store.rsi_status(session.agent_id),
     }
 
 
@@ -67,3 +68,14 @@ async def growth_install_policy(gw, params):
     except ValueError as exc:
         raise RpcError(INVALID_PARAMS, str(exc)) from None
     return {"installed": True}
+
+
+async def growth_rollback(gw, params):
+    """A human can restore a retained revision, even with learning disabled."""
+    gw.require_db()
+    session = await gw.get_session(params)
+    try:
+        restored = await growth_store.rollback(session.agent_id, params.get("revision"))
+    except ValueError as exc:
+        raise RpcError(INVALID_PARAMS, str(exc)) from None
+    return {"restored": restored}

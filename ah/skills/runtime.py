@@ -78,7 +78,7 @@ class SkillIndex:
         }
         self.average = sum(sum(d.values()) for d in self.docs) / max(1, len(self.docs))
 
-    def rank(self, query: str) -> list[Skill]:
+    def rank(self, query: str, *, weights: dict[str, float] | None = None) -> list[Skill]:
         words = set(_words(query))
         ranked = []
         for skill, terms, name in zip(self.skills, self.docs, self.names, strict=True):
@@ -113,11 +113,18 @@ class SkillIndex:
                 score *= 0.35
             if triggered:
                 score += 25
-            ranked.append((score, skill.name, skill))
-        return [skill for _, _, skill in sorted(ranked, key=lambda item: (-item[0], item[1]))]
+            score *= max(0.8, min(1.2, (weights or {}).get(skill.name, 1)))
+            explicit = skill.name.casefold() in query.casefold()
+            ranked.append((explicit, score, skill.name, skill))
+        return [
+            skill
+            for _, _, _, skill in sorted(ranked, key=lambda item: (-item[0], -item[1], item[2]))
+        ]
 
 
-def rank_skills(skills: SkillRegistry, query: str) -> list[Skill]:
+def rank_skills(
+    skills: SkillRegistry, query: str, *, weights: dict[str, float] | None = None
+) -> list[Skill]:
     skills.load_all()
     # Registry replaces its objects on reload; telemetry changes retain them.
     signature = tuple(
@@ -127,7 +134,7 @@ def rank_skills(skills: SkillRegistry, query: str) -> list[Skill]:
     if cached is None or cached[0] != signature:
         cached = (signature, SkillIndex(skills.list_skills()))
         _INDEXES[skills] = cached
-    return cached[1].rank(query)
+    return cached[1].rank(query, weights=weights)
 
 
 def automatic_skill_context(
@@ -140,6 +147,8 @@ def automatic_skill_context(
     can_resources: bool = True,
     recent: list[dict] | None = None,
     goal: str | None = None,
+    skill_weights: dict[str, float] | None = None,
+    activated: list[str] | None = None,
 ) -> str:
     """Activate relevant workflows before the first model call, never all bodies."""
     skills = skills or skills_module.skill_registry
@@ -148,7 +157,9 @@ def automatic_skill_context(
         return ""
     from ah.skills.workflow import plan_workflow
 
-    workflow = plan_workflow(query, skills=skills, recent=recent, goal=goal)
+    workflow = plan_workflow(
+        query, skills=skills, recent=recent, goal=goal, skill_weights=skill_weights
+    )
     matches = workflow.skills[:2]
     header = (
         "\n\n## Automatic skills\n"
@@ -206,6 +217,8 @@ def automatic_skill_context(
             break
         result += block
         skills.record_use(skill.name)
+        if activated is not None:
+            activated.append(skill.name)
     return result
 
 

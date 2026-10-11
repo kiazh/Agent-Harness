@@ -223,7 +223,7 @@ async def learn_personality(kind: str, key: str, content: str) -> str:
         raise ToolError("Personality growth is disabled")
     agent_id, _ = await active_agent_scope()
     try:
-        await growth_store.teach(agent_id, kind, key, content)
+        await growth_store.teach(agent_id, kind, key, content, origin="agent")
     except ValueError as exc:
         raise ToolError(str(exc)) from None
     return f"Learned {kind}:{key}; available in future conversations."

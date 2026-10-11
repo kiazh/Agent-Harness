@@ -143,7 +143,22 @@ else
     git clone --depth 1 "$REPO_URL" "$APP_DIR"
   fi
 fi
+START_DIR="$PWD"
 cd "$APP_DIR" || die "Cannot cd to $APP_DIR"
+
+# Testable installer primitives (function definitions only; sourcing has no
+# side effects, so tests load this file directly). Needs APP_DIR first.
+INSTALL_LIB="$APP_DIR/tools/install-helpers.sh"
+[ -f "$INSTALL_LIB" ] || die "Missing $INSTALL_LIB (update the checkout)"
+# shellcheck disable=SC1091
+. "$INSTALL_LIB"
+
+# The env-file target is resolved ONCE here: an absolute AH_ENV_FILE wins
+# as-is, a relative one anchors to the startup directory (a later directory
+# can no longer redirect it), and unset means the checkout .env.
+if [ -n "${AH_ENV_FILE:-}" ]; then ENV_IS_DEFAULT=0; else ENV_IS_DEFAULT=1; fi
+ENV_FILE="$(resolve_env_file "$START_DIR")"
+log "Using env file: $ENV_FILE"
 
 # --- Prereqs -----------------------------------------------------------------
 pick_python || die "Python 3.11+ is required: https://www.python.org/downloads/ (found: $(python3 --version 2>&1 || python --version 2>&1 || echo none))"
@@ -237,34 +252,32 @@ fi
 # --- .env: defaults + generated secrets, prompt only when safe -----------------
 # AH-007: generated API/provenance keys must not be world-readable. Use a
 # restrictive umask for creation and enforce mode 0600 on the file itself.
+# Every read/write below targets $ENV_FILE (AH_ENV_FILE-aware); see
+# resolve_env_file in tools/install-helpers.sh.
 umask 077
-if [ ! -f ".env" ]; then
+if [ "$ENV_IS_DEFAULT" = "1" ] && [ ! -f "$ENV_FILE" ]; then
   log "Creating .env from .env.example"
-  cp .env.example .env
-  chmod 600 .env 2>/dev/null || true
+  cp .env.example "$ENV_FILE"
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
 else
-  log ".env already exists, keeping it (filling gaps only)"
-  chmod 600 .env 2>/dev/null || true
+  log "$ENV_FILE already exists (or is overridden), keeping it (filling gaps only)"
+  [ -f "$ENV_FILE" ] || : > "$ENV_FILE"
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
 fi
 
 # Ensure DATABASE_URL exists.
-if ! grep -q '^DATABASE_URL=' .env; then
-  printf '\nDATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness\n' >> .env
+if [ -z "$(env_get DATABASE_URL "$ENV_FILE")" ]; then
+  env_set DATABASE_URL "$INSTALLER_DEFAULT_DB_URL" "$ENV_FILE" \
+    || die "Cannot write $ENV_FILE"
 fi
 
 # Replace placeholder secrets with real random values (mirrors `ah setup` autogenerate).
 for KEY in AGENT_HARNESS_API_KEY AGENT_HARNESS_PROVENANCE_KEY; do
-  VAL="$(grep -E "^${KEY}=" .env | cut -d= -f2- || true)"
+  VAL="$(env_get "$KEY" "$ENV_FILE")"
   case "$VAL" in
     ""|"replace-with-a-long-random-key"|"replace-with-a-separate-long-random-key"|"sk-or-..."|"sk-...")
       NEW_VAL="$(rand_hex)"
-      # Portable in-place replace: works on GNU + BSD sed via secure temp file.
-      TMP_ENV="$(mktemp .env.tmp.XXXXXX 2>/dev/null || echo .env.tmp.$$)"
-      chmod 600 "$TMP_ENV" 2>/dev/null || true
-      grep -v -E "^${KEY}=" .env > "$TMP_ENV" || true
-      printf '%s=%s\n' "$KEY" "$NEW_VAL" >> "$TMP_ENV"
-      mv "$TMP_ENV" .env
-      chmod 600 .env 2>/dev/null || true
+      env_set "$KEY" "$NEW_VAL" "$ENV_FILE" || die "Cannot write $ENV_FILE"
       log "Generated random $KEY"
       ;;
   esac
@@ -272,40 +285,28 @@ done
 
 # Prompt for the LLM key only when we have a real TTY (or --interactive), never
 # blocking a `curl | bash` run. Reads from /dev/tty so the pipe isn't consumed.
+# AH-AUDIT-040b: typed secrets must not echo. prompt_secret_hidden fails
+# unless hidden input is fully established — there is no visible-typing
+# fallback; a failure skips with secure instructions instead.
 if [ "$ASSUME_YES" = "0" ] && { [ -t 0 ] || [ "$INTERACTIVE" = "1" ]; } && [ -e /dev/tty ]; then
-  CUR="$(grep -E '^OPENROUTER_API_KEY=' .env | cut -d= -f2- || true)"
+  CUR="$(env_get OPENROUTER_API_KEY "$ENV_FILE")"
   case "$CUR" in
     ""|"sk-or-...")
-      printf 'OPENROUTER_API_KEY (Enter to skip, set later via /keys): ' > /dev/tty
-      # AH-AUDIT-040b: typed secrets must not echo. Disable terminal echo
-      # around the read and reliably restore it on success, error,
-      # interruption, or signals (no-echo as documented).
-      ANSWER=""
-      if STTY_SAVE="$(stty -g < /dev/tty 2>/dev/null)"; then
-        stty -echo < /dev/tty 2>/dev/null || true
-        trap 'stty "$STTY_SAVE" < /dev/tty 2>/dev/null || true' INT TERM HUP
-        read -r ANSWER < /dev/tty || ANSWER=""
-        stty "$STTY_SAVE" < /dev/tty 2>/dev/null || true
-        trap - INT TERM HUP
-        printf '\n' > /dev/tty
+      if ANSWER="$(prompt_secret_hidden 'OPENROUTER_API_KEY (Enter to skip, set later via /keys): ')"; then
+        if [ -n "$ANSWER" ]; then
+          env_set OPENROUTER_API_KEY "$ANSWER" "$ENV_FILE" || die "Cannot write $ENV_FILE"
+          log "Saved OPENROUTER_API_KEY"
+        else
+          warn "Skipped OPENROUTER_API_KEY; set it later with: ah setup  (or /keys in the UI)"
+        fi
       else
-        read -r ANSWER < /dev/tty || ANSWER=""
-      fi
-      if [ -n "$ANSWER" ]; then
-        TMP_ENV="$(mktemp .env.tmp.XXXXXX 2>/dev/null || echo .env.tmp.$$)"
-        chmod 600 "$TMP_ENV" 2>/dev/null || true
-        grep -v -E '^OPENROUTER_API_KEY=' .env > "$TMP_ENV" || true
-        printf 'OPENROUTER_API_KEY=%s\n' "$ANSWER" >> "$TMP_ENV"
-        mv "$TMP_ENV" .env
-        chmod 600 .env 2>/dev/null || true
-        log "Saved OPENROUTER_API_KEY"
-      else
-        warn "Skipped OPENROUTER_API_KEY; set it later with: ah setup  (or /keys in the UI)"
+        warn "Could not establish hidden terminal input; skipping secure prompt."
+        warn "Set the key later with: ah setup  (or /keys in the UI)"
       fi
       ;;
   esac
 else
-  case "$(grep -E '^OPENROUTER_API_KEY=' .env | cut -d= -f2- || true)" in
+  case "$(env_get OPENROUTER_API_KEY "$ENV_FILE")" in
     ""|"sk-or-...")
       warn "No OPENROUTER_API_KEY yet; install continues. Add one later with: ah setup  (or /keys in the UI)"
       ;;
@@ -313,149 +314,8 @@ else
 fi
 
 # --- DB: try init, auto-start local pgvector via docker on failure -------------
-try_init() { "$AH_BIN" init 2>&1; }
-
-start_docker_db() {
-  command -v docker >/dev/null 2>&1 || return 1
-  # AH-029: `docker ps` lists running containers only — a stopped
-  # agentharness-db would be missed and `docker run --name` would fail with
-  # "already exists". Inspect all containers (-a) and reuse the named one.
-  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^agentharness-db$'; then
-    log "agentharness-db already running, reusing it"
-    return 0
-  fi
-  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^agentharness-db$'; then
-    log "Starting existing stopped agentharness-db container"
-    docker start agentharness-db >/dev/null || return 1
-    return 0
-  fi
-  # AH-006: never publish Postgres beyond loopback with weak default
-  # credentials. Bind 127.0.0.1 only and generate a random password, keeping
-  # DATABASE_URL consistent. Existing custom DATABASE_URL values are left
-  # alone for compatibility.
-  DB_PASS="$(rand_hex | cut -c1-32)"
-  DB_URL="postgresql://postgres:${DB_PASS}@127.0.0.1:5432/agentharness"
-  log "Starting local Postgres (pgvector/pgvector:pg16 on 127.0.0.1:5432)"
-  # shellcheck disable=SC2086
-  docker run -d --name agentharness-db \
-    -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$DB_PASS" -e POSTGRES_DB=agentharness \
-    -p 127.0.0.1:5432:5432 pgvector/pgvector:pg16 >/dev/null || return 1
-  # Point a default DATABASE_URL at the generated credentials. A user-set
-  # non-default URL is preserved.
-  if grep -q '^DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness$' .env 2>/dev/null \
-    || ! grep -q '^DATABASE_URL=' .env 2>/dev/null; then
-    TMP_ENV="$(mktemp .env.tmp.XXXXXX 2>/dev/null || echo .env.tmp.$$)"
-    chmod 600 "$TMP_ENV" 2>/dev/null || true
-    grep -v -E '^DATABASE_URL=' .env > "$TMP_ENV" || true
-    printf 'DATABASE_URL=%s\n' "$DB_URL" >> "$TMP_ENV"
-    mv "$TMP_ENV" .env
-    chmod 600 .env 2>/dev/null || true
-    log "Wrote generated Postgres credentials to .env DATABASE_URL (loopback only)"
-  else
-    warn "Reusing existing custom DATABASE_URL; ensure it matches the new container if init fails"
-  fi
-  return 0
-}
-
-start_brew_db() {
-  # macOS fallback when docker is unavailable: Homebrew PostgreSQL + pgvector.
-  # Best-effort — if any step fails we return 1 and the caller prints manual fixes.
-  # stdin is /dev/null so nothing here can block waiting on a piped install.
-  [ "$OS_FAMILY" = "macos" ] || return 1
-  command -v brew >/dev/null 2>&1 || return 1
-  log "Installing PostgreSQL + pgvector via Homebrew (takes a few minutes)"
-  brew install postgresql@16 pgvector < /dev/null || return 1
-  brew services start postgresql@16 < /dev/null || return 1
-  local pg_bin pg_user i extdir
-  pg_bin="$(brew --prefix postgresql@16 2>/dev/null)/bin"
-  [ -x "$pg_bin/pg_isready" ] || return 1
-  log "Postgres: $("$pg_bin/pg_config" --version 2>/dev/null || echo unknown)"
-  # The bottled pgvector is built against Homebrew's *unversioned* postgres —
-  # whenever that major differs from @16, the extension files land in the
-  # wrong tree and CREATE EXTENSION can never succeed. Detect it up front and
-  # go straight to a source build instead of failing minutes later.
-  extdir="$("$pg_bin/pg_config" --sharedir 2>/dev/null)/extension"
-  if [ ! -f "$extdir/vector.control" ]; then
-    warn "Brew pgvector wasn't built for postgresql@16; building pgvector from source"
-    brew_vector_from_source "$pg_bin" || return 1
-  fi
-  for i in $(seq 1 30); do
-    if "$pg_bin/pg_isready" -h localhost -p 5432 >/dev/null 2>&1; then break; fi
-    [ "$i" = "30" ] && return 1
-    sleep 2
-  done
-  pg_user="${USER:-$(whoami 2>/dev/null || echo postgres)}"
-  # AH-AUDIT-040a: never reset an existing role's password as an automatic
-  # repair — that would weaken credentials and break unrelated apps. Only a
-  # role created here gets a generated password; pre-existing roles and
-  # custom DATABASE_URL values are preserved untouched.
-  CREATED_POSTGRES=0
-  if ! "$pg_bin/psql" -h localhost -U "$pg_user" -d postgres -tc \
-    "SELECT 1 FROM pg_roles WHERE rolname='agentharness'" 2>/dev/null | grep -q 1; then
-    "$pg_bin/createuser" -h localhost -U "$pg_user" -s agentharness < /dev/null || return 1
-    CREATED_POSTGRES=1
-  fi
-  if [ "$CREATED_POSTGRES" = "1" ]; then
-    BREW_DB_PASS="$(rand_hex | cut -c1-32)"
-    "$pg_bin/psql" -h localhost -U "$pg_user" -d postgres \
-      -c "ALTER USER agentharness PASSWORD '${BREW_DB_PASS}';" >/dev/null 2>&1 || return 1
-    TMP_ENV="$(mktemp .env.tmp.XXXXXX 2>/dev/null || echo .env.tmp.$$)"
-    chmod 600 "$TMP_ENV" 2>/dev/null || true
-    grep -v -E '^DATABASE_URL=' .env > "$TMP_ENV" || true
-    printf 'DATABASE_URL=postgresql://agentharness:%s@localhost:5432/agentharness\n' \
-      "$BREW_DB_PASS" >> "$TMP_ENV"
-    mv "$TMP_ENV" .env
-    chmod 600 .env 2>/dev/null || true
-    log "Wrote generated agentharness role credentials to .env DATABASE_URL (mode 0600)"
-  else
-    warn "Reusing existing agentharness role; existing credentials preserved (set DATABASE_URL if init fails)"
-  fi
-  if ! "$pg_bin/psql" -h localhost -U "$pg_user" -d postgres -tc \
-    "SELECT 1 FROM pg_database WHERE datname='agentharness'" 2>/dev/null | grep -q 1; then
-    "$pg_bin/createdb" -h localhost -U "$pg_user" -O agentharness agentharness < /dev/null || return 1
-  fi
-  if ! "$pg_bin/psql" -h localhost -U agentharness -d agentharness \
-    -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>&1; then
-    warn "Brew pgvector doesn't fit postgresql@16; building pgvector from source"
-    brew_vector_from_source "$pg_bin" || return 1
-    "$pg_bin/psql" -h localhost -U agentharness -d agentharness \
-      -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>&1 || return 1
-  fi
-  return 0
-}
-
-brew_vector_from_source() {
-  # Compile pgvector against postgresql@16's pg_config when the bottle was
-  # built for another PG major. Needs Xcode CLT (present if brew works) + git.
-  local pg_bin="$1" build_dir
-  command -v git >/dev/null 2>&1 || return 1
-  command -v make >/dev/null 2>&1 || return 1
-  build_dir="$(mktemp -d 2>/dev/null || echo /tmp/pgvector-build-$$)"
-  (
-    cd "$build_dir" \
-      && git clone --depth 1 https://github.com/pgvector/pgvector.git < /dev/null \
-      && cd pgvector \
-      && make PG_CONFIG="$pg_bin/pg_config" < /dev/null \
-      && make PG_CONFIG="$pg_bin/pg_config" install < /dev/null
-  ) || return 1
-  rm -rf "$build_dir"
-  return 0
-}
-
-wait_for_init() {
-  # Retry `ah init` while Postgres wakes up; on final failure print the real
-  # error instead of swallowing it.
-  local i out
-  for i in $(seq 1 30); do
-    if out="$(try_init 2>&1)"; then
-      printf '%s\n' "$out"
-      return 0
-    fi
-    sleep 2
-  done
-  printf '%s\n' "$out"
-  return 1
-}
+# Provisioning primitives live in tools/install-helpers.sh (sourced above)
+# so tests can drive them with mocked commands.
 
 if [ "$SKIP_INIT" = "1" ]; then
   log "Skipping ah init (--skip-init)"

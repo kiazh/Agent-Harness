@@ -226,6 +226,62 @@ test("/growth does not rate interrupted turns and supports explicit correction",
 	assert.deepEqual(host.calls.at(-1), { method: "growth.forget", params: { sessionId: SESSION.id, key: "style:verbosity" } });
 });
 
+test("bare /growth immediately offers actions and cancelled menus do no work", async () => {
+	const host = new FakeHost();
+	await run("/growth", host);
+	assert.deepEqual(host.pickTitles, ["Personality growth"]);
+	assert.equal(host.calls.length, 0);
+	assert.equal(host.printed.length, 0);
+});
+
+test("/growth Teach collects a note interactively without submitting a chat turn", async () => {
+	const host = new FakeHost();
+	host.picks.push("teach", "style");
+	host.textQueue.push("tone", "Be concise and warm");
+	host.responses["growth.teach"] = { notes: { "style:tone": "Be concise and warm" } };
+	await run("/growth", host);
+	assert.deepEqual(host.calls.at(-1), { method: "growth.teach", params: { sessionId: SESSION.id, kind: "style", key: "tone", content: "Be concise and warm" } });
+	assert.equal(host.submitted.length, 0);
+});
+
+test("/growth rollback selects a revision and requires an explicit restore decision", async () => {
+	const host = new FakeHost();
+	host.responses["growth.get"] = { growth: { notes: {}, interactions: 3, feedback_count: 1 }, episodes: [], rsi: { enabled: true, revision: 3, trial: null, observations: 2, automatic_observations: 2, human_ratings: 1, history: [{ revision: 2, reason: "teach", status: "stable", created_at: "2026-10-11T00:00:00Z" }] } };
+	host.responses["growth.rollback"] = { restored: true };
+	host.picks.push("2", "yes");
+	await run("/growth rollback", host);
+	assert.deepEqual(host.calls.at(-1), { method: "growth.rollback", params: { sessionId: SESSION.id, revision: 2 } });
+	assert.match(host.last().text, /Restored/);
+	assert.equal(host.submitted.length, 0);
+});
+
+test("/growth rollback cancellation never changes the saved revision", async () => {
+	const host = new FakeHost();
+	host.picks.push("no");
+	await run("/growth rollback 2", host);
+	assert.equal(host.calls.length, 0);
+});
+
+test("/growth can restore the original revision zero from its menu or arguments", async () => {
+    for (const command of ["/growth rollback", "/growth rollback 0"]) {
+        const host = new FakeHost();
+        host.responses["growth.get"] = { rsi: { revision: 1, history: [{ revision: 0, reason: "baseline", status: "stable" }] } };
+        host.responses["growth.rollback"] = { restored: true };
+        host.picks.push(...(command.endsWith(" 0") ? ["yes"] : ["0", "yes"]));
+        await run(command, host);
+        assert.deepEqual(host.calls.at(-1), { method: "growth.rollback", params: { sessionId: SESSION.id, revision: 0 } });
+    }
+});
+
+test("/growth show distinguishes operational observations, human feedback, and a persona trial", async () => {
+	const host = new FakeHost();
+	host.responses["growth.get"] = { growth: { notes: {}, interactions: 3, feedback_count: 1 }, episodes: [], rsi: { enabled: true, revision: 2, observations: 2, automatic_observations: 2, human_ratings: 1, trial: { revision: 2, ratings: 1, required: 3 }, history: [] } };
+	await run("/growth show", host);
+	assert.match(host.last().text, /operational observations/);
+	assert.match(host.last().text, /human ratings/);
+	assert.match(host.last().text, /1\/3/);
+});
+
 test("/recall searches transcript evidence and opens an anchored window", async () => {
 	const host = new FakeHost();
 	const sourceId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";

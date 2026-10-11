@@ -637,3 +637,126 @@ Before calling the next phase complete, be able to answer all of these with evid
 - Are bundle provenance, licenses, docs, and release gates still accurate?
 
 Leave the next maintainer exact commands, failing test names, and honest limits. The most valuable inheritance is a system whose behavior can be explained and verified.
+
+## 2026-10-11 — MCP library lifecycle blocker resolved and verified
+
+Continue from [MCP_CONNECTORS_PROGRESS.md](plans/MCP_CONNECTORS_PROGRESS.md),
+which records the initial checkout, red/green defects, exact verification
+commands, transport evidence, and successor priorities. Branch remains `main`
+at `dc77017`; prior commits are `0331634`, `9ef4ed4`. Nothing was committed,
+pushed, deployed, or reset; the earlier installer work was preserved.
+
+The original cross-task AnyIO cancel-scope error was reproduced. PIDfile plus
+`os.kill(pid, 0)` and UUID-filtered process inspection showed the fixture had
+already exited before the error: no persistent process leak in that probe.
+Repeated use could still hang after the invalid scope exit. A persistent owner
+task now opens and closes every SDK context in the same task. Six repeated
+same-task/cross-task fixture cycles pass with no surviving processes or shutdown
+warnings. A caller timeout retains cleanup ownership and prevents premature
+replacement; it does not cancel SDK subprocess cleanup.
+
+Also fixed schema field handling and fail-closed validation, result byte caps,
+synthetic-secret redaction, unknown outcomes on dropped calls, transient-only
+retry/circuit behavior, serialized retirement/reconnect, service inventory and
+live-state checks, authentication state preservation, discovery deadlines,
+metadata DNS alias refusal, unsafe config types/URLs, and catalog collisions.
+
+Final evidence: **84 connector tests passed**, **2049 backend tests passed /
+5 skipped**, `npm --prefix ui run check` passed (**132 UI tests / 5 skipped**),
+Ruff check/format passed for all 13 connector/test files, Bandit found **0
+medium/high** (7 low), and `git diff --check` passed. No failing suite needed a
+clean-HEAD comparison. Real stdio and loopback Streamable HTTP SDK calls each
+negotiated `2025-11-25`; this is observed, not hardcoded. A real server-initiated
+elicitation was rejected without calling the model.
+
+This is **not an end-to-end harness connector feature**. Next: register the
+manager in runtime services, integrate native tool exposure through exact broker
+approval and inherited restrictions, add durable inventory and authenticated
+gateway contracts, then build the interactive management UI. OAuth/credential
+transport, full outbound/redirect/DNS-rebinding policy, concurrency enforcement,
+catalog-change subscriptions, and real service/release verification remain
+deferred. HTTP credential profiles currently fail closed. Do not expose the
+low-level client as an approval bypass or equate fixture calls/catalog reads
+with complete application integration.
+
+OpenCode was consulted as a cleanup-pattern reference; no upstream code was
+copied. Its TypeScript transport lifecycle cannot directly solve Python AnyIO
+task ownership. See the progress document for source retrieval limitations.
+
+## 2026-10-11 — Persona RSI implemented across the shared runtime
+
+The active request was to implement recursive self-improvement with persona
+through completion. Start with [PERSONA_RSI_PLAN.md](plans/PERSONA_RSI_PLAN.md)
+for the completed checklist, exact commands, red/green evidence, review rulings,
+clean-HEAD comparison and limits. [PERSONA_RSI_DESIGN.md](plans/PERSONA_RSI_DESIGN.md)
+records the architecture; [PERSONALITY_GROWTH.md](PERSONALITY_GROWTH.md) is the
+user-facing operating guide. These public files are tracked candidates; the
+earlier `docs/superpowers` working copies are ignored by the repository.
+
+RSI defaults on through `rsi_enabled`, alongside existing memory/growth flags.
+No extra model/classifier request, dependency, service or training worker is
+needed. Normal startup and `ah init` run the shared additive growth migration;
+the CLI applies it before management operations. No production DB was migrated.
+The core persona description remains the user's configured tone/character,
+while per-agent notes, retrieval policy and routing evidence persist in Postgres.
+
+Implementation map:
+
+- `ah/memory/rsi.py`: bounded operational evidence, domain strategy selection,
+  capability weights, persona checkpoints/trials, inspection and snapshot policy
+  provenance. `ah/memory/growth.py` owns all per-agent transactional writes.
+- `ah/db/growth_schema.sql`: profiles, revisions and episode metadata, with
+  additive column upgrades for existing installations. Growth-episode deletion
+  cascades to RSI evidence; retention stays 500 episodes and 50 revisions.
+- `ah/core/agent.py`: shared preparation/completion hooks cover CLI, gateway,
+  HTTP, jobs and delegated agents; ContextVars keep metadata task-local. Notes
+  are captured in the same transaction as the attributed revision. Only terminal
+  unpaused turns learn; cancellation does not invent a completed episode.
+- `ah/core/models.py` and `ah/tools/terminal.py`: typed terminal failure and
+  actual subprocess exit/truncation status prevent failed execution receiving
+  positive evidence. String-compatible shell output preserves existing callers.
+- `ah/skills/runtime.py` / `workflow.py`: weights only reorder relevant skills,
+  explicit requests retain precedence, and budgets stay bounded. Automatic and
+  successful manual reads are attributed. Allowed-tool ordering never adds tools.
+- `ah/tools/memory.py`: agent-written notes become persona trials. Three human
+  ratings of that exact revision retain it or restore the stable baseline.
+- Gateway, CLI and TUI growth modules share status/history and restoration.
+  Bare `/growth` immediately opens an action menu; Restore/Forget offer explicit
+  decisions. `growth.rollback` and `ah growth rollback` accept baseline 0 as
+  well as later retained revisions. The protocol document covers the new fields.
+
+Do not remove the review-driven protections. Human choices supersede trials
+even when RSI is disabled or the human confirms an unchanged note. Ratings from
+an older revision cannot erase a later human edit. A human rating removes that
+episode's directly applied automatic memory delta before its human update.
+Revision snapshots keep pending episode IDs; restoring activates only evidence
+actually present in that snapshot. Completing an episode after a restore/import
+must reactivate its newly applied delta. All of these orderings have regressions.
+The delta correction preserves intervening updates; it does not replay a complete
+counterfactual training history.
+
+Verified: **2092 backend tests passed / 5 skipped**; final dedicated RSI checks
+**43 passed**. Standalone `npm --prefix ui run check` passed typecheck, **138 UI
+tests / 5 opt-in skips**, and lint. The backend suite separately ran the real
+Node/Python gateway restart checks, including note/history persistence and
+restoration. Ruff check/format passed for 16 Python files; Bandit RSI/growth
+reported zero findings; `git diff --check` passed. Impeccable's scoped detector
+reported no findings for the growth command. Final fresh review found no
+remaining material issue after the reproduced regressions were fixed.
+
+An initial RPC method-inventory regression was fixed by adding the new method
+to the expected contract. A separate overlapping test-DB migration run deadlocked;
+sequential final runs passed. Both affected tests passed at clean HEAD in a
+temporary detached worktree (2 tests), which was removed afterward. No unresolved
+verification failure remains in these checks. The checkout remains on `main`
+at `dc77017`, with all changes uncommitted and prior MCP/installer work intact.
+
+This is runtime behavioral adaptation, with noisy execution proxies and a simple
+three-rating persona heuristic. No measured general quality/speed gain is claimed.
+Providers in tests were synthetic; no live-model request occurred. Agent-scoped
+state still follows the shared installation account model. LLM weight training,
+unattended source rewriting/deployment, and the separate MCP/release deferred
+phases were not implemented by this RSI work. A next maintainer should benchmark
+quality/cost on repeatable scored tasks before changing reward magnitudes,
+promotion thresholds, or routing bounds; preserve the ownership and permission
+boundaries when extending learning to newly integrated capabilities.

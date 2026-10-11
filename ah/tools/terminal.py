@@ -18,6 +18,17 @@ from ah.tools.base import registry
 logger = logging.getLogger(__name__)
 MAX_OUTPUT_CHARS = 64_000
 
+
+class CommandOutput(str):
+    """String-compatible output with the actual subprocess completion status."""
+
+    def __new__(cls, text: str, *, returncode: int, truncated: bool = False):
+        instance = super().__new__(cls, text)
+        instance.is_error = returncode != 0 or truncated
+        instance.returncode = returncode
+        return instance
+
+
 # Allowlist of safe commands — intentionally narrow
 # Removed: python, pip, npm, node, curl, wget, rm, cp, mv (command injection risk)
 ALLOWED_COMMANDS = frozenset(
@@ -290,8 +301,14 @@ def _run_bounded(
             raise subprocess.TimeoutExpired(args, timeout)
         output = "".join(output_parts)
         if truncated:
-            return output[:MAX_OUTPUT_CHARS] + "\n[output truncated]"
-        return output or f"(exit code {process.returncode}, no output)"
+            return CommandOutput(
+                output[:MAX_OUTPUT_CHARS] + "\n[output truncated]",
+                returncode=process.returncode,
+                truncated=True,
+            )
+        return CommandOutput(
+            output or f"(exit code {process.returncode}, no output)", returncode=process.returncode
+        )
 
 
 @registry.register(

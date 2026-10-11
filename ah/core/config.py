@@ -104,6 +104,7 @@ DEFAULTS: dict[str, Any] = {
     "usage_agent_request_limit": 0,
     "memory_enabled": True,
     "personality_growth_enabled": True,
+    "rsi_enabled": True,
     "persona_description": "",
     "persona_memory_enabled": True,
     "persona_default_emotion": "trust",
@@ -292,6 +293,7 @@ class Config:
     usage_agent_request_limit: int = 0
     memory_enabled: bool = True
     personality_growth_enabled: bool = True
+    rsi_enabled: bool = True
     persona_description: str = ""
     persona_memory_enabled: bool = True
     persona_default_emotion: str = "trust"

@@ -129,6 +129,7 @@ class AgentResponse:
     tokens_used: int = 0
     iterations: int = 0
     needs_approval: list[dict[str, Any]] = field(default_factory=list)
+    outcome: str = "completed"
 
     def __post_init__(self) -> None:
         """Derive typed pauses from tool entries (AH-AUDIT-022).

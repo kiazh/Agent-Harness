@@ -60,6 +60,7 @@ def plan_workflow(
     skills: SkillRegistry,
     recent: list[dict[str, Any]] | None = None,
     goal: str | None = None,
+    skill_weights: dict[str, float] | None = None,
 ) -> SkillWorkflow:
     from ah.skills.runtime import _TECHNOLOGIES, _words, rank_skills
 
@@ -128,7 +129,7 @@ def plan_workflow(
             "api",
         }:
             routing_query += " " + " ".join(sorted(inherited))
-    matches = rank_skills(skills, routing_query)
+    matches = rank_skills(skills, routing_query, weights=skill_weights)
     # Weak single-word overlap never activates a specialist: without clear
     # evidence the agent stays a generalist (see _strong_match). An explicit
     # coding/research task still gets the generic pipeline below.

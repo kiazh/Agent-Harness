@@ -302,3 +302,14 @@ export const SESSION_NOT_FOUND = 1002;
 export const TURN_IN_PROGRESS = 1003;
 export const OPERATION_FAILED = 1004;
 export const UNAUTHORIZED = 1005;
+export interface RsiStatus {
+	enabled: boolean;
+	revision: number;
+	trial: { revision: number; ratings: number; required: number } | null;
+	observations: number;
+	automatic_observations: number;
+	human_ratings: number;
+	skill_weights: Record<string, number>;
+	tool_weights: Record<string, number>;
+	history: Array<{ revision: number; reason: string; status: string; created_at: string }>;
+}

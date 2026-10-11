@@ -522,8 +522,12 @@ def test_first_run_minimal_choices():
 
 
 def test_loopback_and_reuse():
+    # Provisioning primitives live in tools/install-helpers.sh (sourced by
+    # install.sh); the reuse + file-mode properties must hold wherever they live.
     with open("install.sh", encoding="utf-8") as f:
         src = f.read()
+    with open("tools/install-helpers.sh", encoding="utf-8") as f:
+        src += f.read()
     assert "docker ps -a" in src
     assert "0600" in src or "chmod 600" in src
 
