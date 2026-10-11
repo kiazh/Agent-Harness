@@ -282,6 +282,11 @@ export class App implements FeatureHost {
 		this.tui.requestRender();
 	}
 
+	restyle(): void {
+		this.transcript.restyle();
+		this.tui.requestRender();
+	}
+
 	async exit(): Promise<void> {
 		if (this.exiting) return;
 		this.exiting = true;

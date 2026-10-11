@@ -49,6 +49,15 @@ export class Transcript {
 		this.tools.clear();
 	}
 
+	/** Re-resolve theme colors without dropping transcript content (skin switch). */
+	restyle(): void {
+		for (const child of this.container.children) {
+			if (child && typeof child === "object" && "refreshSkin" in child) {
+				(child as { refreshSkin(): void }).refreshSkin();
+			}
+		}
+	}
+
 	/** Re-render a stored conversation (from session.resume). */
 	replay(history: HistoryEntry[]): void {
 		for (const entry of history) {

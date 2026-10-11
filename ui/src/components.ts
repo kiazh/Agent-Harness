@@ -42,8 +42,17 @@ const BLOCK_GAP: string[] = [""];
  * default-foreground text — no box, the words speak for themselves.
  */
 export class UserMessage extends Text {
+	private readonly raw: string;
+
 	constructor(text: string) {
-		super(`${theme.accentBold("›")} ${theme.text(text)}`, 1, 0);
+		super("", 1, 0);
+		this.raw = text;
+		this.refreshSkin();
+	}
+
+	/** Re-resolve theme colors (skins switch live; text was baked at construction). */
+	refreshSkin(): void {
+		this.setText(`${theme.accentBold("›")} ${theme.text(this.raw)}`);
 	}
 
 	override render(width: number): string[] {
@@ -91,17 +100,34 @@ export class AssistantMessage implements Component {
  * marker convention as ToolCard and TextForm errors).
  */
 export class Notice extends Text {
+	private readonly raw: string;
+	private readonly kind: NoticeKind;
+
 	constructor(text: string, kind: NoticeKind = "info") {
+		super("", 1, 0);
+		this.raw = text;
+		this.kind = kind;
+		this.refreshSkin();
+	}
+
+	/** Re-resolve theme colors (skins switch live; text was baked at construction). */
+	refreshSkin(): void {
 		const marked =
-			kind === "success" ? `✓ ${text}` : kind === "warning" ? `! ${text}` : kind === "error" ? `✗ ${text}` : text;
+			this.kind === "success"
+				? `✓ ${this.raw}`
+				: this.kind === "warning"
+					? `! ${this.raw}`
+					: this.kind === "error"
+						? `✗ ${this.raw}`
+						: this.raw;
 		const style = {
 			info: theme.info,
 			plain: theme.text,
 			success: theme.success,
 			warning: theme.warning,
 			error: theme.error,
-		}[kind];
-		super(style(marked), 1, 0);
+		}[this.kind];
+		this.setText(style(marked));
 	}
 
 	override render(width: number): string[] {

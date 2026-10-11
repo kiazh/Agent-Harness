@@ -1,6 +1,6 @@
 # AgentHarness
 
-**Self-hosted multi-agent AI you run locally — streaming terminal UI, persistent memory, tool use, scheduling, and multi-agent delegation. All state in PostgreSQL + pgvector.**
+**Self-hosted general-purpose AI agent you run locally — streaming terminal UI, persistent memory, tool use, subagent fan-out, scheduling, and 42 bundled skill workflows that activate only on real evidence. All state in PostgreSQL + pgvector.**
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Node.js 22+](https://img.shields.io/badge/node.js-22+-green.svg)](https://nodejs.org/)
@@ -34,7 +34,9 @@
 
 ## What this is
 
-AgentHarness is a self-hosted AI agent framework that runs on your machine. The production completion release is still gated on verification recorded in [the completion ledger](docs/plans/PRODUCTION_COMPLETION_PROGRESS.md). You chat with agents in a streaming terminal UI. Agents remember things across sessions, search the web, run tools in a sandbox, follow schedules, and delegate work to each other. Everything is stored in PostgreSQL with pgvector for semantic search.
+AgentHarness is a self-hosted AI agent framework that runs on your machine. It is a **general agent first**: it answers greetings and questions directly, acts on tasks with the right tool for the job, and never goes looking for work. Specialist skill workflows (42 curated, bundled offline) activate only on clear evidence — a named skill, a trigger hit, or genuinely matching task language. You chat in a streaming terminal UI. Agents remember things across sessions, search the web, run tools in a sandbox, follow schedules, and fan out to subagents for parallelizable work. Everything is stored in PostgreSQL with pgvector for semantic search.
+
+The production completion release is still gated on verification recorded in [the completion ledger](docs/plans/PRODUCTION_COMPLETION_PROGRESS.md).
 
 ```
 >_ AgentHarness (v0.2.0)
@@ -128,10 +130,12 @@ docker compose up --build
 
 ## Terminal UI
 
-Codex-style fullscreen TUI: `>_` brand header, filled borderless composer with accent bar, accent selection rows, braille spinner, docked composer + footer (`model · dir · branch · tokens`, then `? for shortcuts · / for commands`), follow-end scrolling, `/` menu opening upward, mouse support.
+Codex-style fullscreen TUI: `>_` brand header, filled borderless composer with accent bar, accent selection rows, braille spinner, docked composer + footer (`model · dir · branch · tokens`, then `? for shortcuts · / for commands`), follow-end scrolling, `/` menu opening upward, mouse support. Response boxes never touch: one blank row separates transcript blocks and the chrome sections.
 
-- **Streaming Markdown** — token-by-token output in a contrasting card; tool cards (`Running`/`Ran`/`Failed`) with diff coloring (`+` green, `-` red, `@@` info).
-- **24 skins** — `/theme` switches live, persisted via `config.theme`: default + `codex`, `mono`, `tokyonight`, `catppuccin` (+frappe/macchiato), `dracula`, `gruvbox`, `rosepine`, `nord`, `everforest`, `matrix`, `onedark`, `one-dark`, `monokai`, `github`, `solarized`, `kanagawa`, `palenight`, `cobalt2`, `ayu`, `nightowl`, `flexoki`.
+- **Streaming Markdown** — token-by-token output in a contrasting card; tool cards (`Running`/`Ran`/`Failed`) with diff coloring (`+` green, `-` red, `@@` info). Notices carry text markers (`✓`/`!`/`✗`) as well as color, so state survives monochrome skins.
+- **Interactive management commands** — bare `/persona`, `/keys`, `/models`, `/theme`, `/sessions` and friends open pickers/forms instead of making you memorize flags. Expert argument forms still work (`/persona --clear`, `/keys set …`).
+- **Persona** — `/persona` opens Add/Reset: Add edits the installation default in a multiline editor (2000 chars, prefilled); Reset confirms yes/no and keeps learned notes. The chat draft is never submitted as a persona.
+- **21 skins** — `/theme` switches live **without clearing the chat** and persists via `config.theme`: default, `codex`, `mono`, `tokyonight`, `catppuccin`, `dracula`, `gruvbox`, `rosepine`, `nord`, `everforest`, `matrix`, `cobalt2`, `ayu`, `nightowl`, `flexoki`, `onedark`, `monokai`, `github`, `solarized`, `kanagawa`, `palenight`.
 - **Keyboard** — Enter send, Shift+Enter newline, Esc stop, Tab complete, Ctrl+C exit, Ctrl+L clear, double-Esc edits last prompt. `/init`, `/review`, `/compact` (=compress), `/clear` for Codex parity.
 
 ### Keys without leaving the UI
@@ -150,8 +154,8 @@ Secrets never echo, never enter history, never touch `config.yaml`.
 ```
 /models                # picker over curated direct-provider + Ollama list (this session)
 /models <query>        # filter, e.g. /models llama
-/default-model       # menu to pick the saved default model
-/default-model <id>  # off-list default, e.g. /default-model deepseek-reasoner
+/default-model         # menu to pick the saved default model
+/default-model <id>    # off-list default, e.g. /default-model deepseek-reasoner
 /provider <name>       # openrouter | openai | anthropic | google | mistral | groq | together | deepseek | xai | ollama
 /effort [low|medium|high|off]  # reasoning depth (provider default when off)
 /keys set DEEPSEEK_API_KEY ... # each family uses its own direct key, never routed via OpenRouter
@@ -161,20 +165,22 @@ Secrets never echo, never enter history, never touch `config.yaml`.
 
 | Command | What it does |
 |---------|--------------|
-| `new`, `sessions`, `resume` | Create, list, resume sessions |
+| `new`, `sessions`, `resume` | Create, list, resume sessions (menu when empty) |
 | `rename`, `goal`, `fork`, `delete`, `export` | Manage current session |
 | `init`, `review` | Scaffold `AGENTS.md`; agent-driven change review |
 | `search`, `recall` | Full-text session search; anchored cross-session recall |
 | `context`, `compress` | Token usage; compact context |
 | `memory` | `list · search · add · forget · share · pending · approve · reject · stats` |
+| `growth` | Learned personality: `show · teach · feedback · forget` |
+| `persona` | Manage the default persona (menu when empty; `--clear` resets) |
 | `skills` | `list · show · learn · proposals · approve · reject · delete · curator` |
-| `agents`, `delegate` | List/show/save agents; delegate a task |
+| `agents`, `delegate` | List/show/save agents; delegate a task (parallel fan-out) |
 | `jobs` | `list · add · script · heartbeat · cron · on · off · delete` |
-| `keys` | `list · set · clear` |
+| `keys` | `list · set · clear` (menu when empty) |
 | `mode`, `approvals` | Execution mode (`ask|workspace|sandbox|full`); pending approvals (`list · allow · deny · revoke`) |
 | `models`, `default-model`, `provider`, `effort` | Session picker; saved default model; provider; reasoning effort |
 | `config` | Show/set settings (`--save` persists) |
-| `theme` | Switch skin |
+| `theme` | Switch skin (menu when empty; chat stays) |
 | `profile`, `profiles` | Preferences and topics |
 | `status`, `usage` | Health; token/request budgets |
 | `clear`, `help`, `exit` | New chat; grouped help; quit |
@@ -185,41 +191,46 @@ Secrets never echo, never enter history, never touch `config.yaml`.
 
 ### Core agent
 
-- **ReAct loop** — Thought → Action → Observation, streaming, configurable iterations, 50k token budget, per-tool timeouts (60s for delegation).
+- **ReAct loop** — Thought → Action → Observation, streaming, configurable iterations, per-tool timeouts (60s for delegation). Independent tool calls in one block run concurrently.
+- **Per-model turn budget** — the spend cap scales with the turn model's documented context window (quarter-window, 8k floor, 50k ceiling) instead of a fixed 8k; an explicit `context_budget` always wins. See `ah/core/context_windows.py`.
+- **Bounded history** — tool results are append-capped and stale rounds condense to head+tail previews before each LLM call (paged skill reads exempt so offsets keep resolving); full records stay in Postgres for recall/compaction.
 - **Tool registry** — decorator-based, JSON Schema inference, `bool`-safe type checks, 20k arg cap. Built-ins: `web_search`, `web_extract`, `read_file`, `write_file`, `list_files`, `search_files`, `remember`, `recall`, `delegate`, `list_agents`, `share_memory`, `session_recall`, `skill_list`, `skill_read`, `terminal`.
-- **Skills** — 42 curated [ECC workflows](docs/ECC_SKILLS.md) bundled offline and automatically routed for each task, with bounded instruction loading and on-demand supporting files. Defaults focus on the Python/TypeScript harness, code quality, research, and MCP work. No manual activation or enable flag. Local skills retain YAML metadata, curator health, hub publish/install and injection scanning.
+- **Skills** — 42 curated [ECC workflows](docs/ECC_SKILLS.md) bundled offline. They activate only on clear evidence (named skill, whole-word trigger, or genuinely matching task); vague input gets a generalist, and turns with no match inject zero skill context. Bodies load bounded and lazily; no manual activation or enable flag. Local skills retain YAML metadata, curator health, hub publish/install and injection scanning.
+
+### Subagents
+
+- **Roster** — three native types plus your customs (`/agents save`): `harness` (general, all tools), `researcher` (read-only gathering), `coder` (edits code, runs tests). `list_agents` shows who is available.
+- **Auto fan-out** — tasks that split into independent subtasks delegate in parallel: one `delegate` call per subtask in a single block (max three), type picked from the roster, standalone task each. Children inherit the parent's restrictions, cannot approve actions, and time out fast. Delegation is never used to evade approval.
+- **Safety** — hop-count depth cap, session ownership checks, exact approval binding per action.
 
 ### Context & memory
 
 - **PostgreSQL context** — asyncpg pool, MessagePack payloads, pgvector, `context_archive` reversible eviction (paginated, transactional, keep-newest-10).
 - **Cross-session recall** — agent-scoped FTS over live + archive with anchored windows.
 - **Long-term memory** — LLM extraction with dedup (`>=` threshold + intra-batch), importance scoring (explicit always wins), Ebbinghaus forgetting, hybrid retrieval (BM25 + dense + RRF + rerank), approval gate, 17-pattern redaction (+Luhn, nested/list support), identity/belief drift gating, persona-conditioned retrieval default-on (`persona_default_emotion=trust`).
+- **Personality growth** — durable bounded preference/style/lesson notes plus a learned retrieval policy, Teach/feedback/forget via `/growth`; independent of the configured `/persona` description. See [personality growth](docs/PERSONALITY_GROWTH.md).
 - **Compression** — budget-aware, deep-copy safe, token recount.
 
 ### RAG
 
 Index → recursive chunk (overlap `rfind`, heading stack, `async def` aware) → OpenAI embeddings (model-keyed LRU) → hybrid BM25 + dense + RRF → Cohere/identity rerank. Redacted before store; cache keyed by model/flags.
 
-### Multi-agent
-
-YAML / DB / Soul Spec v0.5 definitions with tool allowlists and model overrides. Sequential + parallel delegation with hop-count inheritance. Shared memory via HMAC provenance (`AGENT_HARNESS_PROVENANCE_KEY`), quarantine on failure.
-
 ### Production
 
-- **Usage accounting** — durable `llm_usage`, advisory-lock budgets, `reserved → complete/error`, orphan reaper.
+- **Usage accounting** — durable `llm_usage`, advisory-lock budgets, `reserved → complete/error`, orphan reaper. Streamed turns report real token counts, including direct-vendor streams (`include_usage` where documented, estimates elsewhere) — the footer never reads zero on a non-empty turn.
 - **Scheduling** — interval / heartbeat / UTC cron + script-only jobs; `FOR UPDATE SKIP LOCKED` claim, 300s lease + renewal, DB-clock reschedule.
 - **Observability** — sanitized Postgres audit, OpenTelemetry spans, Prometheus `/metrics`, gateway log `~/.agent-harness/logs/gateway.log`.
-- **Security** — allowlisted terminal (blocks `-exec`, `git -c`), jail-checked paths (symlink/O_NOFOLLOW aware), SSRF private/multicast/redirect checks, per-IP rate limit, `.env` atomic writes + newline-injection reject, Vault/AWS/file secrets.
+- **Security** — allowlisted terminal in `ask` mode (blocks `-exec`, `git -c`; `full` mode deliberately resolves host commands instead), jail-checked paths (symlink/O_NOFOLLOW aware), SSRF private/multicast/redirect checks, per-IP rate limit, `.env` atomic writes + newline-injection reject, Vault/AWS/file secrets.
 - **Retry** — 429 backoff (provider 2x + agent guard, no double-stack); global rate buckets.
 
 ### Execution modes & permissions
 
-`ask` (default) · `workspace` · `sandbox` · `full` — via `/mode`, `ah --mode ...`, or `ah mode`. Session activation (`scope=session`, the default) never changes the global default future sessions inherit; only explicit `scope=global` does. Routine project reads/writes, local Git inspection/add/commit, built-in web reads, document retrieval, and common project test/build/lint commands proceed without approval. Credential access, elevation, deletion/discard, publishing, unclassified execution/extension effects, and out-of-workspace access still pause for exact approval; FULL HOST is an explicit session grant (still asks for credentials/elevation/destructive ops). Approval cards show the exact command (argv), cwd, backend, timeout, and file-write diffs. Approvals: `/approvals`, TUI card, `GET/POST /api/v1/approvals`. Headless jobs pause durably as `needs_approval` (resumable via `jobs.resume`) and resume on a fresh claim.
+`ask` (default) · `workspace` · `sandbox` · `full` — via `/mode`, `ah --mode ...`, or `ah mode`. Session activation (`scope=session`, the default) never changes the global default future sessions inherit; only explicit `scope=global` (or saving `execution_mode`) does. To run everything full by default, persist `execution_mode: full` — new sessions auto-grant at creation. Routine project reads/writes, local Git inspection/add/commit, built-in web reads, document retrieval, and common project test/build/lint commands proceed without approval. Credential access, elevation, security-settings changes, and destructive system ops still pause for exact approval **in every mode, including full**; FULL HOST is an explicit session grant, never sensitive consent. Approval cards show the exact command (argv), cwd, backend, timeout, and file-write diffs. Approvals: `/approvals`, TUI card, `GET/POST /api/v1/approvals`. Headless jobs pause durably as `needs_approval` (resumable via `jobs.resume`) and resume on a fresh claim.
 
 ### What runs when
 
-- **Automatic:** turn pipeline (context+memory keyword retrieval, skill catalog), usage accounting, audit/metrics, redaction.
-- **Conditional:** dense memory retrieval (embedding key set), document RAG (indexed docs exist), delegation (task needs a specialist), auto-compaction (over budget threshold), sandbox backend (Docker present + sandbox mode).
+- **Automatic:** turn pipeline (context+memory keyword retrieval, gated skill routing), usage accounting, audit/metrics, redaction.
+- **Conditional:** dense memory retrieval (embedding key set), document RAG (indexed docs exist), delegation (task splits into subtasks), auto-compaction (over budget threshold), sandbox backend (Docker present + sandbox mode).
 - **Degraded (reported, not silent):** keyword-only retrieval, passthrough rerank, unavailable sandbox.
 - **Optional:** memory consolidation/extraction, learning reviews, scheduled jobs.
 - **Offline research:** RL/GRPO training, LoCoMo eval, conformance trials — never part of chat.
@@ -269,6 +280,8 @@ Non-secrets in `~/.agent-harness/config.yaml` or `AGENT_HARNESS_<KEY>` env. **Se
 | `AGENT_HARNESS_MODEL` | Model id | `openrouter/free` |
 | `AGENT_HARNESS_PROVIDER` | Provider (`openrouter`, `openai`, `anthropic`, `google`, `mistral`, `groq`, `together`, `deepseek`, `xai`, `ollama`) | `openrouter` |
 | `AGENT_HARNESS_REASONING_EFFORT` | Reasoning depth (`low`, `medium`, `high`, blank = provider default) | blank |
+| `AGENT_HARNESS_EXECUTION_MODE` | `ask` \| `workspace` \| `sandbox` \| `full` (saved default for new sessions) | `ask` |
+| `AGENT_HARNESS_CONTEXT_BUDGET` | Explicit per-turn spend cap (wins over the per-model derived budget) | `8000` |
 | `AGENT_HARNESS_API_KEY` | HTTP API key (fail-closed 503 if unset) | — |
 | `AGENT_HARNESS_PROVENANCE_KEY` | HMAC key for memory sharing | — |
 | `AGENT_HARNESS_PERSONA_MEMORY_ENABLED` | Persona rerank | `true` |
@@ -331,9 +344,11 @@ Plus LoCoMo harness (`ah/research/locomo.py`), identity eval (`identity_eval.py`
 
 ## Performance & tests
 
-- **Python:** 1702 passed, coverage **~80%** (gate 60%). Phase-7 modules (scheduler, recall, text_search, usage) at ~100%.
-- **UI:** 87 passed, 3 e2e skipped without live DB (`npm --prefix ui test`).
-- **Concurrency:** advisory-lock usage (agent→session order), atomic job claim, per-session turn locks.
+Snapshot 2026-10-10 (pool, no live LLM/DB for gated suites):
+
+- **Python:** 1844 passed, 9 failed — every failure reproduced on a clean checkout (4 DB-backed usage, 1 load-concurrency, 1 provider-effort, 1 memory float, 1 research fixture, 1 schema table). DB-gated suites skip without `AGENT_HARNESS_TEST_DATABASE_URL`.
+- **UI:** 124 passed, 5 skipped without live DB (`npm --prefix ui test`); typecheck + eslint clean.
+- **Concurrency:** advisory-lock usage (agent→session order), atomic job claim, per-session turn locks, parallel in-block tool calls.
 - **Workflow trial:** native Postgres approval **~3.6 ms** vs LangGraph **~18.6 ms** (5.1x overhead); native retained.
 - **Resilience:** 429-then-200 recovers; sustained 429 raises after retries.
 
@@ -354,7 +369,7 @@ bandit -r ah/ -ll -x ah/cli/
 npm --prefix ui run typecheck && npm --prefix ui test
 ```
 
-Conventions: `ruff line-length 100`, `asyncio_mode = auto`, raw SQL via asyncpg, MessagePack for blobs, `B904` (`raise … from`), no `utcnow` (aware datetimes).
+Conventions: `ruff line-length 100`, `asyncio_mode = auto`, raw SQL via asyncpg, MessagePack for blobs, `B904` (`raise … from`), no `utcnow` (aware datetimes). Tests never touch the developer database or live config: the autouse fixture isolates the test DB DSN, snapshots in-memory config, resets session modes, and clears caches; tests that pin a non-default mode isolate it explicitly.
 
 ---
 
@@ -364,9 +379,9 @@ Conventions: `ruff line-length 100`, `asyncio_mode = auto`, raw SQL via asyncpg,
 agent-harness/
 ├── ah/
 │   ├── core/            # agent, assembler, compression, config, container, context,
-│   │                    # cron, exceptions, job_scripts, metrics, models, orchestrator,
-│   │                    # provider, scheduler, serialization, session, session_recall,
-│   │                    # text_search, usage, windows_job
+│   │                    # context_windows, cron, exceptions, job_scripts, metrics, models,
+│   │                    # orchestrator, provider, scheduler, serialization, session,
+│   │                    # session_mode, session_recall, text_search, usage, windows_job
 │   ├── db/              # asyncpg pool + schema.sql
 │   ├── gateway/         # JSON-RPC stdio server + features/ (agents, config, jobs,
 │   │                    # memory, secrets, sessions, skills)
@@ -375,16 +390,16 @@ agent-harness/
 │   │                    # identity, persona, policy, rl, redaction, shared_bus, user_profile
 │   ├── rag/             # chunker, embedder, loaders, pipeline, reranker, search
 │   ├── tools/           # registry + builtins (web/file/memory/rag/recall/skills/terminal/agents)
-│   ├── skills/          # parser, registry, curator, hub, learning, runtime
+│   ├── skills/          # parser, registry, curator, hub, learning, runtime, workflow
 │   ├── soulspec/        # schema, merge, adapters, conformance
 │   ├── security/        # secrets (env/file/Vault/AWS), env_file
 │   ├── observability/   # audit, metrics, tracing
 │   ├── plugins/         # entry-point loader + registry
 │   ├── research/        # locomo, identity_eval, train_memory_policy, workflow_*
 │   └── cli/             # typer app (chat/setup/doctor/init/serve/…) + UI launcher
-├── ui/src/              # pi-tui app + features/ (32 commands, 24 skins)
+├── ui/src/              # pi-tui app + features/ (37 commands, 21 skins)
 ├── ui/test/             # node:test suites
-├── tests/               # ~80 pytest modules + workflow_trial/
+├── tests/               # ~90 pytest modules + workflow_trial/
 ├── skills/              # local playbooks + 42 curated pinned ECC skills and resources
 ├── research/            # example identity scenarios
 ├── Dockerfile / Dockerfile.sandbox / docker-compose.yml
@@ -414,6 +429,8 @@ See `FEATURE_LEDGER.md` for detailed fix mapping (H-01 through H-07, R-01 throug
 | `401 invalid API key` | `Authorization: Bearer …` or `X-API-Key`; non-ASCII → 401 not 500 |
 | `409 a turn is already running` | `prompt.cancel`, wait for `message.complete`; UI timeout is 300s = server |
 | `429 rate limit exceeded` | `Retry-After` header; bump `AGENT_HARNESS_HTTP_RATE_LIMIT`, check proxy single-bucket |
+| Too many approval prompts | `/mode full` for this session, or persist `execution_mode: full` for new sessions (credentials/elevation/destructive still ask) |
+| `terminal` allows more than expected | `full` mode deliberately resolves host commands instead of the `ask`-mode allowlist; switch back to `ask`/`workspace` to narrow it |
 | `.env path escapes allowed roots` | Default `.env` must be under cwd/repo/home/tmp; use `AH_ENV_FILE` for elsewhere |
 | `script must stay inside …` | `noAgent` scripts must be relative `*.py\|*.sh\|*.bash` under `~/.agent-harness/scripts` |
 | `terminal` blocked / `workdir … not within allowed` | `AGENT_HARNESS_TERMINAL_SANDBOX=local\|docker`; workdir under `agent_harness_home` |
@@ -426,7 +443,7 @@ See `FEATURE_LEDGER.md` for detailed fix mapping (H-01 through H-07, R-01 throug
 
 ## Production release status and research
 
-**Implemented:** ReAct loop, Postgres context + recall, persona-on memory, RAG, delegation, scheduling, HTTP API + SSE, usage budgets, tools, skills, TUI + skins, observability, Docker backend, retries. Production readiness additionally requires the [release gates](docs/plans/PRODUCTION_COMPLETION_PROGRESS.md); a passing unit suite alone is insufficient.
+**Implemented:** general agent loop with gated skill routing, subagent fan-out, Postgres context + recall, persona-on memory, RAG, delegation, scheduling, HTTP API + SSE, usage budgets, tools, skills, TUI + skins, observability, Docker backend, retries. Production readiness additionally requires the [release gates](docs/plans/PRODUCTION_COMPLETION_PROGRESS.md); a passing unit suite alone is insufficient.
 
 **Baseline (not in hot path):** RL policy trainer output; SoulSpec cross-runs (adapters, not cert); LoCoMo accuracy (needs live LLM budget).
 

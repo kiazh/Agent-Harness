@@ -33,7 +33,7 @@ export const themeCommand: Command = {
 
 async function applySkin(host: FeatureHost, name: string): Promise<void> {
 	setSkin(name);
-	host.banner();
+	host.restyle();
 	try {
 		await host.request("config.set", { key: "theme", value: name, persist: true });
 	} catch {

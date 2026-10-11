@@ -71,8 +71,15 @@ class FakeHost implements FeatureHost {
 	onConfig(result: ConfigResult) {
 		this.configured.push(result);
 	}
-	clear() {}
+	cleared = 0;
+	restyled = 0;
+	clear() {
+		this.cleared++;
+	}
 	banner() {}
+	restyle() {
+		this.restyled++;
+	}
 	async exit() {}
 
 	last(): { text: string; kind: NoticeKind } {
@@ -735,6 +742,8 @@ test("/theme switches skin and persists it", async () => {
 		assert.equal(getSkin(), "tokyonight");
 		assert.deepEqual(host.calls.at(-1)!.params, { key: "theme", value: "tokyonight", persist: true });
 		assert.match(host.last().text, /Skin: tokyonight/);
+		assert.equal(host.cleared, 0, "switching skin keeps the transcript");
+		assert.equal(host.restyled, 1);
 		await run("/theme nope", host);
 		assert.match(host.last().text, /Unknown skin/);
 	} finally {

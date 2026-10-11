@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type Component, Container, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { helpText, parseCommand } from "../src/commands.ts";
-import { Footer, formatArgs, ToolCard } from "../src/components.ts";
+import { Footer, formatArgs, Notice, ToolCard, UserMessage } from "../src/components.ts";
 import { SLASH_COMMANDS } from "../src/features/index.ts";
 import type { GatewayEvent } from "../src/protocol.ts";
 import { Transcript } from "../src/transcript.ts";
@@ -395,6 +395,44 @@ test("skins switch palette and art, unknown names throw", async () => {
 	} finally {
 		setSkin(before);
 	}
+});
+
+test("transcript blocks re-skin live without losing content", async () => {
+	const { getSkin, setSkin } = await import("../src/theme.ts");
+	const before = getSkin();
+	try {
+		const note = new Notice("all systems go", "success");
+		const user = new UserMessage("hello");
+		const firstPaint = [...note.render(80), ...user.render(80)];
+		setSkin("tokyonight");
+		note.refreshSkin();
+		user.refreshSkin();
+		const secondPaint = [...note.render(80), ...user.render(80)];
+		assert.deepEqual(
+			secondPaint.map((line) => stripTerminalSequences(line)),
+			firstPaint.map((line) => stripTerminalSequences(line)),
+			"text survives the skin switch",
+		);
+		const before = note.render(80).map((line) => stripTerminalSequences(line));
+		note.refreshSkin();
+		assert.deepEqual(
+			note.render(80).map((line) => stripTerminalSequences(line)),
+			before,
+			"re-styling is idempotent (no doubled markers)",
+		);
+	} finally {
+		setSkin(before);
+	}
+});
+
+test("transcript restyle keeps every block", async () => {
+	const container = new Container();
+	const transcript = new Transcript(container, new FakeSpinner());
+	transcript.addUser("hello");
+	transcript.addNotice("working", "plain");
+	const count = container.children.length;
+	transcript.restyle();
+	assert.equal(container.children.length, count, "restyle drops nothing");
 });
 
 test("every skin keeps its accent roles distinct", async () => {
