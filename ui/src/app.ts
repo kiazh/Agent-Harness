@@ -236,6 +236,7 @@ export class App implements FeatureHost {
 	}
 
 	updateSession(session: SessionInfo): void {
+		if (session.id !== this.current?.id) this.footer.dispose();
 		this.current = session;
 		this.tui.requestRender();
 	}
@@ -270,7 +271,7 @@ export class App implements FeatureHost {
 		return `harness-${this.currentProfile}`;
 	}
 
-	private openDialog<T>(create: (close: (value?: T) => void) => Component): Promise<T | undefined> {
+	private openDialog<T>(create: (close: (value?: T) => void) => Component, marginBottom = 5): Promise<T | undefined> {
 		if (this.exiting) return Promise.resolve(undefined);
 		return new Promise((done) => {
 			let settled = false;
@@ -290,7 +291,7 @@ export class App implements FeatureHost {
 				width: "100%",
 				maxHeight: "70%",
 				anchor: "bottom-center",
-				margin: { bottom: 5 },
+				margin: { bottom: marginBottom },
 			});
 			const dialog = { handle, cancel: () => close() };
 			this.dialogs.push(dialog);
@@ -329,6 +330,7 @@ export class App implements FeatureHost {
 	async exit(): Promise<void> {
 		if (this.exiting) return;
 		this.exiting = true;
+		this.footer.dispose();
 		for (const dialog of [...this.dialogs].reverse()) dialog.cancel();
 		this.inputListenerDisposer?.();
 		this.tui.stop();
@@ -339,6 +341,23 @@ export class App implements FeatureHost {
 	// ─── input ────────────────────────────────────────────────────────────
 	private onKey(data: string): { consume: boolean } | undefined {
 		if (this.dialogs.length) return undefined; // dialogs own their cancellation keys
+
+		const questionKey = matchesKey(data, Key.question) || matchesKey(data, Key.shift("?")) || matchesKey(data, Key.shift("/"));
+		if (matchesKey(data, Key.f1) || (questionKey && !this.editor.getText() && !this.editor.isShowingAutocomplete())) {
+			void this.openDialog((close) => new Picker("Keyboard shortcuts", [
+				{ value: "send", label: "Enter — send", description: "Send a message or run a command" },
+				{ value: "newline", label: "Shift+Enter — new line" },
+				{ value: "stop", label: "Esc — stop reply", description: "Twice on empty input edits the last prompt" },
+				{ value: "cancel", label: "Ctrl+C — stop / clear / exit", description: "Stop a reply, clear a draft, or exit when empty" },
+				{ value: "exit", label: "Ctrl+D — exit", description: "When input is empty and idle" },
+				{ value: "clear", label: "Ctrl+L — clear chat", description: "When idle" },
+				{ value: "complete", label: "Tab — complete", description: "Commands and arguments" },
+				{ value: "help", label: "? / F1 — shortcuts", description: "? on empty input, F1 with a draft" },
+				{ value: "commands", label: "/help — all commands", description: "/growth shows learning details" },
+				{ value: "learning", label: "□ / ▪ — learning saved", description: "A brief pulse acknowledges saved evidence" },
+			], () => close(), () => close(), Math.max(1, Math.min(8, Math.floor((this.tui.terminal.rows ?? 24) * 0.7) - 3)), "↑↓ browse · enter/esc close"), 2);
+			return { consume: true };
+		}
 
 		if (matchesKey(data, Key.ctrl("c"))) {
 			if (this.running) this.cancel();
@@ -499,14 +518,13 @@ export class App implements FeatureHost {
 
 	// ─── gateway ────────────────────────────────────────────────────────────
 	private onEvent(event: GatewayEvent): void {
+		if (this.exiting) return;
 		if (event.type === "growth.status") {
 			// Background training lands after the turn retires (and the
 			// in-flight entry clears), so it bypasses turn tracking. Shown
 			// only for the current session; never steals focus.
 			if (event.sessionId !== this.current?.id) return;
-			const detail = event.detail ? `: ${event.detail}` : "";
-			this.transcript.addNotice(`Growth updated${detail}.`, "plain");
-			this.tui.requestRender();
+			this.footer.pulseGrowth(() => this.tui.requestRender());
 			return;
 		}
 		// A turn's events may arrive after the user switched sessions, so match
@@ -628,6 +646,7 @@ export class App implements FeatureHost {
 
 	private onGatewayExit(code: number | null, stderr: string[]): void {
 		if (this.exiting) return;
+		this.footer.dispose();
 		// Clear all in-flight tracking so the session isn't permanently locked.
 		for (const sessionId of [...this.inFlight]) {
 			this.clearInFlight(sessionId);

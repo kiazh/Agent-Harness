@@ -399,8 +399,8 @@ test("error event keeps in-flight until completion (AH-032)", async () => {
 	await app.exit();
 });
 
-test("growth.status renders after the turn retires (no in-flight needed)", async () => {
-	const { app, client } = makeApp(SESSION_A);
+test("growth.status quietly pulses the footer after retirement without transcript notices", async () => {
+	const { app, client, tui } = makeApp(SESSION_A);
 	await app.start();
 	const internal = app as unknown as {
 		transcript: { addNotice(text: string, kind?: unknown): void };
@@ -411,11 +411,14 @@ test("growth.status renders after the turn retires (no in-flight needed)", async
 		notices.push([text, kind]);
 		orig(text, kind);
 	};
-	// No turn is in flight: the notice must still land (current session).
+	const footer = widgetWith(tui, "tokens");
+	const before = footer.render(80).join("\n");
+	// No turn is in flight: background evidence still receives a quiet pulse.
 	client.emit(ev({ type: "growth.status", stage: "consolidation_done", detail: "3 new memories" }));
-	assert.equal(notices.length, 1);
-	assert.match(notices[0]![0], /Growth updated: 3 new memories/);
-	assert.equal(notices[0]![1], "plain");
+	assert.equal(notices.length, 0);
+	assert.notEqual(footer.render(80).join("\n"), before);
+	for (let index = 0; index < 20; index++) client.emit(ev({ type: "growth.status", stage: "rsi_updated" }));
+	assert.equal(notices.length, 0);
 	// Another session's training never interrupts this transcript.
 	client.emit({
 		sessionId: SESSION_B.id,
@@ -424,7 +427,7 @@ test("growth.status renders after the turn retires (no in-flight needed)", async
 		stage: "consolidation_done",
 		detail: "1 new memory",
 	});
-	assert.equal(notices.length, 1);
+	assert.equal(notices.length, 0);
 	await app.exit();
 });
 

@@ -227,6 +227,47 @@ export class Footer implements Component {
 	model = "";
 	tokens = 0;
 	status: "ready" | "working" | "offline" = "ready";
+	reducedMotion = /^(1|true)$/i.test(process.env.AH_UI_REDUCED_MOTION ?? "");
+	private growthFrame = -1;
+	private lastGrowthPulse = -Infinity;
+	private growthTimer: NodeJS.Timeout | undefined;
+	private static readonly GROWTH_FRAMES = ["▪", "■", "▣", "▪"];
+
+	/** A bounded acknowledgment; frequent evidence never restarts or queues it. */
+	pulseGrowth(requestRender: () => void): boolean {
+		const now = Date.now();
+		if (this.status === "offline" || now - this.lastGrowthPulse < 30_000) return false;
+		this.lastGrowthPulse = now;
+		this.growthFrame = 0;
+		requestRender();
+		if (this.reducedMotion) {
+			this.growthTimer = setTimeout(() => {
+				this.stopGrowth();
+				requestRender();
+			}, 800);
+		} else {
+			this.growthTimer = setInterval(() => {
+				this.growthFrame++;
+				if (this.growthFrame >= Footer.GROWTH_FRAMES.length) this.stopGrowth();
+				requestRender();
+			}, 200);
+		}
+		this.growthTimer.unref();
+		return true;
+	}
+
+	private stopGrowth(): void {
+		clearTimeout(this.growthTimer);
+		clearInterval(this.growthTimer);
+		this.growthTimer = undefined;
+		this.growthFrame = -1;
+	}
+
+	/** Retire motion when the app exits, disconnects or changes visible session. */
+	dispose(): void {
+		this.stopGrowth();
+		this.lastGrowthPulse = -Infinity;
+	}
 
 	render(width: number): string[] {
 		const sep = theme.dim(" · ");
@@ -238,8 +279,12 @@ export class Footer implements Component {
 		if (this.status === "working") segments.push(theme.accent("● working"));
 		else if (this.status === "offline") segments.push(theme.error("● offline"));
 		const statusLine = truncateToWidth(segments.join(sep), width);
-		const hints = truncateToWidth(theme.dim("? for shortcuts · / for commands"), width);
-		return [statusLine, hints];
+		const hints = width > 2 ? truncateToWidth(theme.dim("? for shortcuts · F1 help · / for commands"), width - 2) : "";
+		const square = this.growthFrame < 0
+			? theme.dim("□")
+			: theme.accent(this.reducedMotion ? "▪" : Footer.GROWTH_FRAMES[this.growthFrame]!);
+		const bottom = hints + " ".repeat(Math.max(0, width - visibleWidth(hints) - 1)) + square;
+		return [statusLine, truncateToWidth(bottom, width)];
 	}
 
 	invalidate(): void {}
@@ -401,10 +446,12 @@ export class ComposerBox extends Box {
 export class Picker implements Component {
 	private readonly title: string;
 	private readonly list: SelectList;
+	private readonly hint: string;
 
-	constructor(title: string, items: SelectItem[], onSelect: (item: SelectItem) => void, onCancel: () => void) {
+	constructor(title: string, items: SelectItem[], onSelect: (item: SelectItem) => void, onCancel: () => void, visibleRows = 10, hint = "enter select · esc back") {
 		this.title = title;
-		this.list = new SelectList(items, 10, selectListTheme);
+		this.hint = hint;
+		this.list = new SelectList(items, visibleRows, selectListTheme);
 		this.list.onSelect = onSelect;
 		this.list.onCancel = onCancel;
 	}
@@ -418,7 +465,7 @@ export class Picker implements Component {
 		const pad = (line: string): string =>
 			`${line}${" ".repeat(Math.max(0, content - visibleWidth(line)))}`;
 		const title = truncateToWidth(theme.dim(this.title), content);
-		const hint = truncateToWidth(theme.dim("enter select · esc back"), content);
+		const hint = truncateToWidth(theme.dim(this.hint), content);
 		const rows = this.list.render(content).map((line) =>
 			isSelectionRow(line) ? selectionBar(line, content) : pad(line),
 		);

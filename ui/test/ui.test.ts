@@ -30,6 +30,57 @@ function plain(component: Component, width = 60): string {
 		.join("\n");
 }
 
+test("learning square stays at the right edge, pulses briefly and coalesces frequent updates", (t) => {
+	t.mock.timers.enable({ apis: ["Date", "setInterval", "setTimeout"], now: 1000 });
+	const footer = new Footer();
+	footer.reducedMotion = false;
+	let renders = 0;
+	const render = () => renders++;
+	t.after(() => footer.dispose());
+	const idle = plain(footer, 80);
+	assert.match(idle, /□$/);
+	assert.equal(footer.pulseGrowth(render), true);
+	const initial = plain(footer, 80);
+	assert.notEqual(initial, idle);
+	t.mock.timers.tick(200);
+	const advanced = plain(footer, 80);
+	assert.notEqual(advanced, initial);
+	assert.equal(footer.pulseGrowth(render), false);
+	assert.equal(plain(footer, 80), advanced, "a burst never restarts the animation");
+	for (const width of [1, 2, 20, 40, 80, 120]) {
+		const lines = footer.render(width);
+		assert.equal(lines.length, 2);
+		assert.equal(visibleWidth(lines[1]!), width);
+		assert.match(stripTerminalSequences(lines[1]!), /[□▪■▣]$/);
+		assert.ok(lines.every(line => visibleWidth(line) <= width));
+	}
+	t.mock.timers.tick(1000);
+	assert.equal(plain(footer, 80), idle);
+	const settled = renders;
+	t.mock.timers.tick(20000);
+	assert.equal(renders, settled, "no background rendering while idle");
+	assert.equal(footer.pulseGrowth(render), false);
+	t.mock.timers.tick(10000);
+	assert.equal(footer.pulseGrowth(render), true);
+	footer.dispose();
+	const stopped = renders;
+	t.mock.timers.tick(2000);
+	assert.equal(renders, stopped);
+});
+
+test("reduced motion keeps learning feedback static and clears it without animation", (t) => {
+	t.mock.timers.enable({ apis: ["Date", "setInterval", "setTimeout"], now: 1000 });
+	const footer = new Footer();
+	footer.reducedMotion = true;
+	t.after(() => footer.dispose());
+	footer.pulseGrowth(() => {});
+	const initial = plain(footer, 40);
+	t.mock.timers.tick(400);
+	assert.equal(plain(footer, 40), initial);
+	t.mock.timers.tick(1000);
+	assert.match(plain(footer, 40), /□$/);
+});
+
 test("parseCommand recognizes commands, aliases and plain prompts", () => {
 	assert.deepEqual(parseCommand("/new  My title "), { name: "new", args: "My title" });
 	assert.deepEqual(parseCommand("/quit"), { name: "exit", args: "" });

@@ -36,6 +36,61 @@ async function boot(columns = 80, rows = 24) {
 	return { app, tui, type, requests };
 }
 
+test("? opens shortcuts on an empty composer and Esc restores input", async (t) => {
+	const { app, tui, type, requests } = await boot();
+	t.after(() => app.exit());
+	type("?");
+	tui.renderNow(true);
+	const screen = tui.getScreenLines().map(stripTerminalSequences).join("\n");
+	assert.match(screen, /Keyboard shortcuts/);
+	assert.match(screen, /Shift\+Enter/);
+	assert.doesNotMatch(screen, /Ask AgentHarness to do anything\?/);
+	type("\x1b");
+	tui.renderNow(true);
+	assert.doesNotMatch(tui.getScreenLines().map(stripTerminalSequences).join("\n"), /Keyboard shortcuts/);
+	type("Is this working?");
+	type("\r");
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(requests.filter(method => method === "prompt.submit").length, 1);
+});
+
+test("F1 opens shortcuts without erasing a draft and ? stays text inside forms", async (t) => {
+	const { app, tui, type } = await boot();
+	t.after(() => app.exit());
+	type("A question?");
+	type("\x1bOP");
+	tui.renderNow(true);
+	assert.match(tui.getScreenLines().map(stripTerminalSequences).join("\n"), /Keyboard shortcuts/);
+	type("\x1b");
+	tui.renderNow(true);
+	assert.match(tui.getScreenLines().map(stripTerminalSequences).join("\n"), /A question\?/);
+	const form = app.askText({ title: "Persona", initial: "Warm" });
+	type("?");
+	type("\r");
+	assert.equal(await form, "Warm?");
+});
+
+for (const key of ["\x1b[63u", "\x1b[63;2u", "\x1b[47;2u"]) {
+	test(`question key ${JSON.stringify(key)} opens shortcuts with enhanced keyboard protocols`, async (t) => {
+		const { app, tui, type } = await boot();
+		t.after(() => app.exit());
+		type(key);
+		tui.renderNow(true);
+		assert.match(tui.getScreenLines().map(stripTerminalSequences).join("\n"), /Keyboard shortcuts/);
+	});
+}
+
+test("shortcuts keep their close controls visible in a small terminal", async (t) => {
+	const { app, tui, type } = await boot(40, 9);
+	t.after(() => app.exit());
+	type("?");
+	tui.renderNow(true);
+	const screen = tui.getScreenLines().map(stripTerminalSequences).join("\n");
+	assert.match(screen, /Keyboard shortcuts/);
+	assert.match(screen, /enter\/esc close/);
+	type("\x1b");
+});
+
 test("closing an interrupting picker restores the text dialog and saves without submitting a prompt", async (t) => {
 	const { app, tui, type, requests } = await boot();
 	t.after(() => app.exit());

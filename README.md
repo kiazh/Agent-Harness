@@ -138,8 +138,9 @@ Codex-style fullscreen TUI: `>_` brand header, filled borderless composer with a
 - **Streaming Markdown** — token-by-token output in a contrasting card; tool cards (`Running`/`Ran`/`Failed`) with diff coloring (`+` green, `-` red, `@@` info). Notices carry text markers (`✓`/`!`/`✗`) as well as color, so state survives monochrome skins.
 - **Interactive management commands** — bare `/persona`, `/growth`, `/keys`, `/models`, `/theme`, `/sessions` and friends open pickers/forms instead of making you memorize flags. Expert argument forms still work (`/persona --clear`, `/keys set …`).
 - **Persona** — `/persona` opens Add/Reset: Add edits the installation default in a multiline editor (2000 chars, prefilled); Reset confirms yes/no and keeps learned notes. The chat draft is never submitted as a persona.
+- **Quiet learning feedback** — a tiny square at the bottom-right pulses briefly when growth evidence arrives, at most once every 30 seconds. Details stay in `/growth show`; routine updates do not add chat messages.
 - **21 skins** — `/theme` switches live **without clearing the chat** and persists via `config.theme`: default, `codex`, `mono`, `tokyonight`, `catppuccin`, `dracula`, `gruvbox`, `rosepine`, `nord`, `everforest`, `matrix`, `cobalt2`, `ayu`, `nightowl`, `flexoki`, `onedark`, `monokai`, `github`, `solarized`, `kanagawa`, `palenight`.
-- **Keyboard** — Enter send, Shift+Enter newline, Esc stop, Tab complete, Ctrl+C exit, Ctrl+L clear, double-Esc edits last prompt. `/init`, `/review`, `/compact` (=compress), `/clear` for Codex parity.
+- **Keyboard** — `?` on empty input opens shortcuts; F1 opens them while keeping your draft. Arrow keys browse the panel, Enter/Esc close it. Enter sends, Shift+Enter adds a newline, Esc stops, Tab completes, Ctrl+C stops/clears/exits, Ctrl+L clears, and double-Esc edits the last prompt. `/init`, `/review`, `/compact` (=compress), `/clear` for Codex parity.
 
 ### Keys without leaving the UI
 
@@ -332,6 +333,7 @@ Non-secrets in `~/.agent-harness/config.yaml` or `AGENT_HARNESS_<KEY>` env. **Se
 | `SEARXNG_URL` | Self-hosted search | — |
 | `AH_ENV_FILE` | `.env` override path | repo `.env` |
 | `AH_GATEWAY_TOKEN` | Gateway stdio token | random per launch |
+| `AH_UI_REDUCED_MOTION` | `1` or `true` uses a static, brief learning-square acknowledgment | off |
 
 ---
 
@@ -386,7 +388,7 @@ Plus LoCoMo harness (`ah/research/locomo.py`), identity eval (`identity_eval.py`
 Verified checkout snapshot, 2026-10-11 (dedicated test database and synthetic providers):
 
 - **Python:** **2092 passed, 5 skipped**, including **43 RSI tests**. DB-gated suites skip without `AGENT_HARNESS_TEST_DATABASE_URL`.
-- **UI:** **138 passed, 5 environment-gated skips** in `npm --prefix ui run check`; typecheck and eslint passed. Real Node/Python gateway restart, history and restoration checks ran through the backend suite's isolated UI integration test.
+- **UI:** **147 passed, 5 environment-gated skips** in `npm --prefix ui run check`; typecheck and eslint passed. Includes quiet learning feedback, cooldown/cleanup/reduced motion, enhanced `?` key encodings, draft preservation and small-terminal shortcuts. Real Node/Python gateway restart, history and restoration checks ran through the backend suite's isolated UI integration test.
 - **RSI verification:** touched-file Ruff check/format passed; Bandit found no issues in the RSI/growth modules; `git diff --check` passed. No live-provider requests or production DB access. Exact commands, review fixes and clean-HEAD comparison are in the [evidence plan](docs/plans/PERSONA_RSI_PLAN.md).
 - **Concurrency:** advisory-lock usage (agent→session order), atomic job claim, per-session turn locks, parallel in-block tool calls.
 - **Historical workflow trial:** native Postgres approval **~3.6 ms** vs LangGraph **~18.6 ms** (5.1x overhead); native retained. This benchmark does not measure RSI quality or performance.

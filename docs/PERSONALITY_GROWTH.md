@@ -27,6 +27,8 @@ In chat, share a durable preference, for example: “Remember that I prefer shor
 
 Bare `/growth` immediately offers View progress, Give feedback, Teach, Forget and Restore. Teaching collects the kind, name and text interactively. Forget and Restore ask for an explicit decision with cancellation as the default. Argument commands still work. Restoring revision 0 recovers the original retained baseline; restoration creates a new revision.
 
+Routine background updates use a tiny square at the bottom-right, not repeated messages in your chat. It pulses for 800 ms, at most once per 30 seconds, and stays still otherwise. `/growth show` retains the detailed evidence and trial history. `AH_UI_REDUCED_MOTION=1` uses a brief static acknowledgment. `?` on empty composer input or F1 opens shortcuts; F1 preserves a draft, and question marks inside normal text or forms stay text.
+
 `/growth feedback` rates whether the completed approach was useful. The rating informs memory retrieval, the chosen task strategy, actually loaded skills and offered tool ordering. Without an ID it selects the most recent completed, unrated decision in the current session. Each decision accepts one rating. An unfinished, paused or cancelled turn cannot receive feedback. Terminal provider errors and budget/iteration limits can be rated; completion is not assumed to mean task success.
 
 Equivalent CLI commands use the selected session or the last active session:
@@ -41,7 +43,7 @@ ah growth export-policy live-policy.json --session <session-id>
 ah growth import-policy memory-policy.json --session <session-id>
 ```
 
-Gateway methods are `growth.get`, `growth.teach`, `growth.feedback`, `growth.forget`, `growth.installPolicy` and `growth.rollback`, all requiring `sessionId`. They use existing gateway authentication and the same authenticated HTTP `/api/v1/rpc` dispatch. This is agent-scoped persistence in the existing shared local account model, not separate per-user isolation. Use distinct agents for distinct personalities/users.
+Gateway methods are `growth.get`, `growth.teach`, `growth.feedback`, `growth.forget`, `growth.installPolicy` and `growth.rollback`, all requiring `sessionId`. They use existing gateway authentication and the same authenticated HTTP `/rpc` dispatch. This is agent-scoped persistence in the existing shared local account model, not separate per-user isolation. Use distinct agents for distinct personalities/users.
 
 ## What learns
 

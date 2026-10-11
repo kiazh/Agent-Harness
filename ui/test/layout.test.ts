@@ -42,7 +42,7 @@ function mockTerminal(columns: number, rows: number): MockTerminal {
 	};
 }
 
-function boot(columns: number, rows: number, transcriptLines: string[]): { tui: TuiAltScreen; term: MockTerminal } {
+function boot(columns: number, rows: number, transcriptLines: string[]): { tui: TuiAltScreen; term: MockTerminal; footer: Footer } {
 	const term = mockTerminal(columns, rows);
 	const tui = new TuiAltScreen(term);
 	const transcript = new Container();
@@ -55,8 +55,26 @@ function boot(columns: number, rows: number, transcriptLines: string[]): { tui: 
 	tui.setLayoutRoot(createLayout(transcript, composer, footer));
 	tui.start();
 	tui.renderNow(true);
-	return { tui, term };
+	return { tui, term, footer };
 }
+
+test("the learning square stays on the bottom-right without moving transcript or composer", () => {
+	for (const [columns, rows] of [[40, 9], [80, 24], [120, 40]]) {
+		const { tui, footer } = boot(columns!, rows!, ["Keep this conversation still"]);
+		try {
+			const before = plain(tui.getScreenLines());
+			footer.pulseGrowth(() => tui.requestRender());
+			tui.renderNow();
+			const during = plain(tui.getScreenLines());
+			assert.deepEqual(during.slice(0, -1), before.slice(0, -1));
+			assert.match(during.at(-1)!, /▪$/);
+			assert.equal(during.at(-1)!.length, columns);
+		} finally {
+			footer.dispose();
+			tui.stop();
+		}
+	}
+});
 
 function plain(lines: string[]): string[] {
 	return lines.map((line) => stripTerminalSequences(line));

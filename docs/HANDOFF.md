@@ -760,3 +760,47 @@ phases were not implemented by this RSI work. A next maintainer should benchmark
 quality/cost on repeatable scored tasks before changing reward magnitudes,
 promotion thresholds, or routing bounds; preserve the ownership and permission
 boundaries when extending learning to newly integrated capabilities.
+
+## 2026-10-11 — Quiet learning indicator and working shortcut help
+
+The user reported a `Growth updated` message after nearly every operation and
+an inert `?` hint. Routine `growth.status` events now acknowledge saved evidence
+with a tiny square at the bottom-right. It pulses for 800 ms, at most once every
+30 seconds; additional events do not queue or restart it. It adds no transcript
+message, shifts no composer/chat rows, and renders only for the current session.
+Timers stop on app exit, gateway disconnect and visible-session changes.
+`AH_UI_REDUCED_MOTION=1` (or `true`) uses a brief static acknowledgment.
+Detailed progress remains available in `/growth show`.
+
+`?` on an empty composer opens keyboard shortcuts. F1 also opens them while
+preserving a draft; question marks in ordinary drafts and forms remain text.
+The panel uses the existing dialog lifecycle, supports arrow-key browsing and
+Enter/Esc dismissal, and keeps close controls visible at 40×9. Tests cover raw
+input, CSI-u, Kitty shifted-question and shifted-slash encodings. The Footer
+owns motion/cooldown; Picker's optional row count and hint keep existing menus'
+defaults. Implementation is in `ui/src/app.ts` and `ui/src/components.ts`, with
+regressions in `ui/test/{app,dialogs,layout,ui}.test.ts`.
+
+Evidence: initial regressions failed for missing feedback/help behavior; a
+second red run caught two enhanced keyboard encodings and clipped small-window
+controls. Final `npm --prefix ui run check` passed typecheck, **147 tests / 5
+environment-gated skips**, and eslint. Native TuiAltScreen snapshots were
+inspected at 80×24 and 40×9 in codex/mono skins using simulated terminals;
+layout tests also verify 120×40 and exact bottom-right placement without moving
+other rows. Impeccable's scoped detector reported no findings. No operator TTY
+or live provider was used. README, growth guide and gateway protocol describe
+the behavior; the latter two also correct the existing HTTP bridge URL to `/rpc`.
+
+Backend verification initially produced **2091 passed / 5 skipped / 1 failed**:
+Hypothesis reported a timing-only flaky deadline in
+`TestPromptAssemblerProperties.test_assemble_respects_budget` (612 ms against
+200 ms, then 70 ms on replay), with no failed budget assertion. The isolated
+test passed here (**1 passed**) and in a temporary clean-HEAD worktree at
+`592fc67` (**1 passed**); assembler and property-test code are unchanged in this
+patch. The temporary worktree was removed. Full-suite rerun result follows.
+The sequential rerun passed **2092 tests / 5 skipped in 102.22 s**, including
+the real gateway restart checks. Command:
+`AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`.
+`git diff --check` passed. No unrelated deadline setting or production code
+was changed to suppress the initial timing failure. This patch remains
+uncommitted on `main`; no commit, push, deploy or production DB access occurred.
