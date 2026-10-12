@@ -369,9 +369,33 @@ class MCPConnection:
             raise AuthRequired(
                 "HTTP credential profiles are not implemented; authentication is deferred"
             )
+        import httpx2
+
+        async def check_destination(request):
+            destination = urlparse(str(request.url))
+            if (destination.scheme, destination.hostname, destination.port) != (
+                parts.scheme,
+                parts.hostname,
+                parts.port,
+            ):
+                raise ConnectionFailed("MCP transport destination changed")
+            await asyncio.to_thread(
+                _classify_host, destination.hostname or "", local_access=self.config.local_access
+            )
+
         assert self._stack is not None
+        client = await self._stack.enter_async_context(
+            httpx2.AsyncClient(
+                follow_redirects=False,
+                trust_env=False,
+                timeout=httpx2.Timeout(self.config.call_timeout),
+                event_hooks={"request": [check_destination]},
+            )
+        )
         streams = await self._stack.enter_async_context(
-            streamable_http_client(self.config.endpoint, terminate_on_close=True)
+            streamable_http_client(
+                self.config.endpoint, http_client=client, terminate_on_close=True
+            )
         )
         read, write = streams
         self._session = await self._new_session(read, write)

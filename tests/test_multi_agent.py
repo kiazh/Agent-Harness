@@ -32,7 +32,8 @@ async def connected_db():
 
 
 def test_builtin_agents_have_prompts_and_tool_scopes():
-    assert set(BUILTIN_AGENTS) == {"harness", "researcher", "coder"}
+    assert {"harness", "researcher", "coder"} <= set(BUILTIN_AGENTS)
+    assert len([agent for agent in BUILTIN_AGENTS.values() if agent.source == "ecc"]) == 71
     assert "write_file" not in BUILTIN_AGENTS["researcher"].tools
     assert "write_file" in BUILTIN_AGENTS["coder"].tools
     assert BUILTIN_AGENTS["harness"].tools == []  # unrestricted

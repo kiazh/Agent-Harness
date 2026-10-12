@@ -55,14 +55,15 @@ class RuntimeServices:
     def get_connector_service(self) -> ConnectorService:
         """Return this worker's shared inventory without starting connections.
 
-        The inventory is in-memory until connector persistence is implemented.
+        Configuration reloads from installation-local non-secret durable JSON.
         Other applications' MCP connections are outside this runtime's scope.
         Neither runtime startup nor inspection requires the optional MCP SDK.
         """
         if self._connector_service is None:
             from ah.connectors.service import ConnectorService
+            from ah.connectors.store import ConnectorStore
 
-            self._connector_service = ConnectorService()
+            self._connector_service = ConnectorService(store=ConnectorStore())
         return self._connector_service
 
     async def shutdown_connectors(self, timeout: float = 10.0) -> None:

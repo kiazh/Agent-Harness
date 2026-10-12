@@ -138,6 +138,7 @@ def canonical_http_event(data: dict[str, Any], session_id: str, turn_id: str) ->
             name=data["tool"],
             result=data["result"],
             isError=data.get("isError", False),
+            **({"outcome": data["outcome"]} if data.get("outcome") else {}),
         )
     if name == "token_usage":
         return wire_event("usage", session_id, turn_id, tokens=data["tokens"])

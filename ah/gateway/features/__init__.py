@@ -27,7 +27,16 @@ from ah.gateway.features.config import (
     profile_set,
     status,
 )
-from ah.gateway.features.connectors import mcp_list, mcp_status
+from ah.gateway.features.connectors import (
+    mcp_configure,
+    mcp_connect,
+    mcp_disconnect,
+    mcp_list,
+    mcp_preview,
+    mcp_remove,
+    mcp_status,
+    mcp_tools,
+)
 from ah.gateway.features.growth import (
     growth_feedback,
     growth_forget,
@@ -104,6 +113,12 @@ Handler = Callable[["Gateway", dict[str, Any]], Awaitable[dict[str, Any]]]
 METHODS: dict[str, Handler] = {
     "mcp.list": mcp_list,
     "mcp.status": mcp_status,
+    "mcp.configure": mcp_configure,
+    "mcp.remove": mcp_remove,
+    "mcp.preview": mcp_preview,
+    "mcp.connect": mcp_connect,
+    "mcp.disconnect": mcp_disconnect,
+    "mcp.tools": mcp_tools,
     "growth.get": growth_get,
     "growth.teach": growth_teach,
     "growth.feedback": growth_feedback,

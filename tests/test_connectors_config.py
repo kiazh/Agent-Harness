@@ -192,3 +192,10 @@ def test_catalog_name_collision_is_rejected_without_losing_previous_catalog():
     with pytest.raises(ConfigError, match="collision"):
         registry.set_tools("alpha", colliding)
     assert registry.lookup("alpha__original") is not None
+
+
+def test_stdio_accepts_literal_windows_executable_and_absolute_cwd():
+    config = ConnectorConfig(
+        id="windows", command=r"C:\Program Files\Python\python.exe", cwd=r"C:\Projects\Agent"
+    )
+    assert config.validate() is config

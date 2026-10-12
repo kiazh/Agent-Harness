@@ -25,6 +25,9 @@ _SIDE_EFFECT_TOOLS = frozenset(
 # Read-only but non-deterministic / state-dependent: never cached.
 _UNCACHEABLE_TOOLS = frozenset(
     {
+        "mcp_list",
+        "mcp_describe",
+        "mcp_call",
         "recall",
         "harness_status",
         "search_documents",
@@ -244,7 +247,7 @@ class ToolRegistry:
                     f"(max {_MAX_STRING_ARG_CHARS} characters)"
                 )
 
-    async def execute(self, name: str, **kwargs) -> Any:
+    async def execute(self, name: str, /, **kwargs) -> Any:
         """Execute a tool by name with input validation and TTL caching."""
         if name not in self._tools:
             audit_log("tool_execution_error", tool_name=name, error="not_registered")

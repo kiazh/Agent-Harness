@@ -19,7 +19,8 @@
       "name": "string",
       "result": "string",
       "isError": "boolean",
-      "truncated?": "boolean"
+      "truncated?": "boolean",
+      "outcome?": "string"
     },
     "usage": {
       "tokens": "number"

@@ -1,14 +1,12 @@
 """Shared connector operations (management + bounded discovery).
 
-This release covers listing, status, connect/disconnect, and tool
-catalog reads. Executing remote tools through the agent pipeline
-(Phase C: exact broker approval, ownership, durable resume) is deferred
-and documented in docs/plans/MCP_CONNECTORS_PROGRESS.md — there is
-deliberately no `tools.call` here yet.
+Native invocation and exact broker authorization live in execution.py.
+Configuration is human administration; discovery never grants tool consent.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from typing import Any
 
@@ -16,6 +14,7 @@ from ah.connectors.manager import ConnectorManager
 from ah.connectors.models import ConfigError, ConnectionFailed, ConnectionState, ConnectorToolError
 from ah.connectors.policy import classify_tool
 from ah.connectors.registry import ConnectorRegistry
+from ah.connectors.store import ConnectorStore
 
 
 class ConnectorService:
@@ -25,6 +24,7 @@ class ConnectorService:
         self,
         registry: ConnectorRegistry | None = None,
         manager: ConnectorManager | None = None,
+        store: ConnectorStore | None = None,
     ) -> None:
         if registry is not None and manager is not None and manager.registry is not registry:
             raise ConfigError("service and manager must share one connector inventory")
@@ -32,9 +32,62 @@ class ConnectorService:
             manager.registry if manager is not None else ConnectorRegistry()
         )
         self.manager = manager or ConnectorManager(self.registry)
+        self.store = store
+        self._store_generation = -1
+        self._configuration_lock = asyncio.Lock()
+
+    async def refresh(self) -> None:
+        """Reload changed durable config and retire stale worker connections."""
+        if self.store is None:
+            return
+        async with self._configuration_lock:
+            await self._refresh_locked()
+
+    async def _refresh_locked(self) -> None:
+        generation, configs = self.store.load()
+        if generation < self._store_generation:
+            raise ConfigError("connector inventory generation moved backwards")
+        if generation == self._store_generation:
+            return
+        desired = {c.id: c for c in configs}
+        for current in self.registry.list():
+            if desired.get(current.id) != current:
+                await self.manager.disconnect(current.id)
+                self.registry.remove(current.id)
+        for config in configs:
+            if self.registry.get(config.id) is None:
+                stored = self.registry.add(config)
+                stored.revision = config.revision
+        self._store_generation = generation
+
+    async def configure(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """Human installation administration; never starts a connector."""
+        if self.store is None:
+            raise ConfigError("durable connector store is unavailable")
+        config = self.store.validate_input(fields)
+        async with self._configuration_lock:
+            await self._refresh_locked()
+            if self.registry.get(config.id) is not None:
+                await self.manager.disconnect(config.id)
+            self.store.configure(fields)
+            await self._refresh_locked()
+            current = self._config(config.id)
+            return {**current.public_view(), **_state_only(self.manager.status(config.id))}
+
+    async def remove(self, connector_id: str) -> bool:
+        if self.store is None:
+            raise ConfigError("durable connector store is unavailable")
+        async with self._configuration_lock:
+            await self._refresh_locked()
+            if self.registry.get(connector_id) is not None:
+                await self.manager.disconnect(connector_id)
+            removed = self.store.remove(connector_id)
+            await self._refresh_locked()
+            return removed
 
     async def list(self) -> list[dict[str, Any]]:
         """Sanitized inventory with live state; launches nothing."""
+        await self.refresh()
         return [
             {**config.public_view(), **_state_only(self.manager.status(config.id))}
             for config in self.registry.list()
@@ -42,6 +95,7 @@ class ConnectorService:
 
     async def status(self, connector_id: str) -> dict[str, Any]:
         """State of one connector without launching anything."""
+        await self.refresh()
         config = self.registry.get(connector_id)
         if config is None:
             raise ConnectionFailed(f"unknown connector: {connector_id}")
@@ -51,10 +105,12 @@ class ConnectorService:
         self, connector_id: str, secrets: Mapping[str, str] | None = None
     ) -> dict[str, Any]:
         """Connect with bounded retries; disabled servers are refused."""
+        await self.refresh()
         return await self.manager.connect(connector_id, secrets)
 
     async def disconnect(self, connector_id: str) -> dict[str, Any]:
         """Disconnect; reports whether a connection existed."""
+        await self.refresh()
         self._config(connector_id)
         return {"id": connector_id, "disconnected": await self.manager.disconnect(connector_id)}
 
@@ -64,6 +120,7 @@ class ConnectorService:
         Schemas stay server-side until tools_describe: discovery must not
         dump every schema into every consumer.
         """
+        await self.refresh()
         connection = self._live_connection(connector_id)
         tools, truncated = await connection.list_tools()
         stored = self.manager.registry.set_tools(connector_id, tools)
@@ -82,6 +139,7 @@ class ConnectorService:
 
     async def tools_describe(self, name: str) -> dict[str, Any]:
         """Full schema + policy verdict for one namespaced tool."""
+        await self.refresh()
         tool = self.manager.registry.lookup(name)
         if tool is None:
             raise ConnectorToolError(f"unknown tool (discover first): {name}")

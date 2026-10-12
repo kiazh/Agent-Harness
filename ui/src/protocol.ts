@@ -326,3 +326,24 @@ export interface MCPServerView {
  protocol_version?: string | null;
  error?: string | null;
 }
+
+/** Human-managed connector configuration; secret references contain names only. */
+export interface MCPConnectorConfig {
+ id: string;
+ display_name: string;
+ transport: "stdio" | "streamable_http";
+ command?: string;
+ argv?: string[];
+ cwd?: string;
+ endpoint?: string;
+ local_access?: boolean;
+ secret_refs?: string[];
+ tool_allowlist?: string[];
+ trust: "untrusted" | "trusted_read";
+}
+export interface MCPToolView {
+ name: string;
+ remote_name?: string;
+ verdict?: string;
+ description?: string | null;
+}

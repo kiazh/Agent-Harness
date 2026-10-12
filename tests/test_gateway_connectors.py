@@ -117,16 +117,27 @@ async def test_unknown_server_reports_not_found():
     assert response["error"]["code"] == NOT_FOUND
 
 
-async def test_inspection_uses_gateway_auth_and_exposes_no_mutations():
+async def test_management_requires_gateway_auth_and_exposes_no_raw_call():
     runtime, _service = inspection_runtime()
     harness = WireHarness(runtime)
     harness.gateway._auth_token = "fixture-token"
     assert (await harness.call("mcp.list"))["error"]["code"] == UNAUTHORIZED
     assert (await harness.call("mcp.list", {"token": "fixture-token"}))["result"]["servers"]
-    for method in ("mcp.connect", "mcp.disconnect", "mcp.call", "mcp.tools"):
-        assert (await harness.call(method, {"token": "fixture-token"}))["error"][
-            "code"
-        ] == METHOD_NOT_FOUND
+    for method in (
+        "mcp.configure",
+        "mcp.connect",
+        "mcp.preview",
+        "mcp.disconnect",
+        "mcp.tools",
+        "mcp.remove",
+    ):
+        assert (await harness.call(method))["error"]["code"] == UNAUTHORIZED
+    assert (await harness.call("mcp.connect", {"token": "fixture-token"}))["error"][
+        "code"
+    ] == INVALID_PARAMS
+    assert (await harness.call("mcp.call", {"token": "fixture-token"}))["error"][
+        "code"
+    ] == METHOD_NOT_FOUND
 
 
 async def test_gateway_close_does_not_create_unused_connector_service():

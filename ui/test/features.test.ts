@@ -1223,7 +1223,7 @@ test("/mcp lists real harness inventory and reports an honest empty state", asyn
  await run("/mcp", host);
  assert.deepEqual(host.calls, [{method:"mcp.list", params:{}}]);
  assert.match(host.last().text, /No MCP servers registered/);
- assert.equal(host.pickTitles.length, 0);
+ assert.equal(host.pickTitles.length, 1);
  assert.ok(SLASH_COMMANDS.some(command => command.name === "mcp"));
 });
 
@@ -1256,4 +1256,161 @@ test("/mcp status and list inspect without launching; cancel and malformed comma
  await run("/mcp connect docs", host);
  assert.equal(host.calls.length, count);
  assert.match(host.last().text, /Usage:/);
+});
+
+const MCP_DOCS = { id: "docs", display_name: "Docs", enabled: true, transport: "stdio", state: "disconnected", error: null };
+function mcpHost(): FakeHost {
+ const host = new FakeHost();
+ host.responses["mcp.list"] = { servers: [MCP_DOCS] };
+ host.responses["mcp.status"] = { server: MCP_DOCS };
+ host.responses["mcp.preview"] = { digest: "reviewed-digest", proposal: { argv: ["node", "server.js"], cwd: "/workspace", network: [], backend: "subprocess" } };
+ return host;
+}
+test("/mcp adds a stdio server through forms without launching", async () => {
+ const host = mcpHost();
+ host.picks.push("__add__", "stdio");
+ host.textQueue.push("local-docs", "Local docs", "node", '["server.js", "with spaces"]', "", "{}");
+ host.responses["mcp.configure"] = { server: { ...MCP_DOCS, id: "local-docs" } };
+ await run("/mcp", host);
+ assert.deepEqual(host.calls.at(-1), { method: "mcp.configure", params: { config: {
+  id: "local-docs", display_name: "Local docs", transport: "stdio", command: "node", argv: ["server.js", "with spaces"], trust: "untrusted",
+ } } });
+ assert.equal(host.last().kind, "success");
+ assert.ok(host.asked.every(field => !field.secret));
+});
+test("/mcp cancelling an add form never saves configuration", async () => {
+ const host = mcpHost();
+ host.picks.push("__add__", "stdio");
+ host.textQueue.push("docs", undefined);
+ await run("/mcp", host);
+ assert.deepEqual(host.calls.map(call => call.method), ["mcp.list"]);
+});
+test("/mcp connects only after confirmation with the active session", async () => {
+ const host = mcpHost();
+ host.picks.push("docs", "connect", "yes");
+ host.responses["mcp.connect"] = { server: { ...MCP_DOCS, state: "connected" } };
+ await run("/mcp", host);
+ assert.deepEqual(host.calls.at(-1), { method: "mcp.connect", params: { id: "docs", sessionId: SESSION.id, digest: "reviewed-digest" } });
+ assert.match(host.last().text, /connected/);
+});
+test("/mcp denied connection never launches a server", async () => {
+ const host = mcpHost();
+ host.picks.push("docs", "connect", "no");
+ await run("/mcp", host);
+ assert.deepEqual(host.calls.map(call => call.method), ["mcp.list", "mcp.status", "mcp.preview"]);
+ assert.match(host.pickTitles.at(-1)!, /node.*server.js/s);
+ assert.match(host.pickTitles.at(-1)!, /workspace/);
+});
+test("/mcp removal requires confirmation and reports the outcome", async () => {
+ for (const choice of ["no", "yes"]) {
+  const host = mcpHost();
+  host.picks.push("docs", "remove", choice);
+  host.responses["mcp.remove"] = { removed: true };
+  await run("/mcp", host);
+  assert.equal(host.calls.some(call => call.method === "mcp.remove"), choice === "yes");
+  if (choice === "yes") assert.equal(host.last().kind, "success");
+ }
+});
+test("/mcp connection failure reports an error without claiming success", async () => {
+ const host = mcpHost();
+ host.picks.push("docs", "connect", "yes");
+ host.responses["mcp.connect"] = () => { throw new Error("Connection denied by policy"); };
+ await run("/mcp", host);
+ assert.equal(host.last().kind, "error");
+ assert.match(host.last().text, /denied/);
+});
+test("/mcp shows cached tools without connecting and marks truncation", async () => {
+ const host = mcpHost();
+ host.picks.push("docs", "tools");
+ host.responses["mcp.tools"] = { tools: [{ name: "lookup", description: "Look up documentation" }], truncated: true };
+ await run("/mcp", host);
+ assert.deepEqual(host.calls.map(call => call.method), ["mcp.list", "mcp.status", "mcp.tools"]);
+ assert.match(host.last().text, /lookup/);
+ assert.match(host.last().text, /truncated/i);
+});
+test("/mcp advanced configuration rejects secret values", async () => {
+ const host = mcpHost();
+ host.picks.push("__add__", "streamable_http");
+ host.textQueue.push("docs", "Docs", "https://example.com/mcp", '{"headers":{"Authorization":"secret"}}');
+ await run("/mcp", host);
+ assert.equal(host.last().kind, "error");
+ assert.deepEqual(host.calls.map(call => call.method), ["mcp.list"]);
+});
+
+test("/mcp configures HTTP with reference names and allowlist without connecting", async () => {
+ const host = mcpHost();
+ host.picks.push("__add__", "streamable_http");
+ host.textQueue.push("remote", "Remote docs", "https://example.com/mcp", '{"secret_refs":["DOCS_TOKEN"],"tool_allowlist":["lookup"],"local_access":false}');
+ host.responses["mcp.configure"] = { server: { ...MCP_DOCS, id: "remote", transport: "streamable_http" } };
+ await run("/mcp", host);
+ assert.deepEqual(host.calls.at(-1), { method: "mcp.configure", params: { config: { id: "remote", display_name: "Remote docs", transport: "streamable_http", endpoint: "https://example.com/mcp", trust: "untrusted", secret_refs: ["DOCS_TOKEN"], tool_allowlist: ["lookup"], local_access: false } } });
+ assert.deepEqual(host.calls.map(call => call.method), ["mcp.list", "mcp.configure"]);
+});
+test("/mcp disconnects a connected server without starting it", async () => {
+ const host = mcpHost();
+ host.responses["mcp.status"] = { server: { ...MCP_DOCS, state: "connected" } };
+ host.responses["mcp.disconnect"] = { server: MCP_DOCS };
+ host.picks.push("docs", "disconnect");
+ await run("/mcp", host);
+ assert.deepEqual(host.calls.at(-1), { method: "mcp.disconnect", params: { id: "docs" } });
+ assert.match(host.last().text, /disconnected/);
+});
+test("/mcp needs an active session before previewing or connecting", async () => {
+ const host = mcpHost();
+ host.current = undefined;
+ host.picks.push("docs", "connect", "yes");
+ await run("/mcp", host);
+ assert.equal(host.last().kind, "error");
+ assert.match(host.last().text, /No active session/);
+ assert.deepEqual(host.calls.map(call => call.method), ["mcp.list", "mcp.status"]);
+});
+test("/mcp rejected argv and credential endpoints are never configured", async () => {
+ for (const transport of ["stdio", "streamable_http"]) {
+  const host = mcpHost();
+  host.picks.push("__add__", transport);
+  host.textQueue.push("docs", "Docs", ...(transport === "stdio" ? ["node", '["ok", 42]'] : ["https://user:password@example.com/mcp"]));
+  await run("/mcp", host);
+  assert.equal(host.last().kind, "error");
+  assert.deepEqual(host.calls.map(call => call.method), ["mcp.list"]);
+ }
+});
+
+test("/mcp supports trusted_read configuration without granting broader trust", async () => {
+ const host = mcpHost();
+ host.picks.push("__add__", "streamable_http");
+ host.textQueue.push("docs", "Docs", "https://example.com/mcp", '{"trust":"trusted_read"}');
+ host.responses["mcp.configure"] = { server: MCP_DOCS };
+ await run("/mcp", host);
+ assert.equal((host.calls.at(-1)!.params.config as Record<string, unknown>).trust, "trusted_read");
+ assert.equal(host.last().kind, "success");
+});
+test("/mcp cached tools report the policy verdict alongside the tool", async () => {
+ const host = mcpHost();
+ host.picks.push("docs", "tools");
+ host.responses["mcp.tools"] = { tools: [{ name: "docs__lookup", remote_name: "lookup", description: "Read docs", verdict: "allow" }, { name: "docs__write", remote_name: "write", description: "Write docs", verdict: "deny" }], truncated: false };
+ await run("/mcp", host);
+ assert.match(host.last().text, /docs__lookup.*allow/);
+ assert.match(host.last().text, /docs__write.*deny/);
+});
+
+test("/mcp rejects invalid server IDs before saving or collecting further fields", async () => {
+ for (const id of ["Docs", "docs.local", "a".repeat(65), "_docs"]) {
+  const host = mcpHost();
+  host.picks.push("__add__", "stdio");
+  host.textQueue.push(id);
+  await run("/mcp", host);
+  assert.equal(host.last().kind, "error", id);
+  assert.equal(host.asked.length, 1, id);
+  assert.deepEqual(host.calls.map(call => call.method), ["mcp.list"], id);
+ }
+});
+test("/mcp connection confirmation shows the reviewed safe configuration", async () => {
+ const host = mcpHost();
+ host.picks.push("docs", "connect", "no");
+ host.responses["mcp.preview"] = { digest: "config-digest", proposal: { argv: ["node", "server.js"], cwd: "/workspace", network: [], backend: "subprocess", contentPreview: '{"trust":"untrusted","tool_allowlist":["lookup"],"secret_refs":["DOCS_TOKEN"]}' } };
+ await run("/mcp", host);
+ assert.match(host.pickTitles.at(-1)!, /tool_allowlist.*lookup/);
+ assert.match(host.pickTitles.at(-1)!, /secret_refs.*DOCS_TOKEN/);
+ assert.match(host.pickTitles.at(-1)!, /trust.*untrusted/);
+ assert.equal(host.calls.some(call => call.method === "mcp.connect"), false);
 });

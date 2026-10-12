@@ -110,3 +110,21 @@ versions. The TUI uses these methods for `/mcp`, `/mcp list`, and `/mcp status`.
 Inventory is in-memory/default-empty until configuration ingestion/persistence
 ships; OpenCode/Codex inventory is outside this process. Connect/disconnect UI,
 OAuth and agent-loop remote execution are explicitly deferred.
+
+## MCP management and native tool calls (2026-10-12)
+
+This supersedes the earlier read-only phase limitation. Authenticated human
+management methods now include `mcp.configure {config}`, `mcp.remove {id}`,
+`mcp.preview {id,sessionId}`, `mcp.connect {id,sessionId,digest}`,
+`mcp.disconnect {id}` and `mcp.tools {id}`. Configure saves validated,
+reference-only installation-local configuration and never launches. Preview
+returns the exact proposal/digest; connect consumes the human's confirmed
+preview through the broker and rejects changed identities. Connect/disconnect
+return `{server}`; configure returns `{server}`; removal returns `{removed}`;
+tools returns `{tools,truncated}`. Listing/status remain no-launch reads.
+
+No raw `mcp.call` RPC bypass exists. Native `mcp_list`, `mcp_describe` and
+`mcp_call` use the agent pipeline and inherited tool restrictions. `tool.complete`
+adds optional `outcome: "outcome_unknown"` for a dispatched call without a known
+terminal result. Missing outcome preserves legacy behavior; unknown never renders
+as success. OAuth/HTTP credential authentication remains unavailable.

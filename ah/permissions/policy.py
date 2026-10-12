@@ -230,6 +230,7 @@ REVIEW_CAPABILITIES = frozenset(
         "security_settings",
         "destructive_system",
         "opaque_execution_review",
+        "mcp_external_review",
     }
 )
 

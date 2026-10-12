@@ -264,3 +264,47 @@ tests**, zero skipped UI tests). Command:
 with a disposable home/env bootstrap supplied through PYTHONPATH as described in
 the visual review. Standalone UI check: 247 passed / 5 optional skips / 0 failures;
 typecheck and eslint passed. No unresolved failure remains in the recorded checks.
+
+
+## 2026-10-12 — MCP execution and local release candidate
+
+MCP is now usable through `/mcp`: add a stdio or HTTP server, review its launch,
+connect, inspect tools, disconnect or remove. Configurations persist in the
+installation's `~/.agent-harness/mcp.json`; inventory does not start servers.
+The default installation includes the MCP SDK. Native `mcp_list`, `mcp_describe`
+and `mcp_call` tools use the runtime connector service and existing approval
+broker. Untrusted external calls require approval even in full mode; explicitly
+allowed trusted reads retain the configured exception. Changed configuration,
+arguments or schema invalidate the approved action. Launch uses the reviewed
+executable/cwd snapshot; waits are bounded and uncertain dispatched calls are
+reported as `outcome_unknown` without automatic side-effect retries.
+
+Regression coverage includes SDK stdio/HTTP fixtures, elicitation refusal,
+secret redaction, repeated cross-task teardown with no fixture process leaks,
+persistent management through the authenticated gateway, actual agent approval
+pause/resume and timeout/truncation/error handling. Independent review's launch
+race and executable/cwd mismatch were fixed and covered by regressions.
+
+Final isolated backend verification: **2237 passed, 5 skipped, 0 failed**,
+**82.26% coverage**, 127.22 seconds. Standalone UI: **290 passed, 5 gated skips**;
+typecheck/lint passed. The backend's real gateway wrapper runs all **295 UI
+tests with no UI skips**. Ruff check/format passed; Bandit reports **0 medium,
+0 high, 67 low** findings. Lockfile freshness and diff whitespace checks passed.
+Wheel/source builds pass isolated imports, bundled resource hashes and source
+archive cleanliness checks. Only the dedicated `agentharness_test` database
+was used, with disposable HOME/config and cleared live credentials.
+
+Release cleanup preserves the 71 pinned ECC roles and 42 curated skills, adds
+accurate README/changelog/third-party notices and package checks, removes tracked
+backup-environment artifacts and duplicate PR workflow, and excludes installed
+Node dependencies from source archives. The version remains **0.2.0**, a local
+candidate. Nothing was committed, pushed, published or deployed.
+
+Next owner: read [MCP setup](../MCP.md) and
+[release evidence](RELEASE_READINESS.md) before publishing.
+OAuth/HTTP credential profiles, MCP resources/prompts and server callbacks stay
+deferred. Saved configuration is installation-local; live connections are
+worker-local and require reconnect after restart. Run hosted CI/Docker, fresh
+install/platform checks, authorized vendor/staging checks and operational
+backup/rollback gates before claiming production readiness. Existing historical
+counts above are superseded by this entry for the current checkout.

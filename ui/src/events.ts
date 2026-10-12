@@ -5,7 +5,7 @@ export type CanonicalEvent = { protocolVersion: 2; sessionId: string; turnId: st
 	| { type: "message.delta"; text: string }
 	| { type: "message.stopping"; reason: string }
 	| { type: "tool.start"; id: string; name: string; args: Record<string, unknown> }
-	| { type: "tool.complete"; id: string; name: string; result: string; isError: boolean; truncated?: boolean }
+	| { type: "tool.complete"; id: string; name: string; result: string; isError: boolean; truncated?: boolean; outcome?: string }
 	| { type: "usage"; tokens: number }
 	| { type: "growth.status"; stage: string; detail?: string }
 	| { type: "message.complete"; text: string; tokens: number; iterations: number; toolCalls: number; cancelled: boolean; needsApproval?: Record<string, unknown>[] }
@@ -22,7 +22,7 @@ export type LegacyGatewayEvent = { protocolVersion?: 1; sessionId: string; turnI
 	| { type: "message.delta"; text: string }
 	| { type: "message.stopping"; reason: string }
 	| { type: "tool.start"; id: string; name: string; args: Record<string, unknown> }
-	| { type: "tool.complete"; id: string; name: string; result: string; isError: boolean; truncated?: boolean }
+	| { type: "tool.complete"; id: string; name: string; result: string; isError: boolean; truncated?: boolean; outcome?: string }
 	| { type: "usage"; tokens: number }
 	| { type: "growth.status"; stage: string; detail?: string }
 	| { type: "message.complete"; text: string; tokens: number; iterations: number; toolCalls: number; cancelled: boolean; needsApproval?: Record<string, unknown>[] }

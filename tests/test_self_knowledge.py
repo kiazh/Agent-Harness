@@ -200,7 +200,7 @@ async def test_status_tool_is_read_only_owned_and_redacted(monkeypatch):
     from ah.permissions.tools import action_for_tool
 
     assert action_for_tool("harness_status", {})["operation"] == "context.read"
-    assert payload["features"]["mcp"].startswith("Read-only"), (
+    assert "mcp_call" in payload["features"]["mcp"], (
         "discovery is not remote tool exposure"
     )
 
@@ -326,7 +326,7 @@ async def test_live_agent_inspects_own_state_without_approval_or_truncated_evide
         assert payload["session"]["agent_id"] == owner
         assert payload["learning"]["notes"] == {"style:tone": "Speak plainly"}
         assert payload["learning"]["rsi"]["revision"] > 0
-        assert payload["features"]["mcp"].startswith("Read-only")
+        assert "mcp_call" in payload["features"]["mcp"]
     finally:
         await session_manager.delete(session.id)
         await db_pool.execute("DELETE FROM agent_growth WHERE agent_id = $1", owner)

@@ -21,7 +21,7 @@ FEATURES = {
     "skills": "Relevant bundled workflows activate automatically with bounded context; skill tools discover/read more when offered. Skills do not grant permissions.",
     "execution": "Offered tools define this agent's access. Delegation inherits authority; jobs schedule runs; sessions, context compaction and usage budgets are supported.",
     "controls": "TUI /persona, /growth, /profile, /sessions, /models, /provider, /jobs, /usage and /mode manage the respective features; these are UI commands, not model tools.",
-    "mcp": "Read-only TUI /mcp inspects worker inventory/status; durable setup, OAuth and agent-loop remote tool dispatch remain deferred.",
+    "mcp": "TUI /mcp saves server configuration and explicitly connects/disconnects. mcp_list/mcp_describe disclose connected catalogs lazily; mcp_call runs through exact broker approval (or configured trusted-read). OAuth remains unavailable.",
 }
 
 

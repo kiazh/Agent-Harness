@@ -143,7 +143,7 @@ export class Transcript {
 			const card = this.tools.get(event.id);
 			card?.settle(
 				{ text: event.result, backendTruncated: event.truncated ?? false, locallyTruncated: false },
-				event.isError ? "error" : "success",
+				event.outcome === "outcome_unknown" ? "outcome_unknown" : event.isError ? "error" : "success",
 			);
 			this.toolSubs.get(event.id)?.stop();
 			this.toolSubs.delete(event.id);

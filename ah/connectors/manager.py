@@ -21,6 +21,7 @@ from ah.connectors.models import (
     ConfigError,
     ConnectionFailed,
     ConnectionState,
+    ConnectorConfig,
 )
 from ah.connectors.registry import ConnectorRegistry
 
@@ -69,7 +70,11 @@ class ConnectorManager:
         self._open_until.pop(connector_id, None)
 
     async def connect(
-        self, connector_id: str, secrets: Mapping[str, str] | None = None
+        self,
+        connector_id: str,
+        secrets: Mapping[str, str] | None = None,
+        *,
+        launch_config: ConnectorConfig | None = None,
     ) -> dict[str, Any]:
         """Connect (idempotent); bounded retries on transient failures."""
         config = self.registry.get(connector_id)
@@ -83,13 +88,14 @@ class ConnectorManager:
                 existing is not None
                 and existing.state == ConnectionState.CONNECTED
                 and existing.config.revision == config.revision
+                and (launch_config is None or existing.config == launch_config)
             ):
                 return self._info(connector_id, existing)
             if self._circuit_open(connector_id):
                 raise ConnectionFailed("circuit open after repeated failures; try again later")
             if existing is not None:
                 await existing.disconnect()
-            connection = self._factory(config)
+            connection = self._factory(launch_config or config)
             self._connections[connector_id] = connection
             attempts = 1 + max(0, config.max_retries)
             last_error: Exception | None = None

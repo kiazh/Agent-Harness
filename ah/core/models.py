@@ -117,6 +117,7 @@ class StreamEvent:
     # completions arrive out of order. Provider tc["id"] when present,
     # else f"call-{index}".
     tool_call_id: str = ""
+    tool_outcome: str = ""
 
 
 @dataclass

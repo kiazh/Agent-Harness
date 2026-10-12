@@ -54,3 +54,12 @@ Thumbs.db
 
 # Project specific
 *.log
+
+# Exclude local state, credentials and dependency caches from build context
+.venv.*/
+.env.*
+!.env.example
+ui/node_modules/
+.ruff_cache/
+.skill-hub/
+coverage.xml

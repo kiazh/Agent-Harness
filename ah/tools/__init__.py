@@ -8,6 +8,7 @@ from ah.tools import (
     builtins,  # noqa: F401 — web_search, web_extract, search_files
     file,  # noqa: F401 — read_file, write_file, list_files
     harness,  # noqa: F401 — read-only feature/configuration/learning inspection
+    mcp,  # noqa: F401 — lazy connector catalogs and exact remote calls
     memory,  # noqa: F401 — remember, recall
     rag,  # noqa: F401 — index_document, search_documents
     session_recall,  # noqa: F401 — transcript recall

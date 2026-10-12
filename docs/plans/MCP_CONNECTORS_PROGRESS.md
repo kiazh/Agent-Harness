@@ -1,5 +1,11 @@
 # MCP connector progress and successor notes
 
+**Current phase (2026-10-12):** saved local configuration, interactive management
+and broker-bound native calls are implemented. See [MCP setup](../MCP.md) and
+[current release evidence](../verification/RELEASE_READINESS.md). Earlier sections
+below record the historical read-only/library phase; its deferrals are superseded
+only where the final integration section explicitly says so.
+
 Verified on 2026-10-11 in `/Users/shadow/Agent-Harness1`. This is a verified
 connector **library plus read-only inspection phase**, not completed agent-loop integration.
 Read [MCP_CONNECTORS_PLAN.md](MCP_CONNECTORS_PLAN.md) for the remaining contracts.
@@ -229,3 +235,34 @@ New tests cover actual stdio gateway RPC, lazy inspection/auth/input validation,
 shared sanitized views, real SDK connected→disconnected state and PID retirement,
 owned/borrowed lifecycle, UI command dispatch and real-gateway empty inspection.
 Final aggregate evidence is in TUI_OVERHAUL_REVIEW.md and the release review.
+
+## 2026-10-12 — integrated native tool and management phase
+
+This section supersedes the earlier deferred configuration/tool-dispatch rows.
+MCP is now a default dependency. Human gateway/TUI management configures saved
+servers, previews exact launch, explicitly connects, inspects tools, disconnects
+and removes. Configuration persists atomically in installation-local `mcp.json`
+with revisions/generations and worker invalidation; this is a deliberate local
+configuration alternative to the originally planned PostgreSQL connector table.
+Connection health remains worker-local, and restart never auto-launches.
+
+`mcp_list` pages catalogs; `mcp_describe` loads individual schemas; `mcp_call`
+uses the actual agent broker/registry pipeline. Complete config/schema/argument
+identity binds approval, stale review refuses dispatch, unknown tools require
+exact consent in every mode, explicit trusted-read allowlists are supported,
+and parent tool/mode restrictions remain authoritative. Host stdio is refused
+in sandbox mode. Typed uncertain outcomes travel through gateway/HTTP/TUI.
+The existing exact HTTP continuation path rebuilds current connector bindings.
+
+Review fixes include immutable approved launch snapshots, cwd/executable identity,
+venv launcher preservation and bounded concurrency/configuration waits. HTTP
+redirect/proxy inheritance is disabled and destinations are rechecked. Actual
+SDK fixture agent calls cover approval pause/resume, errors, truncation, timeout
+uncertainty and elicitation refusal. Setup and limitations: [MCP.md](../MCP.md).
+Final verification is recorded in [release readiness](../verification/RELEASE_READINESS.md).
+
+Still deferred: OAuth and HTTP credential-profile auth, remote resources/prompts,
+subscriptions, automatic executable installation, complete DNS-rebinding/body
+allocation protections, and verified third-party/live-provider integrations.
+The implementation is not an MCP server and does not expose external apps'
+connection inventories.

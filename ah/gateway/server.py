@@ -931,6 +931,7 @@ class Gateway:
                         result=result[:MAX_TOOL_RESULT_CHARS],
                         truncated=truncated,
                         isError=result.startswith("Error:"),
+                        **({"outcome": event.tool_outcome} if event.tool_outcome else {}),
                     )
                 elif event.type == "token_usage":
                     tokens += event.tokens_used

@@ -14,6 +14,13 @@ import json
 def action_for_tool(name: str, args: dict) -> dict:
     """Return broker kwargs for tool *name* with *args* (operation/targets/...)."""
     args = args or {}
+    if name == "mcp_call":
+        from ah.connectors.execution import call_spec
+        from ah.core.runtime import runtime_services
+
+        return call_spec(runtime_services.get_connector_service(), args)
+    if name in ("mcp_list", "mcp_describe"):
+        return {"operation": "context.read", "targets": []}
     if name in ("read_file",):
         return {"operation": "file.read", "targets": [str(args.get("path", ""))]}
     if name in ("write_file",):

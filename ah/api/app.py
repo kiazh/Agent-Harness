@@ -1304,6 +1304,8 @@ def _serialize_event(
     elif event.type == "tool_result":
         data["tool"] = event.tool_name
         data["result"] = redact_secrets(event.tool_result).text
+        if event.tool_outcome:
+            data["outcome"] = event.tool_outcome
         if getattr(event, "tool_call_id", ""):
             data["id"] = event.tool_call_id
     elif event.type == "token_usage":

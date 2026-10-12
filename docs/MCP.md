@@ -1,0 +1,35 @@
+# Using MCP servers
+
+MCP support is part of the default backend installation. Restart/reinstall after updating so the pinned SDK dependency and new TUI commands are available.
+
+1. Open `/mcp`, choose **Add MCP server**, and select local stdio or HTTP.
+2. Give it a lowercase ID (up to 64 characters), display name and launch fields.
+3. For stdio, enter the executable and arguments separately, for example `node` and `["/absolute/path/to/server.js"]`. The executable/server must already be installed; the harness does not download it. Choose its working directory, or use the configured workspace.
+4. Optional advanced JSON supports `secret_refs`, `tool_allowlist`, `trust` and `local_access`. Leave `trust` as `untrusted` until you have independently verified specific read-only tools. Private HTTP destinations require `local_access: true`; metadata destinations are always refused.
+5. Select the saved server, choose **Connect**, review the complete preview and confirm. This launches the selected process or contacts the endpoint and discovers its tools. Inspection alone never launches anything.
+6. Ask the agent to use the connected server. It pages `mcp_list`, reads a selected `mcp_describe`, and calls `mcp_call` with `{name: "server__tool", arguments: {...}}`. Pending tool approvals use the ordinary approval controls.
+7. Use **Disconnect** to retire a connection, **View tools** to refresh discovery, or **Remove** to retire and delete its saved configuration.
+
+Provider secrets remain in the existing environment/mounted/Vault/AWS secret boundary. `secret_refs: ["MY_MCP_TOKEN"]` resolves that named secret at launch and passes it to the stdio server. Never put tokens in command arguments, endpoints or configuration JSON. Missing references refuse launch. Errors and server output redact known launch secret values.
+
+## Authority and lifecycle
+
+Human management RPC methods are `mcp.configure`, `mcp.remove`, `mcp.preview`, `mcp.connect`, `mcp.disconnect` and `mcp.tools`; existing `mcp.list` and `mcp.status` remain read-only. `mcp.connect` takes the current session and the digest returned by `mcp.preview`. The human confirmation is recorded/claimed through the existing broker. Configuration is not a model tool, and server callbacks cannot launch another connector or approve a tool.
+
+Native calls bind the complete non-secret configuration/revision, resolved executable identity, schema, remote name and canonical arguments to the broker digest. The existing session/mode/backend and parent tool restrictions also apply. Explicit host configuration may grant narrowly allowlisted trusted reads; server annotations cannot. Altered configurations/schemas/arguments, missing connections, disabled servers and owner mismatches refuse dispatch.
+
+Configurations are installation-local JSON in `~/.agent-harness/mcp.json`, mode 0600, with advisory locks, atomic replacement and monotonic generations/revisions. This deliberately follows existing local configuration instead of adding the originally planned PostgreSQL connector table. Health and transports are worker-local. Inspection reloads configuration without launching; mutations retire stale transports. Workers on different homes have different inventories. Administrator manual changes must advance generation/revision; rollback of a loaded generation fails closed.
+
+Connections do not autostart after worker restart. Reconnect through the menu. A new worker cannot use another worker's connected process. SDK contexts are entered and retired by one owning task; callers may disconnect from other tasks. A shutdown timeout retains cleanup tracking and refuses replacement rather than pretending retirement succeeded.
+
+Calls have a total deadline including concurrency wait. Waiting without dispatch is a known failure; a dispatched timeout/dropped transport is `outcome_unknown`, rendered explicitly in the TUI and retained in typed agent outcomes. No remote call is automatically retried. Connection retries remain bounded and transient-only. Cancellation never proves a remote effect was undone.
+
+## Scope and remaining work
+
+Only the schema subset enforced by `ah/connectors/policy.py` is accepted: typed values, properties/required, arrays, enum/const, numeric/string/item bounds and supported combinators. Unsupported constraints or malformed schemas fail closed rather than being silently ignored.
+
+Supported: stdio and Streamable HTTP, tools, interactive configuration/connect/disconnect/removal, durable local configuration, broker-bound native tool calls and existing exact HTTP approval continuation machinery.
+
+Not supported: OAuth login, HTTP credential-profile authentication, legacy SSE, remote resources/prompts, catalog subscriptions, server-initiated model/filesystem callbacks, automatic executable installation, shared-process connections or complete transport-level DNS-rebinding defenses. Stdio is host execution and is refused in sandbox mode. HTTP disables redirects and inherited proxies and rechecks destinations; normalized result caps do not bound every SDK receive allocation.
+
+SDK fixture tests prove transport and harness pipeline behavior. No particular external MCP vendor or live-provider quality gain is implied. See [release evidence](verification/RELEASE_READINESS.md) and the historical [connector progress](plans/MCP_CONNECTORS_PROGRESS.md).

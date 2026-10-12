@@ -1,0 +1,829 @@
+{
+  "agents": {
+    "a11y-architect": {
+      "path": "agents/a11y-architect.md",
+      "sha256": "88e684476cbc449a2444a1218a79034d275465f375ce45b6d86ab99958bf45e7",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "agent-evaluator": {
+      "path": "agents/agent-evaluator.md",
+      "sha256": "7ef0739152e7bbc837e9bab4fbae7164f29719a4d1dbdaa1e3b62b4f34358e3c",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "architect": {
+      "path": "agents/architect.md",
+      "sha256": "6b8e1e8bd274995f3949691731f4334820c061d3054eaea3be2ce163386d1f24",
+      "upstream_model": "opus",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "bengali-reviewer": {
+      "path": "agents/bengali-reviewer.md",
+      "sha256": "ad93abe7b04a2606b671fe7a86e3980565a55bee939b4eccedfccfea7107fd5a",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "build-error-resolver": {
+      "path": "agents/build-error-resolver.md",
+      "sha256": "acc9e14df59dd28d00f966b3a6cf0d9aeeda7e8a9ab7f1bc442466c0219c35ec",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "chief-of-staff": {
+      "path": "agents/chief-of-staff.md",
+      "sha256": "d3dca9a474011410256dfcd0cc553f926bd30b4efdaaf6ec41b4f6ec86e88e6f",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash",
+        "Edit",
+        "Write"
+      ]
+    },
+    "code-architect": {
+      "path": "agents/code-architect.md",
+      "sha256": "1a2ce1d231b7427ff863522f6f19e7738cd668279ac60af520aa0c45ac14772b",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "code-explorer": {
+      "path": "agents/code-explorer.md",
+      "sha256": "3dbb33769147f6c7ffb739c550b7b8867e1b8ea84f1179197fdbc3028dc34fb7",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "code-reviewer": {
+      "path": "agents/code-reviewer.md",
+      "sha256": "9dd23be23d65f18126e10f7680fc1eb2576ec54a427d076ff2f870bd0bafd5d2",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "code-simplifier": {
+      "path": "agents/code-simplifier.md",
+      "sha256": "4020b1466f4a635ed33b87a3d734bda45363514defc7d1613b81d5c59e426c6b",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "comment-analyzer": {
+      "path": "agents/comment-analyzer.md",
+      "sha256": "ce7fdf759885ba9ef5ee1bdc9da4ce88d78ba65501facf53e581082fcf402b07",
+      "upstream_model": "haiku",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "commit-reviewer": {
+      "path": "agents/commit-reviewer.md",
+      "sha256": "b6e8bb0a3bab270ef6c53f68f829e5c86f2725c159b790962a6cd2dc648d2a26",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "conversation-analyzer": {
+      "path": "agents/conversation-analyzer.md",
+      "sha256": "f86fcf4317a41158dc55641f606c97a8d4d3ccacf7157ff70e0811ca7b42ba75",
+      "upstream_model": "haiku",
+      "upstream_tools": [
+        "Read",
+        "Grep"
+      ]
+    },
+    "cpp-build-resolver": {
+      "path": "agents/cpp-build-resolver.md",
+      "sha256": "0a06faff0f6be85989a22c79647743d872c3348ca772ee860f048035473c1675",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "cpp-reviewer": {
+      "path": "agents/cpp-reviewer.md",
+      "sha256": "c34ee3291505ea66d4330268babbd9cbc899e32b7869ca71cca1690b4ce3cf22",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "csharp-reviewer": {
+      "path": "agents/csharp-reviewer.md",
+      "sha256": "34652d6a39387d0d008a90804b1b271ae62bba77abaf9537b79bd7705b1724e0",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "dart-build-resolver": {
+      "path": "agents/dart-build-resolver.md",
+      "sha256": "2715aa7b58fae3667493a089afbfa891dfe20d24e555e90ddfdd732d10104d1f",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "database-reviewer": {
+      "path": "agents/database-reviewer.md",
+      "sha256": "945c107dea01ca74e3e9bc3a5841e79e744673e8f14697e88cf1cfd9c01a1cc5",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "django-build-resolver": {
+      "path": "agents/django-build-resolver.md",
+      "sha256": "643f1445336ef801f49cc56a00ad09af3435124ef841f4b023be19ee50662b29",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "django-reviewer": {
+      "path": "agents/django-reviewer.md",
+      "sha256": "d116bccee67db3d1f52f54f819a04467fe7dd2b0004ec85d21f218a6aacf6346",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "doc-updater": {
+      "path": "agents/doc-updater.md",
+      "sha256": "5018d3a0bf740d2263fd4b7a92412d53a62d4be151a71221d6549cacba62d72c",
+      "upstream_model": "haiku",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "docs-lookup": {
+      "path": "agents/docs-lookup.md",
+      "sha256": "11560171e4535419e7917158d0de3bc7bbbf0408f83f61f0f3558b356802419e",
+      "upstream_model": "haiku",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "mcp__context7__resolve-library-id",
+        "mcp__context7__query-docs"
+      ]
+    },
+    "e2e-runner": {
+      "path": "agents/e2e-runner.md",
+      "sha256": "94811f4bbc491c351cdf220ab103d6bd251fb1d88d9d46ba4c8162637a236a5b",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "fastapi-reviewer": {
+      "path": "agents/fastapi-reviewer.md",
+      "sha256": "d8704e52fda045fa72cfc51de7937aa4e313b2161279ff8e11d878f6ab8a0d81",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "flutter-reviewer": {
+      "path": "agents/flutter-reviewer.md",
+      "sha256": "26a78d27db9a035204c9c517314c880a5ea4419500da319acdb643b84d59b0b8",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "fsharp-reviewer": {
+      "path": "agents/fsharp-reviewer.md",
+      "sha256": "24200e4814ddbdb32ed2eeb5b6aecabbb3d655d5ba0de7b2a054638fe12e7c5a",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "gan-evaluator": {
+      "path": "agents/gan-evaluator.md",
+      "sha256": "e5c8e6ab245ce97502472ae5223e529cc3d1c4c84527f4c19bcca3d362513322",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Bash",
+        "Grep",
+        "Glob",
+        "mcp__playwright__browser_navigate",
+        "mcp__playwright__browser_click",
+        "mcp__playwright__browser_take_screenshot",
+        "mcp__playwright__browser_snapshot",
+        "mcp__playwright__browser_type",
+        "mcp__playwright__browser_fill_form",
+        "mcp__playwright__browser_resize",
+        "mcp__playwright__browser_press_key"
+      ]
+    },
+    "gan-generator": {
+      "path": "agents/gan-generator.md",
+      "sha256": "52411e8bb705284ef0be36a86b9df69d7365cda84a2780d5e3c2d64e6019a352",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "gan-planner": {
+      "path": "agents/gan-planner.md",
+      "sha256": "852f8ac7cc1761186ec6f48e1b1be65cc32307a182062e0cebb84aae2d3ca901",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "go-build-resolver": {
+      "path": "agents/go-build-resolver.md",
+      "sha256": "fa191d2a3c66915402b343a8f2da21090bb330968e62a8615739acccfce90424",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "go-reviewer": {
+      "path": "agents/go-reviewer.md",
+      "sha256": "be174fc66f6be1ade25f496548ba7040c00894aec81da163863b046d44233e39",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "harmonyos-app-resolver": {
+      "path": "agents/harmonyos-app-resolver.md",
+      "sha256": "2385d05160744130f6f5fadbae0314a7500db92da13719779dac41eb53ae1202",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "harness-optimizer": {
+      "path": "agents/harness-optimizer.md",
+      "sha256": "54444fd46afdfacb87a885bef4dcef129915740d35b5fe6f07a5a7e804f2b053",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash",
+        "Edit"
+      ]
+    },
+    "healthcare-reviewer": {
+      "path": "agents/healthcare-reviewer.md",
+      "sha256": "ffe0855862276f94bd47fbbdeba0d233b7ca2c8647bce784c94f61c382e3cc69",
+      "upstream_model": "opus",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "homelab-architect": {
+      "path": "agents/homelab-architect.md",
+      "sha256": "d851727c8d07d2c44ea953d1ccab812865de3ba4b693d0392e86ba52187664bc",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep"
+      ]
+    },
+    "java-build-resolver": {
+      "path": "agents/java-build-resolver.md",
+      "sha256": "6dc1da9c6ac9f39671dcf1013a8e8ab30cccf3604808d7da1b0a21935c1ac537",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "java-reviewer": {
+      "path": "agents/java-reviewer.md",
+      "sha256": "e768811020978d62930e8a1de33d674f07fbd479073de570df57c143b8eb33b6",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "kotlin-build-resolver": {
+      "path": "agents/kotlin-build-resolver.md",
+      "sha256": "db6796bdc2294d795bac286f7c04f4e6048af8acb3faf80edfc110285172e16b",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "kotlin-reviewer": {
+      "path": "agents/kotlin-reviewer.md",
+      "sha256": "be82de3435c4b7b48e4ff9589e8c211d80fafa5c8c9ac98d6572c88004519858",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "loop-operator": {
+      "path": "agents/loop-operator.md",
+      "sha256": "51f8283a56b799c2bd2c2455b3480e949656cbf997ea2feb34a972d3d6400f22",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash",
+        "Edit"
+      ]
+    },
+    "marketing-agent": {
+      "path": "agents/marketing-agent.md",
+      "sha256": "9d9cdcde2f90ba36ac488065beaa4fc3b74ff5a91507e504b9ea2cc608213cf8",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "WebSearch",
+        "WebFetch"
+      ]
+    },
+    "mle-reviewer": {
+      "path": "agents/mle-reviewer.md",
+      "sha256": "c505be5fccea9d067775b86fed76bc4b84e63e17090855ac135694adbc83a7f8",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "network-architect": {
+      "path": "agents/network-architect.md",
+      "sha256": "1b434aa8496a1cb8c39add08d0c68a4b27af8378de725f370d7682c02a56997e",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep"
+      ]
+    },
+    "network-config-reviewer": {
+      "path": "agents/network-config-reviewer.md",
+      "sha256": "12b2b04d8235941f6a9a0d42a679c581ce89963172d5fb0f63abb4202521593f",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep"
+      ]
+    },
+    "network-troubleshooter": {
+      "path": "agents/network-troubleshooter.md",
+      "sha256": "64528c41b59eea2cb4ac642bd3197bbadc8c456f3601520e410cf606e848fb07",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Bash",
+        "Grep"
+      ]
+    },
+    "opensource-forker": {
+      "path": "agents/opensource-forker.md",
+      "sha256": "3b302c2d4b080509a1f290e74412eb8076bec9aa42438e74c52fe519f8ff0242",
+      "upstream_model": "haiku",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "opensource-packager": {
+      "path": "agents/opensource-packager.md",
+      "sha256": "996f528ac789b3c19ded6bf7c25217a3e9e7c1e6d320a4f9d69f17252815cb16",
+      "upstream_model": "haiku",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "opensource-sanitizer": {
+      "path": "agents/opensource-sanitizer.md",
+      "sha256": "c62ab133be4a469d69f1ae2186bdbd8d5e048e8e6e9799615dee1e2e93620945",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "performance-optimizer": {
+      "path": "agents/performance-optimizer.md",
+      "sha256": "76d00a70fcc07a0b207f6b517d54078fa7a59f29e157fea72bf5f1d9cab8f9b2",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "php-reviewer": {
+      "path": "agents/php-reviewer.md",
+      "sha256": "5ea9c18d0adedcf6ef7d46cc35ec91cdde2fa8fc3cfe1d1ece477347cb1a4a30",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "planner": {
+      "path": "agents/planner.md",
+      "sha256": "63aba865206bac9cb5887542fb01b97656e7701faff98e091aa77057ba9860bc",
+      "upstream_model": "opus",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "pr-test-analyzer": {
+      "path": "agents/pr-test-analyzer.md",
+      "sha256": "5432aaf7e5fcb0813ac21828382971cc00f17d56ee95eac6d0ce180fc5d58016",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "python-reviewer": {
+      "path": "agents/python-reviewer.md",
+      "sha256": "d2180b115f5840383268c13d5d075b0541fe7ef2a1ac8ecd5d835266ca1b27ce",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "pytorch-build-resolver": {
+      "path": "agents/pytorch-build-resolver.md",
+      "sha256": "5ec08de6c6b616b068e7075be4496edd3e4ef3b041f0095a2e073131a58a9f7c",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "rag-pipeline-reviewer": {
+      "path": "agents/rag-pipeline-reviewer.md",
+      "sha256": "793432a0c4e44aa4c640cb85ec24b47062ed044782852b0ba67323d860154fec",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "react-build-resolver": {
+      "path": "agents/react-build-resolver.md",
+      "sha256": "a29dec6de18ac3d7b65c746f8133c1f14de5886592fa340c5c2a62fe7c4584e0",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "react-reviewer": {
+      "path": "agents/react-reviewer.md",
+      "sha256": "17d0286b4f101e27b818cad026a6bfc1f9fd3e7f9b52c8414e6ea2a05481995a",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "refactor-cleaner": {
+      "path": "agents/refactor-cleaner.md",
+      "sha256": "13704c3aee163bcbf6bcbf7a7933630a70d6c312ff3ee5a29bff63b8800484cc",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "ruby-reviewer": {
+      "path": "agents/ruby-reviewer.md",
+      "sha256": "3ba715e19b0f776fbd63128f6f79a0c2c0e846896ce1c20f603dc8f5971e5d0c",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "rust-build-resolver": {
+      "path": "agents/rust-build-resolver.md",
+      "sha256": "78c75c6be38ff376963b3c5b26d60dce0491064481d1a61e842a6d2879534e82",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "rust-reviewer": {
+      "path": "agents/rust-reviewer.md",
+      "sha256": "10af67c5764677596d43f32a952d8ec28662bb353fd986d726daefd3382ebeca",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "security-reviewer": {
+      "path": "agents/security-reviewer.md",
+      "sha256": "813e4062bed5f42ab25dd02a0070f682058ffe9508198fcfdbb2c31296f93b7b",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "seo-specialist": {
+      "path": "agents/seo-specialist.md",
+      "sha256": "40a66d601113669585cf6abbf4c9ae2bf134ef23ffdb78c45223733dbde90a2c",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "WebSearch",
+        "WebFetch"
+      ]
+    },
+    "silent-failure-hunter": {
+      "path": "agents/silent-failure-hunter.md",
+      "sha256": "e5e2094c6f50cc515a77376331c78e4955d5ff16c7a0e5d8f6edec692b7ebd8d",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "spec-miner": {
+      "path": "agents/spec-miner.md",
+      "sha256": "a9270c2012e2dc979f153a481cdfdc7c5413e8774f579ada0319c00ea8903ba2",
+      "upstream_model": "opus",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash",
+        "Write"
+      ]
+    },
+    "swift-build-resolver": {
+      "path": "agents/swift-build-resolver.md",
+      "sha256": "219e9e37151e385c0eae69b28306897e2a21ba1dbad5ed3077801c822c98b156",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "swift-reviewer": {
+      "path": "agents/swift-reviewer.md",
+      "sha256": "b8de7f16fafef82645aca3923b0c4fdbe619433c5df9386b3737fb6591545e8b",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "tdd-guide": {
+      "path": "agents/tdd-guide.md",
+      "sha256": "979afbb40c42bfdd02fc308c130d7e257f5d6dd5f6531ef2562644862f6b7771",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Grep"
+      ]
+    },
+    "type-design-analyzer": {
+      "path": "agents/type-design-analyzer.md",
+      "sha256": "753908aadd759d4710e07ac1a0ba8a6fbc0bc35fe369cadd3ede9655da5d1c49",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ]
+    },
+    "typescript-reviewer": {
+      "path": "agents/typescript-reviewer.md",
+      "sha256": "6b012db1a9039870c4f040975144a0d4e3592510d6332e2d260f02859ec66da1",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    },
+    "vue-reviewer": {
+      "path": "agents/vue-reviewer.md",
+      "sha256": "c675814544f06703cf34347c24c630267073d6ee605e70820fc1c1a74e71358a",
+      "upstream_model": "sonnet",
+      "upstream_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash"
+      ]
+    }
+  },
+  "repository": "https://github.com/affaan-m/ECC",
+  "revision": "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
+}

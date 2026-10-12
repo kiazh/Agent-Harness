@@ -11,6 +11,7 @@ from __future__ import annotations
 import enum
 import re
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 from urllib.parse import urlparse
 
@@ -27,7 +28,7 @@ MAX_ARGV_ENTRY_CHARS = 1024
 _CONNECTOR_ID_RE = re.compile(r"[a-z0-9][a-z0-9\-_]{0,63}")
 _ENV_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]*")
 _TOOL_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\-]{0,127}")
-_SHELL_METACHARS = re.compile(r"[;&|$`\\\n\s]")
+_SHELL_METACHARS = re.compile(r"[;&|$`\n]")
 
 
 class Transport(enum.StrEnum):
@@ -143,13 +144,23 @@ class ConnectorConfig:
         if self.kind != "mcp":
             raise ConfigError("connector kind must be 'mcp'")
         if self.transport == Transport.STDIO.value:
-            if not self.command or _SHELL_METACHARS.search(self.command):
+            absolute_command = (
+                PurePosixPath(self.command).is_absolute()
+                or PureWindowsPath(self.command).is_absolute()
+            )
+            if (
+                not self.command
+                or _SHELL_METACHARS.search(self.command)
+                or (re.search(r"\s", self.command) and not absolute_command)
+            ):
                 raise ConfigError("stdio command must be a plain executable (no shell syntax)")
             if len(self.argv) > MAX_ARGV_ENTRIES or any(
                 len(a) > MAX_ARGV_ENTRY_CHARS for a in self.argv
             ):
                 raise ConfigError("stdio argv exceeds bounds")
-            if self.cwd and not self.cwd.startswith("/"):
+            if self.cwd and not (
+                PurePosixPath(self.cwd).is_absolute() or PureWindowsPath(self.cwd).is_absolute()
+            ):
                 raise ConfigError("stdio cwd must be an absolute path")
             if self.endpoint:
                 raise ConfigError("endpoint is HTTP-only; stdio connectors must not set it")

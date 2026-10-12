@@ -716,3 +716,26 @@ test("cleanup freezes tool activity without reporting success or releasing owner
  transcript.apply(tev({type:"tool.complete", id:"one", name:"terminal", result:"finished", isError:false}));
  assert.match(textOf(view), /✔ terminal/);
 });
+
+test("typed unknown tool completion stays uncertain regardless of output or error flag", () => {
+ for (const isError of [false, true]) {
+  const view = new Container();
+  const transcript = new Transcript(view, new FakeSpinner());
+  transcript.apply(tev({ type: "tool.start", id: "unknown", name: "terminal", args: { command: "publish" } }));
+  const complete = { type: "tool.complete" as const, id: "unknown", name: "terminal", result: "successfully published", isError, outcome: "outcome_unknown" };
+  transcript.apply(tev(complete));
+  assert.match(textOf(view), /\? terminal/);
+  assert.match(textOf(view), /completion not reported/);
+  assert.doesNotMatch(textOf(view), /✔ terminal|✖ terminal/);
+ }
+});
+
+test("legacy tool completion retains typed success and error flags without inferring from text", () => {
+ for (const isError of [false, true]) {
+  const view = new Container();
+  const transcript = new Transcript(view, new FakeSpinner());
+  transcript.apply(tev({ type: "tool.start", id: "legacy", name: "terminal", args: {} }));
+  transcript.apply(tev({ type: "tool.complete", id: "legacy", name: "terminal", result: "outcome unknown", isError }));
+  assert.match(textOf(view), isError ? /✖ terminal/ : /✔ terminal/);
+ }
+});

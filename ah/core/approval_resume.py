@@ -14,6 +14,10 @@ from ah.permissions.tools import action_for_tool
 async def resumed_request(record: dict, arguments: dict[str, Any]):
     """Rebuild every material field from live configuration and client inputs."""
     tool = record["proposal"]["tool"]
+    if tool == "mcp_call":
+        from ah.core.runtime import runtime_services
+
+        await runtime_services.get_connector_service().refresh()
     spec = action_for_tool(tool, arguments)
     context = await resolve_execution_context(record["session_id"], tool)
     return build_request(

@@ -1017,3 +1017,94 @@ gateway/database checkbox-deletion path. Isolation used
 and only `agentharness_test`. Scoped Impeccable detection returned `[]` and
 `git diff --check` passed. No backend code changed for this feature. Previous
 uncommitted delegation and background fixes remain in the working tree.
+
+### 2026-10-12 — All canonical ECC subagents bundled
+
+Added the 71 root `agents/*.md` specialists from ECC, pinned at
+`b92f181b3b748d1abbc2afd94af6aa7d8c8fca29`. The upstream catalog identifies
+this directory as the canonical 71 subagents; platform mirrors, translated
+copies, skills and their helper definitions are outside this import.
+`ah/bundled_agents/ecc/` holds original Markdown (476,384 bytes total), the MIT
+license and a provenance/checksum manifest. No upstream code, hooks, installer,
+commands or MCP settings are executed or added. The existing 42-skill bundle
+and its separate pin are unchanged.
+
+`ah/core/agent_def.py` registers these as source `ecc` in `BUILTIN_AGENTS` (74
+default agents total). They appear through the existing registry, gateway,
+`list_agents` tool and Delegate menu; no optional feature flag or database seed
+is required. The ordinary factory injects only the selected role's prompt.
+Tool aliases map to existing harness tools and are explicit allow-lists, never
+empty/all-tool fallback. Parent authority and permission handling are unchanged.
+Original opus/sonnet/haiku preferences remain in the manifest; ECC roles do not
+force a provider/model switch. Unsupported Context7/Playwright MCP tools are
+identified in each affected role's integration note and are not fabricated.
+Existing database lookup precedence is preserved.
+
+`tools/vendor_ecc_agents.py` reproduces only the agent data from a local pinned
+checkout or downloaded snapshot, validating revision/metadata and recording
+hashes. `docs/ECC_AGENTS.md` documents usage, adaptations, limitations and update
+procedure. Original Markdown is byte-for-byte; adaptations live in the loader.
+
+Evidence: initial new regressions failed; focused registry/factory/orchestrator,
+existing multi-agent, delegation-boundary and built-in-save checks passed (49
+tests before adding the two importer regressions). Final isolated full backend
+suite: **2201 passed, 5 skipped in 112.50s**. Command used only the dedicated
+`agentharness_test` DSN with the disposable-home bootstrap in PYTHONPATH and
+`.venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`.
+Standalone `npm --prefix ui run check`: typecheck/ESLint passed, 272 UI tests
+passed and 5 gated tests skipped. The full backend suite includes the wrapper
+that runs all 277 UI tests with real gateway/test DB and no UI skips.
+
+`.venv/bin/python -m hatchling build -t wheel -d /tmp/ah-ecc-agents-wheel`
+succeeded; wheel inventory contains exactly 71 agent Markdown files plus
+manifest/license. Extracted-wheel import from `/tmp`, without checkout on
+PYTHONPATH, discovered all 74 defaults and verified planner's read-only scope.
+Ruff check/format and `git diff --check` passed. Bandit medium/high check passed;
+its full scan reports three low-severity subprocess warnings on the importer’s
+bounded, shell-free `git rev-parse` provenance check. No medium/high findings.
+No live model calls, quality claims, production DB operations or paid provider
+requests were used for verification. No unresolved test failures.
+
+
+## 2026-10-12 — MCP execution and local release candidate
+
+MCP is now usable through `/mcp`: add a stdio or HTTP server, review its launch,
+connect, inspect tools, disconnect or remove. Configurations persist in the
+installation's `~/.agent-harness/mcp.json`; inventory does not start servers.
+The default installation includes the MCP SDK. Native `mcp_list`, `mcp_describe`
+and `mcp_call` tools use the runtime connector service and existing approval
+broker. Untrusted external calls require approval even in full mode; explicitly
+allowed trusted reads retain the configured exception. Changed configuration,
+arguments or schema invalidate the approved action. Launch uses the reviewed
+executable/cwd snapshot; waits are bounded and uncertain dispatched calls are
+reported as `outcome_unknown` without automatic side-effect retries.
+
+Regression coverage includes SDK stdio/HTTP fixtures, elicitation refusal,
+secret redaction, repeated cross-task teardown with no fixture process leaks,
+persistent management through the authenticated gateway, actual agent approval
+pause/resume and timeout/truncation/error handling. Independent review's launch
+race and executable/cwd mismatch were fixed and covered by regressions.
+
+Final isolated backend verification: **2237 passed, 5 skipped, 0 failed**,
+**82.26% coverage**, 127.22 seconds. Standalone UI: **290 passed, 5 gated skips**;
+typecheck/lint passed. The backend's real gateway wrapper runs all **295 UI
+tests with no UI skips**. Ruff check/format passed; Bandit reports **0 medium,
+0 high, 67 low** findings. Lockfile freshness and diff whitespace checks passed.
+Wheel/source builds pass isolated imports, bundled resource hashes and source
+archive cleanliness checks. Only the dedicated `agentharness_test` database
+was used, with disposable HOME/config and cleared live credentials.
+
+Release cleanup preserves the 71 pinned ECC roles and 42 curated skills, adds
+accurate README/changelog/third-party notices and package checks, removes tracked
+backup-environment artifacts and duplicate PR workflow, and excludes installed
+Node dependencies from source archives. The version remains **0.2.0**, a local
+candidate. Nothing was committed, pushed, published or deployed.
+
+Next owner: read [MCP setup](MCP.md) and
+[release evidence](verification/RELEASE_READINESS.md) before publishing.
+OAuth/HTTP credential profiles, MCP resources/prompts and server callbacks stay
+deferred. Saved configuration is installation-local; live connections are
+worker-local and require reconnect after restart. Run hosted CI/Docker, fresh
+install/platform checks, authorized vendor/staging checks and operational
+backup/rollback gates before claiming production readiness. Existing historical
+counts above are superseded by this entry for the current checkout.

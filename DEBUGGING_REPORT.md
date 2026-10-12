@@ -1,5 +1,7 @@
 # Deep debugging report
 
+Current release evidence and open gates are in [RELEASE_READINESS.md](docs/verification/RELEASE_READINESS.md). Counts below belong to their dated engineering snapshots.
+
 Date: 2026-10-09. Reviewed against the current working tree; no commit or deployment performed.
 
 ## Scope and method

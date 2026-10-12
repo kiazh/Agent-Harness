@@ -1,5 +1,7 @@
 # AgentHarness runtime/feature ledger
 
+Current release evidence and open gates are in [RELEASE_READINESS.md](docs/verification/RELEASE_READINESS.md). Counts below belong to their dated engineering snapshots.
+
 Checked matrix: implementation → entry points → dependency → trigger → config → fallback → lifecycle → proof test. Statuses: automatic (every turn), conditional (when triggered/material exists), degraded (fallback reported), optional (explicit), offline (research-only).
 
 ## Hang fixes (2026-10-07)

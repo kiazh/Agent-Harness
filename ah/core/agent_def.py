@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -109,6 +110,61 @@ BUILTIN_AGENTS: dict[str, AgentDef] = {
         source="builtin",
     ),
 }
+
+
+def _ecc_agents() -> dict[str, AgentDef]:
+    """Ship reviewed specialist prompts offline; never execute upstream code."""
+    directory = Path(__file__).resolve().parents[1] / "bundled_agents" / "ecc"
+    tool_names = {
+        "Read": "read_file",
+        "Grep": "search_files",
+        "Glob": "list_files",
+        "Write": "write_file",
+        "Edit": "write_file",
+        "Bash": "terminal",
+        "WebSearch": "web_search",
+        "WebFetch": "web_extract",
+    }
+    manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    definitions = {}
+    for name in manifest["agents"]:
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name) or name in BUILTIN_AGENTS:
+            raise ValueError("invalid or conflicting bundled ECC agent name")
+        raw = (directory / f"{name}.md").read_text(encoding="utf-8")
+        _, header, body = raw.split("---", 2)
+        metadata = yaml.safe_load(header)
+        if metadata["name"] != name or not body.strip():
+            raise ValueError(f"invalid bundled ECC agent: {name}")
+        upstream = [tool.strip() for tool in metadata["tools"].split(",")]
+        tools = list(dict.fromkeys(tool_names[tool] for tool in upstream if tool in tool_names))
+        if not tools:
+            raise ValueError(f"bundled ECC agent has no supported tools: {name}")
+        unavailable = [tool for tool in upstream if tool not in tool_names]
+        adaptation = (
+            "AgentHarness integration: handle only the delegated task. Use the registered "
+            f"harness tool names: {', '.join(tools)}. "
+            "Read=read_file; Grep=search_files; Glob=list_files; Write/Edit=write_file; "
+            "Bash=terminal; WebSearch=web_search; WebFetch=web_extract. "
+            "Permission approval and inherited parent restrictions still apply. "
+            "Use the selected session model/provider. Referenced ECC skills, commands, "
+            "or platform-specific paths may not be installed; inspect before relying on them. "
+        )
+        if unavailable:
+            adaptation += (
+                f"These upstream tools are unavailable: {', '.join(unavailable)}. "
+                "Do not claim to have called them; report missing capabilities when needed. "
+            )
+        definitions[name] = AgentDef(
+            name=name,
+            description=metadata["description"],
+            system_prompt=adaptation + "\n\n" + body.strip(),
+            tools=tools,
+            source="ecc",
+        )
+    return definitions
+
+
+BUILTIN_AGENTS.update(_ecc_agents())
 
 
 class AgentRegistry:

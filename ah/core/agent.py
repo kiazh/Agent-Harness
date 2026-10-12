@@ -997,7 +997,13 @@ class BaseReActAgent:
                         from ah.permissions.broker import permission_broker as _broker
                         from ah.permissions.policy import build_request as _build_req
 
+                        if tool_name in {"mcp_call", "mcp_list", "mcp_describe"}:
+                            from ah.core.runtime import runtime_services
+
+                            await runtime_services.get_connector_service().refresh()
                         _spec = _perm_tools.action_for_tool(tool_name, tool_args)
+                        if tool_name == "mcp_call":
+                            tool_timeout = int(_spec.get("timeout", 60)) + 1
                         from ah.core.execution_context import resolve_execution_context
 
                         _context = await resolve_execution_context(str(session_id), tool_name)
@@ -1067,6 +1073,8 @@ class BaseReActAgent:
                                 registry.execute(tool_name, **tool_args),
                                 timeout=tool_timeout,
                             )
+                            if getattr(result, "outcome_unknown", False):
+                                item["_outcome_unknown"] = True
                             from ah.tools.agents import DelegationToolResult
 
                             if isinstance(result, DelegationToolResult):
@@ -1178,6 +1186,7 @@ class BaseReActAgent:
                         tool_name=tool_name,
                         tool_result=result_str,
                         tool_call_id=finished["call_id"],
+                        tool_outcome="outcome_unknown" if finished.get("_outcome_unknown") else "",
                     )
                     # AH-AUDIT-030: typed pause alongside the result so live
                     # consumers need not wait for the terminal response.
@@ -1323,6 +1332,8 @@ class BaseReActAgent:
                 "result_preview": result_str[:200],
                 "outcome": "denied"
                 if item.get("_denied") or result_str.startswith("Permission denied:")
+                else "outcome_unknown"
+                if item.get("_outcome_unknown")
                 else "failed"
                 if item.get("_failed") or result_str.startswith("Error:")
                 else "completed",

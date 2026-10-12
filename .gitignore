@@ -74,27 +74,6 @@ skills/telemetry.json
 __pycache__/
 *.egg-info/
 
-# Internal research and development files
-_dump/
-.locomo10.json
-docs/superpowers/
-docs/research-*.md
-docs/roadmap.md
-docs/plugins.md
-communications/
-research/results/
-verify_issues.py
-scripts/
-agents/
-skills/telemetry.json
-.skill-hub/
-.coverage
-.hypothesis/
-.pytest_cache/
-.ruff_cache/
-__pycache__/
-*.egg-info/
-
 # Keep the public wire contract; other communications remain internal.
 !communications/
 communications/*
@@ -105,3 +84,10 @@ communications/*
 # Generated caches are not part of the pinned distribution.
 skills/ecc/**/__pycache__/
 skills/ecc/**/*.py[cod]
+
+# Archived virtual environments and generated coverage
+.venv.*/
+coverage.xml
+
+# Installed Node dependencies are restored from the lockfile
+node_modules/
