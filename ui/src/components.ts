@@ -6,6 +6,8 @@ import {
 	type Component,
 	CURSOR_MARKER,
 	Editor,
+    Key,
+    matchesKey,
 	type EditorOptions,
 	type EditorTheme,
 	ScrollView,
@@ -135,6 +137,32 @@ export function popAbove(lines: string[], popupHeight: number): string[] {
  * Scroll position survives via a dim `↑ N more` marker.
  */
 export class ComposerInput extends Editor {
+    onPaste?: (text: string) => boolean;
+    onSubmitBlocked?: () => boolean;
+    private attachmentPaste: string | undefined;
+
+    override handleInput(data: string): void {
+        if (matchesKey(data, Key.enter) && this.onSubmitBlocked?.()) return;
+        if (this.attachmentPaste !== undefined || data.includes("\x1b[200~")) {
+            if (this.attachmentPaste === undefined) {
+                const start = data.indexOf("\x1b[200~");
+                if (start > 0) super.handleInput(data.slice(0, start));
+                this.attachmentPaste = "";
+                data = data.slice(start + 6);
+            }
+            this.attachmentPaste += data;
+            const end = this.attachmentPaste.indexOf("\x1b[201~");
+            if (end < 0) return;
+            const text = this.attachmentPaste.slice(0, end);
+            const remaining = this.attachmentPaste.slice(end + 6);
+            this.attachmentPaste = undefined;
+            if (!this.onPaste?.(text)) super.handleInput(`\x1b[200~${text}\x1b[201~`);
+            if (remaining) this.handleInput(remaining);
+            return;
+        }
+        if (!this.onPaste?.(data)) super.handleInput(data);
+    }
+
 	override renderTopBorder(_width: number, hiddenLineCount: number): string {
 		if (hiddenLineCount > 0) return theme.dim(`↑ ${hiddenLineCount} more`);
 		return "";

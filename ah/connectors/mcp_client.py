@@ -149,17 +149,16 @@ class _PipeStderr:
         return "".join(self._chunks)
 
 
-def _classify_host(host: str, *, local_access: bool) -> None:
+def _classify_host(host: str, *, local_access: bool) -> tuple[str, ...]:
     """Reject link-local/metadata/private destinations without scoped consent.
 
-    Raises ConnectionFailed closed. DNS is resolved at check time; rebinding
-    between check and connect is a documented residual (see plan doc).
+    Return the complete approved IP set for the pinned connection backend.
+    Raises ConnectionFailed closed before any connection is opened.
     """
     lowered = (host or "").lower().rstrip(".")
     if lowered in ("localhost",) or lowered.endswith(".localhost"):
         if not local_access:
             raise ConnectionFailed("loopback connectors require explicit local_access")
-        return
     try:
         ips = [ipaddress.ip_address(lowered)]
     except ValueError:
@@ -194,6 +193,8 @@ def _classify_host(host: str, *, local_access: bool) -> None:
                     f"private connector address requires explicit local_access: {ip}"
                 )
             continue
+
+    return tuple(dict.fromkeys(str(ip) for ip in ips))
 
 
 class MCPConnection:
@@ -389,6 +390,8 @@ class MCPConnection:
             )
         import httpx2
 
+        from ah.connectors.http_transport import pinned_http_transport
+
         oauth_auth = None
         oauth_token_value = ""
         coordinator = getattr(self, "_oauth_coordinator", None)
@@ -423,6 +426,9 @@ class MCPConnection:
         client_kwargs: dict[str, Any] = {
             "follow_redirects": False,
             "trust_env": False,
+            "transport": pinned_http_transport(
+                httpx2, lambda host: _classify_host(host, local_access=self.config.local_access)
+            ),
             "timeout": httpx2.Timeout(self.config.call_timeout),
             "event_hooks": {"request": [check_destination]},
         }

@@ -61,12 +61,14 @@ function formatReview(review: MCPOAuthReview): string {
 		`Resource: ${review.resource}`,
 		`Scopes: ${review.requestedScopes.length ? review.requestedScopes.map((scope) => sanitizeDisplay(scope)).join(", ") : "(none requested)"}`,
 		`Registration: ${review.registrationMode}`,
+		`Authorization endpoint: ${review.endpoints.authorization || "(not advertised)"}`,
+		`Token endpoint: ${review.endpoints.token || "(not advertised)"}`,
+		`Registration endpoint: ${review.endpoints.registration || "(not advertised)"}`,
+		`Revocation endpoint: ${review.endpoints.revocation || "(not advertised)"}`,
 		`Callback: ${review.redirectUri}`,
 	];
 	return lines.map((line) => sanitizeDisplay(line)).join("\n");
 }
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface PreviewResult {
 	previewId?: string;
@@ -113,44 +115,93 @@ export async function authorizeConnector(host: FeatureHost, serverId: string): P
 	const operationId = operation.operationId;
 	let disposed = false;
 	let pollTimer: ReturnType<typeof setTimeout> | undefined;
-	const cleanup = async (): Promise<void> => {
+	let wakePoll: (() => void) | undefined;
+	let loginUrl: string | undefined;
+	let browserOpening = false;
+	const cleanup = (): void => {
 		disposed = true;
 		if (pollTimer) clearTimeout(pollTimer);
+		wakePoll?.();
 	};
+	const waitForPoll = (): Promise<void> => new Promise((resolve) => {
+		if (disposed) return resolve();
+		wakePoll = resolve;
+		pollTimer = setTimeout(() => { wakePoll = undefined; resolve(); }, POLL_MS);
+	});
 	const progress = host.showOAuthProgress({
 		title: `Authorizing ${serverId}`,
 		status: "Preparing authorization…",
 		onOpen: () => {
-			host.request("mcp.oauth.open", { id: serverId, sessionId, operationId }).catch(() => undefined);
+			if (disposed || browserOpening || !loginUrl) return;
+			browserOpening = true;
+			void (async () => {
+				try {
+					const { opened } = await host.request<{ opened: boolean }>("mcp.oauth.open", { id: serverId, sessionId, operationId });
+					if (disposed) return;
+					progress.update(opened ? "Browser opened. Waiting for authorization…"
+						: "Could not open the browser. Press y to copy the full link, or o to retry.", loginUrl);
+				} catch {
+					if (!disposed) progress.update("Could not open the browser. Press y to copy the full link, or o to retry.", loginUrl);
+				} finally {
+					browserOpening = false;
+				}
+			})();
+		},
+		onCopy: () => {
+			if (disposed || !loginUrl) return;
+			void (async () => {
+				let copied = false;
+				try { copied = await host.copyText?.(loginUrl!) ?? false; } catch { /* local clipboard unavailable */ }
+				if (!disposed) progress.update(copied ? "Login link copied. Paste it into your browser to authorize."
+					: "Clipboard unavailable. Select the full link below and copy it into your browser, or press o to retry.", loginUrl);
+			})();
 		},
 		onCancel: () => {
-			void cleanup().then(() =>
-				host.request("mcp.oauth.cancel", { id: serverId, sessionId, operationId }).catch(() => undefined));
+			if (disposed) return;
+			cleanup();
+			void host.request("mcp.oauth.cancel", { id: serverId, sessionId, operationId }).catch(() => undefined);
 		},
 	});
 	try {
 		const deadline = Date.now() + OVERALL_MS;
 		let awaitingBrowser = false;
+		let unavailablePolls = 0;
 		while (!disposed && Date.now() < deadline) {
 			let status: { auth: MCPOAuthView; operation?: MCPOAuthOperationView };
 			try {
 				// Sequential awaits keep exactly one status request outstanding.
 				status = await host.request("mcp.oauth.status", { id: serverId, sessionId, operationId });
-			} catch {
-				progress.update("Authorization service unavailable.");
-				await sleep(POLL_MS);
+			} catch (error) {
+				if (disposed) return;
+				const failure = permanentStatusError(error);
+				if (failure || ++unavailablePolls >= 3) {
+					host.print(failure ?? "Authorization service unavailable. Start authorization again.", "error");
+					return;
+				}
+				progress.update("Authorization service unavailable. Retrying…");
+				await waitForPoll();
 				continue;
 			}
+			if (disposed) return;
+			unavailablePolls = 0;
 			const state = status.operation?.state;
+			if (!state) {
+				host.print(oauthErrorMessage("oauth_operation_not_found"), "error");
+				return;
+			}
 			if (state === "awaiting_browser" && !awaitingBrowser) {
-				awaitingBrowser = true;
 				try {
 					const { authorizationUrl } = await host.request<{ authorizationUrl: string }>("mcp.oauth.url", {
 						id: serverId, sessionId, operationId,
 					});
+					if (disposed) return;
+					loginUrl = authorizationUrl;
+					awaitingBrowser = true;
 					progress.update("Waiting for browser authorization…", authorizationUrl);
-				} catch {
-					progress.update("Waiting for browser authorization…");
+				} catch (error) {
+					if (disposed) return;
+					host.print(permanentStatusError(error) ?? "The login link could not be loaded. Start authorization again.", "error");
+					return;
 				}
 			} else if (state === "preparing" || state === "exchanging") {
 				progress.update(state === "preparing" ? "Preparing authorization…" : "Completing authorization…");
@@ -165,14 +216,15 @@ export async function authorizeConnector(host: FeatureHost, serverId: string): P
 				host.print(oauthErrorMessage(status.operation?.reasonCode ?? status.auth.reasonCode), state === "cancelled" ? "warning" : "error");
 				return;
 			}
-			await sleep(POLL_MS);
+			await waitForPoll();
 		}
 		if (!disposed) {
 			await host.request("mcp.oauth.cancel", { id: serverId, sessionId, operationId }).catch(() => undefined);
+			if (disposed) return;
 			host.print(oauthErrorMessage("oauth_expired"), "error");
 		}
 	} finally {
-		await cleanup();
+		cleanup();
 		progress.dispose();
 	}
 }
@@ -204,5 +256,16 @@ function operationReason(error: unknown): string | undefined {
 		const match = /oauth_[a-z_]+/.exec(message);
 		return match?.[0];
 	}
+	return undefined;
+}
+
+function permanentStatusError(error: unknown): string | undefined {
+	const reason = operationReason(error);
+	if (reason) return oauthErrorMessage(reason);
+	if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+	const code = (error as { code: unknown }).code;
+	if (code === 1002) return oauthErrorMessage("oauth_operation_not_found");
+	if (code === 1005) return "Permission to authorize this server changed. Review authorization again.";
+	if (code === -32600 || code === -32601 || code === -32602) return "The authorization request is no longer valid. Start authorization again.";
 	return undefined;
 }

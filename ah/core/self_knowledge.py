@@ -21,7 +21,8 @@ FEATURES = {
     "skills": "Relevant bundled workflows activate automatically with bounded context; skill tools discover/read more when offered. Skills do not grant permissions.",
     "execution": "Offered tools define this agent's access. Delegation inherits authority; jobs schedule runs; sessions, context compaction and usage budgets are supported.",
     "controls": "TUI /persona, /growth, /profile, /sessions, /models, /provider, /jobs, /usage and /mode manage the respective features; these are UI commands, not model tools.",
-    "mcp": "TUI /mcp saves server configuration and explicitly connects/disconnects. mcp_list/mcp_describe disclose connected catalogs lazily; mcp_call runs through exact broker approval (or configured trusted-read). OAuth remains unavailable.",
+    "mcp": "TUI /mcp saves server configuration and explicitly connects/disconnects. mcp_list/mcp_describe disclose connected catalogs lazily; mcp_call runs through exact broker approval (or configured trusted-read). HTTP servers can use human-reviewed browser OAuth with PKCE, encrypted credentials and bounded token refresh; authorization does not grant tool execution permission.",
+    "images": "The TUI accepts dropped PNG/JPEG/GIF/WebP files and clipboard images (Ctrl+V or forwarded Cmd+V), displayed as [image 1] markers. Inline image content is sent to the provider and retained in recent conversation context. Image understanding requires a vision-capable model; markers alone do not prove an image was supplied.",
 }
 
 

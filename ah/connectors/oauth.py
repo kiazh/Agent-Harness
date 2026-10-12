@@ -84,6 +84,8 @@ class OAuthCoordinator:
         self._operations: dict[str, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
         self._auth_cache: dict[str, dict[str, Any]] = {}
+        self._retention_tasks: set[asyncio.Task] = set()
+        self._shutting_down = False
 
     # ── config resolution ───────────────────────────────────────
     async def _resolve_config(self, connector_id: str):
@@ -132,6 +134,7 @@ class OAuthCoordinator:
                 "mode": snapshot.registration_mode,
                 "client": snapshot.client_id,
                 "fingerprint": snapshot.fingerprint,
+                "requireIss": snapshot.require_iss,
             },
             sort_keys=True,
         )
@@ -174,12 +177,13 @@ class OAuthCoordinator:
                         f"requested scopes not in allowlist: {sorted(missing)}",
                         reason="oauth_scope_not_allowed",
                     )
-            # Reserve inert loopback listener before finalizing preview.
-            callback = await self._callback_factory.reserve(
-                port=settings.callback_port, deadline=loop.time() + 5.0
-            )
-            redirect_uri = callback.redirect_uri
             mode = self._registration_mode(settings, discovered)
+            # Pre-registered providers require their exact registered path.
+            reservation = {"port": settings.callback_port, "deadline": loop.time() + 5.0}
+            if mode == "preregistered":
+                reservation["path"] = settings.callback_path
+            callback = await self._callback_factory.reserve(**reservation)
+            redirect_uri = callback.redirect_uri
             snapshot = OAuthReviewSnapshot(
                 connector_id=config.id,
                 config_revision=config.revision,
@@ -194,6 +198,7 @@ class OAuthCoordinator:
                 registration_mode=mode,
                 client_id=settings.client_id,
                 fingerprint=discovered.fingerprint,
+                require_iss=discovered.require_iss,
             )
             digest = self._digest_of(snapshot, config_revision=config.revision)
             preview_id = secrets.token_hex(8)
@@ -246,6 +251,11 @@ class OAuthCoordinator:
         if settings.client_mode == "preregistered":
             return "preregistered"
         if settings.client_mode == "metadata_document":
+            if not discovered.supports_client_metadata_document:
+                raise OAuthError(
+                    "server does not support client metadata documents",
+                    reason="oauth_client_configuration_required",
+                )
             return "metadata_document"
         if discovered.registration_endpoint:
             return "dcr"
@@ -485,7 +495,7 @@ class OAuthCoordinator:
                     raise OAuthError(str(exc), reason="oauth_exchange_failed") from exc
                 granted = (
                     tuple(str(token.scope).split())
-                    if getattr(token, "scope", None)
+                    if getattr(token, "scope", None) is not None
                     else tuple(snapshot.requested_scopes)
                 )
                 if set(granted) - set(snapshot.requested_scopes):
@@ -616,7 +626,10 @@ class OAuthCoordinator:
                         self._operations.pop(operation_id, None)
 
             try:
-                asyncio.create_task(_evict())
+                if not self._shutting_down and not asyncio.current_task().cancelling():
+                    task = asyncio.create_task(_evict())
+                    self._retention_tasks.add(task)
+                    task.add_done_callback(self._retention_tasks.discard)
             except RuntimeError:
                 pass  # loop closing; entries expire with the worker
 
@@ -701,6 +714,7 @@ class OAuthCoordinator:
         except Exception:
             pass
         # Scan index for any grant for this connector (bounded, local only).
+        stale_binding = None
         try:
             index = self._creds._read_index()
             for key, entry in index.get("grants", {}).items():
@@ -722,9 +736,14 @@ class OAuthCoordinator:
                             issuer=record.issuer,
                             client_id=record.client_id,
                         )
-                        return await self._auth_view(config, binding)
+                        if self._record_matches_config(record, config, binding):
+                            return await self._auth_view(config, binding)
+                        if stale_binding is None:
+                            stale_binding = binding
         except Exception:
             return {"state": "storage_unavailable", "generation": 0}
+        if stale_binding is not None:
+            return await self._auth_view(config, stale_binding)
         return {"state": "signed_out", "generation": 0}
 
     async def _auth_view(self, config, binding: OAuthBinding) -> dict[str, Any]:
@@ -734,7 +753,7 @@ class OAuthCoordinator:
             return {"state": "storage_unavailable", "generation": 0}
         if record is None:
             return {"state": "signed_out", "generation": 0}
-        if record.config_revision != config.revision:
+        if not self._record_matches_config(record, config, binding):
             return {
                 "state": "reauthorization_required",
                 "generation": record.generation,
@@ -754,15 +773,39 @@ class OAuthCoordinator:
         }
         if record.expires_at_utc:
             view["expiresAt"] = record.expires_at_utc
-        if expires is not None and expires <= self._now() and not record.refresh_token:
+        if record.refresh_state != "idle" or (
+            expires is not None and expires <= self._now() and not record.refresh_token
+        ):
             view["state"] = "reauthorization_required"
             view["reasonCode"] = "oauth_reauthorization_required"
         return view
 
-    async def authorization_url(self, operation_id: str, owner: OAuthOwner) -> str:
+    async def _validate_handle_config(
+        self, handle: dict[str, Any], owner: OAuthOwner, *, connector_id: str | None = None
+    ) -> None:
+        actual_id = handle["connector_id"]
+        if handle["owner"] != owner or (connector_id is not None and connector_id != actual_id):
+            raise OAuthError("operation not found", reason="oauth_operation_not_found")
+        config = await self._resolve_config(actual_id)
+        if config.id != actual_id or (config.owner and config.owner != owner.agent_id):
+            raise OAuthError(
+                "operation owner no longer authorized", reason="oauth_operation_not_found"
+            )
+        if config.revision != handle["snapshot"].config_revision:
+            raise OAuthError("configuration changed", reason="oauth_config_changed")
+
+    async def authorization_url(
+        self, operation_id: str, owner: OAuthOwner, *, connector_id: str | None = None
+    ) -> str:
         async with self._lock:
             operation = self._operations.get(operation_id)
             if operation is None or operation["owner"] != owner:
+                raise OAuthError("operation not found", reason="oauth_operation_not_found")
+        # Resolving may refresh service state and invalidate handles; never
+        # hold the coordinator lock across that call.
+        await self._validate_handle_config(operation, owner, connector_id=connector_id)
+        async with self._lock:
+            if self._operations.get(operation_id) is not operation:
                 raise OAuthError("operation not found", reason="oauth_operation_not_found")
             if operation["state"] != "awaiting_browser" or not operation.get("authorization_url"):
                 raise OAuthError(
@@ -770,8 +813,10 @@ class OAuthCoordinator:
                 )
             return operation["authorization_url"]
 
-    async def open_browser(self, operation_id: str, owner: OAuthOwner) -> bool:
-        url = await self.authorization_url(operation_id, owner)
+    async def open_browser(
+        self, operation_id: str, owner: OAuthOwner, *, connector_id: str | None = None
+    ) -> bool:
+        url = await self.authorization_url(operation_id, owner, connector_id=connector_id)
         try:
             opened = await asyncio.to_thread(self._browser, url)
             return bool(opened)
@@ -779,7 +824,12 @@ class OAuthCoordinator:
             return False
 
     async def cancel(
-        self, owner: OAuthOwner, *, preview_id: str | None = None, operation_id: str | None = None
+        self,
+        owner: OAuthOwner,
+        *,
+        preview_id: str | None = None,
+        operation_id: str | None = None,
+        connector_id: str | None = None,
     ) -> bool:
         if (preview_id is None) == (operation_id is None):
             raise OAuthError("exactly one handle is required", reason="oauth_operation_not_found")
@@ -790,6 +840,10 @@ class OAuthCoordinator:
                     return False
                 if prev["owner"] != owner:
                     raise OAuthError("not authorized", reason="oauth_operation_not_found")
+            await self._validate_handle_config(prev, owner, connector_id=connector_id)
+            async with self._lock:
+                if self._previews.get(preview_id) is not prev:
+                    return False
                 await self._close_preview_locked(preview_id)
                 return True
         assert operation_id is not None
@@ -799,6 +853,10 @@ class OAuthCoordinator:
                 return False
             if operation["owner"] != owner:
                 raise OAuthError("not authorized", reason="oauth_operation_not_found")
+        await self._validate_handle_config(operation, owner, connector_id=connector_id)
+        async with self._lock:
+            if self._operations.get(operation_id) is not operation:
+                return False
             if operation["state"] in ("complete", "failed", "cancelled", "expired"):
                 return True
             operation["state"] = "cancelled"
@@ -839,10 +897,10 @@ class OAuthCoordinator:
                 snapshot_record = await self._creds.load(binding)
             except Exception:
                 snapshot_record = None
-            try:
-                await self._creds.forget(binding, expected_generation=expected_generation)
-            except ValueError as exc:
-                raise OAuthError(str(exc), reason="oauth_config_changed") from exc
+        await self._retire_connector_credentials(
+            connector_id, preferred_binding=binding, expected_generation=expected_generation
+        )
+        if binding is not None:
             if revoke and snapshot_record is not None and snapshot_record.revocation_endpoint:
                 network = self._network_factory(local_access=bool(config.local_access))
                 try:
@@ -893,43 +951,159 @@ class OAuthCoordinator:
                 except Exception:
                     continue
                 if record is not None:
-                    return OAuthBinding(
+                    binding = OAuthBinding(
                         connector_id=config.id,
                         credential_key=key,
                         resource=record.resource,
                         issuer=record.issuer,
                         client_id=record.client_id,
                     )
-        settings = OAuthSettings.from_dict(getattr(config, "oauth", None) or {})
-        if settings is not None and settings.issuer:
-            return self._binding_for(
-                config,
-                issuer=settings.issuer,
-                client_id=settings.client_id or settings.client_metadata_url,
-            )
+                    if self._record_matches_config(record, config, binding):
+                        return binding
         return None
 
-    async def invalidate_connector(self, connector_id: str) -> None:
+    async def _retire_connector_credentials(
+        self,
+        connector_id: str,
+        *,
+        config_revision: int | None = None,
+        preferred_binding: OAuthBinding | None = None,
+        expected_generation: int | None = None,
+    ) -> None:
+        index = await asyncio.to_thread(self._creds._read_index)
+        bindings: dict[str, tuple[OAuthBinding, int]] = {}
+        protected_keys: set[str] = set()
+        for key, entry in index.get("grants", {}).items():
+            if entry.get("connector_id") != connector_id:
+                continue
+            binding = OAuthBinding(
+                connector_id=connector_id, credential_key=key, resource="", issuer="", client_id=""
+            )
+            try:
+                record = await self._creds.load(binding)
+            except Exception:
+                record = None
+            if (
+                record is not None
+                and config_revision is not None
+                and record.config_revision > config_revision
+            ):
+                protected_keys.add(key)
+                continue
+            bindings[key] = (binding, int(entry.get("generation", 0)))
+        # An exchanging operation may not have committed its first envelope.
+        # Tombstone its already known binding as well, so late commits lose CAS.
+        async with self._lock:
+            operations = list(self._operations.values())
+        for operation in operations:
+            client = operation.get("client")
+            snapshot = operation.get("snapshot")
+            if operation.get("connector_id") != connector_id or client is None or snapshot is None:
+                continue
+            if config_revision is not None and snapshot.config_revision > config_revision:
+                continue
+            key = credential_key_for(
+                connector_id=connector_id,
+                resource=snapshot.resource,
+                issuer=snapshot.issuer,
+                client_id=client.client_id,
+            )
+            if key not in bindings and key not in protected_keys:
+                binding = OAuthBinding(
+                    connector_id=connector_id,
+                    credential_key=key,
+                    resource=snapshot.resource,
+                    issuer=snapshot.issuer,
+                    client_id=client.client_id,
+                )
+                bindings[key] = (binding, await self._creds.current_generation(binding))
+        if preferred_binding is not None and preferred_binding.credential_key not in bindings:
+            bindings[preferred_binding.credential_key] = (
+                preferred_binding,
+                await self._creds.current_generation(preferred_binding),
+            )
+        if expected_generation is not None:
+            key = (
+                preferred_binding.credential_key
+                if preferred_binding is not None
+                else next(iter(bindings), None)
+            )
+            if key is None:
+                if expected_generation != 0:
+                    raise OAuthError("authority changed", reason="oauth_config_changed")
+            elif bindings[key][1] != expected_generation:
+                raise OAuthError("authority changed", reason="oauth_config_changed")
+            elif key is not None:
+                # Validate the review-bound generation before retiring siblings.
+                selected = bindings.pop(key)
+                bindings = {key: selected, **bindings}
+        for binding, generation in bindings.values():
+            try:
+                await self._creds.forget(
+                    binding,
+                    expected_generation=generation,
+                    max_config_revision=config_revision,
+                )
+            except ValueError as exc:
+                raise OAuthError(
+                    "authority changed during retirement", reason="oauth_config_changed"
+                ) from exc
+
+    async def invalidate_connector(
+        self, connector_id: str, *, config_revision: int | None = None
+    ) -> None:
         async with self._lock:
             for op_id, op in list(self._operations.items()):
-                if op["connector_id"] == connector_id:
+                if op["connector_id"] == connector_id and (
+                    config_revision is None or op["snapshot"].config_revision <= config_revision
+                ):
                     op["state"] = "cancelled"
                     op["reason"] = "oauth_config_changed"
                     task = op.get("task")
                     if task is not None and not task.done():
                         task.cancel()
             for pid, prev in list(self._previews.items()):
-                if prev["connector_id"] == connector_id:
+                if prev["connector_id"] == connector_id and (
+                    config_revision is None or prev["snapshot"].config_revision <= config_revision
+                ):
                     await self._close_preview_locked(pid)
         self._auth_cache.pop(connector_id, None)
+        await self._retire_connector_credentials(connector_id, config_revision=config_revision)
 
     # ── tokens for transport ────────────────────────────────────
     def auth_identity(self, connector_id: str) -> dict[str, Any] | None:
         return self._auth_cache.get(connector_id)
 
-    async def refresh_auth_cache(self, connector_id: str) -> None:
+    @staticmethod
+    def _record_matches_config(record, config, binding: OAuthBinding) -> bool:
         try:
-            config = await self._resolve_config(connector_id)
+            settings = OAuthSettings.from_dict(getattr(config, "oauth", None) or {})
+            if settings is None:
+                return False
+            expected_client = (
+                settings.client_id
+                if settings.client_mode == "preregistered"
+                else settings.client_metadata_url
+                if settings.client_mode == "metadata_document"
+                else ""
+            )
+            return (
+                record.connector_id == config.id == binding.connector_id
+                and record.config_revision == config.revision
+                and record.credential_key == binding.credential_key
+                and record.resource == binding.resource == normalize_resource(config.endpoint)
+                and record.issuer == binding.issuer
+                and record.client_id == binding.client_id
+                and (not settings.issuer or record.issuer == settings.issuer)
+                and (not expected_client or record.client_id == expected_client)
+            )
+        except (ValueError, TypeError):
+            return False
+
+    async def refresh_auth_cache(self, connector_id: str, *, config=None) -> None:
+        try:
+            if config is None:
+                config = await self._resolve_config(connector_id)
         except Exception:
             self._auth_cache.pop(connector_id, None)
             return
@@ -950,7 +1124,11 @@ class OAuthCoordinator:
         except Exception:
             self._auth_cache.pop(connector_id, None)
             return
-        if record is None:
+        if (
+            record is None
+            or record.refresh_state != "idle"
+            or not self._record_matches_config(record, config, binding)
+        ):
             self._auth_cache.pop(connector_id, None)
             return
         self._auth_cache[connector_id] = {
@@ -974,6 +1152,10 @@ class OAuthCoordinator:
             ) from exc
         if record is None:
             raise OAuthError("authorization required", reason="oauth_reauthorization_required")
+        config = await self._resolve_config(binding.connector_id)
+        if not self._record_matches_config(record, config, binding):
+            self._auth_cache.pop(binding.connector_id, None)
+            raise OAuthError("configuration changed", reason="oauth_config_changed")
         if (
             str(expected_grant.get("grantId", "")) != record.grant_id
             or int(expected_grant.get("generation", -1)) != record.generation
@@ -986,6 +1168,9 @@ class OAuthCoordinator:
         needs_refresh = (
             expires is not None and (expires - now).total_seconds() <= OAUTH_REFRESH_SKEW_SECONDS
         )
+        if record.refresh_state != "idle" and not needs_refresh:
+            self._auth_cache.pop(binding.connector_id, None)
+            raise OAuthError("authorization required", reason="oauth_reauthorization_required")
         if expires is None:
             return record.access_token  # unknown expiry: use until challenged
         if not needs_refresh:
@@ -996,6 +1181,13 @@ class OAuthCoordinator:
             # Re-read: another worker may have refreshed already.
             fresh = await self._creds.load(binding)
             if fresh is None:
+                raise OAuthError("authorization required", reason="oauth_reauthorization_required")
+            config = await self._resolve_config(binding.connector_id)
+            if not self._record_matches_config(fresh, config, binding):
+                self._auth_cache.pop(binding.connector_id, None)
+                raise OAuthError("configuration changed", reason="oauth_config_changed")
+            if fresh.refresh_state != "idle":
+                self._auth_cache.pop(binding.connector_id, None)
                 raise OAuthError("authorization required", reason="oauth_reauthorization_required")
             if (
                 fresh.access_token != record.access_token
@@ -1010,18 +1202,22 @@ class OAuthCoordinator:
                 ):
                     raise OAuthError("authority changed", reason="oauth_config_changed")
                 return fresh.access_token
-            if fresh.refresh_state == "in_flight":
-                raise OAuthError(
-                    "refresh already in progress; reauthorization required",
-                    reason="oauth_reauthorization_required",
-                )
             # Journal in_flight before POST (crash safety).
             fresh.refresh_state = "in_flight"
             try:
                 await self._creds.save(fresh, expected_generation=fresh.generation)
-            except Exception:
-                pass
-            network = self._network_factory(local_access=True)
+            except ValueError as exc:
+                self._auth_cache.pop(binding.connector_id, None)
+                raise OAuthError(
+                    "authority changed before refresh", reason="oauth_config_changed"
+                ) from exc
+            except Exception as exc:
+                self._auth_cache.pop(binding.connector_id, None)
+                raise OAuthError(
+                    "refresh journal unavailable", reason="oauth_storage_unavailable"
+                ) from exc
+            self._auth_cache.pop(binding.connector_id, None)
+            network = self._network_factory(local_access=bool(config.local_access))
             try:
                 token = await network.refresh_token(fresh, deadline=deadline)
             except OAuthNetworkError as exc:
@@ -1035,7 +1231,7 @@ class OAuthCoordinator:
                     pass
             granted = (
                 tuple(str(token.scope).split())
-                if getattr(token, "scope", None)
+                if getattr(token, "scope", None) is not None
                 else tuple(fresh.granted_scopes)
             )
             if set(granted) - set(fresh.approved_scopes or fresh.granted_scopes):
@@ -1052,33 +1248,67 @@ class OAuthCoordinator:
                     if getattr(token, "expires_in", None)
                     else fresh.expires_at_utc,
                     "refresh_state": "idle",
+                    "grant_id": secrets.token_hex(8)
+                    if set(granted) != set(fresh.granted_scopes)
+                    else fresh.grant_id,
+                    "generation": fresh.generation + 1
+                    if set(granted) != set(fresh.granted_scopes)
+                    else fresh.generation,
                 }
             )
             # Generation check at commit defeats late refresh after logout.
+            current = await self._resolve_config(binding.connector_id)
+            if not self._record_matches_config(fresh, current, binding):
+                raise OAuthError(
+                    "configuration changed during refresh", reason="oauth_config_changed"
+                )
             try:
                 await self._creds.save(updated, expected_generation=fresh.generation)
             except ValueError as exc:
                 raise OAuthError(
                     "authority changed during refresh", reason="oauth_config_changed"
                 ) from exc
-            # Same-grant rotation preserves grant_id/generation by construction.
+            await self.refresh_auth_cache(binding.connector_id, config=current)
+            if updated.grant_id != fresh.grant_id or updated.generation != fresh.generation:
+                raise OAuthError(
+                    "scope authority changed; fresh review required", reason="oauth_config_changed"
+                )
+            # Same-scope rotation preserves grant_id/generation.
             return updated.access_token
 
     async def shutdown(self, *, deadline: float = 5.0) -> None:
+        self._shutting_down = True
         async with self._lock:
-            previews = list(self._previews.keys())
-            for pid in previews:
-                await self._close_preview_locked(pid)
+            callbacks = [preview["callback"] for preview in self._previews.values()]
+            self._previews.clear()
+            tasks = set(self._retention_tasks)
             for op in self._operations.values():
                 task = op.get("task")
                 if task is not None and not task.done():
-                    task.cancel()
+                    tasks.add(task)
                 callback = op.get("callback")
                 if callback is not None:
-                    try:
-                        await callback.aclose()
-                    except Exception:
-                        pass
+                    callbacks.append(callback)
+        for task in tasks:
+            task.cancel()
+
+        async def close_callback(callback):
+            try:
+                await callback.aclose()
+            except Exception:
+                pass
+
+        tasks.update(asyncio.create_task(close_callback(callback)) for callback in set(callbacks))
+        if tasks:
+            done, pending = await asyncio.wait(tasks, timeout=max(0.0, deadline))
+            for task in pending:
+                task.cancel()
+            if pending:
+                cancelled, _ = await asyncio.wait(pending, timeout=0.1)
+                done.update(cancelled)
+            for task in done:
+                if not task.cancelled():
+                    task.exception()
 
 
 class _BasicClient:

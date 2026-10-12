@@ -89,6 +89,17 @@ def _reject_secret_sentinel(mapping: dict[str, Any]) -> None:
             raise OAuthConfigError(f"oauth field {key!r} must not carry secret material")
 
 
+def validate_callback_path(path: str) -> None:
+    if (
+        not isinstance(path, str)
+        or len(path) > 1024
+        or not re.fullmatch(r"/[A-Za-z0-9._~/-]+", path)
+        or path.startswith("//")
+        or any(segment in (".", "..") for segment in path.split("/"))
+    ):
+        raise OAuthConfigError("callback_path must be an absolute, unencoded URL path")
+
+
 @dataclass(frozen=True)
 class OAuthSettings:
     client_mode: str = "auto"
@@ -99,6 +110,7 @@ class OAuthSettings:
     issuer: str = ""
     scope_allowlist: tuple[str, ...] = ()
     callback_port: int = 0
+    callback_path: str = "/oauth/callback"
 
     @classmethod
     def from_dict(cls, fields: dict[str, Any] | None) -> OAuthSettings | None:
@@ -115,6 +127,7 @@ class OAuthSettings:
             "issuer",
             "scope_allowlist",
             "callback_port",
+            "callback_path",
         }
         if unknown:
             raise OAuthConfigError(f"unsupported oauth fields: {sorted(unknown)}")
@@ -131,6 +144,8 @@ class OAuthSettings:
         issuer = fields.get("issuer", "")
         scopes = fields.get("scope_allowlist", [])
         port = fields.get("callback_port", 0)
+        callback_path = fields.get("callback_path", "/oauth/callback")
+        validate_callback_path(callback_path)
         if not isinstance(client_id, str) or not isinstance(metadata_url, str):
             raise OAuthConfigError("client_id/client_metadata_url must be strings")
         if not isinstance(secret_ref, str) or not isinstance(issuer, str):
@@ -202,6 +217,7 @@ class OAuthSettings:
             issuer=issuer,
             scope_allowlist=tuple(scopes),
             callback_port=port,
+            callback_path=callback_path,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -214,6 +230,7 @@ class OAuthSettings:
             "issuer": self.issuer,
             "scope_allowlist": list(self.scope_allowlist),
             "callback_port": self.callback_port,
+            "callback_path": self.callback_path,
         }
 
 
@@ -245,6 +262,7 @@ class DiscoveredOAuth:
     require_iss: bool
     supports_s256: bool
     fingerprint: str
+    supports_client_metadata_document: bool = False
 
 
 @dataclass(frozen=True)
@@ -262,6 +280,7 @@ class OAuthReviewSnapshot:
     registration_mode: str
     client_id: str
     fingerprint: str
+    require_iss: bool = False
 
 
 @dataclass(frozen=True)

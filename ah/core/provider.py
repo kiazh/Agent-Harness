@@ -17,6 +17,7 @@ import httpx
 
 from ah.core.config import config
 from ah.core.exceptions import ProviderError, RateLimitError, ValidationError
+from ah.core.images import anthropic_content, ollama_messages
 from ah.core.metrics import metrics
 from ah.core.models import (  # noqa: F401 — re-exported for backward compat
     LLMResponse,
@@ -1240,7 +1241,7 @@ class OllamaProvider(LLMProvider):
 
         payload: dict[str, Any] = {
             "model": model or self.model,
-            "messages": messages,
+            "messages": ollama_messages(messages),
             "stream": False,
             "options": {
                 "temperature": temperature,
@@ -1387,7 +1388,7 @@ class OllamaProvider(LLMProvider):
 
         payload: dict[str, Any] = {
             "model": model or self.model,
-            "messages": messages,
+            "messages": ollama_messages(messages),
             "stream": True,
             "options": {
                 "temperature": temperature,
@@ -1884,7 +1885,7 @@ class AnthropicProvider(LLMProvider):
                     )
                 out.append({"role": "assistant", "content": blocks})
                 continue
-            out.append({"role": role, "content": str(msg.get("content", ""))})
+            out.append({"role": role, "content": anthropic_content(msg.get("content", ""))})
         return ("\n\n".join(system_parts) if system_parts else None, out)
 
     @staticmethod

@@ -71,7 +71,7 @@ async function addServer(host: FeatureHost): Promise<void> {
  const { server } = await host.request<{ server: MCPServerView }>("mcp.configure", { config });
  host.print(`${nameOf(server)} saved. Open /mcp and choose Connect when ready.`, "success");
 }
-async function askOAuthSettings(host: FeatureHost): Promise<MCPOAuthSettings | undefined> {
+async function askOAuthSettings(host: FeatureHost, existing?: MCPOAuthSettings): Promise<MCPOAuthSettings | undefined> {
  const mode = await host.pick("OAuth client registration", [
   { value: "auto", label: "Automatic", description: "Use dynamic registration when the server supports it" },
   { value: "preregistered", label: "Pre-registered", description: "Use an existing client ID" },
@@ -79,24 +79,32 @@ async function askOAuthSettings(host: FeatureHost): Promise<MCPOAuthSettings | u
  ]);
  if (!mode) return undefined;
  const settings: MCPOAuthSettings = {
-  client_mode: mode.value, client_id: "", client_metadata_url: "", client_secret_ref: "",
+  client_id: "", client_metadata_url: "", client_secret_ref: "",
   token_endpoint_auth_method: "none", issuer: "", scope_allowlist: [], callback_port: 0,
+  ...existing,
+  client_mode: mode.value,
  };
+ if (existing?.client_mode !== mode.value) {
+  settings.client_id = "";
+  settings.client_metadata_url = "";
+  settings.client_secret_ref = "";
+  settings.token_endpoint_auth_method = "none";
+ }
  if (mode.value === "preregistered") {
-  const clientId = await host.askText({ title: "Client ID", description: "Public client ID from the provider" });
+  const clientId = await host.askText({ title: "Client ID", initial: existing?.client_id, description: "Public client ID from the provider" });
   if (clientId === undefined) return undefined;
   settings.client_id = clientId.trim();
  }
  if (mode.value === "metadata_document") {
-  const documentUrl = await host.askText({ title: "Client metadata URL", example: "https://client.example.com/metadata" });
+  const documentUrl = await host.askText({ title: "Client metadata URL", initial: existing?.client_metadata_url, example: "https://client.example.com/metadata" });
   if (documentUrl === undefined) return undefined;
   settings.client_metadata_url = documentUrl.trim();
-  if (settings.client_id === "") settings.client_id = settings.client_metadata_url;
+  settings.client_id = settings.client_metadata_url;
  }
- const issuer = await host.askText({ title: "Issuer (optional)", description: "Leave empty to use the server-advertised issuer" });
+ const issuer = await host.askText({ title: "Issuer (optional)", initial: existing?.issuer, description: "Leave empty to use the server-advertised issuer" });
  if (issuer === undefined) return undefined;
- if (issuer.trim()) settings.issuer = issuer.trim();
- const scopes = await host.askText({ title: "Allowed scopes (JSON array, optional)", initial: "[]", description: "Empty means every discovered scope needs explicit review" });
+ settings.issuer = issuer.trim();
+ const scopes = await host.askText({ title: "Allowed scopes (JSON array, optional)", initial: JSON.stringify(existing?.scope_allowlist ?? []), description: "Empty means every discovered scope needs explicit review" });
  if (scopes === undefined) return undefined;
  const parsed: unknown = JSON.parse(scopes || "[]");
  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) throw new Error("Allowed scopes must be a JSON array of strings. Open /mcp to try again.");
@@ -125,7 +133,7 @@ async function manageServer(host: FeatureHost, id: string): Promise<void> {
    { value: "authorize", label: hasOAuth ? "Authorize / Reauthorize" : "Authorize", description: "Authorize in an external browser" },
    { value: "forget", label: "Forget access", description: "Remove saved OAuth credentials" },
   ] : []),
-  ...(isHttp && !hasOAuth ? [{ value: "configure-oauth", label: "Configure OAuth", description: "Add OAuth settings to this server" }] : []),
+  ...(isHttp ? [{ value: "configure-oauth", label: hasOAuth ? "Edit OAuth settings" : "Configure OAuth", description: hasOAuth ? "Update client, issuer and allowed scopes" : "Add OAuth settings to this server" }] : []),
   { value: "tools", label: "View tools", description: "Inspect cached tools without connecting" },
   { value: "remove", label: "Remove server", description: "Delete its configuration and close its connection" },
  ]);
@@ -135,7 +143,7 @@ async function manageServer(host: FeatureHost, id: string): Promise<void> {
  } else if (action.value === "forget") {
   await forgetConnectorAccess(host, id);
  } else if (action.value === "configure-oauth") {
-  const oauth = await askOAuthSettings(host);
+  const oauth = await askOAuthSettings(host, server.oauth ?? undefined);
   if (!oauth) return;
   const { server: saved } = await host.request<{ server: MCPServerView }>("mcp.configure", { config: { id, oauth } });
   host.print(`${nameOf(saved)} OAuth settings saved. Choose Authorize when ready.`, "success");

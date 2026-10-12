@@ -17,7 +17,7 @@ import subprocess
 import sys
 
 
-def _run_child(code: str) -> "subprocess.CompletedProcess[str]":
+def _run_child(code: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,

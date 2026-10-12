@@ -35,6 +35,9 @@ def _limits() -> dict[str, int]:
 
 def _estimate_tokens(messages: list[dict[str, Any]], tools: list[Any], max_tokens: int) -> int:
     """Reserve a conservative amount when provider usage is not yet known."""
+    from ah.core.images import token_messages
+
+    messages, visual_tokens = token_messages(messages)
     payload = json.dumps({"messages": messages, "tools": tools}, default=str, ensure_ascii=False)
     try:
         prompt_estimate = get_token_count(payload)
@@ -42,7 +45,7 @@ def _estimate_tokens(messages: list[dict[str, Any]], tools: list[Any], max_token
         # tiktoken rejects certain special-token spellings by default; those
         # are valid user text and must not prevent a provider call.
         prompt_estimate = max(1, len(payload) // 3)
-    return max(1, int(prompt_estimate * 1.2) + 16 + max_tokens)
+    return max(1, int((prompt_estimate + visual_tokens) * 1.2) + 16 + max_tokens)
 
 
 def _check_limit(

@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import random
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-
 # ─── 14. Batch vector insertion against real PostgreSQL ──────────────────
+
 
 async def test_batch_vector_insert_with_embeddings(db_pool, monkeypatch):
     """$7::text[]::vector[] cast accepted by the real PG16 + pgvector server."""
@@ -20,6 +19,7 @@ async def test_batch_vector_insert_with_embeddings(db_pool, monkeypatch):
 
     monkeypatch.setattr(cmod, "db", db_pool)
     from ah.core.context import context_manager
+
     sid = None
     try:
         row = await db_pool.fetchrow(
@@ -54,6 +54,7 @@ async def test_batch_insert_all_none_embeddings(db_pool, monkeypatch):
 
     monkeypatch.setattr(cmod, "db", db_pool)
     from ah.core.context import context_manager
+
     sid = None
     try:
         row = await db_pool.fetchrow(
@@ -87,6 +88,7 @@ async def test_batch_insert_concurrent_with_single_inserts(db_pool, monkeypatch)
 
     monkeypatch.setattr(cmod, "db", db_pool)
     from ah.core.context import context_manager
+
     sid = None
     try:
         row = await db_pool.fetchrow(
@@ -111,7 +113,9 @@ async def test_batch_insert_concurrent_with_single_inserts(db_pool, monkeypatch)
             asyncio.create_task(context_manager.add_chunks_batch(batch)),
             *(
                 asyncio.create_task(
-                    context_manager.add_chunk(sid, "harness", "user_message", {"content": f"s{i}"}, 3, emb)
+                    context_manager.add_chunk(
+                        sid, "harness", "user_message", {"content": f"s{i}"}, 3, emb
+                    )
                 )
                 for i in range(10)
             ),
@@ -133,6 +137,7 @@ async def test_unsupported_vector_dimension_fails_loudly(db_pool, monkeypatch):
 
     monkeypatch.setattr(cmod, "db", db_pool)
     from ah.core.context import context_manager
+
     row = await db_pool.fetchrow(
         "INSERT INTO sessions (title, agent_id) VALUES ($1,$2) RETURNING id",
         "bad-vector",
@@ -167,6 +172,7 @@ async def test_batch_insert_preserves_document_source(db_pool, monkeypatch):
 
     monkeypatch.setattr(cmod, "db", db_pool)
     from ah.core.context import context_manager
+
     sid = None
     try:
         row = await db_pool.fetchrow(
@@ -199,6 +205,7 @@ async def test_batch_insert_preserves_document_source(db_pool, monkeypatch):
 
 
 # ─── 15. Startup probes do not block the event loop ──────────────────────
+
 
 async def test_startup_and_refresh_run_detection_off_loop(monkeypatch):
     """startup()/refresh() execute probes via asyncio.to_thread."""
@@ -239,7 +246,6 @@ async def test_startup_and_refresh_run_detection_off_loop(monkeypatch):
 async def test_detection_runs_while_a_slow_probe_blocks_the_thread(monkeypatch):
     """A blocking thread must not stall the event loop."""
     import threading
-    import time
 
     import ah.core.runtime as rt
 
@@ -317,6 +323,7 @@ async def test_ollama_probe_timeout_reports_unavailable(monkeypatch):
 
 
 # ─── 16. Scheduler finish outcomes ───────────────────────────────────────
+
 
 def _finish_status_test_helpers():
     """Canonical shared helpers keep mock and production paths aligned."""
@@ -408,7 +415,10 @@ async def test_scheduler_paused_approval_finish(db_pool, monkeypatch):
     store, sid, job = await _isolated_job(db_pool, monkeypatch, "paused", "interval", prompt="x")
     try:
         claimed = await store.claim_due()
-        assert await store.finish(claimed.id, claim_token=claimed.claim_token, paused_for="req-1") is True
+        assert (
+            await store.finish(claimed.id, claim_token=claimed.claim_token, paused_for="req-1")
+            is True
+        )
         paused = await store.get(job.id)
         assert paused.status == "paused_approval"
         assert paused.paused_for_approval == "req-1"
@@ -422,8 +432,13 @@ async def test_scheduler_paused_approval_finish(db_pool, monkeypatch):
 
 async def test_scheduler_cron_reschedule(db_pool, monkeypatch):
     store, sid, job = await _isolated_job(
-        db_pool, monkeypatch, "cronjob", "cron",
-        interval_seconds=60, cron_expression="*/5 * * * *", prompt="c",
+        db_pool,
+        monkeypatch,
+        "cronjob",
+        "cron",
+        interval_seconds=60,
+        cron_expression="*/5 * * * *",
+        prompt="c",
     )
     try:
         before = await store.get(job.id)
@@ -442,9 +457,12 @@ async def test_scheduler_error_finish_records_error(db_pool, monkeypatch):
     store, sid, job = await _isolated_job(db_pool, monkeypatch, "err", "interval", prompt="x")
     try:
         claimed = await store.claim_due()
-        assert await store.finish(
-            claimed.id, claim_token=claimed.claim_token, error="RuntimeError: boom"
-        ) is True
+        assert (
+            await store.finish(
+                claimed.id, claim_token=claimed.claim_token, error="RuntimeError: boom"
+            )
+            is True
+        )
         got = await store.get(job.id)
         assert got.status == "error"
         assert "boom" in (got.last_error or "")
@@ -453,6 +471,7 @@ async def test_scheduler_error_finish_records_error(db_pool, monkeypatch):
 
 
 # ─── 17. Windows bootstrap broken pipe ──────────────────────────────────
+
 
 async def _run_broken_pipe_case(monkeypatch, pipe, cleaned):
     """Shared harness for Windows bootstrap transport failures."""
@@ -554,10 +573,16 @@ _js.js_broken_pipe_pipe = js_broken_pipe_pipe
 
 # ─── 18. Metrics formatter redaction boundary ────────────────────────────
 
+
 def _record(**extras):
     rec = logging.LogRecord(
-        name="test", level=logging.INFO, pathname=__file__, lineno=1,
-        msg="message", args=None, exc_info=None,
+        name="test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="message",
+        args=None,
+        exc_info=None,
     )
     for key, value in extras.items():
         setattr(rec, key, value)

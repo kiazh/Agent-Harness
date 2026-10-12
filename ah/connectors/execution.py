@@ -274,6 +274,9 @@ async def execute_call(service, name: str, arguments: dict, *, session_id: str, 
             raise ConnectorToolError("MCP deadline expired before dispatch")
         if getattr(config, "oauth", None):
             await _oauth_preflight(service, config, remaining=remaining)
+        remaining = config.call_timeout - (asyncio.get_running_loop().time() - started)
+        if remaining <= 0:
+            raise ConnectorToolError("MCP deadline expired before dispatch")
         try:
             async with asyncio.timeout(remaining):
                 return await connection.call_tool(tool.remote_name, arguments)

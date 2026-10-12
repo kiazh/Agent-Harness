@@ -20,6 +20,7 @@ import json
 import os
 import secrets
 import tempfile
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -124,9 +125,11 @@ def _lock_file(path: Path):
     return os.open(str(path), os.O_CREAT | os.O_RDWR, 0o600)
 
 
-def _file_lock_acquire(fd: int, *, timeout: float) -> bool:
+def _file_lock_acquire(fd: int, *, timeout: float, cancelled=None) -> bool:
     deadline = time.monotonic() + max(0.0, timeout)
     while True:
+        if cancelled is not None and cancelled.is_set():
+            return False
         try:
             if _WINDOWS:  # pragma: no cover
                 if os.fstat(fd).st_size == 0:
@@ -369,6 +372,7 @@ class OAuthCredentialStore:
                         "generation": record.generation,
                         "grant_id": record.grant_id,
                         "connector_id": record.connector_id,
+                        "config_revision": record.config_revision,
                     }
                     self._write_index(index)
                     # GC: remove superseded envelopes for this key.
@@ -392,7 +396,13 @@ class OAuthCredentialStore:
         # Defense in depth: report failure loudly; caller marks flow failed.
         return committed
 
-    async def forget(self, binding: OAuthBinding, *, expected_generation: int) -> int:
+    async def forget(
+        self,
+        binding: OAuthBinding,
+        *,
+        expected_generation: int,
+        max_config_revision: int | None = None,
+    ) -> int:
         key = _safe_name(binding.credential_key)
         _ensure_dirs(self.root)
         await self._master()
@@ -408,6 +418,12 @@ class OAuthCredentialStore:
                     current_gen = int(current.get("generation", 0)) if current else 0
                     tombstone_gen = int(index["tombstones"].get(key, 0))
                     floor = max(current_gen, tombstone_gen)
+                    if (
+                        max_config_revision is not None
+                        and current is not None
+                        and int(current.get("config_revision", 0)) > max_config_revision
+                    ):
+                        return floor
                     if expected_generation != floor:
                         raise ValueError("oauth generation mismatch; stale forget")
                     new_gen = floor + 1
@@ -451,20 +467,48 @@ class OAuthCredentialStore:
             await asyncio.wait_for(lock.acquire(), timeout=min(remaining, OAUTH_LOCK_SECONDS))
         except TimeoutError as exc:
             raise TimeoutError("oauth refresh lock acquisition timed out") from exc
-        lock_path = self.root / "locks" / f"{key}.lock"
-        fd = await asyncio.to_thread(_lock_file, lock_path)
-        acquired = await asyncio.to_thread(
-            _file_lock_acquire, fd, timeout=min(remaining, OAUTH_LOCK_SECONDS)
-        )
-        if not acquired:
-            lock.release()
-            await asyncio.to_thread(os.close, fd)
-            raise TimeoutError("oauth cross-process refresh lock timed out")
+        fd = None
+        acquired = False
+        cancelled = threading.Event()
         try:
+            lock_path = self.root / "locks" / f"{key}.lock"
+            fd = _lock_file(lock_path)
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("oauth refresh lock deadline expired")
+            acquisition = asyncio.create_task(
+                asyncio.to_thread(
+                    _file_lock_acquire,
+                    fd,
+                    timeout=min(remaining, OAUTH_LOCK_SECONDS),
+                    cancelled=cancelled,
+                )
+            )
+            try:
+                acquired = await asyncio.shield(acquisition)
+            except asyncio.CancelledError:
+                cancelled.set()
+                # The worker owns fd until it exits; never close/reuse it while
+                # a background flock may still acquire it.
+                while not acquisition.done():
+                    try:
+                        await asyncio.shield(acquisition)
+                    except asyncio.CancelledError:
+                        continue
+                acquired = acquisition.result()
+                raise
+            if not acquired:
+                raise TimeoutError("oauth cross-process refresh lock timed out")
             yield
         finally:
-            await asyncio.to_thread(_file_lock_release, fd)
-            lock.release()
+            try:
+                if fd is not None:
+                    if acquired:
+                        _file_lock_release(fd)
+                    else:
+                        os.close(fd)
+            finally:
+                lock.release()
 
     async def mark_refresh_state(self, binding: OAuthBinding, state: str) -> None:
         record = await self.load(binding)

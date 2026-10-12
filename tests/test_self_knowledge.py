@@ -10,6 +10,15 @@ from ah.core.config import config
 from ah.core.models import LLMResponse, Session, StreamEvent
 
 
+def test_capability_brief_explains_oauth_and_inline_user_images():
+    from ah.core.self_knowledge import FEATURES
+
+    assert "OAuth remains unavailable" not in FEATURES["mcp"]
+    assert "OAuth" in FEATURES["mcp"]
+    assert "PKCE" in FEATURES["mcp"]
+    assert "[image 1]" in FEATURES.get("images", "")
+
+
 def setup_agent(monkeypatch, *, allowed_tools=None):
     from ah.core.agent import ReActAgent
 
@@ -200,9 +209,7 @@ async def test_status_tool_is_read_only_owned_and_redacted(monkeypatch):
     from ah.permissions.tools import action_for_tool
 
     assert action_for_tool("harness_status", {})["operation"] == "context.read"
-    assert "mcp_call" in payload["features"]["mcp"], (
-        "discovery is not remote tool exposure"
-    )
+    assert "mcp_call" in payload["features"]["mcp"], "discovery is not remote tool exposure"
 
 
 async def test_status_tool_refuses_wrong_owner_and_sanitizes_failure(monkeypatch):

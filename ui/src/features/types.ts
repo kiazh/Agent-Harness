@@ -55,6 +55,8 @@ export interface FeatureHost {
 	 * after dispose. Status updates never touch the transcript.
 	 */
 	showOAuthProgress(options: OAuthProgressOptions): OAuthProgressHandle;
+	/** Copy a transient value using the local OS clipboard, if available. */
+	copyText?(text: string): Promise<boolean>;
 	/** Inspect locally retained tool output; never re-executes tools. */
 	inspectOutput(toolId?: string): Promise<void>;
 	/** Active user profile id (preferences bucket + new-chat agent scope). */
@@ -103,6 +105,7 @@ export interface OAuthProgressOptions {
 	/** Transient login link: shown only in the overlay viewer, never printed. */
 	loginUrl?: string;
 	onOpen(): void;
+	onCopy?(): void;
 	onCancel(): void;
 }
 

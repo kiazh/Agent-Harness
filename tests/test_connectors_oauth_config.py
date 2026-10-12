@@ -101,6 +101,7 @@ def test_legacy_config_roundtrip_and_revision_identity():
         "issuer": "",
         "scope_allowlist": [],
         "callback_port": 0,
+        "callback_path": "/oauth/callback",
     }
     sentinel = "supersecret-token-value"
     oauth_view = _http(oauth={"client_mode": "preregistered", "client_id": "id"}).public_view()
@@ -135,3 +136,44 @@ def test_partial_oauth_update_merges_and_bumps_revision(tmp_path):
             await service.configure({"id": "missing", "oauth": {"client_mode": "auto"}})
 
     asyncio.run(_run())
+
+
+def test_preregistered_callback_path_roundtrips():
+    settings = OAuthSettings.from_dict(
+        {
+            "client_mode": "preregistered",
+            "client_id": "registered",
+            "callback_path": "/provider/callback",
+            "callback_port": 12345,
+        }
+    )
+    assert settings.callback_path == "/provider/callback"
+    assert settings.to_dict()["callback_path"] == "/provider/callback"
+    assert (
+        OAuthSettings.from_dict(
+            {"client_mode": "preregistered", "client_id": "registered"}
+        ).callback_path
+        == "/oauth/callback"
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "",
+        "relative",
+        "//evil/callback",
+        "/a?x=1",
+        "/a#frag",
+        "/a\r\n",
+        "/a%2fb",
+        "/a/../b",
+        "/a\\b",
+        3,
+    ],
+)
+def test_unsafe_callback_path_rejected(path):
+    with pytest.raises(ValueError):
+        OAuthSettings.from_dict(
+            {"client_mode": "preregistered", "client_id": "registered", "callback_path": path}
+        )

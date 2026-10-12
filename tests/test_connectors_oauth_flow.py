@@ -158,41 +158,60 @@ def test_preview_freeze_and_ownership(tmp_path):
     asyncio.run(_run())
 
 
-def test_preregistered_and_basic_and_metadata_document_modes(tmp_path):
+def test_preregistered_and_basic_and_metadata_document_modes(tmp_path, monkeypatch):
     async def _run():
+        import socket
+
+        # Reserve an available port only to choose the registered exact URI;
+        # the coordinator owns the actual listener throughout each login.
+        with socket.socket() as candidate:
+            candidate.bind(("127.0.0.1", 0))
+            callback_port = candidate.getsockname()[1]
+        callback_uri = f"http://127.0.0.1:{callback_port}/provider/callback"
         fixture = OAuthFixture()
-        fixture.preregister("public-client")
-        fixture.preregister("conf-client", secret="conf-secret-value")
+        fixture.preregister("public-client", redirect_uri=callback_uri)
+        fixture.preregister("conf: +é", redirect_uri=callback_uri, secret="conf: +&é")
         await fixture.start()
+        coordinator = coordinator2 = None
         try:
             # Public pre-registered client: no DCR traffic.
             service, coordinator = _service(
                 fixture,
                 tmp_path=tmp_path,
-                oauth_settings={"client_mode": "preregistered", "client_id": "public-client"},
+                oauth_settings={
+                    "client_mode": "preregistered",
+                    "client_id": "public-client",
+                    "callback_port": callback_port,
+                    "callback_path": "/provider/callback",
+                },
             )
             owner = _owner()
-            await _full_login(fixture, coordinator, owner)
+            _, _, final = await _full_login(fixture, coordinator, owner)
+            assert final["operation"]["state"] == "complete"
             assert fixture.counters["register"] == 0
             await coordinator.shutdown()
             # Explicit Basic client resolves the named secret only at exchange.
-            import os
-
-            os.environ["OAUTH_FIXTURE_CLIENT_SECRET"] = "conf-secret-value"
+            monkeypatch.setenv("OAUTH_FIXTURE_CLIENT_SECRET", "conf: +&é")
             service2, coordinator2 = _service(
                 fixture,
                 tmp_path=tmp_path,
                 oauth_settings={
                     "client_mode": "preregistered",
-                    "client_id": "conf-client",
+                    "client_id": "conf: +é",
+                    "callback_port": callback_port,
+                    "callback_path": "/provider/callback",
                     "client_secret_ref": "OAUTH_FIXTURE_CLIENT_SECRET",
                     "token_endpoint_auth_method": "client_secret_basic",
                 },
             )
-            await _full_login(fixture, coordinator2, owner)
+            _, _, final = await _full_login(fixture, coordinator2, owner)
+            assert final["operation"]["state"] == "complete"
+            assert fixture.counters["exchange"] == 2
             await coordinator2.shutdown()
-            del os.environ["OAUTH_FIXTURE_CLIENT_SECRET"]
         finally:
+            for active in (coordinator, coordinator2):
+                if active is not None:
+                    await active.shutdown()
             await fixture.stop()
 
     asyncio.run(_run())
@@ -274,3 +293,213 @@ def test_lost_exchange_response_never_reuses_code(tmp_path):
             await fixture.stop()
 
     asyncio.run(_run())
+
+
+def test_advertised_response_issuer_is_required_before_exchange(tmp_path):
+    async def run():
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+        fixture = OAuthFixture()
+        await fixture.start()
+        coordinator = None
+        try:
+            service, coordinator = _service(fixture, tmp_path=tmp_path)
+            owner = _owner()
+            preview = await coordinator.preview("remote", owner)
+            started = await coordinator.start(
+                "remote", owner, preview_id=preview["previewId"], digest=preview["digest"]
+            )
+            operation_id = started["operation"]["operationId"]
+            await _wait_state(coordinator, "remote", owner, operation_id, "awaiting_browser")
+            url = await coordinator.authorization_url(operation_id, owner)
+            async with httpx.AsyncClient(follow_redirects=False, trust_env=False) as client:
+                response = await client.get(url)
+                callback = urlsplit(response.headers["location"])
+                query = urlencode(
+                    [(key, value) for key, value in parse_qsl(callback.query) if key != "iss"]
+                )
+                missing_issuer = urlunsplit(callback._replace(query=query))
+                rejected = await client.get(missing_issuer)
+                assert "Authorization request invalid" in rejected.text
+            await asyncio.sleep(0.05)
+            assert fixture.counters["exchange"] == 0
+            status = await coordinator.status("remote", owner, operation_id=operation_id)
+            assert status["operation"]["state"] == "awaiting_browser"
+            assert (await coordinator.status("remote", owner))["auth"]["state"] == "signed_out"
+            async with httpx.AsyncClient(follow_redirects=False, trust_env=False) as client:
+                await client.get(response.headers["location"])
+            final = await _wait_state(coordinator, "remote", owner, operation_id, "complete")
+            assert final["operation"]["state"] == "complete"
+            assert fixture.counters["exchange"] == 1
+        finally:
+            if coordinator is not None:
+                await coordinator.shutdown()
+            await fixture.stop()
+
+    asyncio.run(run())
+
+
+def test_metadata_document_requires_server_advertisement(tmp_path):
+    async def run():
+        from ah.connectors.oauth import OAuthError
+
+        fixture = OAuthFixture()
+        await fixture.start()
+        coordinator = None
+        try:
+            service, coordinator = _service(
+                fixture,
+                tmp_path=tmp_path,
+                oauth_settings={
+                    "client_mode": "metadata_document",
+                    "client_metadata_url": "https://client.example.com/client.json",
+                },
+            )
+            with pytest.raises(OAuthError) as exc:
+                await coordinator.preview("remote", _owner())
+            assert exc.value.reason == "oauth_client_configuration_required"
+            assert fixture.counters["register"] == 0
+            assert not coordinator._previews
+        finally:
+            if coordinator is not None:
+                await coordinator.shutdown()
+            await fixture.stop()
+
+    asyncio.run(run())
+
+
+def test_reauthorization_after_provider_edit_selects_current_grant(tmp_path):
+    async def run():
+        from ah.connectors.oauth_store import credential_key_for
+
+        old_provider = OAuthFixture()
+        new_provider = OAuthFixture()
+        await old_provider.start()
+        await new_provider.start()
+        coordinator = None
+        try:
+            old_client = "old-client"
+            old_key = credential_key_for(
+                connector_id="remote",
+                resource=old_provider.endpoint,
+                issuer=old_provider.issuer,
+                client_id=old_client,
+            )
+            for attempt in range(1000):
+                new_client = f"new-client-{attempt}"
+                new_key = credential_key_for(
+                    connector_id="remote",
+                    resource=new_provider.endpoint,
+                    issuer=new_provider.issuer,
+                    client_id=new_client,
+                )
+                if old_key < new_key:
+                    break
+            else:
+                pytest.fail("could not arrange stale grant first in canonical index")
+            service, coordinator = _service(
+                old_provider,
+                tmp_path=tmp_path,
+                oauth_settings={"client_mode": "preregistered", "client_id": old_client},
+            )
+            owner = _owner()
+
+            async def login(provider, client_id):
+                preview = await coordinator.preview("remote", owner)
+                provider.preregister(client_id, redirect_uri=preview["review"]["redirectUri"])
+                started = await coordinator.start(
+                    "remote", owner, preview_id=preview["previewId"], digest=preview["digest"]
+                )
+                operation_id = started["operation"]["operationId"]
+                await _wait_state(coordinator, "remote", owner, operation_id, "awaiting_browser")
+                await _drive_browser(coordinator, owner, operation_id)
+                final = await _wait_state(coordinator, "remote", owner, operation_id, "complete")
+                assert final["operation"]["state"] == "complete"
+
+            await login(old_provider, old_client)
+            service.registry.update(
+                "remote",
+                endpoint=new_provider.endpoint,
+                oauth={"client_mode": "preregistered", "client_id": new_client},
+            )
+            await login(new_provider, new_client)
+            await coordinator.refresh_auth_cache("remote")
+            identity = coordinator.auth_identity("remote")
+            assert identity is not None, (
+                "an earlier stale grant must not hide newly authorized credentials"
+            )
+            assert identity["credentialKey"] == new_key
+            assert identity["resource"] == new_provider.endpoint
+            status = await coordinator.status("remote", owner)
+            assert status["auth"]["state"] == "authorized"
+            assert status["auth"]["issuer"] == new_provider.issuer
+        finally:
+            if coordinator is not None:
+                await coordinator.shutdown()
+            await old_provider.stop()
+            await new_provider.stop()
+
+    asyncio.run(run())
+
+
+def test_initial_exchange_preserves_explicit_empty_granted_scope(tmp_path):
+    async def run():
+        from dataclasses import replace
+
+        from ah.connectors.oauth_models import OAuthBinding
+        from ah.connectors.oauth_network import OAuthNetworkClient
+
+        class ReadOnlyNetwork(OAuthNetworkClient):
+            async def discover(self, *args, **kwargs):
+                discovered = await super().discover(*args, **kwargs)
+                return replace(discovered, scopes=("read",))
+
+        fixture = OAuthFixture()
+        await fixture.start()
+        coordinator = None
+        try:
+            service, coordinator = _service(fixture, tmp_path=tmp_path)
+            coordinator._network_factory = lambda *, local_access: ReadOnlyNetwork(
+                local_access=local_access
+            )
+            owner = _owner()
+            preview = await coordinator.preview("remote", owner)
+            assert preview["review"]["requestedScopes"] == ["read"]
+            started = await coordinator.start(
+                "remote", owner, preview_id=preview["previewId"], digest=preview["digest"]
+            )
+            operation_id = started["operation"]["operationId"]
+            await _wait_state(coordinator, "remote", owner, operation_id, "awaiting_browser")
+            url = await coordinator.authorization_url(operation_id, owner)
+            async with httpx.AsyncClient(follow_redirects=False, trust_env=False) as client:
+                response = await client.get(url)
+                assert response.status_code == 302
+                assert len(fixture._codes) == 1
+                code = next(iter(fixture._codes.values()))
+                assert code["scope"] == "read"
+                # The provider reduces its actual token grant to zero scopes.
+                # Its real token endpoint emits the explicit scope="" field.
+                code["scope"] = ""
+                await client.get(response.headers["location"])
+            final = await _wait_state(coordinator, "remote", owner, operation_id, "complete")
+            assert final["operation"]["state"] == "complete"
+            assert final["auth"]["grantedScopes"] == []
+            await coordinator.refresh_auth_cache("remote")
+            identity = coordinator.auth_identity("remote")
+            assert identity["grantedScopes"] == []
+            binding = OAuthBinding(
+                connector_id="remote",
+                credential_key=identity["credentialKey"],
+                resource=identity["resource"],
+                issuer=identity["issuer"],
+                client_id=identity["clientId"],
+            )
+            record = await coordinator._creds.load(binding)
+            assert record.approved_scopes == ("read",)
+            assert record.granted_scopes == ()
+        finally:
+            if coordinator is not None:
+                await coordinator.shutdown()
+            await fixture.stop()
+
+    asyncio.run(run())

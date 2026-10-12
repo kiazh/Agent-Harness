@@ -116,6 +116,15 @@ def _worker(root: str, endpoint: str, issuer: str, queue):
                 connector_id="remote", credential_key=key, resource="", issuer="", client_id=""
             )
         )
+        config = ConnectorConfig(
+            id="remote",
+            transport="streamable_http",
+            endpoint=endpoint,
+            revision=record.config_revision,
+            local_access=True,
+            oauth={"client_mode": "auto", "issuer": issuer},
+        )
+        coordinator._config_resolver = lambda _: config
         binding = _Binding(
             connector_id="remote",
             credential_key=key,
@@ -258,3 +267,237 @@ def test_invalid_grant_clears_eligibility_without_resource_dispatch(tmp_path):
             await fixture.stop()
 
     asyncio.run(_run())
+
+
+async def _seed_refresh(
+    tmp_path, *, expires_at="2020-01-01T00:00:00+00:00", scopes=("read", "write")
+):
+    from tests.test_connectors_oauth_store import _binding, _record
+
+    binding = _binding()
+    store = OAuthCredentialStore(tmp_path / "oauth", key_provider=lambda: b"k" * 32)
+    config = ConnectorConfig(
+        id="web",
+        transport="streamable_http",
+        endpoint=binding.resource,
+        revision=1,
+        local_access=False,
+        oauth={"client_mode": "auto"},
+    )
+    record = _record(
+        binding, expires_at_utc=expires_at, approved_scopes=scopes, granted_scopes=scopes
+    )
+    await store.save(record, expected_generation=0)
+    coordinator = OAuthCoordinator(config_resolver=lambda _: config, credential_store=store)
+    await coordinator.refresh_auth_cache("web")
+    return coordinator, config, binding, coordinator.auth_identity("web")
+
+
+def test_refresh_journal_failure_never_sends_rotating_token(tmp_path, monkeypatch):
+    async def run():
+        coordinator, config, binding, identity = await _seed_refresh(tmp_path)
+
+        async def fail_save(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(coordinator._creds, "save", fail_save)
+
+        def forbidden_network(**kwargs):
+            pytest.fail("refresh token dispatched without durable journal")
+
+        coordinator._network_factory = forbidden_network
+        with pytest.raises(OAuthError) as exc:
+            await coordinator.ensure_token(
+                binding, expected_grant=identity, deadline=asyncio.get_running_loop().time() + 2
+            )
+        assert exc.value.reason == "oauth_storage_unavailable"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("change", ["revision", "resource", "issuer", "client"])
+def test_valid_token_rejects_current_configuration_change(tmp_path, change):
+    async def run():
+        coordinator, config, binding, identity = await _seed_refresh(tmp_path, expires_at="")
+        if change == "revision":
+            config.revision = 2
+        elif change == "resource":
+            config.endpoint = "https://other.example.com/mcp"
+        elif change == "issuer":
+            config.oauth = {"client_mode": "auto", "issuer": "https://other.example.com"}
+        else:
+            config.oauth = {"client_mode": "preregistered", "client_id": "other-client"}
+        with pytest.raises(OAuthError) as exc:
+            await coordinator.ensure_token(
+                binding, expected_grant=identity, deadline=asyncio.get_running_loop().time() + 2
+            )
+        assert exc.value.reason == "oauth_config_changed"
+        await coordinator.refresh_auth_cache("web")
+        assert coordinator.auth_identity("web") is None
+
+    asyncio.run(run())
+
+
+def test_refresh_scope_change_invalidates_prior_review(tmp_path):
+    async def run():
+        from types import SimpleNamespace
+
+        coordinator, config, binding, identity = await _seed_refresh(tmp_path)
+
+        class Network:
+            async def refresh_token(self, record, *, deadline):
+                return SimpleNamespace(
+                    access_token="new-access",
+                    refresh_token="new-refresh",
+                    scope="read",
+                    expires_in=3600,
+                )
+
+            async def aclose(self):
+                pass
+
+        coordinator._network_factory = lambda **kwargs: Network()
+        with pytest.raises(OAuthError) as exc:
+            await coordinator.ensure_token(
+                binding, expected_grant=identity, deadline=asyncio.get_running_loop().time() + 2
+            )
+        assert exc.value.reason == "oauth_config_changed"
+        await coordinator.refresh_auth_cache("web")
+        new_identity = coordinator.auth_identity("web")
+        assert new_identity["grantId"] != identity["grantId"]
+        assert new_identity["generation"] == identity["generation"] + 1
+        assert new_identity["grantedScopes"] == ["read"]
+        with pytest.raises(OAuthError):
+            await coordinator.ensure_token(
+                binding, expected_grant=identity, deadline=asyncio.get_running_loop().time() + 2
+            )
+
+    asyncio.run(run())
+
+
+def test_refresh_uses_configured_local_access_policy(tmp_path):
+    async def run():
+        from types import SimpleNamespace
+
+        coordinator, config, binding, identity = await _seed_refresh(tmp_path)
+
+        class Network:
+            async def refresh_token(self, record, *, deadline):
+                return SimpleNamespace(
+                    access_token="new-access",
+                    refresh_token="new-refresh",
+                    scope="read write",
+                    expires_in=3600,
+                )
+
+            async def aclose(self):
+                pass
+
+        def network_factory(*, local_access):
+            assert local_access is False, "refresh must honor saved local access permission"
+            return Network()
+
+        coordinator._network_factory = network_factory
+        assert (
+            await coordinator.ensure_token(
+                binding, expected_grant=identity, deadline=asyncio.get_running_loop().time() + 2
+            )
+            == "new-access"
+        )
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", ["invalid_grant", "lost_response"])
+def test_refresh_failure_clears_cached_authority_and_prevents_replay(tmp_path, failure):
+    async def run():
+        from ah.connectors.oauth_network import OAuthNetworkError
+
+        coordinator, config, binding, identity = await _seed_refresh(tmp_path)
+
+        class Network:
+            async def refresh_token(self, record, *, deadline):
+                raise OAuthNetworkError(failure, reason="oauth_refresh_failed")
+
+            async def aclose(self):
+                pass
+
+        coordinator._network_factory = lambda **kwargs: Network()
+        with pytest.raises(OAuthError):
+            await coordinator.ensure_token(
+                binding, expected_grant=identity, deadline=asyncio.get_running_loop().time() + 2
+            )
+        assert coordinator.auth_identity("web") is None
+        await coordinator.refresh_auth_cache("web")
+        assert coordinator.auth_identity("web") is None
+        assert (await coordinator._public_auth(config))["state"] == "reauthorization_required"
+        coordinator._network_factory = lambda **kwargs: pytest.fail(
+            "ambiguous rotating refresh replayed"
+        )
+        with pytest.raises(OAuthError):
+            await coordinator.ensure_token(
+                binding, expected_grant=identity, deadline=asyncio.get_running_loop().time() + 2
+            )
+
+    asyncio.run(run())
+
+
+def test_refresh_cache_accepts_known_config_without_resolving(tmp_path):
+    async def run():
+        coordinator, config, binding, identity = await _seed_refresh(tmp_path)
+        coordinator._config_resolver = lambda _: pytest.fail(
+            "known config must not resolve recursively"
+        )
+        await coordinator.refresh_auth_cache("web", config=config)
+        assert coordinator.auth_identity("web") == identity
+
+    asyncio.run(run())
+
+
+def test_overlapping_refresh_waits_for_existing_journal_owner(tmp_path):
+    async def run():
+        from types import SimpleNamespace
+
+        coordinator, config, binding, identity = await _seed_refresh(tmp_path)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class Network:
+            async def refresh_token(self, record, *, deadline):
+                entered.set()
+                await release.wait()
+                return SimpleNamespace(
+                    access_token="new-access",
+                    refresh_token="new-refresh",
+                    scope="read write",
+                    expires_in=3600,
+                )
+
+            async def aclose(self):
+                pass
+
+        coordinator._network_factory = lambda **kwargs: Network()
+
+        async def get_token():
+            return await coordinator.ensure_token(
+                binding, expected_grant=identity, deadline=asyncio.get_running_loop().time() + 2
+            )
+
+        first = asyncio.create_task(get_token())
+        second = None
+        try:
+            await entered.wait()
+            second = asyncio.create_task(get_token())
+            await asyncio.sleep(0.05)
+            assert not second.done(), (
+                "a live refresh must be awaited before interpreting its journal as a crash"
+            )
+            release.set()
+            assert await asyncio.gather(first, second) == ["new-access", "new-access"]
+        finally:
+            release.set()
+            await asyncio.gather(
+                first, *([second] if second is not None else []), return_exceptions=True
+            )
+
+    asyncio.run(run())

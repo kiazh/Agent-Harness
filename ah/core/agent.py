@@ -58,11 +58,11 @@ console = Console()
 
 def instrument_run(func):
     @wraps(func)
-    async def wrapper(self, session_id, user_message, verbose=True):
+    async def wrapper(self, session_id, user_message, verbose=True, **kwargs):
         start = time.monotonic()
         with span("agent.run", agent_id=self.agent_id, session_id=str(session_id)):
             try:
-                response = await func(self, session_id, user_message, verbose)
+                response = await func(self, session_id, user_message, verbose, **kwargs)
             except Exception:
                 metrics.record_error("agent.run")
                 raise
@@ -79,11 +79,11 @@ def instrument_run(func):
 
 def instrument_stream(func):
     @wraps(func)
-    async def wrapper(self, session_id, user_message, verbose=True):
+    async def wrapper(self, session_id, user_message, verbose=True, **kwargs):
         start = time.monotonic()
         with span("agent.run_stream", agent_id=self.agent_id, session_id=str(session_id)):
             try:
-                async for event in func(self, session_id, user_message, verbose):
+                async for event in func(self, session_id, user_message, verbose, **kwargs):
                     if event.type == "done":
                         if event.response is not None and not event.response.needs_approval:
                             await self._complete_growth(event.response, session_id=session_id)
@@ -198,7 +198,10 @@ def _effective_turn_budget(session, provider) -> int:
 
 def _request_context_tokens(messages, tools, provider) -> int:
     from ah.core.assembler import get_token_count
+    from ah.core.images import token_messages
     from ah.core.provider import _tools_payload
+
+    messages, visual_tokens = token_messages(messages)
 
     output = int(config.get("max_tokens"))
     resolver = getattr(type(provider), "reservation_max_tokens", None)
@@ -210,6 +213,7 @@ def _request_context_tokens(messages, tools, provider) -> int:
         + 16
         + 8 * len(messages)
         + output
+        + visual_tokens
     )
 
 
@@ -495,6 +499,7 @@ class BaseReActAgent:
         user_message: str,
         include_memory: bool = True,
         pending_chunks: list[dict[str, Any]] | None = None,
+        images: list[dict[str, str]] | None = None,
     ) -> tuple[Session, list[dict[str, Any]]]:
         """Prepare session, context, and prompt messages.
 
@@ -514,6 +519,13 @@ class BaseReActAgent:
         Raises:
             ValueError: If the session is not found.
         """
+        from ah.core.images import IMAGE_TOKEN_RESERVE, image_content, validate_images
+
+        images = validate_images(images or [])
+        visual_tokens = len(images) * IMAGE_TOKEN_RESERVE
+        payload = {"content": user_message}
+        if images:
+            payload["images"] = images
         # Get session for context budget and goal
         session = await session_manager.get(session_id)
         if session is None:
@@ -538,7 +550,8 @@ class BaseReActAgent:
             max(
                 1,
                 session.context_budget
-                - _request_context_tokens([], self._tool_defs(), self.provider),
+                - _request_context_tokens([], self._tool_defs(), self.provider)
+                - visual_tokens,
             )
         )
 
@@ -549,8 +562,8 @@ class BaseReActAgent:
                     "session_id": session_id,
                     "agent_id": self.agent_id,
                     "chunk_type": "user_message",
-                    "payload": {"content": user_message},
-                    "token_count": len(user_message) // 4,
+                    "payload": payload,
+                    "token_count": len(user_message) // 4 + visual_tokens,
                 }
             )
         else:
@@ -558,12 +571,22 @@ class BaseReActAgent:
                 session_id=session_id,
                 agent_id=self.agent_id,
                 chunk_type="user_message",
-                payload={"content": user_message},
-                token_count=len(user_message) // 4,
+                payload=payload,
+                token_count=len(user_message) // 4 + visual_tokens,
             )
 
         # Get recent context for prompt assembly
-        recent = await context_manager.get_recent_context(session_id, limit=3)
+        recent = await context_manager.get_recent_context(session_id, limit=10)
+        # Reserve the latest referenced images before assembling text. This
+        # keeps follow-up turns within the same context budget as initial ones.
+        if not images:
+            for chunk in recent:
+                prior = chunk.get("payload", {})
+                if chunk.get("type") == "user_message" and prior.get("images"):
+                    images = validate_images(prior["images"])
+                    visual_tokens = len(images) * IMAGE_TOKEN_RESERVE
+                    break
+            assembler.session_budget = max(1, assembler.session_budget - visual_tokens)
 
         # Build retrieved chunks for the assembler
         retrieved_chunks: list[tuple] = []
@@ -720,9 +743,10 @@ class BaseReActAgent:
             query=user_message,
         )
 
-        messages = [
-            {"role": "user", "content": prompt},
-        ]
+        # Keep the latest image-bearing user turn in recent context useful on
+        # follow-up requests and after gateway restart. Raw encodings never go
+        # through the text assembler, retrieval embeddings, or display history.
+        messages = [{"role": "user", "content": image_content(prompt, images)}]
         return session, messages
 
     def _append_tool_messages(
@@ -1603,6 +1627,8 @@ class ReActAgent(BaseReActAgent):
         session_id: uuid.UUID,
         user_message: str,
         verbose: bool = True,
+        *,
+        images: list[dict[str, str]] | None = None,
     ) -> AgentResponse:
         """Run the ReAct loop for a user message."""
         # Audit log: session start
@@ -1611,7 +1637,11 @@ class ReActAgent(BaseReActAgent):
         # Prepare context (includes memory retrieval)
         pending_chunks: list[dict[str, Any]] = []
         session, messages = await self._prepare_context(
-            session_id, user_message, include_memory=True, pending_chunks=pending_chunks
+            session_id,
+            user_message,
+            include_memory=True,
+            pending_chunks=pending_chunks,
+            images=images,
         )
         # AH-015: persist the user message immediately so cancellation during
         # the first LLM call cannot lose it.
@@ -1791,6 +1821,8 @@ class ReActAgent(BaseReActAgent):
         session_id: uuid.UUID,
         user_message: str,
         verbose: bool = True,
+        *,
+        images: list[dict[str, str]] | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Run the ReAct loop with streaming output.
 
@@ -1807,7 +1839,11 @@ class ReActAgent(BaseReActAgent):
         # Prepare context (includes memory retrieval, same as run())
         pending_chunks: list[dict[str, Any]] = []
         session, messages = await self._prepare_context(
-            session_id, user_message, include_memory=True, pending_chunks=pending_chunks
+            session_id,
+            user_message,
+            include_memory=True,
+            pending_chunks=pending_chunks,
+            images=images,
         )
         # AH-015: persist the user message immediately; run_stream otherwise
         # holds everything in pending until the final done event, so a

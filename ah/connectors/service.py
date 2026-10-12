@@ -53,15 +53,11 @@ class ConnectorService:
     async def refresh(self) -> None:
         """Reload changed durable config and retire stale worker connections."""
         if self.store is None:
-            if self.oauth is not None:
-                for config in self.registry.list():
-                    try:
-                        await self.oauth.refresh_auth_cache(config.id)
-                    except Exception:
-                        pass
+            await self._refresh_auth_cache()
             return
         async with self._configuration_lock:
             await self._refresh_locked()
+            await self._refresh_auth_cache()
 
     async def _refresh_locked(self) -> None:
         generation, configs = self.store.load()
@@ -76,7 +72,10 @@ class ConnectorService:
                 self.registry.remove(current.id)
                 if self.oauth is not None:
                     try:
-                        await self.oauth.invalidate_connector(current.id)
+                        await self.oauth.invalidate_connector(
+                            current.id,
+                            config_revision=current.revision if current.id in desired else None,
+                        )
                     except Exception:
                         pass
         for config in configs:
@@ -84,12 +83,15 @@ class ConnectorService:
                 stored = self.registry.add(config)
                 stored.revision = config.revision
         self._store_generation = generation
+
+    async def _refresh_auth_cache(self) -> None:
+        # Pass the already loaded config: resolving it through service.refresh
+        # here would recursively acquire the configuration lock. Credentials
+        # may change independently of the inventory generation (another worker
+        # can log out), so refresh these views even when config is unchanged.
         if self.oauth is not None:
             for config in self.registry.list():
-                try:
-                    await self.oauth.refresh_auth_cache(config.id)
-                except Exception:
-                    pass
+                await self.oauth.refresh_auth_cache(config.id, config=config)
 
     async def configure(self, fields: dict[str, Any]) -> dict[str, Any]:
         """Human installation administration; never starts a connector."""
@@ -128,11 +130,7 @@ class ConnectorService:
                 await self.manager.disconnect(config.id)
             self.store.configure(fields)
             await self._refresh_locked()
-            if self.oauth is not None:
-                try:
-                    await self.oauth.refresh_auth_cache(config.id)
-                except Exception:
-                    pass
+            await self._refresh_auth_cache()
             current = self._config(config.id)
             return {**current.public_view(), **_state_only(self.manager.status(config.id))}
 
@@ -150,6 +148,7 @@ class ConnectorService:
                         pass
             removed = self.store.remove(connector_id)
             await self._refresh_locked()
+            await self._refresh_auth_cache()
             return removed
 
     async def list(self) -> list[dict[str, Any]]:

@@ -7,8 +7,10 @@ in tests; no live keyring access happens in automated verification.
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import os
 import secrets as _secrets
+import threading
 
 MASTER_KEY_ENV = "AGENT_HARNESS_OAUTH_MASTER_KEY"
 KEYRING_SERVICE = "AgentHarness/MCP-OAuth"
@@ -19,6 +21,28 @@ _ALLOWED_BACKENDS = ("macos", "windows", "secretservice", "kwallet", "libsecret"
 
 class OAuthKeyUnavailable(Exception):
     """No usable secure master key; caller reports storage_unavailable."""
+
+
+def _keyring_bounded(call, *, timeout: float, timeout_message: str):
+    # A permanently blocked OS backend must not retain process shutdown.
+    # Python cannot interrupt its call; let the daemon finish independently.
+    future = concurrent.futures.Future()
+
+    def run():
+        try:
+            future.set_result(call())
+        except BaseException as exc:
+            future.set_exception(exc)
+
+    threading.Thread(target=run, name="oauth-keyring", daemon=True).start()
+    try:
+        return future.result(timeout=max(0.0, timeout))
+    except concurrent.futures.TimeoutError as exc:
+        raise OAuthKeyUnavailable(timeout_message) from exc
+    except OAuthKeyUnavailable:
+        raise
+    except Exception as exc:
+        raise OAuthKeyUnavailable("os keyring is locked or unavailable") from exc
 
 
 def _decode_supplied(raw: str) -> bytes:
@@ -81,23 +105,20 @@ def get_master_key(*, key_provider=None, timeout: float = 5.0, lock_path=None) -
         raise OAuthKeyUnavailable(
             "no oauth master key: set AGENT_HARNESS_OAUTH_MASTER_KEY or install an OS keyring backend"
         ) from exc
-    if not _keyring_backend_usable(keyring_mod):
+    if not _keyring_bounded(
+        lambda: _keyring_backend_usable(keyring_mod),
+        timeout=timeout,
+        timeout_message="os keyring backend is locked or unavailable",
+    ):
         raise OAuthKeyUnavailable("no secure OS keyring backend available for oauth master key")
-    import concurrent.futures
 
     def _read() -> str | None:
-        try:
-            return keyring_mod.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
-        except Exception:
-            return None
+        return keyring_mod.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
 
     def _read_bounded() -> str | None:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_read)
-            try:
-                return future.result(timeout=timeout)
-            except concurrent.futures.TimeoutError:
-                raise OAuthKeyUnavailable("os keyring is locked or unavailable") from None
+        return _keyring_bounded(
+            _read, timeout=timeout, timeout_message="os keyring is locked or unavailable"
+        )
 
     stored = _read_bounded()
     if stored:
@@ -107,22 +128,25 @@ def get_master_key(*, key_provider=None, timeout: float = 5.0, lock_path=None) -
     if lock_path is not None:
         from pathlib import Path as _Path
 
-        _acquire_creation_lock(_Path(lock_path), timeout=timeout)
-        try:
-            stored = _read_bounded()
-            if stored:
-                return _decode_supplied(stored)
-            return _create_key(keyring_mod, timeout=timeout)
-        finally:
-            _release_creation_lock()
+        def _create_locked():
+            fd = _acquire_creation_lock(_Path(lock_path), timeout=timeout)
+            try:
+                stored = _read()
+                if stored:
+                    return _decode_supplied(stored)
+                return _write_new_key(keyring_mod)
+            finally:
+                _release_creation_lock(fd)
+
+        # The worker retains the lock through an ambiguous write timeout.
+        # A later caller must never race its still-running key creation.
+        return _keyring_bounded(
+            _create_locked, timeout=timeout, timeout_message="os keyring write timed out"
+        )
     return _create_key(keyring_mod, timeout=timeout)
 
 
-_creation_lock_fd: int | None = None
-
-
-def _acquire_creation_lock(path, *, timeout: float) -> None:
-    global _creation_lock_fd
+def _acquire_creation_lock(path, *, timeout: float) -> int:
     import os as _os
     import time as _time
 
@@ -150,19 +174,15 @@ def _acquire_creation_lock(path, *, timeout: float) -> None:
                             "oauth master-key creation lock timed out"
                         ) from None
                     _time.sleep(0.01)
-        _creation_lock_fd = fd
+        return fd
     except BaseException:
         _os.close(fd)
         raise
 
 
-def _release_creation_lock() -> None:
-    global _creation_lock_fd
+def _release_creation_lock(fd: int) -> None:
     import os as _os
 
-    fd, _creation_lock_fd = _creation_lock_fd, None
-    if fd is None:
-        return
     try:
         if _os.name == "nt":  # pragma: no cover
             import msvcrt as _msvcrt
@@ -178,22 +198,18 @@ def _release_creation_lock() -> None:
 
 
 def _create_key(keyring_mod, *, timeout: float) -> bytes:
-    import concurrent.futures
+    return _keyring_bounded(
+        lambda: _write_new_key(keyring_mod),
+        timeout=timeout,
+        timeout_message="os keyring write timed out",
+    )
 
+
+def _write_new_key(keyring_mod) -> bytes:
     fresh = _secrets.token_bytes(32)
     encoded = base64.b64encode(fresh).decode()
 
-    def _write() -> None:
-        keyring_mod.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, encoded)
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(_write)
-        try:
-            future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError as exc:
-            raise OAuthKeyUnavailable("os keyring write timed out") from exc
-        except Exception as exc:
-            raise OAuthKeyUnavailable("os keyring is locked or unavailable") from exc
+    keyring_mod.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, encoded)
     return fresh
 
 

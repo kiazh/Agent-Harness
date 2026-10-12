@@ -7,6 +7,9 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Container, stripTerminalSequences, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 import { App } from "../src/app.ts";
 import type { GatewayClient } from "../src/gateway.ts";
@@ -170,6 +173,133 @@ function makeApp() {
 	const app = new App(tui, client as unknown as GatewayClient);
 	return { app, tui, client };
 }
+
+test("image file drop renders a marker and submits actual bytes without exposing the path", async () => {
+    const { app, tui, client } = makeApp();
+    const root = await mkdtemp(join(tmpdir(), "ah-ui-image-"));
+    const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+    try {
+        await app.start();
+        client.autoSubmit = { turnId: "image-turn" };
+        const path = join(root, "my image.png");
+        await writeFile(path, Buffer.from(data, "base64"));
+        const editor = tui.focused as unknown as { handleInput(text: string): void; getText(): string };
+        editor.handleInput("Describe this screenshot ");
+        editor.handleInput(`\x1b[200~'${path}'\x1b[201~`);
+        // Enter immediately: submission must wait for the file read.
+        editor.handleInput("\r");
+        for (let i = 0; i < 100 && !client.submitCount(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+        const submitted = client.requests.find((request) => request.method === "prompt.submit");
+        assert.ok(submitted, "drop must submit through the composer");
+        assert.equal(submitted.params.text, "Describe this screenshot [image 1]");
+        assert.deepEqual(submitted.params.images, [{ name: "my image.png", mediaType: "image/png", data }]);
+        const display = tui.children.flatMap((child) => child.render(100)).map(stripTerminalSequences).join("\n");
+        assert.ok(display.includes("[image 1]"));
+        assert.ok(!display.includes(path));
+        assert.ok(!display.includes(data));
+    } finally { await app.exit(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("image prompt re-edit retains original bytes and follow-up markers remain usable", async () => {
+    const { app, tui, client } = makeApp();
+    const root = await mkdtemp(join(tmpdir(), "ah-ui-image-"));
+    const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+    try {
+        await app.start();
+        client.autoSubmit = { turnId: "image-1" };
+        const path = join(root, "original.png");
+        await writeFile(path, Buffer.from(data, "base64"));
+        const editor = tui.focused as unknown as { handleInput(text: string): void; getText(): string };
+        editor.handleInput("Describe ");
+        editor.handleInput(`\x1b[200~'${path}'\x1b[201~`);
+        editor.handleInput("\r");
+        for (let i = 0; i < 100 && !client.submitCount(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+        assert.equal(client.submitCount(), 1);
+        client.emit(ev(SESSION_A.id, "image-1", { type: "message.start" }));
+        client.emit(ev(SESSION_A.id, "image-1", { type: "message.complete", text: "done", tokens: 1, iterations: 1, toolCalls: 0, cancelled: false }));
+        // Double-Esc recovers markers; re-submission must use captured bytes,
+        // even if the original file has since changed or disappeared.
+        await writeFile(path, "changed file");
+        for (const listener of tui.inputListeners) { listener("\x1b"); listener("\x1b"); }
+        assert.equal(editor.getText(), "Describe [image 1]");
+        client.autoSubmit = { turnId: "image-2" };
+        editor.handleInput("\r");
+        for (let i = 0; i < 100 && client.submitCount() < 2; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+        const second = client.requests.filter((request) => request.method === "prompt.submit")[1];
+        assert.deepEqual(second?.params.images, [{ name: "original.png", mediaType: "image/png", data }]);
+        client.emit(ev(SESSION_A.id, "image-2", { type: "message.start" }));
+        client.emit(ev(SESSION_A.id, "image-2", { type: "message.complete", text: "done", tokens: 1, iterations: 1, toolCalls: 0, cancelled: false }));
+        client.autoSubmit = { turnId: "image-3" };
+        editor.handleInput("what colour is [image 1]?");
+        editor.handleInput("\r");
+        for (let i = 0; i < 100 && client.submitCount() < 3; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+        const third = client.requests.filter((request) => request.method === "prompt.submit")[2];
+        assert.equal(third?.params.text, "what colour is [image 1]?");
+        assert.equal(third?.params.images, undefined);
+    } finally { await app.exit(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("a failed image drop with immediate Enter preserves the user's instruction", async () => {
+    const { app, tui, client } = makeApp();
+    const root = await mkdtemp(join(tmpdir(), "ah-ui-image-"));
+    try {
+        await app.start();
+        const path = join(root, "bad.png");
+        await writeFile(path, "not an image");
+        const editor = tui.focused as unknown as { handleInput(text: string): void; getText(): string };
+        editor.handleInput("Describe this screenshot ");
+        editor.handleInput(`\x1b[200~'${path}'\x1b[201~`);
+        editor.handleInput("\r");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        assert.equal(editor.getText(), "Describe this screenshot ");
+        assert.equal(client.submitCount(), 0);
+    } finally { await app.exit(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("pending image drops are retired on session navigation", async () => {
+    const { app, tui, client } = makeApp();
+    const root = await mkdtemp(join(tmpdir(), "ah-ui-image-"));
+    try {
+        await app.start();
+        const path = join(root, "a.png");
+        await writeFile(path, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64"));
+        const editor = tui.focused as unknown as { handleInput(text: string): void; getText(): string };
+        editor.handleInput(`\x1b[200~'${path}'\x1b[201~`);
+        app.switchTo(SESSION_B, []);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        assert.equal(editor.getText(), "");
+        assert.equal(client.submitCount(), 0);
+    } finally { await app.exit(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("a failed image submission cannot restore attachments into a different session", async () => {
+    const { app, tui, client } = makeApp();
+    const root = await mkdtemp(join(tmpdir(), "ah-ui-image-"));
+    try {
+        await app.start();
+        const path = join(root, "private.png");
+        await writeFile(path, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64"));
+        let rejectSubmit: (error: Error) => void = () => {};
+        const request = client.request.bind(client);
+        client.request = <T>(method: string, params: Record<string, unknown> = {}): Promise<T> => {
+            if (method !== "prompt.submit") return request<T>(method, params);
+            client.requests.push({ method, params });
+            return new Promise<T>((_resolve, reject) => { rejectSubmit = reject; });
+        };
+        const editor = tui.focused as unknown as { handleInput(text: string): void; getText(): string };
+        editor.handleInput(`\x1b[200~'${path}'\x1b[201~`);
+        editor.handleInput("\r");
+        for (let i = 0; i < 100 && !client.submitCount(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+        assert.equal(client.submitCount(), 1);
+        app.switchTo(SESSION_B, []);
+        rejectSubmit(new Error("submit failed"));
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        assert.equal(editor.getText(), "");
+        editor.handleInput("text for B\r");
+        // A normal draft in B must not inherit A's attachments.
+        assert.ok(!editor.getText().includes("[image"));
+    } finally { await app.exit(); await rm(root, { recursive: true, force: true }); }
+});
 
 const ev = (sessionId: string, turnId: string, e: Record<string, unknown>) =>
 	({ sessionId, turnId, ...e }) as GatewayEvent;

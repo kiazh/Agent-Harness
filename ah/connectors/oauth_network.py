@@ -15,7 +15,7 @@ import json
 import socket
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 from ah.connectors.oauth_models import (
     OAUTH_MAX_ISSUERS,
@@ -63,7 +63,7 @@ def _is_literal_loopback(host: str) -> bool:
     return lowered in _LOOPBACK_LITERALS
 
 
-def classify_url_host(host: str, *, local_access: bool) -> None:
+def classify_url_host(host: str, *, local_access: bool) -> tuple[str, ...]:
     lowered = (host or "").lower().rstrip(".")
     if lowered in ("localhost",) or lowered.endswith(".localhost"):
         if not local_access:
@@ -71,12 +71,9 @@ def classify_url_host(host: str, *, local_access: bool) -> None:
                 "loopback oauth destination requires local access",
                 reason="oauth_unsafe_destination",
             )
-        return
     try:
         ips = [ipaddress.ip_address(lowered.strip("[]"))]
-        literal = True
     except ValueError:
-        literal = False
         try:
             infos = awaitable_dns(lowered)
         except OSError as exc:
@@ -108,7 +105,7 @@ def classify_url_host(host: str, *, local_access: bool) -> None:
             )
         if ip.is_loopback:
             kinds.add("loopback")
-            if not local_access and not (literal and _is_literal_loopback(lowered)):
+            if not local_access:
                 raise OAuthNetworkError(
                     "loopback oauth destination requires local access",
                     reason="oauth_unsafe_destination",
@@ -133,6 +130,8 @@ def classify_url_host(host: str, *, local_access: bool) -> None:
             "oauth host resolves to mixed public/private addresses",
             reason="oauth_unsafe_destination",
         )
+
+    return tuple(dict.fromkeys(str(ip) for ip in ips))
 
 
 def awaitable_dns(host: str):
@@ -290,9 +289,14 @@ class OAuthNetworkClient:
         if self._client is None:
             import httpx
 
+            from ah.connectors.http_transport import pinned_http_transport
+
             self._client = httpx.AsyncClient(
                 follow_redirects=False,
                 trust_env=False,
+                transport=pinned_http_transport(
+                    httpx, lambda host: classify_url_host(host, local_access=self._local_access)
+                ),
                 timeout=self._timeout,
                 headers={"Accept-Encoding": "identity"},
             )
@@ -302,6 +306,57 @@ class OAuthNetworkClient:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+
+    @staticmethod
+    def _check_response(status: int, headers: dict, *, body: bytes, max_bytes: int) -> None:
+        if status in (301, 302, 303, 307, 308):
+            raise OAuthNetworkError(
+                "oauth redirects are not followed", reason="oauth_redirect_unsupported"
+            )
+        encoding = str(headers.get("content-encoding", "identity") or "identity").lower()
+        if encoding not in ("identity", ""):
+            raise OAuthNetworkError("compressed oauth responses are not supported")
+        if len(body) > max_bytes:
+            raise OAuthNetworkError("oauth response exceeds size limit")
+
+    async def _request_bounded(
+        self,
+        method: str,
+        url: str,
+        *,
+        max_bytes: int,
+        deadline: float,
+        headers: dict,
+        data=None,
+        json_body=None,
+        request_timeout: float | None = None,
+    ) -> tuple[int, dict[str, str], bytes]:
+        """Read identity response chunks under one timeout and cumulative cap."""
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise OAuthNetworkError("oauth deadline expired")
+        client = await self._get_client()
+        assert client is not None
+        timeout = min(remaining, self._timeout if request_timeout is None else request_timeout)
+        try:
+            async with asyncio.timeout(timeout):
+                async with client.stream(
+                    method, url, headers=headers, data=data, json=json_body, timeout=timeout
+                ) as response:
+                    response_headers = dict(response.headers)
+                    self._check_response(
+                        response.status_code, response_headers, body=b"", max_bytes=max_bytes
+                    )
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise OAuthNetworkError("oauth response exceeds size limit")
+                        chunks.append(chunk)
+                    return response.status_code, response_headers, b"".join(chunks)
+        except TimeoutError as exc:
+            raise OAuthNetworkError("oauth request timed out") from exc
 
     async def _fetch_json(
         self, url: str, *, max_bytes: int, deadline: float, extra_headers: dict | None = None
@@ -314,35 +369,14 @@ class OAuthNetworkClient:
         if extra_headers:
             headers.update(extra_headers)
         if self._transport is not None:
-            return await self._transport.fetch(
+            status, response_headers, body = await self._transport.fetch(
                 url, headers=headers, timeout=min(remaining, self._timeout), max_bytes=max_bytes
             )
-        client = await self._get_client()
-        assert client is not None
-        try:
-            async with asyncio.timeout(min(remaining, self._timeout)):
-                response = await client.get(url, headers=headers)
-        except TimeoutError as exc:
-            raise OAuthNetworkError("oauth metadata fetch timed out") from exc
-        encoding = response.headers.get("content-encoding", "identity")
-        if encoding.lower() not in ("identity", ""):
-            raise OAuthNetworkError("compressed oauth responses are not supported")
-        # Stream with byte cap before JSON parsing.
-        chunks: list[bytes] = []
-        total = 0
-        async for chunk in response.aiter_bytes():
-            total += len(chunk)
-            if total > max_bytes:
-                await response.aclose()
-                raise OAuthNetworkError("oauth response exceeds size limit")
-            chunks.append(chunk)
-        body = b"".join(chunks)
-        await response.aclose()
-        if response.status_code in (301, 302, 303, 307, 308):
-            raise OAuthNetworkError(
-                "oauth redirects are not followed", reason="oauth_redirect_unsupported"
-            )
-        return response.status_code, dict(response.headers), body
+            self._check_response(status, response_headers, body=body, max_bytes=max_bytes)
+            return status, response_headers, body
+        return await self._request_bounded(
+            "GET", url, max_bytes=max_bytes, deadline=deadline, headers=headers
+        )
 
     async def _post_form(
         self,
@@ -353,6 +387,7 @@ class OAuthNetworkClient:
         deadline: float,
         auth: tuple[str, str] | None = None,
         extra_headers: dict | None = None,
+        expect_json: bool = True,
     ) -> dict[str, Any]:
         validate_outbound_url(url, local_access=self._local_access)
         remaining = deadline - asyncio.get_running_loop().time()
@@ -361,62 +396,41 @@ class OAuthNetworkClient:
         headers = {"Accept": "application/json", "Accept-Encoding": "identity"}
         if extra_headers:
             headers.update(extra_headers)
+        if auth:
+            import base64
+
+            # RFC 6749 section 2.3.1: encode each component as form data
+            # before constructing the HTTP Basic user/password pair.
+            pair = f"{quote_plus(auth[0], safe='')}:{quote_plus(auth[1], safe='')}"
+            headers["Authorization"] = "Basic " + base64.b64encode(pair.encode("ascii")).decode(
+                "ascii"
+            )
         if self._transport is not None:
-            status, _, body = await self._transport.post(
+            status, response_headers, body = await self._transport.post(
                 url,
                 data=data,
                 headers=headers,
-                auth=auth,
+                auth=None,
                 timeout=min(remaining, 10.0),
                 max_bytes=max_bytes,
             )
-            if status >= 400:
-                raise OAuthNetworkError(
-                    f"oauth request failed: {status}", reason="oauth_exchange_failed"
-                )
-            try:
-                return json.loads(body.decode())
-            except ValueError as exc:
-                raise OAuthNetworkError("oauth response is not valid JSON") from exc
-        import httpx
-
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                follow_redirects=False,
-                trust_env=False,
-                timeout=10.0,
-                headers={"Accept-Encoding": "identity"},
+            self._check_response(status, response_headers, body=body, max_bytes=max_bytes)
+        else:
+            status, _, body = await self._request_bounded(
+                "POST",
+                url,
+                max_bytes=max_bytes,
+                deadline=deadline,
+                headers=headers,
+                data=data,
+                request_timeout=10.0,
             )
-        client = self._client
-        try:
-            async with asyncio.timeout(min(remaining, 10.0)):
-                response = await client.post(
-                    url, data=data, headers=headers, auth=auth if auth else None
-                )
-        except TimeoutError as exc:
-            raise OAuthNetworkError("oauth request timed out") from exc
-        if response.status_code in (301, 302, 303, 307, 308):
-            raise OAuthNetworkError(
-                "oauth redirects are not followed", reason="oauth_redirect_unsupported"
-            )
-        encoding = response.headers.get("content-encoding", "identity")
-        if encoding.lower() not in ("identity", ""):
-            raise OAuthNetworkError("compressed oauth responses are not supported")
-        chunks: list[bytes] = []
-        total = 0
-        async for chunk in response.aiter_bytes():
-            total += len(chunk)
-            if total > max_bytes:
-                await response.aclose()
-                raise OAuthNetworkError("oauth response exceeds size limit")
-            chunks.append(chunk)
-        body = b"".join(chunks)
-        status = response.status_code
-        await response.aclose()
-        if status >= 400:
+        if not 200 <= status < 300:
             raise OAuthNetworkError(
                 f"oauth request failed: {status}", reason="oauth_exchange_failed"
             )
+        if not expect_json:
+            return {}
         try:
             return json.loads(body.decode())
         except ValueError as exc:
@@ -432,11 +446,10 @@ class OAuthNetworkClient:
         assert client is not None
         try:
             async with asyncio.timeout(min(max(0.0, remaining), 3.0)):
-                response = await client.get(endpoint, headers={"Accept-Encoding": "identity"})
-                status = response.status_code
-                headers = dict(response.headers)
-                await response.aclose()
-                return status, headers
+                async with client.stream(
+                    "GET", endpoint, headers={"Accept-Encoding": "identity"}
+                ) as response:
+                    return response.status_code, dict(response.headers)
         except TimeoutError:
             return None, {}
 
@@ -626,11 +639,17 @@ class OAuthNetworkClient:
                     "reg": registration_endpoint,
                     "rev": revocation_endpoint,
                     "scopes": list(scopes),
+                    "require_iss": server_meta.get("authorization_response_iss_parameter_supported")
+                    is True,
+                    "supports_client_metadata_document": server_meta.get(
+                        "client_id_metadata_document_supported"
+                    )
+                    is True,
                 },
                 sort_keys=True,
             ).encode()
         ).hexdigest()
-        require_iss = bool(server_meta.get("authorization_response_iss_parameter_supported", False))
+        require_iss = server_meta.get("authorization_response_iss_parameter_supported") is True
         return DiscoveredOAuth(
             resource=resource,
             issuers=tuple(issuers),
@@ -643,6 +662,10 @@ class OAuthNetworkClient:
             require_iss=require_iss,
             supports_s256=True,
             fingerprint=fingerprint,
+            supports_client_metadata_document=server_meta.get(
+                "client_id_metadata_document_supported"
+            )
+            is True,
         )
 
     # ── registration / tokens ───────────────────────────────────
@@ -670,30 +693,19 @@ class OAuthNetworkClient:
                 snapshot.registration_endpoint, body, timeout=min(remaining, 10.0)
             )
         else:
-            client = await self._get_client()
-            assert client is not None
+            status, _, raw = await self._request_bounded(
+                "POST",
+                snapshot.registration_endpoint,
+                max_bytes=OAUTH_TOKEN_MAX_BYTES,
+                deadline=deadline,
+                json_body=body,
+                request_timeout=10.0,
+                headers={"Accept": "application/json", "Accept-Encoding": "identity"},
+            )
             try:
-                async with asyncio.timeout(min(max(0.0, remaining), 10.0)):
-                    resp = await client.post(
-                        snapshot.registration_endpoint,
-                        json=body,
-                        headers={"Accept": "application/json", "Accept-Encoding": "identity"},
-                    )
-                    if resp.status_code in (301, 302, 303, 307, 308):
-                        raise OAuthNetworkError(
-                            "registration redirect refused", reason="oauth_redirect_unsupported"
-                        )
-                    raw = await resp.aread()
-                    if len(raw) > OAUTH_TOKEN_MAX_BYTES:
-                        raise OAuthNetworkError("registration response too large")
-                    status = resp.status_code
-                    await resp.aclose()
-                    try:
-                        response = (status, json.loads(raw.decode()))
-                    except ValueError as exc:
-                        raise OAuthNetworkError("registration response is not JSON") from exc
-            except TimeoutError as exc:
-                raise OAuthNetworkError("registration timed out") from exc
+                response = (status, json.loads(raw.decode()))
+            except ValueError as exc:
+                raise OAuthNetworkError("registration response is not JSON") from exc
         if isinstance(response, tuple):
             status, payload = response
         else:
@@ -793,13 +805,7 @@ class OAuthNetworkClient:
             extra_secret = _get_secret(secret_ref) or ""
             if not extra_secret:
                 raise OAuthNetworkError("client secret unavailable", reason="oauth_exchange_failed")
-            import base64 as _b64
-            from urllib.parse import quote as _quote
-
             auth = (client.client_id, extra_secret)
-            _ = _b64.b64encode(
-                f"{_quote(client.client_id, safe='')}:{_quote(extra_secret, safe='')}".encode()
-            ).decode()
         payload = await self._post_form(
             snapshot.token_endpoint,
             data,
@@ -808,8 +814,6 @@ class OAuthNetworkClient:
             auth=auth,
         )
         self._validate_token_payload(payload, approved=snapshot.requested_scopes)
-        if snapshot.token_endpoint != snapshot.token_endpoint:
-            raise OAuthNetworkError("token endpoint changed", reason="oauth_config_changed")
         try:
             from mcp.shared.auth import OAuthToken as _OAuthToken
 
@@ -882,6 +886,7 @@ class OAuthNetworkClient:
                 max_bytes=OAUTH_TOKEN_MAX_BYTES,
                 deadline=deadline,
                 auth=auth,
+                expect_json=False,
             )
         except OAuthNetworkError:
             return "failed"

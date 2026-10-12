@@ -169,3 +169,25 @@ def test_response_headers_and_no_secret_logging(caplog):
             await callback.aclose()
 
     asyncio.run(_run())
+
+
+def test_fixed_callback_path_accepts_only_correct_state_and_path():
+    async def run():
+        callback = await LoopbackOAuthCallback.reserve(
+            port=0, path="/provider/callback", deadline=asyncio.get_running_loop().time() + 5
+        )
+        try:
+            assert callback.redirect_uri.endswith("/provider/callback")
+            callback.arm(state="secret-state", issuer="fixture", require_iss=False)
+            waiter = asyncio.create_task(
+                callback.wait(deadline=asyncio.get_running_loop().time() + 5)
+            )
+            await _get(callback.port, "/provider/callback", "?code=bad&state=wrong")
+            await _get(callback.port, "/provider/other", "?code=bad&state=secret-state")
+            assert not waiter.done()
+            await _get(callback.port, "/provider/callback", "?code=accepted&state=secret-state")
+            assert (await waiter).code == "accepted"
+        finally:
+            await callback.aclose()
+
+    asyncio.run(run())

@@ -19,14 +19,18 @@ def _coordinator(gw: Gateway):
     return coordinator
 
 
-def _owner(gw: Gateway, params: dict[str, Any]) -> OAuthOwner:
-    session = await_owner_session(gw, params)
-    return OAuthOwner(session_id=str(session.id), agent_id=session.agent_id)
-
-
-async def await_owner_session(gw: Gateway, params: dict[str, Any]):
+async def _authorized_owner(gw: Gateway, params: dict[str, Any], connector_id: str) -> OAuthOwner:
+    """Bind every OAuth action to the current configuration's actor authority."""
     _str(params, "sessionId", max_len=64)
-    return await gw.get_session(params)
+    session = await gw.get_session(params)
+    service = gw.runtime.get_connector_service()
+    await service.refresh()
+    config = service.registry.get(connector_id)
+    if config is None:
+        raise RpcError(NOT_FOUND, "connector not found")
+    if config.owner and config.owner != session.agent_id:
+        raise RpcError(UNAUTHORIZED, "connector belongs to another agent")
+    return OAuthOwner(session_id=str(session.id), agent_id=session.agent_id)
 
 
 def _map_error(exc: OAuthError) -> RpcError:
@@ -58,8 +62,7 @@ async def mcp_oauth_preview(gw: Gateway, params: dict[str, Any]) -> dict[str, An
     issuer = params.get("issuer")
     if issuer is not None and (not isinstance(issuer, str) or not issuer.strip()):
         raise RpcError(INVALID_PARAMS, "issuer must be a non-empty string")
-    session = await gw.get_session(params)
-    owner = OAuthOwner(session_id=str(session.id), agent_id=session.agent_id)
+    owner = await _authorized_owner(gw, params, connector_id)
     try:
         return await _coordinator(gw).preview(
             connector_id, owner, issuer=issuer.strip() if isinstance(issuer, str) else None
@@ -79,8 +82,7 @@ async def mcp_oauth_start(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]
     connector_id = _str(params, "id", max_len=64)
     preview_id = _str(params, "previewId", max_len=64)
     digest = _str(params, "digest", max_len=128)
-    session = await gw.get_session(params)
-    owner = OAuthOwner(session_id=str(session.id), agent_id=session.agent_id)
+    owner = await _authorized_owner(gw, params, connector_id)
     try:
         return await _coordinator(gw).start(
             connector_id, owner, preview_id=preview_id, digest=digest
@@ -99,8 +101,7 @@ async def mcp_oauth_status(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
     operation_id = params.get("operationId")
     if operation_id is not None and (not isinstance(operation_id, str) or not operation_id.strip()):
         raise RpcError(INVALID_PARAMS, "operationId must be a non-empty string")
-    session = await gw.get_session(params)
-    owner = OAuthOwner(session_id=str(session.id), agent_id=session.agent_id)
+    owner = await _authorized_owner(gw, params, connector_id)
     try:
         return await _coordinator(gw).status(
             connector_id,
@@ -117,12 +118,13 @@ async def mcp_oauth_url(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     allowed = {"id", "sessionId", "operationId", "token"}
     if set(params) - allowed:
         raise RpcError(INVALID_PARAMS, "unsupported oauth url parameters")
-    _str(params, "id", max_len=64)
+    connector_id = _str(params, "id", max_len=64)
     operation_id = _str(params, "operationId", max_len=64)
-    session = await gw.get_session(params)
-    owner = OAuthOwner(session_id=str(session.id), agent_id=session.agent_id)
+    owner = await _authorized_owner(gw, params, connector_id)
     try:
-        url = await _coordinator(gw).authorization_url(operation_id, owner)
+        url = await _coordinator(gw).authorization_url(
+            operation_id, owner, connector_id=connector_id
+        )
     except OAuthError as exc:
         raise _map_error(exc) from None
     return {"authorizationUrl": url}
@@ -134,12 +136,11 @@ async def mcp_oauth_open(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     allowed = {"id", "sessionId", "operationId", "token"}
     if set(params) - allowed:
         raise RpcError(INVALID_PARAMS, "unsupported oauth open parameters")
-    _str(params, "id", max_len=64)
+    connector_id = _str(params, "id", max_len=64)
     operation_id = _str(params, "operationId", max_len=64)
-    session = await gw.get_session(params)
-    owner = OAuthOwner(session_id=str(session.id), agent_id=session.agent_id)
+    owner = await _authorized_owner(gw, params, connector_id)
     try:
-        opened = await _coordinator(gw).open_browser(operation_id, owner)
+        opened = await _coordinator(gw).open_browser(operation_id, owner, connector_id=connector_id)
     except OAuthError as exc:
         raise _map_error(exc) from None
     return {"opened": bool(opened)}
@@ -151,17 +152,17 @@ async def mcp_oauth_cancel(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
     allowed = {"id", "sessionId", "previewId", "operationId", "token"}
     if set(params) - allowed:
         raise RpcError(INVALID_PARAMS, "unsupported oauth cancel parameters")
-    _str(params, "id", max_len=64)
+    connector_id = _str(params, "id", max_len=64)
     preview_id = params.get("previewId")
     operation_id = params.get("operationId")
     for value, name in ((preview_id, "previewId"), (operation_id, "operationId")):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise RpcError(INVALID_PARAMS, f"{name} must be a non-empty string")
-    session = await gw.get_session(params)
-    owner = OAuthOwner(session_id=str(session.id), agent_id=session.agent_id)
+    owner = await _authorized_owner(gw, params, connector_id)
     try:
         cancelled = await _coordinator(gw).cancel(
             owner,
+            connector_id=connector_id,
             preview_id=preview_id.strip() if isinstance(preview_id, str) else None,
             operation_id=operation_id.strip() if isinstance(operation_id, str) else None,
         )
@@ -183,12 +184,7 @@ async def mcp_oauth_forget(gw: Gateway, params: dict[str, Any]) -> dict[str, Any
     revoke = params.get("revoke", False)
     if type(revoke) is not bool:
         raise RpcError(INVALID_PARAMS, "revoke must be a boolean")
-    session = await gw.get_session(params)
-    service = gw.runtime.get_connector_service()
-    config = service.registry.get(connector_id)
-    if config is not None and config.owner and config.owner != session.agent_id:
-        raise RpcError(UNAUTHORIZED, "connector belongs to another agent")
-    owner = OAuthOwner(session_id=str(session.id), agent_id=session.agent_id)
+    owner = await _authorized_owner(gw, params, connector_id)
     try:
         return await _coordinator(gw).forget(
             connector_id, owner, expected_generation=expected, revoke=revoke

@@ -339,3 +339,28 @@ def test_ssrf_and_loopback_policy():
             )
 
     asyncio.run(_run())
+
+
+@pytest.mark.parametrize(
+    "capability",
+    ["authorization_response_iss_parameter_supported", "client_id_metadata_document_supported"],
+)
+def test_metadata_capabilities_are_preserved_in_discovery_fingerprint(capability):
+    async def run():
+        transport = StubTransport()
+        meta = _discovery_routes(transport)
+        client = OAuthNetworkClient(local_access=True, transport=transport)
+        baseline = await _discover(client)
+        meta[capability] = True
+        for url in issuer_metadata_candidates("http://127.0.0.1:9/auth"):
+            transport.route(url, payload=meta)
+        advertised = await _discover(client)
+        assert advertised.require_iss is (
+            capability == "authorization_response_iss_parameter_supported"
+        )
+        assert advertised.supports_client_metadata_document is (
+            capability == "client_id_metadata_document_supported"
+        )
+        assert advertised.fingerprint != baseline.fingerprint
+
+    asyncio.run(run())

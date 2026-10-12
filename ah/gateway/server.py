@@ -536,6 +536,16 @@ class Gateway:
         text = text.strip()
         if len(text) > 20_000:
             raise RpcError(INVALID_PARAMS, "text is too long (max 20000 characters)")
+        from ah.core.images import validate_images
+
+        try:
+            images = validate_images(params.get("images", []))
+        except ValueError as exc:
+            raise RpcError(INVALID_PARAMS, str(exc)) from exc
+        for index in range(1, len(images) + 1):
+            marker = f"[image {index}]"
+            if marker not in text:
+                text += "\n" + marker
         key = str(session.id)
         # Shared coordinator claim (cross-transport owner token). The
         # in-process lock serializes same-process racers; the DB claim fences
@@ -554,8 +564,9 @@ class Gateway:
             raise RpcError(TURN_IN_PROGRESS, "a turn is already running for this session")
         logger.info("Turn %s started for session %s", turn_id, session.id)
         self._turn_tokens[key] = token
+        image_kwargs = {"images": images} if images else {}
         self._turns[key] = asyncio.create_task(
-            self._run_turn_with_timeout(session.id, turn_id, text)
+            self._run_turn_with_timeout(session.id, turn_id, text, **image_kwargs)
         )
         return {"turnId": turn_id}
 
@@ -638,7 +649,14 @@ class Gateway:
         return {}
 
     # ─── turns ─────────────────────────────────────────────────────────────
-    async def _run_turn(self, session_id: uuid.UUID, turn_id: str, text: str) -> None:
+    async def _run_turn(
+        self,
+        session_id: uuid.UUID,
+        turn_id: str,
+        text: str,
+        *,
+        images: list[dict[str, str]] | None = None,
+    ) -> None:
         """Run one agent turn, translating agent stream events into protocol events."""
         sid = str(session_id)
         owned_token = self._turn_tokens.get(sid)
@@ -876,7 +894,8 @@ class Gateway:
                     session.model or self.model, session.provider or self.provider
                 )
             self._record_stage(turn_id, "waiting_for_provider", session_id=sid)
-            async for event in agent.run_stream(session_id, text, verbose=False):
+            stream_kwargs = {"images": images} if images else {}
+            async for event in agent.run_stream(session_id, text, verbose=False, **stream_kwargs):
                 if event.type == "text":
                     safe = _turn_redactor.feed(event.content or "")
                     if safe:
@@ -1085,7 +1104,14 @@ class Gateway:
             # Optional fallback preserves the primary outcome; report no payload.
             record_failure("server._run_turn", _boundary_error)
 
-    async def _run_turn_with_timeout(self, session_id: uuid.UUID, turn_id: str, text: str) -> None:
+    async def _run_turn_with_timeout(
+        self,
+        session_id: uuid.UUID,
+        turn_id: str,
+        text: str,
+        *,
+        images: list[dict[str, str]] | None = None,
+    ) -> None:
         """Observe compute time separately from approvals; retirement owns completion.
 
         Timeout and cancel request termination and observe a bounded grace. A
@@ -1096,7 +1122,8 @@ class Gateway:
         timeout = float(config.get("turn_timeout") or 300)
         sid = str(session_id)
         current = asyncio.current_task()
-        inner = asyncio.create_task(self._run_turn(session_id, turn_id, text))
+        turn_kwargs = {"images": images} if images else {}
+        inner = asyncio.create_task(self._run_turn(session_id, turn_id, text, **turn_kwargs))
         start = asyncio.get_running_loop().time()
 
         def retired(task) -> None:

@@ -18,6 +18,7 @@ from ah.connectors.oauth_models import (
     OAUTH_CALLBACK_PARAM_MAX,
     OAUTH_CALLBACK_READ_SECONDS,
     OAuthCallbackResult,
+    validate_callback_path,
 )
 
 _SUCCESS_HTML = (
@@ -61,8 +62,13 @@ class LoopbackOAuthCallback:
         self._closed = False
 
     @classmethod
-    async def reserve(cls, *, port: int, deadline: float) -> LoopbackOAuthCallback:
+    async def reserve(
+        cls, *, port: int, deadline: float, path: str | None = None
+    ) -> LoopbackOAuthCallback:
         self = cls()
+        if path is not None:
+            validate_callback_path(path)
+            self._path = path
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             raise TimeoutError("callback reservation deadline expired")

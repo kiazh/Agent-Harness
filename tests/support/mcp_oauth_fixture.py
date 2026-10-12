@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import hmac
 import secrets
 import socket
 import urllib.parse
@@ -74,6 +75,7 @@ class OAuthFixture:
         self._refresh: dict[str, dict[str, Any]] = {}
         self._clients: dict[str, dict[str, Any]] = {}
         self._preregistered: dict[str, str] = {}  # client_id -> secret
+        self._preregistered_redirects: dict[str, list[str]] = {}
         self.port = 0
         self._sock: socket.socket | None = None
         self._server = None
@@ -83,8 +85,9 @@ class OAuthFixture:
         self.endpoint = ""
 
     # ── setup ───────────────────────────────────────────────────
-    def preregister(self, client_id: str, *, secret: str = "") -> None:
+    def preregister(self, client_id: str, *, redirect_uri: str, secret: str = "") -> None:
         self._preregistered[client_id] = secret
+        self._preregistered_redirects[client_id] = [redirect_uri]
 
     async def start(self) -> OAuthFixture:
         from mcp.server.mcpserver import MCPServer
@@ -233,7 +236,8 @@ class OAuthFixture:
             if client_id not in fixture._clients and client_id not in fixture._preregistered:
                 return JSONResponse({"error": "unauthorized_client"}, status_code=400)
             known = fixture._clients.get(client_id, {}).get("redirects", [])
-            if redirect not in known and client_id not in fixture._preregistered:
+            known = fixture._preregistered_redirects.get(client_id, known)
+            if redirect not in known:
                 return JSONResponse({"error": "invalid_redirect_uri"}, status_code=400)
             if resource != fixture.endpoint:
                 return JSONResponse({"error": "invalid_target"}, status_code=400)
@@ -268,6 +272,23 @@ class OAuthFixture:
         async def _token(request: Request):
             form = dict(await request.form())
             grant = form.get("grant_type", "")
+            client_id = form.get("client_id", "")
+            expected_secret = fixture._preregistered.get(client_id, "")
+            if expected_secret:
+                try:
+                    authorization = request.headers.get("authorization", "")
+                    if not authorization.startswith("Basic "):
+                        raise ValueError("basic auth required")
+                    pair = base64.b64decode(authorization[6:], validate=True).decode("ascii")
+                    encoded_id, encoded_secret = pair.split(":", 1)
+                    actual_id = urllib.parse.unquote_plus(encoded_id)
+                    actual_secret = urllib.parse.unquote_plus(encoded_secret)
+                    if actual_id != client_id or not hmac.compare_digest(
+                        actual_secret.encode(), expected_secret.encode()
+                    ):
+                        raise ValueError("client credentials mismatch")
+                except (ValueError, UnicodeError):
+                    return JSONResponse({"error": "invalid_client"}, status_code=401)
             if grant == "authorization_code":
                 fixture.counters["exchange"] += 1
                 await fixture.suspend_exchange.wait()

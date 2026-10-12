@@ -14,7 +14,6 @@ import os
 import pty
 import select
 import signal
-import stat
 import subprocess
 import termios
 import time
@@ -80,7 +79,7 @@ def file_mode(path):
 def test_lib_sources_without_side_effects(tmp_path):
     assert DEFAULT_LIB.is_file()
     before = set(os.listdir(tmp_path))
-    proc = run_bash('echo sourced-ok', cwd=tmp_path)
+    proc = run_bash("echo sourced-ok", cwd=tmp_path)
     assert proc.returncode == 0, proc.stderr
     assert "sourced-ok" in proc.stdout
     assert set(os.listdir(tmp_path)) == before
@@ -106,22 +105,20 @@ def test_syntax_check_both_files():
 
 
 def test_resolve_env_file_unset_uses_checkout(tmp_path):
-    proc = run_bash('resolve_env_file /startup', cwd=tmp_path)
+    proc = run_bash("resolve_env_file /startup", cwd=tmp_path)
     assert proc.returncode == 0
     assert proc.stdout.strip() == f"{tmp_path}/.env"
 
 
 def test_resolve_env_file_absolute_override(tmp_path):
-    proc = run_bash(
-        'resolve_env_file /startup', cwd=tmp_path, env={"AH_ENV_FILE": "/tmp/x y/.env"}
-    )
+    proc = run_bash("resolve_env_file /startup", cwd=tmp_path, env={"AH_ENV_FILE": "/tmp/x y/.env"})
     assert proc.returncode == 0
     assert proc.stdout.strip() == "/tmp/x y/.env"
 
 
 def test_resolve_env_file_relative_anchors_to_startup(tmp_path):
     proc = run_bash(
-        'resolve_env_file /startup; echo; cd / && resolve_env_file /startup; echo',
+        "resolve_env_file /startup; echo; cd / && resolve_env_file /startup; echo",
         cwd=tmp_path,
         env={"AH_ENV_FILE": "rel dir/custom.env"},
     )
@@ -131,7 +128,7 @@ def test_resolve_env_file_relative_anchors_to_startup(tmp_path):
 
 
 def test_resolve_env_file_unicode_name(tmp_path):
-    proc = run_bash('resolve_env_file /s', cwd=tmp_path, env={"AH_ENV_FILE": "/tmp/ünïcode.env"})
+    proc = run_bash("resolve_env_file /s", cwd=tmp_path, env={"AH_ENV_FILE": "/tmp/ünïcode.env"})
     assert proc.stdout.strip() == "/tmp/ünïcode.env"
 
 
@@ -153,7 +150,9 @@ def test_env_round_trip_with_spaces_and_unicode(tmp_path):
 def test_env_set_preserves_unrelated_values(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("KEEP=yes\nDATABASE_URL=custom://x\n")
-    proc = run_bash('env_set DATABASE_URL "custom://y" "$F"', cwd=tmp_path, env={"F": str(env_file)})
+    proc = run_bash(
+        'env_set DATABASE_URL "custom://y" "$F"', cwd=tmp_path, env={"F": str(env_file)}
+    )
     assert proc.returncode == 0, proc.stderr
     lines = env_file.read_text().splitlines()
     assert "KEEP=yes" in lines
@@ -176,22 +175,34 @@ def test_env_set_rejects_bad_keys_and_targets(tmp_path):
     env_file.write_text("OK=1\n")
     before = env_file.read_bytes()
     for bad in ["", "9LIVE", "HAS SPACE", "DASH-ED", "a=b"]:
-        proc = run_bash(f'if env_set {bad!r} v "$F"; then echo ACCEPTED; else echo REJECTED; fi',
-                        cwd=tmp_path, env={"F": str(env_file)})
+        proc = run_bash(
+            f'if env_set {bad!r} v "$F"; then echo ACCEPTED; else echo REJECTED; fi',
+            cwd=tmp_path,
+            env={"F": str(env_file)},
+        )
         assert "REJECTED" in proc.stdout, bad
     assert env_file.read_bytes() == before
-    proc = run_bash('if env_set K v "$F"; then echo ACCEPTED; else echo REJECTED; fi',
-                    cwd=tmp_path, env={"F": str(tmp_path / "no-such-dir" / ".env")})
+    proc = run_bash(
+        'if env_set K v "$F"; then echo ACCEPTED; else echo REJECTED; fi',
+        cwd=tmp_path,
+        env={"F": str(tmp_path / "no-such-dir" / ".env")},
+    )
     assert "REJECTED" in proc.stdout
     (tmp_path / "adir").mkdir()
-    proc = run_bash('if env_set K v "$F"; then echo ACCEPTED; else echo REJECTED; fi',
-                    cwd=tmp_path, env={"F": str(tmp_path / "adir")})
+    proc = run_bash(
+        'if env_set K v "$F"; then echo ACCEPTED; else echo REJECTED; fi',
+        cwd=tmp_path,
+        env={"F": str(tmp_path / "adir")},
+    )
     assert "REJECTED" in proc.stdout
 
 
 def test_env_get_missing_file_is_empty(tmp_path):
-    proc = run_bash('test -z "$(env_get NOPE "$F")" && echo EMPTY', cwd=tmp_path,
-                    env={"F": str(tmp_path / "missing")})
+    proc = run_bash(
+        'test -z "$(env_get NOPE "$F")" && echo EMPTY',
+        cwd=tmp_path,
+        env={"F": str(tmp_path / "missing")},
+    )
     assert "EMPTY" in proc.stdout
 
 
@@ -210,12 +221,16 @@ def test_db_url_guard_cases(tmp_path):
         'printf "DATABASE_URL=\\n" > "$F_EMPTY";'
         'check "$F_EMPTY" empty;'
     )
-    proc = run_bash(script, cwd=tmp_path, env={
-        "F_MISSING": str(tmp_path / "nope"),
-        "F_DEF": str(tmp_path / "d.env"),
-        "F_CUSTOM": str(tmp_path / "c.env"),
-        "F_EMPTY": str(tmp_path / "e.env"),
-    })
+    proc = run_bash(
+        script,
+        cwd=tmp_path,
+        env={
+            "F_MISSING": str(tmp_path / "nope"),
+            "F_DEF": str(tmp_path / "d.env"),
+            "F_CUSTOM": str(tmp_path / "c.env"),
+            "F_EMPTY": str(tmp_path / "e.env"),
+        },
+    )
     assert proc.returncode == 0, proc.stderr
     assert "missing REPLACEABLE" in proc.stdout
     assert "default REPLACEABLE" in proc.stdout
@@ -226,22 +241,33 @@ def test_db_url_guard_cases(tmp_path):
 def test_maybe_write_db_url_preserves_custom(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("DATABASE_URL=postgresql://u:p@db.internal:5432/prod\nOTHER=1\n")
-    proc = run_bash('maybe_write_db_url "postgresql://agentharness:NEW@localhost:5432/agentharness" "$F"',
-                    cwd=tmp_path, env={"F": str(env_file)})
+    proc = run_bash(
+        'maybe_write_db_url "postgresql://agentharness:NEW@localhost:5432/agentharness" "$F"',
+        cwd=tmp_path,
+        env={"F": str(env_file)},
+    )
     assert proc.returncode == 0, proc.stderr
     assert "Reusing existing custom DATABASE_URL" in proc.stderr
-    assert "DATABASE_URL=postgresql://u:p@db.internal:5432/prod" in env_file.read_text().splitlines()
+    assert (
+        "DATABASE_URL=postgresql://u:p@db.internal:5432/prod" in env_file.read_text().splitlines()
+    )
     assert "NEW" not in env_file.read_text()
 
 
 def test_maybe_write_db_url_replaces_default(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness\n")
-    proc = run_bash('maybe_write_db_url "postgresql://agentharness:NEW@localhost:5432/agentharness" "$F"',
-                    cwd=tmp_path, env={"F": str(env_file)})
+    proc = run_bash(
+        'maybe_write_db_url "postgresql://agentharness:NEW@localhost:5432/agentharness" "$F"',
+        cwd=tmp_path,
+        env={"F": str(env_file)},
+    )
     assert proc.returncode == 0, proc.stderr
     assert "Wrote generated Postgres credentials" in proc.stdout
-    assert "DATABASE_URL=postgresql://agentharness:NEW@localhost:5432/agentharness" in env_file.read_text().splitlines()
+    assert (
+        "DATABASE_URL=postgresql://agentharness:NEW@localhost:5432/agentharness"
+        in env_file.read_text().splitlines()
+    )
     assert file_mode(env_file) == "0o600"
 
 
@@ -267,7 +293,7 @@ def test_install_sh_uses_hidden_prompt_without_fallback():
 
 def test_install_sh_no_bare_env_file_ops():
     text = INSTALL_SH.read_text()
-    for banned in [">> .env", "> .env", '" .env > "', "mv \"$TMP_ENV\" .env", "mktemp .env.tmp"]:
+    for banned in [">> .env", "> .env", '" .env > "', 'mv "$TMP_ENV" .env', "mktemp .env.tmp"]:
         assert banned not in text, banned
 
 
@@ -337,7 +363,9 @@ def _echo_enabled(master):
 def test_prompt_hidden_input_round_trip(tmp_path):
     proc, master, _ = _spawn_ctty(
         'if out=$(prompt_secret_hidden "P: "); then echo "rc=0 val=$out";'
-        ' else echo "rc=1 val=$out"; fi', cwd=tmp_path, env={}
+        ' else echo "rc=1 val=$out"; fi',
+        cwd=tmp_path,
+        env={},
     )
     try:
         time.sleep(0.7)
@@ -460,15 +488,15 @@ def _brew_harness(tmp_path):
         '  *pg_roles*) echo " $ROLE_EXISTS";;\n'
         '  *pg_database*) echo " $DB_EXISTS";;\n'
         '  *ALTER\\ USER*) echo "$@" >> "$ALTER_LOG"; exit ${PSQL_ALTER_RC:-0};;\n'
-        '  *CREATE\\ EXTENSION*) exit ${PSQL_EXT_RC:-0};;\n'
-        'esac\n'
+        "  *CREATE\\ EXTENSION*) exit ${PSQL_EXT_RC:-0};;\n"
+        "esac\n"
         "exit 0\n"
     )
     (pgbin / "createuser").write_text(
-        "#!/usr/bin/env bash\necho \"createuser $*\" >> \"$BREW_LOG\"\nexit ${CREATE_RC:-0}\n"
+        '#!/usr/bin/env bash\necho "createuser $*" >> "$BREW_LOG"\nexit ${CREATE_RC:-0}\n'
     )
     (pgbin / "createdb").write_text(
-        "#!/usr/bin/env bash\necho \"createdb $*\" >> \"$BREW_LOG\"\nexit ${CREATE_RC:-0}\n"
+        '#!/usr/bin/env bash\necho "createdb $*" >> "$BREW_LOG"\nexit ${CREATE_RC:-0}\n'
     )
     for name in ("pg_isready", "pg_config", "psql", "createuser", "createdb"):
         (pgbin / name).chmod(0o755)
@@ -502,7 +530,9 @@ def _run_brew(tmp_path, env_content, **overrides):
     env = _brew_env(tmp_path, bindir, pgbin, env_file, **overrides)
     proc = run_bash(
         "start_brew_db && echo BREW_RC=0 || echo BREW_RC=1",
-        cwd=workdir, env=env, timeout=60,
+        cwd=workdir,
+        env=env,
+        timeout=60,
     )
     alter_log = tmp_path / "alter.log"
     return proc, env_file.read_text(), before, alter_log.read_text() if alter_log.exists() else ""
@@ -523,7 +553,9 @@ def test_brew_default_url_gets_generated_credentials(tmp_path):
     proc, after, _, _ = _run_brew(tmp_path, default)
     assert proc.returncode == 0, proc.stderr
     lines = [line for line in after.splitlines() if line.startswith("DATABASE_URL=")]
-    assert lines == ["DATABASE_URL=postgresql://agentharness:0123456789abcdef0123456789abcdef@localhost:5432/agentharness"]
+    assert lines == [
+        "DATABASE_URL=postgresql://agentharness:0123456789abcdef0123456789abcdef@localhost:5432/agentharness"
+    ]
 
 
 def test_brew_existing_role_keeps_password_and_url(tmp_path):
@@ -548,9 +580,7 @@ def test_brew_refuses_non_macos(tmp_path):
     workdir = tmp_path / "work"
     workdir.mkdir(exist_ok=True)
     env = _brew_env(tmp_path, bindir, pgbin, workdir / ".env", OS_FAMILY="linux")
-    proc = run_bash(
-        'if start_brew_db; then echo RAN; else echo REFUSED; fi', cwd=workdir, env=env
-    )
+    proc = run_bash("if start_brew_db; then echo RAN; else echo REFUSED; fi", cwd=workdir, env=env)
     assert "REFUSED" in proc.stdout
 
 
@@ -576,8 +606,12 @@ def test_docker_custom_url_preserved(tmp_path):
     }
     proc = run_bash(
         "start_docker_db && echo DOCKER_RC=0 || echo DOCKER_RC=1",
-        cwd=workdir, env=env, timeout=60,
+        cwd=workdir,
+        env=env,
+        timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
     assert "DOCKER_RC=0" in proc.stdout
-    assert "DATABASE_URL=postgresql://u:p@db.internal:5432/prod" in env_file.read_text().splitlines()
+    assert (
+        "DATABASE_URL=postgresql://u:p@db.internal:5432/prod" in env_file.read_text().splitlines()
+    )

@@ -203,3 +203,255 @@ def test_fake_keyring_backend_selection(tmp_path, monkeypatch):
     monkeypatch.delenv("AGENT_HARNESS_OAUTH_MASTER_KEY", raising=False)
     with pytest.raises(OAuthKeyUnavailable):
         oauth_keys.get_master_key()
+
+
+def test_refresh_lock_cancellation_releases_file_and_local_locks(tmp_path, monkeypatch):
+    import threading
+
+    from ah.connectors import oauth_store
+
+    async def run():
+        store = OAuthCredentialStore(tmp_path / "oauth", key_provider=_key_provider)
+        binding = _binding()
+        entered = threading.Event()
+        release = threading.Event()
+        original = oauth_store._file_lock_acquire
+        captured = []
+
+        def suspended(fd, *, timeout, cancelled=None):
+            captured.append(fd)
+            entered.set()
+            release.wait(2)
+            return original(fd, timeout=timeout, cancelled=cancelled)
+
+        monkeypatch.setattr(oauth_store, "_file_lock_acquire", suspended)
+
+        async def acquire():
+            async with store.refresh_lock(binding, deadline=asyncio.get_running_loop().time() + 3):
+                pytest.fail("cancelled lock entered body")
+
+        task = asyncio.create_task(acquire())
+        await asyncio.to_thread(entered.wait, 1)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.05)
+        assert not store._async_locks[binding.credential_key].locked()
+        with pytest.raises(OSError):
+            os.fstat(captured[0])
+        monkeypatch.setattr(oauth_store, "_file_lock_acquire", original)
+        async with store.refresh_lock(binding, deadline=asyncio.get_running_loop().time() + 1):
+            pass
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("operation", ["backend", "read", "write"])
+def test_keyring_timeout_returns_without_waiting_for_backend(monkeypatch, operation):
+    import sys
+    import threading
+    import time
+
+    class Backend:
+        pass
+
+    Backend.__module__ = "keyring.backends.macos"
+    release = threading.Event()
+    encoded = base64.b64encode(b"k" * 32).decode()
+
+    class FakeKeyring:
+        @staticmethod
+        def get_keyring():
+            if operation == "backend":
+                release.wait(0.5)
+            return Backend()
+
+        @staticmethod
+        def get_password(*args):
+            if operation == "read":
+                release.wait(0.5)
+                return encoded
+            return None
+
+        @staticmethod
+        def set_password(*args):
+            release.wait(0.5)
+
+    monkeypatch.setitem(sys.modules, "keyring", FakeKeyring)
+    monkeypatch.delenv("AGENT_HARNESS_OAUTH_MASTER_KEY", raising=False)
+    started = time.monotonic()
+    try:
+        with pytest.raises(OAuthKeyUnavailable):
+            oauth_keys.get_master_key(timeout=0.02)
+        assert time.monotonic() - started < 0.2
+    finally:
+        release.set()
+
+
+def test_keyring_timeout_does_not_hold_process_shutdown(tmp_path):
+    import subprocess
+    import sys
+    import textwrap
+
+    program = textwrap.dedent("""
+        import sys, threading
+        from ah.security.oauth_keys import get_master_key, OAuthKeyUnavailable
+        class Backend:
+            pass
+        Backend.__module__ = "keyring.backends.macos"
+        class FakeKeyring:
+            @staticmethod
+            def get_keyring():
+                return Backend()
+            @staticmethod
+            def get_password(*args):
+                threading.Event().wait()
+        sys.modules["keyring"] = FakeKeyring
+        try:
+            get_master_key(timeout=0.02)
+        except OAuthKeyUnavailable:
+            print("timed out", flush=True)
+    """)
+    env = os.environ.copy()
+    env.pop("AGENT_HARNESS_OAUTH_MASTER_KEY", None)
+    result = subprocess.run(
+        [sys.executable, "-c", program], env=env, capture_output=True, text=True, timeout=2
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "timed out"
+
+
+def test_timed_out_key_creation_keeps_lock_until_backend_write_finishes(tmp_path, monkeypatch):
+    import sys
+    import threading
+
+    class Backend:
+        pass
+
+    Backend.__module__ = "keyring.backends.macos"
+    release = threading.Event()
+    finished = threading.Event()
+    writes = []
+    stored = []
+
+    class FakeKeyring:
+        @staticmethod
+        def get_keyring():
+            return Backend()
+
+        @staticmethod
+        def get_password(*args):
+            return stored[-1] if stored else None
+
+        @staticmethod
+        def set_password(service, account, value):
+            writes.append(value)
+            release.wait(1)
+            stored.append(value)
+            finished.set()
+
+    monkeypatch.setitem(sys.modules, "keyring", FakeKeyring)
+    monkeypatch.delenv("AGENT_HARNESS_OAUTH_MASTER_KEY", raising=False)
+    lock_path = tmp_path / "creation.lock"
+    try:
+        with pytest.raises(OAuthKeyUnavailable):
+            oauth_keys.get_master_key(timeout=0.02, lock_path=lock_path)
+        with pytest.raises(OAuthKeyUnavailable):
+            oauth_keys.get_master_key(timeout=0.02, lock_path=lock_path)
+        assert len(writes) == 1, "a pending creation may not overwrite a sibling master key"
+    finally:
+        release.set()
+        assert finished.wait(1)
+    assert oauth_keys.get_master_key(timeout=1, lock_path=lock_path) == base64.b64decode(stored[-1])
+
+
+def test_failed_keyring_read_never_creates_replacement_key(monkeypatch):
+    import sys
+
+    class Backend:
+        pass
+
+    Backend.__module__ = "keyring.backends.macos"
+
+    class FakeKeyring:
+        @staticmethod
+        def get_keyring():
+            return Backend()
+
+        @staticmethod
+        def get_password(*args):
+            raise RuntimeError("keyring temporarily locked")
+
+        @staticmethod
+        def set_password(*args):
+            pytest.fail("unreadable keyring must not mint a replacement master key")
+
+    monkeypatch.setitem(sys.modules, "keyring", FakeKeyring)
+    monkeypatch.delenv("AGENT_HARNESS_OAUTH_MASTER_KEY", raising=False)
+    with pytest.raises(OAuthKeyUnavailable):
+        oauth_keys.get_master_key(timeout=0.2)
+
+
+def test_repeated_refresh_cancellation_waits_for_file_worker_cleanup(tmp_path, monkeypatch):
+    import threading
+
+    from ah.connectors import oauth_store
+
+    async def run():
+        store = OAuthCredentialStore(tmp_path / "oauth", key_provider=_key_provider)
+        binding = _binding()
+        entered = threading.Event()
+        release = threading.Event()
+        captured = []
+
+        def suspended(fd, *, timeout, cancelled=None):
+            captured.append(fd)
+            entered.set()
+            release.wait(1)
+            os.fstat(fd)
+            return False
+
+        monkeypatch.setattr(oauth_store, "_file_lock_acquire", suspended)
+
+        async def acquire():
+            async with store.refresh_lock(binding, deadline=asyncio.get_running_loop().time() + 2):
+                pytest.fail("cancelled acquisition entered body")
+
+        task = asyncio.create_task(acquire())
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.sleep(0.02)
+            assert not task.done(), (
+                "file descriptor must remain owned until its acquisition worker exits"
+            )
+            os.fstat(captured[0])
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+        assert task.cancelled()
+        assert not store._async_locks[binding.credential_key].locked()
+        with pytest.raises(OSError):
+            os.fstat(captured[0])
+
+    asyncio.run(run())
+
+
+def test_revision_filtered_retirement_preserves_newer_authority_atomically(tmp_path):
+    async def run():
+        store = OAuthCredentialStore(tmp_path / "oauth", key_provider=_key_provider)
+        binding = _binding()
+        await store.save(_record(binding), expected_generation=0)
+        await store.save(
+            _record(binding, config_revision=2, generation=2, grant_id="new-grant"),
+            expected_generation=1,
+        )
+        generation = await store.forget(binding, expected_generation=1, max_config_revision=1)
+        assert generation == 2
+        record = await store.load(binding)
+        assert record is not None and record.grant_id == "new-grant"
+
+    asyncio.run(run())

@@ -27,6 +27,8 @@ import { AnimationCoordinator } from "./design/motion.ts";
 import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features/index.ts";
 import { type AskTextOptions, PROFILE_ID_RE, type OAuthProgressHandle, type OAuthProgressOptions } from "./features/types.ts";
 import type { GatewayClient } from "./gateway.ts";
+import { copyText as copyClipboardText } from "./clipboard.ts";
+import { clipboardImage, clipboardText, ImageDraft, imagePaths, readImageFile, type ImageAttachment } from "./images.ts";
 import type {
 	ConfigGetResult,
 	ConfigResult,
@@ -131,6 +133,13 @@ export class App implements FeatureHost {
 	private exiting = false;
 	private resolveExit: () => void = () => {};
 	private inputListenerDisposer: (() => void) | undefined;
+    private imageDraft = new ImageDraft();
+    private imageLoads = Promise.resolve();
+    private imageEpoch = 0;
+    private pendingImageLoads = 0;
+    private imageLoadFailures = 0;
+    private lastPromptImages: ImageAttachment[] = [];
+    private lastPromptSessionId: string | undefined;
 
 	// Match the server turn timeout (turn_timeout=300s) so the UI does not
 	// time out and unlock while the server is still running the turn (which
@@ -152,6 +161,18 @@ export class App implements FeatureHost {
 
 		this.composer = new ComposerBox(tui, editorTheme, { paddingX: 1 });
 		this.editor = this.composer.editor;
+        this.composer.editor.onPaste = (text) => this.acceptImageDrop(text);
+        this.composer.editor.onSubmitBlocked = () => {
+            if (!this.pendingImageLoads) return false;
+            const epoch = this.imageEpoch;
+            const failures = this.imageLoadFailures;
+            void this.imageLoads.then(() => {
+                if (epoch === this.imageEpoch && failures === this.imageLoadFailures && !this.exiting) {
+                    void this.submit(this.editor.getExpandedText());
+                }
+            });
+            return true;
+        };
 		this.shell = new AppShell(tui, this.transcriptView, this.composer, this.footer);
 		this.editor.setAutocompleteProvider(new ArgumentAwareAutocompleteProvider(SLASH_COMMANDS, process.cwd()));
 		this.editor.setAutocompleteMaxVisible(8);
@@ -258,6 +279,8 @@ export class App implements FeatureHost {
 		this.tui.requestRender();
 	}
 
+    copyText(text: string): Promise<boolean> { return copyClipboardText(text); }
+
 	printMarkdown(text: string): void {
 		this.transcript.addMarkdown(text);
 		this.tui.requestRender();
@@ -293,6 +316,8 @@ export class App implements FeatureHost {
 
 	updateSession(session: SessionInfo): void {
 		if (session.id !== this.current?.id) {
+            this.clearImages();
+            this.editor.setText("");
 			this.footer.dispose();
 			// A pending request may reopen only when the user returns to its
 			// owning session; never carry a selection into the new session.
@@ -384,13 +409,14 @@ export class App implements FeatureHost {
 			closeDialog = close;
 			component = new OAuthProgress(options.title, options.status, {
 				onOpen: options.onOpen,
+                onCopy: options.onCopy,
 				onCancel: () => {
 					if (settled) return;
 					settled = true;
 					options.onCancel();
 					close("cancel");
 				},
-			}, options.loginUrl);
+            }, options.loginUrl, this.tui);
 			return component;
 		}).then(() => {
 			settled = true;
@@ -552,15 +578,68 @@ export class App implements FeatureHost {
 	}
 
 	// ─── input ────────────────────────────────────────────────────────────
+    private clearImages(): void {
+        this.imageEpoch++;
+        this.imageDraft = new ImageDraft();
+        this.lastPromptImages = [];
+        this.lastPromptSessionId = undefined;
+    }
+
+    private acceptImageDrop(text: string): boolean {
+        const paths = imagePaths(text);
+        if (!paths) return false;
+        this.loadImages(() => {
+            if (paths.length > 5) throw new Error("Attach at most 5 images per message.");
+            return Promise.all(paths.map(readImageFile));
+        });
+        return true;
+    }
+
+    private loadImages(load: () => Promise<ImageAttachment[]>): void {
+        const epoch = this.imageEpoch;
+        this.pendingImageLoads++;
+        this.imageLoads = this.imageLoads.then(async () => {
+            if (epoch !== this.imageEpoch || this.exiting) return;
+            const images = await load();
+            if (epoch !== this.imageEpoch || this.exiting || !images.length) return;
+            this.imageDraft.prune(this.editor.getExpandedText());
+            const markers = this.imageDraft.addMany(images);
+            this.editor.insertTextAtCursor(markers.join(" ") + " ");
+        }).catch((error) => {
+            this.imageLoadFailures++;
+            if (epoch === this.imageEpoch && !this.exiting) this.print(message(error), "error");
+        }).finally(() => {
+            this.pendingImageLoads--;
+            this.tui.requestRender();
+        });
+    }
+
 	private onKey(data: string): { consume: boolean } | undefined {
 		this.shell.sync();
 		if (this.dialogs.length || this.approvalDialogs.size) return undefined; // focused dialogs own their keys
+
+        if (matchesKey(data, Key.ctrl("v")) || matchesKey(data, Key.super("v"))) {
+            const epoch = this.imageEpoch;
+            this.loadImages(async () => {
+                const image = await clipboardImage();
+                if (image) return [image];
+                const text = await clipboardText();
+                if (epoch !== this.imageEpoch || this.exiting) return [];
+                const paths = imagePaths(text);
+                if (paths) return Promise.all(paths.map(readImageFile));
+                if (text) this.editor.insertTextAtCursor(text);
+                else this.print("No image or text found in the clipboard. Drop an image file to attach it.", "info");
+                return [];
+            });
+            return { consume: true };
+        }
 
 		const questionKey = matchesKey(data, Key.question) || matchesKey(data, Key.shift("?")) || matchesKey(data, Key.shift("/"));
 		if (matchesKey(data, Key.f1) || (questionKey && !this.editor.getText() && !this.editor.isShowingAutocomplete())) {
 			void this.openDialog((close) => new Picker("Keyboard shortcuts", [
 				{ value: "send", label: "Enter — send", description: "Send a message or run a command" },
 				{ value: "newline", label: "Shift+Enter — new line" },
+                { value: "image", label: "Drop an image / Ctrl+V — paste image", description: "PNG, JPEG, GIF or WebP · ⌘V where forwarded by your terminal" },
 				{ value: "stop", label: "Esc — stop reply", description: "Twice on empty input edits the last prompt" },
 				{ value: "cancel", label: "Ctrl+C — stop / clear / exit", description: "Stop a reply, clear a draft, or exit when empty" },
 				{ value: "exit", label: "Ctrl+D — exit", description: "When input is empty and idle" },
@@ -575,7 +654,7 @@ export class App implements FeatureHost {
 
 		if (matchesKey(data, Key.ctrl("c"))) {
 			if (this.running) this.cancel();
-			else if (this.editor.getText()) this.editor.setText("");
+            else if (this.editor.getText() || this.pendingImageLoads) { this.editor.setText(""); this.clearImages(); }
 			else void this.exit();
 			this.tui.requestRender();
 			return { consume: true };
@@ -612,7 +691,11 @@ export class App implements FeatureHost {
 	}
 
 	private async submit(raw: string): Promise<void> {
-		const text = raw.trim();
+        const waitingForImages = this.pendingImageLoads > 0;
+        const epoch = this.imageEpoch;
+        await this.imageLoads;
+        if (epoch !== this.imageEpoch || this.exiting) return;
+        const text = (waitingForImages ? this.editor.getExpandedText() : raw).trim();
 		if (!text) return;
 
 		// AH-031: parse FIRST, then guard only conflicting operations.
@@ -620,6 +703,10 @@ export class App implements FeatureHost {
 		// new prompts and session-mutating commands on the in-flight
 		// session are rejected.
 		const command = parseCommand(text);
+        if (command && /\[image \d+\]/.test(text)) {
+            this.print("Send image attachments with a message, rather than a slash command.", "warning");
+            return;
+        }
 		const inFlight = this.current && this.inFlight.has(this.current.id);
 		if (inFlight && !command) {
 			this.transcript.addNotice("The previous turn is still finishing. Try again shortly.", "warning");
@@ -632,25 +719,46 @@ export class App implements FeatureHost {
 			return;
 		}
 
+        let draft: ReturnType<ImageDraft["prepare"]>;
+        try {
+            if (text === this.lastPrompt && this.current?.id === this.lastPromptSessionId && this.lastPromptImages.length) {
+                // Editor history contains markers only. Re-edit the original
+                // inline bytes instead of reading a possibly changed file.
+                this.imageDraft = new ImageDraft();
+                this.imageDraft.addMany(this.lastPromptImages);
+            }
+            draft = this.imageDraft.prepare(text);
+        }
+        catch (error) { this.print(message(error), "error"); return; }
+        const submittedImages = this.imageDraft;
+        this.imageDraft = new ImageDraft();
+        this.imageEpoch++;
+        const submittedEpoch = this.imageEpoch;
+        const submittedSessionId = this.current?.id;
+
 		this.editor.setText("");
 
 		// Never keep secrets in input history: /keys set carries a raw value.
 		const secret = command?.name === "keys" && command.args.startsWith("set");
-		if (!secret) this.editor.addToHistory(text);
+        if (!secret) this.editor.addToHistory(draft.text);
 		if (command) {
 			await runCommand(command, this);
 		} else {
-			this.lastPrompt = text;
+			this.lastPrompt = draft.text;
+            this.lastPromptImages = draft.images;
+            this.lastPromptSessionId = submittedSessionId;
 			try {
-				await this.submitTurn(text);
+				await this.submitTurn(draft.text, draft.images);
 			} catch (error) {
 				// Restore the draft on failure. When the guard was released
 				// the failure preceded acceptance and retry is meaningful;
 				// when it is retained the dispatch outcome is unknown, so say
 				// so instead of implying a retry is safe.
-				const sessionId = this.current?.id;
-				const unknownDispatch = sessionId ? this.inFlight.has(sessionId) : false;
-				if (!this.editor.getText()) this.editor.setText(text);
+                const unknownDispatch = submittedSessionId ? this.inFlight.has(submittedSessionId) : false;
+                if (!this.editor.getText() && !unknownDispatch && this.current?.id === submittedSessionId && this.imageEpoch === submittedEpoch) {
+                    this.imageDraft = submittedImages;
+                    this.editor.setText(text);
+                }
 				this.setRunning(this.current ? this.inFlight.has(this.current.id) : false);
 				this.transcript.addNotice(
 					unknownDispatch
@@ -663,7 +771,7 @@ export class App implements FeatureHost {
 		this.tui.requestRender();
 	}
 
-	async submitTurn(text: string): Promise<void> {
+    async submitTurn(text: string, images: ImageAttachment[] = []): Promise<void> {
 		if (!this.current) {
 			this.transcript.addNotice("Not connected to a session. Try /new.", "warning");
 			return;
@@ -690,7 +798,9 @@ export class App implements FeatureHost {
 		this.startInFlightTimer(sessionId);
 		this.tui.requestRender();
 		try {
-			const result = await this.client.request<{ turnId?: string }>("prompt.submit", { sessionId, text });
+            const result = await this.client.request<{ turnId?: string }>("prompt.submit", {
+                sessionId, text, ...(images.length ? { images } : {}),
+            });
 			this.confirmTurn(sessionId, result?.turnId);
 		} catch (error) {
 			// Rejection known to precede acceptance (no dispatch evidence)
