@@ -22,6 +22,8 @@ class FakeHost implements FeatureHost {
 	files = new Map<string, string>();
 	picks: Array<string | undefined> = [];
 	pickTitles: string[] = [];
+	manyQueue: Array<string[] | undefined> = [];
+	manyItems: SelectItem[][] = [];
 	textQueue: Array<string | undefined> = [];
 	asked: AskTextOptions[] = [];
 	current: SessionInfo | undefined = SESSION;
@@ -63,6 +65,11 @@ class FakeHost implements FeatureHost {
 	async askText(options: AskTextOptions): Promise<string | undefined> {
 		this.asked.push(options);
 		return this.textQueue.shift();
+	}
+	async pickMany(_title: string, items: SelectItem[]) {
+		this.manyItems.push(items);
+		const values = this.manyQueue.shift();
+		return values ? items.filter(item => values.includes(item.value)) : undefined;
 	}
 	themeQueue: Array<string | undefined> = [];
 	async pickTheme(): Promise<string | undefined> {
@@ -521,13 +528,88 @@ test("/delete asks for confirmation and starts a new session after deleting the 
 	host.responses["session.create"] = { session: { ...SESSION, id: "99999999-0000-0000-0000-000000000000", title: "" } };
 
 	host.picks = ["no"];
-	await run("/delete", host);
+	await run(`/delete ${SESSION.id}`, host);
 	assert.equal(host.calls.length, 0, "cancel sends nothing");
 
 	host.picks = ["yes"];
-	await run("/delete", host);
+	await run(`/delete ${SESSION.id}`, host);
 	assert.deepEqual(host.calls.map((c) => c.method), ["session.delete", "session.create"]);
 	assert.equal(host.current?.id, "99999999-0000-0000-0000-000000000000");
+});
+
+test("/delete lists every page, then deletes only checked sessions after confirmation", async () => {
+	const host = new FakeHost();
+	const older = { ...SESSION, id: "older-session", title: "Older session" };
+	host.responses["session.list"] = (params: Record<string, unknown>) => params.cursor ? { sessions: [older] } : { sessions: [SESSION], nextCursor: "200" };
+	host.manyQueue.push([older.id]);
+	host.picks.push("yes");
+	host.responses["session.delete"] = { deleted: true };
+	await run("/delete", host);
+	assert.deepEqual(host.manyItems[0]!.map(item => item.value), [SESSION.id, older.id]);
+	assert.deepEqual(host.calls.map(call => call.method), ["session.list", "session.list", "session.delete"]);
+	assert.deepEqual(host.calls[2]!.params, { sessionId: older.id });
+	assert.equal(host.current?.id, SESSION.id);
+	assert.match(host.last().text, /Deleted 1 session/);
+});
+
+test("/delete checkbox and confirmation cancellation never delete", async () => {
+	for (const selection of [undefined, [], [SESSION.id]]) {
+		const host = new FakeHost();
+		host.responses["session.list"] = { sessions: [SESSION] };
+		host.manyQueue.push(selection);
+		host.picks.push("no");
+		await run("/delete", host);
+		assert.deepEqual(host.calls.map(call => call.method), ["session.list"]);
+	}
+});
+
+test("/delete reports partial failures and keeps a failed current session", async () => {
+	const host = new FakeHost();
+	host.responses["session.list"] = { sessions: [SESSION, { ...SESSION, id: "other" }, { ...SESSION, id: "gone" }] };
+	host.manyQueue.push([SESSION.id, "other", "gone"]);
+	host.picks.push("yes");
+	host.responses["session.delete"] = (params: Record<string, unknown>) => {
+		if (params.sessionId === SESSION.id) throw new Error("Stop the running reply first");
+		return { deleted: params.sessionId !== "gone" };
+	};
+	await run("/delete", host);
+	assert.equal(host.current?.id, SESSION.id);
+	assert.ok(!host.calls.some(call => call.method === "session.create"));
+	assert.match(host.printed.map(item => item.text).join("\n"), /Deleted 1 session/);
+	assert.match(host.printed.map(item => item.text).join("\n"), /Stop the running reply first/);
+	assert.equal(host.calls.filter(call => call.method === "session.delete").length, 3);
+});
+
+test("/delete selected current session creates only one replacement", async () => {
+	const host = new FakeHost();
+	host.responses["session.list"] = { sessions: [SESSION, { ...SESSION, id: "other" }] };
+	host.manyQueue.push([SESSION.id, "other"]);
+	host.picks.push("yes");
+	host.responses["session.delete"] = { deleted: true };
+	host.responses["session.create"] = { session: { ...SESSION, id: "new" } };
+	await run("/delete", host);
+	assert.equal(host.current?.id, "new");
+	assert.equal(host.calls.filter(call => call.method === "session.create").length, 1);
+	assert.match(host.last().text, /Deleted 2 sessions/);
+});
+
+test("/delete runs at most three requests concurrently", async () => {
+	const host = new FakeHost();
+	const ids = ["a", "b", "c", "d"];
+	host.responses["session.list"] = { sessions: ids.map(id => ({ ...SESSION, id })) };
+	host.manyQueue.push(ids);
+	host.picks.push("yes");
+	const pending: Array<(value: { deleted: boolean }) => void> = [];
+	host.responses["session.delete"] = () => new Promise(resolve => pending.push(resolve));
+	const deleting = run("/delete", host);
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(pending.length, 3);
+	for (const resolve of pending.splice(0)) resolve({ deleted: true });
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(pending.length, 1);
+	pending[0]!({ deleted: true });
+	await deleting;
+	assert.match(host.last().text, /Deleted 4 sessions/);
 });
 
 test("/export writes Markdown to a default file name", async () => {
@@ -650,6 +732,55 @@ test("/delegate runs one step through agents.run", async () => {
 	await run("/delegate researcher find X", host);
 	assert.deepEqual(host.calls[0]!.params.steps, [{ agent: "researcher", task: "find X" }]);
 	assert.match(host.markdown.at(-1)!, /found X/);
+});
+
+test("/delegate selects a live agent before asking for the task", async () => {
+	const host = new FakeHost();
+	host.responses["agents.list"] = { agents: [{ name: "coder", description: "Edits code" }, { name: "researcher", description: "Researches questions" }] };
+	host.picks.push("researcher");
+	host.textQueue.push("  Find the source\nwith evidence  ");
+	host.responses["agents.run"] = { results: [{ status: "complete", response: "Found it", tokens: 10 }] };
+	await run("/delegate", host);
+	assert.deepEqual(host.pickTitles, ["Delegate to which agent?"]);
+	assert.match(host.asked[0]!.title, /researcher/);
+	assert.deepEqual(host.calls.map(c => c.method), ["agents.list", "agents.run"]);
+	assert.deepEqual(host.calls[1]!.params, { sessionId: SESSION.id, steps: [{ agent: "researcher", task: "Find the source\nwith evidence" }] });
+});
+
+test("/delegate agent asks for a task without opening the picker", async () => {
+	const host = new FakeHost();
+	host.textQueue.push("Fix the bug");
+	host.responses["agents.run"] = { results: [{ status: "complete", response: "Fixed", tokens: 10 }] };
+	await run("/delegate coder", host);
+	assert.equal(host.pickTitles.length, 0);
+	assert.match(host.asked[0]!.title, /coder/);
+	assert.deepEqual(host.calls[0]!.params.steps, [{ agent: "coder", task: "Fix the bug" }]);
+});
+
+test("/delegate picker cancellation does not ask for a task or launch", async () => {
+	const host = new FakeHost();
+	host.responses["agents.list"] = { agents: [{ name: "coder", description: "Edits code" }] };
+	await run("/delegate", host);
+	assert.equal(host.asked.length, 0);
+	assert.deepEqual(host.calls.map(c => c.method), ["agents.list"]);
+});
+
+test("/delegate cancelled or blank task never launches", async () => {
+	for (const task of [undefined, "   "]) {
+		const host = new FakeHost();
+		host.textQueue.push(task);
+		await run("/delegate coder", host);
+		assert.equal(host.calls.length, 0);
+	}
+});
+
+test("/delegate with no available agents explains how to add one", async () => {
+	const host = new FakeHost();
+	host.responses["agents.list"] = { agents: [] };
+	await run("/delegate", host);
+	assert.equal(host.pickTitles.length, 0);
+	assert.equal(host.asked.length, 0);
+	assert.match(host.last().text, /No agents.*\/agents save/);
 });
 
 test("/resume with no args delegates to the sessions command (named reference)", async () => {

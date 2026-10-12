@@ -152,6 +152,7 @@ test("slash commands work against the real gateway and database", { skip, timeou
 			current = session;
 		},
 		pick: async (_title: string, items: SelectItem[]) => items.find((i) => i.value === "yes") ?? items[0],
+		pickMany: async (_title, items) => items.filter(item => item.value === current?.id),
 		askText: async () => undefined,
 		inspectOutput: async () => {},
 		pickTheme: async () => undefined,
@@ -221,8 +222,9 @@ test("slash commands work against the real gateway and database", { skip, timeou
 		const original = current!.id;
 		await run("/fork");
 		assert.notEqual(current!.id, original, "fork switches to the copy");
+		const forkId = current!.id;
 		await run("/delete");
-		assert.notEqual(current, undefined, "deleting the current session opens a new one");
+		assert.notEqual(current!.id, forkId, "checking and deleting the current session opens a new one");
 	} finally {
 		await client.stop();
 	}

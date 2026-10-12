@@ -39,6 +39,8 @@ export interface FeatureHost {
 	/** Update details (e.g. title) of the current session. */
 	updateSession(session: SessionInfo): void;
 	pick(title: string, items: SelectItem[]): Promise<SelectItem | undefined>;
+	/** Check multiple items; undefined means cancelled. Nothing starts here. */
+	pickMany(title: string, items: SelectItem[]): Promise<SelectItem[] | undefined>;
 	/**
 	 * Live theme preview: selections recolor immediately, cancel restores,
 	 * Enter commits. Returns the committed skin ID or undefined on cancel.

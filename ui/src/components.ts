@@ -159,8 +159,14 @@ export class ComposerInput extends Editor {
 		const total = this.render(event.width).length;
 		const textBlock = total - popupHeight;
 		if (textBlock <= 0) return super.handleMouse(event);
+		const popupCommand = event.y < popupHeight && /^\/[\w-]*$/.test(this.getText().trim());
 		const y = event.y < popupHeight ? event.y + textBlock : event.y - popupHeight;
-		return super.handleMouse({ ...event, y });
+		const result = super.handleMouse({ ...event, y });
+		// Picker-first actions open as soon as the command is selected.
+		if (popupCommand && !this.isShowingAutocomplete() && ["/delegate", "/delete"].includes(this.getText().trim())) {
+			this.onSubmit?.(this.getText());
+		}
+		return result;
 	}
 }
 

@@ -193,7 +193,12 @@ export class App implements FeatureHost {
 			Object.assign(this.footer, { cwd: init.cwd, branch: init.branch, model: init.model, status: "ready" });
 			try {
 				const { config } = await this.client.request<ConfigGetResult>("config.get", {}, 30_000);
-				if (typeof config.theme === "string" && config.theme) setSkin(config.theme);
+				if (typeof config.theme === "string" && config.theme) {
+					setSkin(config.theme);
+					// The startup frame is already on screen. Use the same
+					// cache invalidation/full redraw as live theme selection.
+					this.restyle();
+				}
 			} catch {
 				// Saved skin is best-effort; the default applies otherwise.
 			}
@@ -301,6 +306,15 @@ export class App implements FeatureHost {
 		const rows = this.tui.terminal.rows ?? 24;
 		const visibleRows = Math.max(1, Math.min(10, rows - 5 - 3));
 		return this.openDialog<SelectItem>((close) => new Picker(title, items, close, () => close(), visibleRows, undefined, this.tui));
+	}
+
+	pickMany(title: string, items: SelectItem[]): Promise<SelectItem[] | undefined> {
+		return this.openDialog<SelectItem[]>((close) => {
+			const menu = new Menu(title, items, { multiSelect: true, tui: this.tui, visibleRows: 12 });
+			menu.onConfirm = close;
+			menu.onCancel = () => close();
+			return menu;
+		});
 	}
 
 	/**
@@ -478,7 +492,9 @@ export class App implements FeatureHost {
 
 	restyle(): void {
 		this.transcript.restyle();
-		this.tui.requestRender();
+		// A theme changes empty viewport rows too, which do not otherwise
+		// differ in the renderer's retained screen cache.
+		this.tui.requestRender(true);
 	}
 
 	async exit(): Promise<void> {

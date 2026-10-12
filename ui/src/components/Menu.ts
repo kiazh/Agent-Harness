@@ -3,7 +3,7 @@
 // separate from displayed labels. The installed SelectList only prefix-matches
 // on values, so this menu filters explicitly and renders its own rows.
 
-import { Key, matchesKey, truncateToWidth, visibleWidth, type Component, type SelectItem, type TUI } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth, visibleWidth, type Component, type SelectItem, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { ICONS } from "../design/icons.ts";
 import { isSelectionRow, selectionBar, theme } from "../theme.ts";
 
@@ -16,12 +16,14 @@ export interface MenuOptions {
 	tui?: TUI;
 	/** Initially selected value (defaults to the first item). */
 	initialValue?: string;
+	multiSelect?: boolean;
 }
 
 export class Menu implements Component {
 	onSelect: ((item: SelectItem) => void) | undefined;
 	onCancel: (() => void) | undefined;
 	onSelectionChange: ((item: SelectItem) => void) | undefined;
+	onConfirm: ((items: SelectItem[]) => void) | undefined;
 
 	private readonly title: string;
 	private readonly items: SelectItem[];
@@ -30,11 +32,14 @@ export class Menu implements Component {
 	private readonly tui: TUI | undefined;
 	private filter = "";
 	private selectedValue: string | undefined;
+	private readonly multiSelect: boolean;
+	private readonly checked = new Set<string>();
 
 	constructor(title: string, items: SelectItem[], options: MenuOptions = {}) {
 		this.title = title;
 		this.items = items;
-		this.hint = options.hint ?? "enter select · esc back";
+		this.multiSelect = options.multiSelect ?? false;
+		this.hint = options.hint ?? (this.multiSelect ? "↑↓ move · space check · enter review · esc cancel" : "enter select · esc back");
 		this.visibleRows = Math.max(1, options.visibleRows ?? 10);
 		this.tui = options.tui;
 		this.selectedValue = options.initialValue ?? items[0]?.value;
@@ -93,14 +98,49 @@ export class Menu implements Component {
 		this.select((to === "start" ? visible[0] : visible.at(-1))!.value);
 	}
 
+	private toggle(value: string): void {
+		if (this.checked.has(value)) this.checked.delete(value);
+		else this.checked.add(value);
+	}
+
+	private visibleWindow(visible: SelectItem[]): SelectItem[] {
+		const live = this.tui ? Math.max(1, (this.tui.terminal.rows ?? 24) - 5 - 3) : this.visibleRows;
+		const budget = Math.max(1, Math.min(this.visibleRows, live));
+		const at = Math.max(0, visible.findIndex(item => item.value === this.selectedValue));
+		const start = Math.max(0, Math.min(visible.length - budget, at - Math.floor(budget / 2)));
+		return visible.slice(start, start + budget);
+	}
+
+	handleMouse(event: TuiMouseEvent): ReturnType<NonNullable<Component["handleMouse"]>> {
+		if (!this.multiSelect || event.button !== "left") return undefined;
+		const item = this.visibleWindow(this.filtered())[event.y - 2];
+		if (!item) return undefined;
+		if (event.type === "click") {
+			this.select(item.value);
+			this.toggle(item.value);
+			return { handled: true, focus: true, render: true };
+		}
+		if (event.type === "press") return { handled: true, focus: true };
+		return undefined;
+	}
+
 	handleInput(data: string): void {
 		if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
 			this.onCancel?.();
 			return;
 		}
 		if (matchesKey(data, Key.enter)) {
+			if (this.multiSelect) {
+				if (this.checked.size) this.onConfirm?.(this.items.filter(item => this.checked.has(item.value)));
+				return;
+			}
 			const item = this.getSelectedItem();
 			if (item) this.onSelect?.(item);
+			return;
+		}
+		if (this.multiSelect && data === " ") {
+			const item = this.getSelectedItem();
+			if (item) this.toggle(item.value);
 			return;
 		}
 		if (matchesKey(data, Key.up)) {
@@ -145,7 +185,7 @@ export class Menu implements Component {
 		const total = Math.max(0, width);
 		const visible = this.filtered();
 		const selected = this.getSelectedItem()?.value;
-		const count = theme.dim(`(${visible.length}/${this.items.length})`);
+		const count = theme.dim(`(${visible.length}/${this.items.length}${this.multiSelect ? ` · ${this.checked.size} checked` : ""})`);
 		const out = [truncateToWidth(`${theme.dim(this.title)} ${count}`, content)];
 		out.push(
 			this.filter
@@ -157,14 +197,11 @@ export class Menu implements Component {
 		} else {
 			// Live budget: never exceed the constructed rows, shrink for
 			// short viewports so selection and cancel hint stay visible.
-			const live = this.tui ? Math.max(1, (this.tui.terminal.rows ?? 24) - 5 - 3) : this.visibleRows;
-			const budget = Math.max(1, Math.min(this.visibleRows, live));
-			const at = Math.max(0, visible.findIndex((item) => item.value === selected));
-			const start = Math.max(0, Math.min(visible.length - budget, at - Math.floor(budget / 2)));
-			for (const item of visible.slice(start, start + budget)) {
+			for (const item of this.visibleWindow(visible)) {
+				const label = `${this.multiSelect ? (this.checked.has(item.value) ? "[x] " : "[ ] ") : ""}${item.label ?? item.value}`;
 				const head = item.value === selected
-					? `${ICONS.selectedMarker} ${item.label ?? item.value}`
-					: `  ${item.label ?? item.value}`;
+					? `${ICONS.selectedMarker} ${label}`
+					: `  ${label}`;
 				// Descriptions yield at narrow widths; primary labels carry actions.
 				const room = Math.max(0, content - visibleWidth(head) - 2);
 				const tail = item.description && room > 4 ? `  ${truncateToWidth(item.description, room)}` : "";

@@ -979,3 +979,41 @@ Final copy clarification says empty notes mean none are currently saved, without
 implying the agent has never learned (notes can be explicitly forgotten).
 The complete self-knowledge test file then passed again: **13 passed in 0.86 s**;
 Ruff check/format and diff whitespace checks remained clean.
+
+### 2026-10-12 — Session deletion checklist
+
+Bare `/delete`, including clicking Delete in the slash menu, now lists sessions
+across all `session.list` pages (200 per request) in a searchable checklist.
+Nothing is prechecked. Arrow keys move, Space or a row click toggles its box,
+and Enter reviews the selection with a separate confirmation defaulting to
+Cancel. Escape cancels without deleting. Checks persist across filtering; the
+header shows the checked count. The current session is labelled. Explicit
+`/delete <id>` still targets one session with confirmation.
+
+`FeatureHost.pickMany` is implemented by App using the existing Menu component
+with opt-in multi-selection. Other menus keep single-selection behavior.
+Confirmed deletion uses the existing guarded `session.delete` endpoint with at
+most three requests in flight. Failed/refused deletions are reported separately,
+without retry or false success. A successfully deleted current session creates
+one replacement in the same agent scope; a failed current-session deletion
+leaves it active. Backend live-turn/mutation guards are unchanged. This reduces
+repeated UI interactions and serial request latency; no database deletion-speed
+benchmark or schema optimization is claimed.
+
+Regression evidence: new feature tests initially failed (5 failures, 1 existing
+pass), then passed with pagination, cancellation, partial failure, replacement
+and bounded-concurrency coverage. Real fullscreen interaction tests exercise
+checking boxes, confirmation, and deletion. The slash-command mouse regression
+covers both Delegate and Delete.
+
+Verification: `npm --prefix ui run check` passed typecheck, ESLint and 272 tests
+with 5 environment-gated skips. The isolated dedicated-test-database command
+`.venv/bin/python -m pytest
+tests/test_personality_growth.py::test_ui_checks_with_real_gateway_restart
+-q --tb=short -p no:cacheprovider` passed (1 test in 10.84s); that wrapper runs
+the entire UI check with all 277 UI tests and no skips, including the real
+gateway/database checkbox-deletion path. Isolation used
+`PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/Users/shadow/Agent-Harness1`
+and only `agentharness_test`. Scoped Impeccable detection returned `[]` and
+`git diff --check` passed. No backend code changed for this feature. Previous
+uncommitted delegation and background fixes remain in the working tree.

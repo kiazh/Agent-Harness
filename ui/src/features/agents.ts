@@ -100,11 +100,37 @@ export const agentsCommand: Command = {
 
 export const delegateCommand: Command = {
 	name: "delegate",
-	description: "Run a task on another agent",
-	argumentHint: "<agent> <task>",
+	description: "Choose an agent and delegate a task",
+	argumentHint: "[agent] [task]",
 	async run(args, host) {
-		const [agent, task] = splitSub(requireArgs(args, "/delegate <agent> <task>"));
-		if (!task) throw new Error("Usage: /delegate <agent> <task>");
+		let [agent, task] = splitSub(args.trim());
+		if (!agent) {
+			const { agents } = await host.request<{ agents: AgentInfo[] }>("agents.list");
+			if (!agents.length) {
+				host.print("No agents available. Create one with /agents save <name>.", "plain");
+				return;
+			}
+			const selected = await host.pick("Delegate to which agent?", agents.map(a => ({
+				value: a.name,
+				label: a.name,
+				description: a.description,
+			})));
+			if (!selected) return;
+			agent = selected.value;
+		}
+		if (!task) {
+			const prompt = await host.askText({
+				title: `Task for ${agent}`,
+				description: "Describe the task and the result you want.",
+				placeholder: "What should this agent do?",
+			});
+			if (prompt === undefined) return;
+			task = prompt.trim();
+			if (!task) {
+				host.print("Task is empty. Use /delegate to try again.", "warning");
+				return;
+			}
+		}
 		host.print(`Delegating to ${agent}…`, "plain");
 		const { results } = await host.request<{ results: DelegationResult[] }>("agents.run", {
 			sessionId: host.session()?.id,

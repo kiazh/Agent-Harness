@@ -166,18 +166,52 @@ export const sessionCommands: Command[] = [
 	},
 	{
 		name: "delete",
-		description: "Delete a session (default: this one)",
+		description: "Select sessions to delete",
 		argumentHint: "[id]",
 		async run(args, host) {
 			const current = host.session();
-			const id = args ? await resolveSessionId(host, args) : requireSession(host).id;
-			if (!(await confirm(host, `Delete session ${shortId(id)}? This cannot be undone.`, "Delete"))) {
-				host.print("Kept the session.", "plain");
+			let ids: string[];
+			if (args) {
+				ids = [await resolveSessionId(host, args)];
+			} else {
+				const sessions: SessionInfo[] = [];
+				let cursor: string | undefined;
+				host.print("Loading sessions…", "plain");
+				do {
+					const page = await host.request<SessionListResult & { nextCursor?: string }>("session.list", { limit: 200, ...(cursor ? { cursor } : {}) });
+					sessions.push(...page.sessions);
+					cursor = page.nextCursor;
+				} while (cursor);
+				if (!sessions.length) {
+					host.print("No sessions to delete.", "plain");
+					return;
+				}
+				const selected = await host.pickMany("Select sessions to delete", sessionItems(sessions).map(item => ({
+					...item, description: `${item.value === current?.id ? "current · " : ""}${item.description}`,
+				})));
+				if (!selected?.length) return;
+				ids = [...new Set(selected.map(item => item.value))];
+			}
+			const label = ids.length === 1 ? `session ${shortId(ids[0]!)}` : `${ids.length} sessions`;
+			if (!(await confirm(host, `Delete ${label}? This cannot be undone.`, `Delete ${ids.length === 1 ? "session" : `${ids.length} sessions`}`))) {
+				host.print("Kept the sessions.", "plain");
 				return;
 			}
-			await host.request("session.delete", { sessionId: id });
-			host.print(`Deleted session ${shortId(id)}.`, "success");
-			if (current?.id === id) {
+			host.print(`Deleting ${ids.length} session${ids.length === 1 ? "" : "s"}…`, "plain");
+			const deleted = new Set<string>();
+			const failures: string[] = [];
+			// Keep existing per-session authorization/live-turn guards, with
+			// bounded concurrency instead of one confirmation per session.
+			for (let i = 0; i < ids.length; i += 3) {
+				const batch = ids.slice(i, i + 3);
+				const results = await Promise.allSettled(batch.map(sessionId => host.request<{ deleted: boolean }>("session.delete", { sessionId })));
+				for (const [index, result] of results.entries()) {
+					const id = batch[index]!;
+					if (result.status === "fulfilled" && result.value.deleted) deleted.add(id);
+					else failures.push(`${shortId(id)}: ${result.status === "rejected" ? (result.reason instanceof Error ? result.reason.message : String(result.reason)) : "Session was not deleted."}`);
+				}
+			}
+			if (current && deleted.has(current.id)) {
 				const agent = host.sessionAgent();
 				const { session } = await host.request<SessionResult>(
 					"session.create",
@@ -185,6 +219,8 @@ export const sessionCommands: Command[] = [
 				);
 				host.switchTo(session, []);
 			}
+			host.print(`Deleted ${deleted.size} session${deleted.size === 1 ? "" : "s"}.${failures.length ? ` ${failures.length} could not be deleted.` : ""}`, failures.length ? "warning" : "success");
+			for (const failure of failures) host.print(failure, "error");
 		},
 	},
 	{

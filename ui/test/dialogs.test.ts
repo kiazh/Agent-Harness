@@ -10,6 +10,29 @@ import { runCommand } from "../src/features/index.ts";
 import type { GatewayClient } from "../src/gateway.ts";
 import { editorTheme } from "../src/theme.ts";
 
+test("session checklist retains checks while filtering and requires a selection to continue", () => {
+	const menu = new Menu("Delete sessions", [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }], { multiSelect: true });
+	let selected: string[] | undefined;
+	menu.onConfirm = items => { selected = items.map(item => item.value); };
+	menu.handleInput("\r");
+	assert.equal(selected, undefined);
+	menu.handleInput(" ");
+	assert.match(menu.render(80).map(stripTerminalSequences).join("\n"), /\[x\] Alpha/);
+	menu.handleInput("Beta");
+	menu.handleInput(" ");
+	menu.handleInput("\r");
+	assert.deepEqual(selected, ["a", "b"], "hidden checked sessions remain checked");
+});
+
+test("session checklist checkboxes can be clicked and toggled off", () => {
+	const menu = new Menu("Delete sessions", [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }], { multiSelect: true });
+	const click = { type: "click", button: "left", x: 4, y: 3, screenX: 4, screenY: 3, width: 80, height: 10, shift: false, alt: false, ctrl: false } as const;
+	assert.ok(menu.handleMouse(click)?.handled);
+	assert.match(menu.render(80).map(stripTerminalSequences).join("\n"), /\[x\] Beta/);
+	menu.handleMouse(click);
+	assert.match(menu.render(80).map(stripTerminalSequences).join("\n"), /\[ \] Beta/);
+});
+
 function terminal(columns = 80, rows = 24) {
 	let input: (data: string) => void = () => {};
 	const term: Terminal & { columns: number; rows: number } = {
@@ -21,7 +44,7 @@ function terminal(columns = 80, rows = 24) {
 	return { term, type: (data: string) => input(data) };
 }
 
-async function boot(columns = 80, rows = 24) {
+async function boot(columns = 80, rows = 24, responses: Record<string, unknown> = {}) {
 	const { term, type } = terminal(columns, rows);
 	const tui = new TuiAltScreen(term);
 	const requests: string[] = [];
@@ -29,6 +52,7 @@ async function boot(columns = 80, rows = 24) {
 		start() {}, async stop() {}, stderr: () => [],
 		async request(method: string) {
 			requests.push(method);
+			if (method in responses) return responses[method];
 			if (method === "initialize") return { version: "test", model: "m", cwd: "/tmp" };
 			if (method === "config.get") return { config: {} };
 			if (method === "session.create") return { session: { id: "s", title: "test", model: "m", provider: "p", status: "active", lastActivity: null } };
@@ -39,6 +63,33 @@ async function boot(columns = 80, rows = 24) {
 	await app.start();
 	return { app, tui, type, requests, client, term };
 }
+
+test("real delete flow checks sessions, confirms once, and deletes only checked rows", async (t) => {
+	const { app, tui, type, requests } = await boot(80, 24, {
+		"session.list": { sessions: [{ id: "s", title: "Current", lastActivity: null }, { id: "other", title: "Old chat", lastActivity: null }] },
+		"session.delete": { deleted: true },
+	});
+	t.after(() => app.exit());
+	type("/delete");
+	type("\r");
+	await new Promise(resolve => setImmediate(resolve));
+	tui.renderNow(true);
+	assert.match(tui.getScreenLines().map(stripTerminalSequences).join("\n"), /\[ \] Old chat/);
+	type("\x1b[B");
+	type(" ");
+	tui.renderNow(true);
+	assert.match(tui.getScreenLines().map(stripTerminalSequences).join("\n"), /\[x\] Old chat/);
+	assert.equal(requests.filter(method => method === "session.delete").length, 0);
+	type("\r");
+	await new Promise(resolve => setImmediate(resolve));
+	tui.renderNow(true);
+	assert.match(tui.getScreenLines().map(stripTerminalSequences).join("\n"), /cannot be undone/);
+	type("\x1b[B");
+	type("\r");
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(requests.filter(method => method === "session.delete").length, 1);
+	assert.equal(requests.filter(method => method === "session.create").length, 1, "current session kept; only startup created a session");
+});
 
 test("? opens shortcuts on an empty composer and Esc restores input", async (t) => {
 	const { app, tui, type, requests } = await boot();

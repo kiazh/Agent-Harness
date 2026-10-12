@@ -5,7 +5,8 @@ import { parseArgs } from "node:util";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as crypto from "node:crypto";
-import { ProcessTerminal, TuiAltScreen } from "@earendil-works/pi-tui";
+import { TuiAltScreen } from "@earendil-works/pi-tui";
+import { ThemedTerminal } from "./design/terminal.ts";
 import { App } from "./app.ts";
 import { GatewayClient } from "./gateway.ts";
 
@@ -50,7 +51,7 @@ const python = detectPython();
 const gatewayToken = crypto.randomBytes(32).toString("hex");
 // Fullscreen alternate buffer, Codex style: the app owns the display and the
 // composer docks to the bottom (see App's layout root). Restored on exit.
-const tui = new TuiAltScreen(new ProcessTerminal());
+const tui = new TuiAltScreen(new ThemedTerminal());
 const client = new GatewayClient({ python, token: gatewayToken, env: { AH_GATEWAY_TOKEN: gatewayToken } });
 const app = new App(tui, client, { model: values.model, provider: values.provider, sessionId: values.session, mode: values.mode });
 

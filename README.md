@@ -207,7 +207,8 @@ Set `rsi_enabled: false` to pause automatic RSI evidence and routing adaptation 
 | Command | What it does |
 |---------|--------------|
 | `new`, `sessions`, `resume` | Create, list, resume sessions (menu when empty) |
-| `rename`, `goal`, `fork`, `delete`, `export` | Manage current session |
+| `rename`, `goal`, `fork`, `export` | Manage current session |
+| `delete` | Check sessions with Space or click, Enter to review, then confirm deletion; `[id]` targets one session |
 | `init`, `review` | Scaffold `AGENTS.md`; agent-driven change review |
 | `search`, `recall` | Full-text session search; anchored cross-session recall |
 | `context`, `compress` | Token usage; compact context |

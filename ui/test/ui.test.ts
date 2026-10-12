@@ -409,6 +409,27 @@ test("slash menu opens above the input", async () => {
 	assert.ok(res && res.handled, "menu click is handled");
 });
 
+for (const command of ["delegate", "delete"]) test(`clicking ${command} in the slash menu opens its flow immediately`, async () => {
+	const { ComposerBox } = await import("../src/components.ts");
+	const { ArgumentAwareAutocompleteProvider } = await import("../src/autocomplete.ts");
+	const { editorTheme } = await import("../src/theme.ts");
+	const box = new ComposerBox({ terminal: { rows: 40 }, requestRender() {} } as never, editorTheme);
+	box.editor.setAutocompleteProvider(new ArgumentAwareAutocompleteProvider([
+		{ name: command, description: "Choose items" },
+	], process.cwd()));
+	const submitted: string[] = [];
+	box.editor.onSubmit = text => { submitted.push(text.trim()); };
+	box.editor.handleInput("/");
+	for (let i = 0; i < 30 && !box.editor.isShowingAutocomplete(); i++) {
+		await new Promise(resolve => setTimeout(resolve, 20));
+	}
+	const rows = box.editor.render(60).map(stripTerminalSequences);
+	const y = rows.findIndex(row => row.includes("Choose items"));
+	assert.ok(y >= 0);
+	box.editor.handleMouse({ type: "click", button: "left", x: 4, y, screenX: 4, screenY: y, width: 60, height: rows.length, shift: false, alt: false, ctrl: false });
+	assert.deepEqual(submitted, [`/${command}`]);
+});
+
 test("codex skin ships with the clones", async () => {
 	const { SKIN_NAMES, skinDescription } = await import("../src/theme.ts");
 	assert.ok(SKIN_NAMES.includes("codex"));
