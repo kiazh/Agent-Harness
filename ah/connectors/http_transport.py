@@ -15,7 +15,11 @@ _DNS_SLOTS = threading.BoundedSemaphore(32)
 
 
 async def run_dns_check(check: Callable[[], Any], *, timeout: float | None):
-    if not _DNS_SLOTS.acquire(blocking=False):
+    # Capture the instance, not the module global: a slow worker that
+    # outlives its caller must release the semaphore it acquired, even if
+    # the global was rebound meanwhile (tests rebind it per case).
+    slots = _DNS_SLOTS
+    if not slots.acquire(blocking=False):
         raise OSError("connector DNS resolution capacity exceeded")
     loop = asyncio.get_running_loop()
     future = loop.create_future()
@@ -48,7 +52,7 @@ async def run_dns_check(check: Callable[[], Any], *, timeout: float | None):
         except Exception as exc:
             error = exc
         finally:
-            _DNS_SLOTS.release()
+            slots.release()
         try:
             loop.call_soon_threadsafe(deliver, value, error)
         except RuntimeError:
@@ -58,7 +62,7 @@ async def run_dns_check(check: Callable[[], Any], *, timeout: float | None):
     try:
         thread.start()
     except Exception:
-        _DNS_SLOTS.release()
+        slots.release()
         raise
     try:
         async with asyncio.timeout(timeout):

@@ -211,7 +211,3 @@ def _write_new_key(keyring_mod) -> bytes:
 
     keyring_mod.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, encoded)
     return fresh
-
-
-def encode_key_for_tests(key: bytes) -> str:
-    return base64.b64encode(bytes(key)).decode()

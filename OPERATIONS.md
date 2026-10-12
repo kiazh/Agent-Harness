@@ -2,7 +2,7 @@
 
 The v1.0.0 gate requires code checks plus an identified staging deployment,
 provider provisioning, monitoring/alert delivery, and a verified restore. Current
-evidence is in [the completion ledger](docs/plans/PRODUCTION_COMPLETION_PROGRESS.md).
+evidence is in [the completion ledger](docs/archive/plans/PRODUCTION_COMPLETION_PROGRESS.md).
 Use [SECURITY.md](SECURITY.md) for boundaries and limitations.
 
 ## Configuration contract

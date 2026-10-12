@@ -127,4 +127,4 @@ JSON. This mutable, agent-specific result is never cached globally.
 
 The screenshot supersedes the earlier borderless-tool/two-footer-row direction.
 See [visual verification](../verification/TUI_OVERHAUL_REVIEW.md) and the
-[renderer capture](../verification/artifacts/tui-reference.png).
+[renderer capture](../archive/artifacts/tui-reference.png).

@@ -1,6 +1,11 @@
 # AgentHarness succession handoff
 
-**Update 2026-10-11: TUI full overhaul implemented (T0–T8).** Presentation rebuilt over the intact Python gateway/JSON-RPC transport: semantic design tokens + one animation coordinator + compact borderless transcript (user/assistant/tool/diff/notice widgets) + responsive docked shell + searchable menus/durable forms/masked secrets + exact approval review + live theme preview. Session/turn-bound event model with honest outcomes (unknown/interrupted/historical, no guessed success), once-only final text/usage reconciliation, retained-output inspection (`/output`, 8×128 KiB/1 MiB), Deny-default session-bound approvals with `sessionId` in `approvals.resolve`, 26 skins with `codex` fresh default (explicit saved themes respected). Verified: `npm --prefix ui run check` **228 passed / 5 env-skipped** (233 total), typecheck + eslint clean; isolated real-gateway wrapper 1 passed; direct gateway e2e 5 passed / 0 skipped (incl. `/theme` persist round-trip); full backend suite **2093 passed / 5 skipped** on rerun (first run: 2 load-timing delegation flakes, green in isolation and on rerun); Ruff clean on changed Python (`ah/core/config.py` theme default only + 1 precedence test). Implementation map, gates and deferred items: `docs/plans/TUI_OVERHAUL_PROGRESS.md`; design contract: `docs/design/TUI_DESIGN.md`. Remaining: T9 docs polish is in this entry + README; T10 bounded visual review still open. No commits/pushes; MCP backend integration stays deferred (no connector RPCs invented).
+> Status note (2026-10-12, HEAD `8c96fe3`): this file is a historical
+> running log; snapshots below (from `167cfbb` era) are superseded by newer
+> evidence docs. The code default execution mode is still `ask`; the
+> ask→full entry below records a local user config change only.
+
+**Update 2026-10-11: TUI full overhaul implemented (T0–T8).** Presentation rebuilt over the intact Python gateway/JSON-RPC transport: semantic design tokens + one animation coordinator + compact borderless transcript (user/assistant/tool/diff/notice widgets) + responsive docked shell + searchable menus/durable forms/masked secrets + exact approval review + live theme preview. Session/turn-bound event model with honest outcomes (unknown/interrupted/historical, no guessed success), once-only final text/usage reconciliation, retained-output inspection (`/output`, 8×128 KiB/1 MiB), Deny-default session-bound approvals with `sessionId` in `approvals.resolve`, 26 skins with `codex` fresh default (explicit saved themes respected). Verified: `npm --prefix ui run check` **228 passed / 5 env-skipped** (233 total), typecheck + eslint clean; isolated real-gateway wrapper 1 passed; direct gateway e2e 5 passed / 0 skipped (incl. `/theme` persist round-trip); full backend suite **2093 passed / 5 skipped** on rerun (first run: 2 load-timing delegation flakes, green in isolation and on rerun); Ruff clean on changed Python (`ah/core/config.py` theme default only + 1 precedence test). Implementation map, gates and deferred items: `docs/archive/plans/TUI_OVERHAUL_PROGRESS.md`; design contract: `docs/design/TUI_DESIGN.md`. Remaining: T9 docs polish is in this entry + README; T10 bounded visual review still open. No commits/pushes; MCP backend integration stays deferred (no connector RPCs invented).
 
 **Latest bug-fix audit:** Read [Post-OpenCode audit](BUGFIX_AUDIT.md) for current fixes and verification. The older measurements and remaining-failure lists below are historical snapshots, superseded by that audit.
 
@@ -53,7 +58,7 @@ Start with these documents:
 - [Personality growth](PERSONALITY_GROWTH.md): persona configuration, persisted learning, and RL boundaries.
 - [ECC skills](ECC_SKILLS.md): bundle provenance, automatic routing, workflow composition, and packaging.
 - [UI/gateway protocol](../communications/ui-gateway-protocol.md): transport and turn semantics.
-- [Production completion ledger](plans/PRODUCTION_COMPLETION_PROGRESS.md): broader release gates. This handoff does not supersede them.
+- [Production completion ledger](archive/plans/PRODUCTION_COMPLETION_PROGRESS.md): broader release gates. This handoff does not supersede them.
 
 ## 2. The product intent and decisions already made
 
@@ -642,7 +647,7 @@ Leave the next maintainer exact commands, failing test names, and honest limits.
 
 ## 2026-10-11 — MCP library lifecycle blocker resolved and verified
 
-Continue from [MCP_CONNECTORS_PROGRESS.md](plans/MCP_CONNECTORS_PROGRESS.md),
+Continue from [MCP_CONNECTORS_PROGRESS.md](archive/plans/MCP_CONNECTORS_PROGRESS.md),
 which records the initial checkout, red/green defects, exact verification
 commands, transport evidence, and successor priorities. Branch remains `main`
 at `dc77017`; prior commits are `0331634`, `9ef4ed4`. Nothing was committed,
@@ -688,9 +693,9 @@ task ownership. See the progress document for source retrieval limitations.
 ## 2026-10-11 — Persona RSI implemented across the shared runtime
 
 The active request was to implement recursive self-improvement with persona
-through completion. Start with [PERSONA_RSI_PLAN.md](plans/PERSONA_RSI_PLAN.md)
+through completion. Start with [PERSONA_RSI_PLAN.md](archive/plans/PERSONA_RSI_PLAN.md)
 for the completed checklist, exact commands, red/green evidence, review rulings,
-clean-HEAD comparison and limits. [PERSONA_RSI_DESIGN.md](plans/PERSONA_RSI_DESIGN.md)
+clean-HEAD comparison and limits. [PERSONA_RSI_DESIGN.md](archive/plans/PERSONA_RSI_DESIGN.md)
 records the architecture; [PERSONALITY_GROWTH.md](PERSONALITY_GROWTH.md) is the
 user-facing operating guide. These public files are tracked candidates; the
 earlier `docs/superpowers` working copies are ignored by the repository.
@@ -812,9 +817,9 @@ uncommitted on `main`; no commit, push, deploy or production DB access occurred.
 
 User’s screenshot is the current visual authority. Do not revert to the older
 Desktop instruction’s borderless-tool/two-row-footer direction. See
-`docs/design/TUI_DESIGN.md`, `docs/plans/TUI_OVERHAUL_PROGRESS.md` and
+`docs/design/TUI_DESIGN.md`, `docs/archive/plans/TUI_OVERHAUL_PROGRESS.md` and
 `docs/verification/TUI_OVERHAUL_REVIEW.md`; preview is
-`docs/verification/artifacts/tui-reference.png`. Existing OpenCode changes were
+`docs/archive/artifacts/tui-reference.png`. Existing OpenCode changes were
 preserved and all work remains uncommitted on main at base `0ea164e`.
 
 Implemented quiet neutral tool/evidence frames (104-column cap, 3-column indent),
@@ -897,7 +902,7 @@ zero failures, typecheck/eslint clean. Isolated dedicated-test-DB wrapper
 1 pass in 33.19 s, all 256 UI tests run with zero skips. Full backend was not
 repeated for this UI-only follow-up; prior full run was 2106 pass/5 skip.
 Reproduction details: docs/verification/TUI_OVERHAUL_REVIEW.md; preview artifacts
-artifacts/tui-reference.png and artifacts/tui-motion.gif beneath that directory.
+docs/archive/artifacts/tui-reference.png and docs/archive/artifacts/tui-motion.gif.
 The capture script emits four real timed native frames in addition to the nine
 viewport/theme captures. No production model/provider or real-PTY compatibility
 claim is implied. MCP configuration ingestion/persistence, connect controls,
@@ -951,7 +956,7 @@ Focused verification after the review fix: **15 passed**, including the two
 checks that failed in the first full run. That first run had **2113 passed,
 5 skipped, 2 failed**: the corrected legacy-session compatibility bug and an
 unchanged Hypothesis timing-only deadline. Clean HEAD `1d80ba0` in managed
-worktree `/Users/shadow/.codex/worktrees/38df/Agent-Harness1` passed lifecycle
+worktree `/home/user/.codex/worktrees/38df/Agent-Harness1` passed lifecycle
 and reproduced the timing failure (576 ms vs 200 ms; **1 passed, 1 failed**).
 No budget assertion failed and no deadline was relaxed. Final full-run evidence
 is recorded in `docs/verification/TUI_OVERHAUL_REVIEW.md` and below.
@@ -967,7 +972,7 @@ after applying changes so the worker and TUI load the new code.
 Final full backend verification after the fixes: **2119 passed / 5 skipped /
 0 failed in 168.11 s**, including the real gateway UI wrapper (all **256 UI
 tests**, zero UI skips). Actual command used the disposable bootstrap through
-`PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/Users/shadow/Agent-Harness1`
+`PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/home/user/Agent-Harness1`
 and the dedicated test DSN, with `.venv/bin/python -m pytest -q --tb=short
 -p no:cacheprovider`. Standalone UI: 251 passed/5 gated skips, typecheck/eslint
 clean. Ruff check/format passed on seven touched Python files; Bandit on the
@@ -1013,7 +1018,7 @@ tests/test_personality_growth.py::test_ui_checks_with_real_gateway_restart
 -q --tb=short -p no:cacheprovider` passed (1 test in 10.84s); that wrapper runs
 the entire UI check with all 277 UI tests and no skips, including the real
 gateway/database checkbox-deletion path. Isolation used
-`PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/Users/shadow/Agent-Harness1`
+`PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/home/user/Agent-Harness1`
 and only `agentharness_test`. Scoped Impeccable detection returned `[]` and
 `git diff --check` passed. No backend code changed for this feature. Previous
 uncommitted delegation and background fixes remain in the working tree.

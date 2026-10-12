@@ -15,7 +15,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 from urllib.parse import urlparse
 
-# Catalog/context bounds (see docs/plans/MCP_CONNECTORS_PLAN.md).
+# Catalog/context bounds (see docs/archive/plans/MCP_CONNECTORS_PLAN.md).
 MAX_CATALOG_TOOLS = 200
 MAX_SCHEMA_DEPTH = 8
 MAX_DESCRIPTION_CHARS = 2000

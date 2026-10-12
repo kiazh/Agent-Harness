@@ -109,7 +109,7 @@ git status --short
 node --version
 ```
 
-The research checkout was `/Users/shadow/Agent-Harness1`, on `main`; HEAD observed
+The research checkout was `/home/user/Agent-Harness1`, on `main`; HEAD observed
 at the end of research was `4c945cc`. This is a locator, not an assertion that
 Muse's checkout is unchanged. Check actual files and signatures. No AGENTS.md was
 found in the prior review; search again if the checkout has changed.
@@ -1522,7 +1522,7 @@ artifact checker if new packaged files/dependencies need explicit coverage.
 ## 15. Security and acceptance matrix
 
 No row is satisfied solely by code inspection. Link its test name and command in
-`docs/plans/MCP_OAUTH_PROGRESS.md` when implementing.
+`docs/archive/plans/MCP_OAUTH_PROGRESS.md` when implementing.
 
 | Requirement | Minimum proving test |
 | --- | --- |
@@ -1688,7 +1688,7 @@ Report:
 
 ```text
 Implement MCP OAuth in the AgentHarness checkout using
- docs/plans/MCP_OAUTH_IMPLEMENTATION_HANDOFF.md as your specification and plan.
+ docs/archive/plans/MCP_OAUTH_IMPLEMENTATION_HANDOFF.md as your specification and plan.
 Read sections 1–12 before editing and execute task checkboxes sequentially.
 Start with recon and preserve unrelated modifications. No commit/push/deploy,
 live credential reads, production database operations or shell startup changes.
@@ -1704,7 +1704,7 @@ No auth step may replay an uncertain side effect, widen permissions, expose a
 secret or resurrect access after logout. Preserve owner-task SDK teardown.
 
 For each task write a regression, prove red, implement, prove green, record
-progress in docs/plans/MCP_OAUTH_PROGRESS.md. Inspect actual SDK signatures.
+progress in docs/archive/plans/MCP_OAUTH_PROGRESS.md. Inspect actual SDK signatures.
 Use real local HTTP issuer + SDK MCP fixtures; no paid providers or real browser
 in automated tests. Verify cross-process refresh/tombstone races and server-side
 mutation counters. Complete the full backend/UI/security/package checks and
@@ -1715,7 +1715,7 @@ independent work moving and report the exact boundary with evidence.
 
 ### Progress document format
 
-Create `docs/plans/MCP_OAUTH_PROGRESS.md` at task 1:
+Create `docs/archive/plans/MCP_OAUTH_PROGRESS.md` at task 1:
 
 ```markdown
 # MCP OAuth progress

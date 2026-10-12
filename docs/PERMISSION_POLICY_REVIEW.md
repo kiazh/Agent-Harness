@@ -18,7 +18,7 @@ security certification or a line-by-line audit of every unrelated algorithm.
 ## Causes and corrections
 
 1. Sensitive checks searched arbitrary substrings in complete paths. `shadow`
-   in `/Users/shadow/...` classified ordinary project files as credentials.
+   in `/home/user/...` classified ordinary project files as credentials.
    Checks now use credential components/locations and canonical command operands.
    Source/documentation names such as `secrets.py` and `credentials.md` are ordinary
    files; `.env.example` remains readable.

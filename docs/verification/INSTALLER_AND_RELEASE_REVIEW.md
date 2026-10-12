@@ -129,18 +129,18 @@ git diff --check                                # clean.
     constructs but executed only on macOS bash 3.2 — BLOCKED elsewhere.
   - No live-provider calls and no real MCP service integrations (opt-in
     only by policy); mock/SDK-backed connector evidence lives in
-    `docs/plans/MCP_CONNECTORS_PROGRESS.md`.
+    `docs/archive/plans/MCP_CONNECTORS_PROGRESS.md`.
   - Staging alerts, backup/restore, rollback, deployment gates: open
     unless verified with authorization (unchanged from the ledger).
 
 Do not claim zero bugs, complete security, or production readiness from
 unit tests alone. The release gates in
-`docs/plans/PRODUCTION_COMPLETION_PROGRESS.md` remain authoritative.
+`docs/archive/plans/PRODUCTION_COMPLETION_PROGRESS.md` remain authoritative.
 
 ## Part 4 — subsequent MCP connector library verification (2026-10-11)
 
 Evidence and exact commands are maintained in
-[MCP_CONNECTORS_PROGRESS.md](../plans/MCP_CONNECTORS_PROGRESS.md). The existing
+[MCP_CONNECTORS_PROGRESS.md](../archive/plans/MCP_CONNECTORS_PROGRESS.md). The existing
 installer changes were preserved. Checkout remains `main` at `dc77017`; no
 commit/push/deployment or git configuration changes were made.
 
@@ -198,7 +198,7 @@ gateway and CLI operations expose status/history and restoration, including
 baseline revision 0; the TUI opens an interactive action menu.
 
 Evidence and exact commands are in
-[PERSONA_RSI_PLAN.md](../plans/PERSONA_RSI_PLAN.md). Final backend suite:
+[PERSONA_RSI_PLAN.md](../archive/plans/PERSONA_RSI_PLAN.md). Final backend suite:
 **2092 passed / 5 skipped**; dedicated RSI suite: **43 passed**. These include
 real PostgreSQL, actual CLI subprocesses, synthetic-provider agent loops in both
 modes, real subprocess exit-status evidence, task cancellation, and Node/Python
@@ -228,7 +228,7 @@ single-cell 600 ms activity. Static growth acknowledges evidence briefly with a
 30 s cooldown. Native responsive and approval/focus/queue/overflow regressions are
 in `ui/test/reference.test.ts`; motion and turn-state tests preserve ownership and
 truthful outcomes. Independent review findings were reproduced red, fixed and
-confirmed in a bounded re-review. Preview: `artifacts/tui-reference.png`.
+confirmed in a bounded re-review. Preview: `../archive/artifacts/tui-reference.png`.
 
 Read-only `mcp.list`/`mcp.status` now feed `/mcp` from one lazy worker-owned
 ConnectorService. Inspection does not start DB/SDK, launch/discover or mutate.

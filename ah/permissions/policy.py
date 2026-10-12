@@ -118,7 +118,7 @@ def _sensitive_path(value: str, root: Path) -> bool:
     """Match credential path components, never incidental words/usernames."""
     text = value.replace("\\", "/")
     path = Path(text).expanduser()
-    # Ignore ancestors of the configured project (e.g. /Users/shadow).
+    # Ignore ancestors of the configured project (e.g. /home/user).
     if path.is_absolute():
         try:
             text = str(path.relative_to(root))

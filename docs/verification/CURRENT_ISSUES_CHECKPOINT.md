@@ -55,7 +55,7 @@ These are focused, intermediate results from the current dirty tree. They are no
 ## Verified results 2026-10-12 (this tree, uncommitted)
 
 - Focused OAuth/MCP/DNS/image/ECC suites: **273 passed**.
-- Full backend suite (isolated runner, `agentharness_test` only, serial): **2450 passed, 5 skipped, 10 deselected, 82.20% coverage** (threshold 60).
+- Full backend suite (isolated runner, `agentharness_test` only, serial): **2478 passed, 5 skipped, 10 deselected, 82.12% coverage** (threshold 60).
 - UI `npm run check` with real gateway integration (`AH_TEST_PYTHON` + test DB, isolated HOME): **326/326 pass, 0 fail, 0 skipped**; typecheck and eslint clean.
 - Ruff check + format clean (347 files); `git diff --check` clean; `uv lock --check --offline` clean; Bandit 0 medium/high severity.
 - Wheel + sdist rebuilt to a fresh temp dir and artifact-checked; `image_context_schema.sql` present in both; isolated wheel import smoke passed.
@@ -65,7 +65,7 @@ These are focused, intermediate results from the current dirty tree. They are no
 
 1. ~~Fix legacy image fallback to atomically seed the durable cache~~ DONE and verified (see table above).
 2. ~~Finish focused OAuth/MCP regressions~~ DONE: DNS capacity recovery, cancellation/shutdown bounds, rotated token redaction, and credential-bearing catalog rejection regressions are all present and green in the focused runs below.
-3. Full backend suite serially against only `agentharness_test`, with coverage at the repository threshold. VERIFIED 2026-10-12: **2450 passed, 5 skipped, 10 deselected, 82.20% coverage** (threshold 60), isolated runner, test DB only. Run supported Python 3.11 checks as well as local development checks.
+3. Full backend suite serially against only `agentharness_test`, with coverage at the repository threshold. VERIFIED 2026-10-12: **2478 passed, 5 skipped, 10 deselected, 82.12% coverage** (threshold 60), isolated runner, test DB only. Run supported Python 3.11 checks as well as local development checks.
 4. UI typecheck/tests/lint with the real gateway integration tests enabled and the dedicated test database. VERIFIED 2026-10-12: **326/326 pass, 0 fail, 0 skipped** with `AH_TEST_PYTHON` + test DB in an isolated HOME.
 5. Ruff check/format, Bandit, `uv lock --check --offline`, and `git diff --check`. VERIFIED 2026-10-12: all clean; Bandit 0 medium/high severity (94 lows, same idioms as baseline).
 6. Build wheel and sdist into a fresh temporary directory, run `tools/check_release_artifacts.py`, and verify the new schema is present in the packaged distribution. VERIFIED 2026-10-12: both artifacts verified; `image_context_schema.sql` confirmed in wheel and sdist; isolated wheel import smoke passed. Installed-package/CLI smoke checks beyond the import smoke remain open.

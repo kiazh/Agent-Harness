@@ -139,7 +139,7 @@ clean HEAD `dc77017` in a disposable detached worktree (**2 passed, 0.46s**):
 
 ```sh
 # Run in the temporary clean-HEAD checkout, with PYTHONPATH set to that checkout:
-AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test /Users/shadow/Agent-Harness1/.venv/bin/python -m pytest -q tests/test_features_split.py::test_all_feature_methods_accessible_after_split tests/test_scheduler_coverage.py::test_finish_cron_reschedules_from_expression --tb=short -p no:cacheprovider
+AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test /home/user/Agent-Harness1/.venv/bin/python -m pytest -q tests/test_features_split.py::test_all_feature_methods_accessible_after_split tests/test_scheduler_coverage.py::test_finish_cron_reschedules_from_expression --tb=short -p no:cacheprovider
 ```
 
 The worktree was removed after comparison. The final current-tree run passed

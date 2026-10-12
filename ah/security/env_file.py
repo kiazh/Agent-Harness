@@ -19,7 +19,6 @@ __all__ = [
     "find_env_file",
     "read_env_values",
     "set_env_values",
-    "is_set",
 ]
 
 # Curated provider keys offered by the `/keys` menu and `ah setup`.
@@ -245,11 +244,3 @@ def set_env_values(
         except OSError:
             pass
     return target
-
-
-def is_set(key: str) -> bool:
-    """True when *key* has a non-blank value in the process environment."""
-    try:
-        return bool(os.environ.get(_validate_key(key), "").strip())
-    except ValueError:
-        return False

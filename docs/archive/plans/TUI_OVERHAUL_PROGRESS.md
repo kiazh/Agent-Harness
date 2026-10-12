@@ -1,6 +1,6 @@
 # TUI Overhaul Progress
 
-Spec: `/Users/shadow/Desktop/TUI_FULL_OVERHAUL_INSTRUCTIONS.md` (1051 lines, prepared 2026-10-11, HEAD 0ea164e).
+Spec: `/home/user/Desktop/TUI_FULL_OVERHAUL_INSTRUCTIONS.md` (1051 lines, prepared 2026-10-11, HEAD 0ea164e).
 This file is the durable continuation record per spec section 1.5. Update after each task.
 
 ## Screenshot correction — 2026-10-11
@@ -90,7 +90,7 @@ artifacts use revised spacing; no production-provider/PTY validation is implied.
 
 ## T0 — Reconnaissance and baseline — COMPLETE 2026-10-11
 
-Working directory: `/Users/shadow/agent-harness1` (spec says `/Users/shadow/Agent-Harness1`; macOS case-insensitive, same checkout).
+Working directory: `/home/user/agent-harness1` (spec says `/home/user/Agent-Harness1`; macOS case-insensitive, same checkout).
 HEAD: `0ea164e animatuin changes with growth`
 Log -3:
 - 0ea164e animatuin changes with growth
@@ -395,7 +395,7 @@ Next task and first action: T2 — read Footer growth + App Loader/spinner integ
 
 Task ID and status: T0 complete, T1 next.
 Behavior delivered: Baseline recorded, no code changed, working tree still clean except this new progress file (untracked until written).
-Files changed: docs/plans/TUI_OVERHAUL_PROGRESS.md (new).
+Files changed: docs/archive/plans/TUI_OVERHAUL_PROGRESS.md (new).
 Public interfaces added/changed: none.
 Tests added: none (baseline only).
 Red command + failure that proved the defect: N/A (T0 recon; no red cycle required).

@@ -87,7 +87,7 @@ The first full backend run returned **2113 passed, 5 skipped, 2 failed**: an old
 session test double lacked `execution_mode` (a new compatibility bug, corrected to
 an honest unknown label), and Hypothesis exceeded its 200 ms deadline without a
 failed budget assertion (317 ms initially, 26 ms replay). Clean HEAD `1d80ba0`
-in `/Users/shadow/.codex/worktrees/38df/Agent-Harness1` passed the lifecycle check
+in `/home/user/.codex/worktrees/38df/Agent-Harness1` passed the lifecycle check
 and reproduced the same property-test timing failure (**1 passed, 1 failed**;
 576 ms deadline). Assembler and property-test sources are unchanged. No deadline
 was relaxed to suppress the failure. The current focused rerun passed both checks.
@@ -95,11 +95,11 @@ Final full verification is recorded below.
 
 ## Reproducible visual evidence
 
-[Native renderer preview](artifacts/tui-reference.png) is generated from the real
+[Native renderer preview](../archive/artifacts/tui-reference.png) is generated from the real
 `App`/`AppShell`/`TuiAltScreen` components with a deterministic gateway fixture.
 The installer guard is explicitly illustrative; it is not a real installer edit.
 No browser/CSS mockup, provider, operator terminal, or credentials were used.
-The [timed native motion preview](artifacts/tui-motion.gif) captures working dot
+The [timed native motion preview](../archive/artifacts/tui-motion.gif) captures working dot
 and fixed square brightness changes from that same renderer.
 
 ```sh
@@ -136,7 +136,7 @@ in the bounded output/motion correction.
 - Latest full backend verification after gutter/context/boundary fixes:
   **2119 passed / 5 skipped / 0 failed in 168.11 s**, including the real-gateway
   UI wrapper with all 256 UI tests running and zero UI skips. Command:
-  `AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/Users/shadow/Agent-Harness1 .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`.
+  `AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/home/user/Agent-Harness1 .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`.
 - Latest touched-file Ruff check/format check passed on seven Python files.
   Bandit `-q ah/core/self_knowledge.py ah/tools/harness.py -ll` emitted no medium+
   findings. Scoped Impeccable layout detector returned `[]`; `git diff --check`
@@ -170,7 +170,7 @@ The first full run had 2 failures: method inventory lacked the newly added MCP
 methods (test contract updated), and the initial isolation bootstrap replaced a
 child test’s own temporary HOME (verification setup corrected). Both affected
 checks passed on clean HEAD `0ea164e` in managed worktree
-`/Users/shadow/.codex/worktrees/27d1/Agent-Harness1` (**5 passed**) and in the current
+`/home/user/.codex/worktrees/27d1/Agent-Harness1` (**5 passed**) and in the current
 checkout (**5 passed**). This is evidence of the exact causes, not a blanket
 pre-existing-failure claim. No unresolved failure is being waived.
 

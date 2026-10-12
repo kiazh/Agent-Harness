@@ -129,5 +129,5 @@ reproducer and redacted metadata. Do not attach credentials, raw conversation
 content, production dumps, or unrestricted audit logs.
 
 Release evidence and remaining operational gates are recorded in
-[the completion ledger](docs/plans/PRODUCTION_COMPLETION_PROGRESS.md).
+[the completion ledger](docs/archive/plans/PRODUCTION_COMPLETION_PROGRESS.md).
 A passing scanner does not establish isolation or production readiness.

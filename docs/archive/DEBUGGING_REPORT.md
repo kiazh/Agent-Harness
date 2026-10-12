@@ -1,6 +1,6 @@
 # Deep debugging report
 
-Current release evidence and open gates are in [RELEASE_READINESS.md](docs/verification/RELEASE_READINESS.md). Counts below belong to their dated engineering snapshots.
+Current release evidence and open gates are in [RELEASE_READINESS.md](../verification/RELEASE_READINESS.md). Counts below belong to their dated engineering snapshots.
 
 Date: 2026-10-09. Reviewed against the current working tree; no commit or deployment performed.
 
@@ -149,7 +149,7 @@ Notable finds during the pass (fixed, not just tested):
 Remaining open (P3 gates 19–24, not verifiable in this workspace): staging
 deployment, backup/restore drill, alert delivery, dependency lockfile + release
 artifact, production usage budgets, MCP scope decision. See
-`docs/plans/PRODUCTION_COMPLETION_PROGRESS.md`. The v1.0.0 gate stays open.
+`docs/archive/plans/PRODUCTION_COMPLETION_PROGRESS.md`. The v1.0.0 gate stays open.
 
 ## Full look-through (2026-10-12, user-requested)
 

@@ -4,14 +4,14 @@ Updated 2026-10-11. This is unfinished work, not a completion claim.
 
 ## Start here
 
-Continue in `/Users/shadow/Agent-Harness1`, branch `main`, HEAD at handoff
+Continue in `/home/user/Agent-Harness1`, branch `main`, HEAD at handoff
 `b33b8eb changes`. Preserve all existing uncommitted changes. Run and record
 `git status --short`, `git log --oneline -3`, `git branch --show-current` first.
 Do not commit, push, deploy, change git configuration, reset files, or edit the
 operator's home/configuration/credentials/shell startup files/terminal.
 
 Read `AGENTS.md` if present, this file, and
-`docs/plans/SHELL_AND_CONTEXT_LIMITS_PLAN.md`. Inspect the actual diff before
+`docs/archive/plans/SHELL_AND_CONTEXT_LIMITS_PLAN.md`. Inspect the actual diff before
 editing. The changes below are already in the working tree; do not recreate
 them from scratch or discard them because they are uncommitted.
 
@@ -165,7 +165,7 @@ suites sequentially**, never concurrently against the shared test DB.
 
 ```sh
 AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test \
-PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/Users/shadow/Agent-Harness1 \
+PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/home/user/Agent-Harness1 \
 .venv/bin/python -m pytest \
 tests/test_shell_commands.py tests/test_model_context_limits.py \
 tests/test_context_windows.py tests/test_review_round2_fixes.py \
@@ -177,7 +177,7 @@ After focused tests, run the full backend suite with the same isolated env:
 
 ```sh
 AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test \
-PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/Users/shadow/Agent-Harness1 \
+PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/home/user/Agent-Harness1 \
 .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider
 npm --prefix ui run check
 ```

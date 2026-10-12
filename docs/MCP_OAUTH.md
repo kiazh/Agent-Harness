@@ -74,4 +74,4 @@ session cannot operate another session's preview or operation.
   real gateway wrapper over stdio).
 - Full suite plus `npm run check`, Ruff, Bandit (zero medium/high
   severity), `uv lock --check`, isolated wheel build with OAuth modules.
-- Progress log: `docs/plans/MCP_OAUTH_PROGRESS.md`.
+- Progress log: `docs/archive/plans/MCP_OAUTH_PROGRESS.md`.

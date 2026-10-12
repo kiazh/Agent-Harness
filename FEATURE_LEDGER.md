@@ -126,7 +126,7 @@ Same shared factory/coordinator/broker/scope/ownership on every path. Evidence =
 
 ## Production completion changes (2026-10-09)
 
-Release status is tracked in [the completion ledger](docs/plans/PRODUCTION_COMPLETION_PROGRESS.md).
+Release status is tracked in [the completion ledger](docs/archive/plans/PRODUCTION_COMPLETION_PROGRESS.md).
 The implementation evidence below does not assert that an external deployment,
 alert receiver, or production backup/restore has passed.
 
@@ -152,7 +152,7 @@ for enforced guarantees, operator requirements, and explicit limitations.
 
 Code-level leftovers closed on top of the production-completion merge; the
 v1.0.0 gate stays open until DB/Docker/staging verification per
-`docs/plans/PRODUCTION_COMPLETION_PROGRESS.md` tasks 12/15/16.
+`docs/archive/plans/PRODUCTION_COMPLETION_PROGRESS.md` tasks 12/15/16.
 
 | Boundary | Change | Proof |
 |---|---|---|

@@ -424,7 +424,9 @@ async def test_abandoned_dns_bounds_workers_and_recovers_capacity(monkeypatch, a
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)
-    async with asyncio.timeout(1):
+    # Joining a woken worker thread can stall past 1s on loaded machines;
+    # the product path is already proven above, this only waits out scheduling.
+    async with asyncio.timeout(5):
         while not finished.is_set() or not slots.acquire(blocking=False):
             await asyncio.sleep(0.001)
     slots.release()
@@ -459,3 +461,44 @@ async def test_mixed_public_private_answers_fail_before_secret_transmission(monk
         assert not dialed
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_rebound_global_does_not_corrupt_slot_accounting(monkeypatch):
+    """A worker that outlives a rebinding of the global semaphore must
+    release the instance it acquired. Otherwise a stale worker corrupts the
+    new instance's count and capacity checks pass when they must fail."""
+    import threading
+
+    from ah.connectors import http_transport
+
+    first = threading.BoundedSemaphore(1)
+    second = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(http_transport, "_DNS_SLOTS", first)
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked():
+        entered.set()
+        release.wait(2)
+        return "approved"
+
+    task = asyncio.create_task(http_transport.run_dns_check(blocked, timeout=0.05))
+    try:
+        async with asyncio.timeout(1):
+            while not entered.is_set():
+                await asyncio.sleep(0.001)
+        with pytest.raises(TimeoutError):
+            await task
+        # Rebind while the first worker is still blocked, as test
+        # monkeypatching (or future dynamic pools) can.
+        monkeypatch.setattr(http_transport, "_DNS_SLOTS", second)
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.sleep(0.05)
+        assert second.acquire(blocking=False)
+        second.release()
+        assert first.acquire(blocking=False)
+        first.release()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)

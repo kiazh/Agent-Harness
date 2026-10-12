@@ -116,22 +116,27 @@ A Python wheel installs the backend, bundled skills and subagents. It does **not
 
 The fullscreen interface has a scrolling conversation, framed tool results, a docked composer and approval controls. Themes color the full alternate screen; the normal terminal is restored on exit. Motion can be disabled with `AH_UI_REDUCED_MOTION=1`.
 
-Type `/` for commands. Management commands open pickers or forms; `?` on empty input and F1 show shortcuts. Enter selects, Escape cancels, and Space toggles checklist entries.
+Type `/` for commands. Management commands open pickers or forms; `?` on empty input and F1 show shortcuts. Enter selects, Escape cancels, and Space toggles checklist entries. Drop image files or paste with Ctrl+V (Cmd+V when the terminal forwards it); attachments show as numbered `[image N]` markers and need a vision-capable model. Limits: PNG/JPEG/GIF/WebP, at most 5 images per message, 5 MiB each and 20 MiB total; follow-up turns keep the latest images through tool churn and compaction.
 
 | Command | Behavior |
 | --- | --- |
-| `/models`, `/provider` | Choose the session model/provider |
+| `/models`, `/provider`, `/effort` | Choose the session model/provider; set reasoning effort where supported |
 | `/default-model` | Save the default model for future sessions |
 | `/keys` | Manage masked provider keys |
 | `/persona` | Add/edit or reset the default persona |
 | `/growth` | Inspect learning, teach, rate, forget or restore a revision |
-| `/delegate` | Pick an agent, then enter its task |
-| `/sessions` | Browse and resume conversations |
-| `/delete` | Select sessions with checkboxes, then confirm deletion |
+| `/delegate`, `/agents` | Pick an agent, then enter its task; list available roles |
+| `/sessions`, `/new`, `/resume`, `/delete` | Browse, start and resume conversations; checklist deletion |
+| `/search`, `/recall`, `/export`, `/rename`, `/fork`, `/goal` | Search, recall, export, rename, fork, and goal-track sessions |
+| `/memory`, `/skills` | Search memory; browse installed skills |
+| `/context`, `/compress` | Inspect and compact session context |
+| `/jobs` | Schedule and manage background jobs |
 | `/theme` | Preview and save a theme; Escape restores the previous theme |
 | `/output` | Inspect retained tool output without rerunning it |
 | `/mcp` | Add servers, review connection launches and inspect/disconnect them |
 | `/mode`, `/approvals` | Manage execution mode and pending approvals |
+| `/status`, `/usage`, `/config` | Feature availability, token usage, non-secret settings |
+| `/help`, `/clear`, `/exit` | Command help, clear transcript, quit |
 
 ## What is included
 
@@ -158,12 +163,25 @@ service; configured embeddings add semantic similarity. Persona-aware ranking
 can influence which memories are relevant. Neither retrieval nor storage makes
 a model's unsupported claims true: retrieved material remains evidence to assess.
 
-### Skills and delegation
+### Skills, delegation and installing more
 
 Skill routing uses explicit requests, trigger matches and task evidence to select
 relevant workflows. Bundled metadata and bounded excerpts keep unrelated skill
 content out of the prompt; complete instructions are loaded when needed. The
 curated 42-skill set replaces indiscriminate loading of the upstream collection.
+
+Paste a GitHub repo link in chat to install its skills: the agent stages the
+repo (shallow clone, digest-bound plan, nothing installed or executed) and,
+after your explicit approval of the digest, installs validated skill content.
+Test suites, installers, hooks and package installs never run; MCP servers found
+in a repo come back as configuration drafts for human `/mcp` review and are
+never connected automatically. Manage skills from the CLI:
+
+```bash
+ah learn <file-or-url>        # learn a skill from a file, URL or skill name
+ah hub list | search | install # community skill hub
+ah curator report              # skill usage, staleness and cleanup
+```
 
 Subagents provide specialist instructions for coding, review, research and other
 roles. `/delegate` opens the agent picker, then asks for the task. The model can
@@ -348,7 +366,6 @@ Important settings include `DATABASE_URL`, `AGENT_HARNESS_PROVIDER`, `AGENT_HARN
 | Setting | Meaning | Default / guidance |
 | --- | --- | --- |
 | `DATABASE_URL` | Application PostgreSQL connection | Required for persistent operation |
-| `AGENT_HARNESS_TEST_DATABASE_URL` | Dedicated test database | Never point this at the application database |
 | `AGENT_HARNESS_PROVIDER` | Chat provider adapter | `openrouter` |
 | `AGENT_HARNESS_MODEL` | Model identifier | `openrouter/free`; availability is provider-dependent |
 | `AGENT_HARNESS_REASONING_EFFORT` | Requested reasoning depth | Blank uses provider default |
@@ -365,10 +382,8 @@ Important settings include `DATABASE_URL`, `AGENT_HARNESS_PROVIDER`, `AGENT_HARN
 | `AGENT_HARNESS_MAX_TOKENS` | Requested provider response length | `4096`; separate from prompt capacity |
 | `AGENT_HARNESS_MAX_ITERATIONS` | Agent loop iteration bound | `10` |
 | `AGENT_HARNESS_TURN_TIMEOUT` | Turn deadline in seconds | `300` |
-| `AGENT_HARNESS_API_KEY` | HTTP API authentication secret | Required to use protected HTTP endpoints |
-| `AGENT_HARNESS_PROVENANCE_KEY` | Shared-memory provenance signing key | Generated by setup/installer |
-| `AGENT_HARNESS_TERMINAL_SANDBOX` | Terminal backend setting | `disabled`; configure `local` or `docker` as appropriate |
 | `SEARXNG_URL` | SearXNG search endpoint | `http://localhost:8080` |
+| `AGENT_HARNESS_TERMINAL_SANDBOX` | Terminal backend setting | `disabled`; configure `local` or `docker` as appropriate |
 | `AH_ENV_FILE` | Alternate secret/environment file | Default resolver uses the project environment file |
 | `AH_UI_DIR` | TUI source directory override | Useful for backend wheel installs |
 | `AH_UI_REDUCED_MOTION` | Disable working/learning animation | Set `1` |
@@ -390,6 +405,12 @@ explicit session mode change affects that session; changing the saved default
 controls future sessions. Configuration precedence and migration details are in
 [OPERATIONS.md](OPERATIONS.md).
 
+Not configuration keys (no `config.yaml` entry, managed through the secret
+path instead): `AGENT_HARNESS_API_KEY` (HTTP API authentication, required for
+protected endpoints), `AGENT_HARNESS_PROVENANCE_KEY` (generated by
+setup/installer), and `AGENT_HARNESS_TEST_DATABASE_URL` (dedicated test
+database — never point it at the application database).
+
 ### HTTP API reference
 
 ```bash
@@ -405,15 +426,18 @@ The HTTP API provides sessions, SSE prompts, memory, documents, jobs and approva
 | GET | `/metrics` | Authenticated Prometheus exposition |
 | POST / GET | `/api/v1/sessions` | Create / list sessions |
 | GET / PATCH / DELETE | `/api/v1/sessions/{id}` | History / update / delete; active-turn restrictions apply |
-| POST | `/api/v1/sessions/{id}/prompt` | Streaming agent response over SSE |
+| POST | `/api/v1/sessions/{id}/prompt`, `/api/v1/sessions/{id}/chat` | Streaming agent response over SSE (`chat` is an alias) |
 | GET | `/api/v1/sessions/{id}/context` | Redacted context previews |
 | GET | `/api/v1/sessions/{id}/usage` | Recorded usage and configured budgets |
-| POST / GET | `/api/v1/sessions/{id}/jobs` | Schedule / list session jobs |
+| POST | `/api/v1/sessions/{id}/jobs` | Schedule session jobs |
+| GET | `/api/v1/sessions/{id}/jobs` | List session jobs |
 | DELETE | `/api/v1/jobs/{id}` | Remove a scheduled job |
+| GET | `/agents` | List available agents and roles |
 | POST | `/api/v1/memory`, `/api/v1/persona-memory` | Add agent-scoped memory |
 | GET | `/api/v1/memory/search` | Search memory |
-| POST / GET | `/api/v1/documents`, `/api/v1/documents/search` | Index / search documents |
-| GET | `/api/v1/approvals` | List approval requests |
+| POST | `/api/v1/documents` | Index documents |
+| GET | `/api/v1/documents/search` | Search documents |
+| GET | `/api/v1/approvals?sessionId=…` | List approval requests (`sessionId` required) |
 | POST | `/api/v1/approvals/{id}/resolve` | Record an approval decision |
 | POST | `/api/v1/approvals/{id}/resume` | Resume the original reviewed action |
 | POST | `/rpc` | Authenticated gateway bridge with method restrictions |
@@ -497,12 +521,13 @@ CI covers Python checks, coverage, optional connector transport tests, the UI an
 
 ### Recorded verification
 
-The 2026-10-12 local candidate review recorded **2,237 backend tests passed,
-5 skipped**, with **82.26% coverage**. Standalone UI checks recorded **290 passed,
-5 environment-gated skips**; the real gateway wrapper ran all **295 UI tests**
-without UI skips. Ruff and package checks passed; Bandit reported zero medium/high
-findings and 67 low findings. These are dated results, not a guarantee for later
-commits or every supported platform. Commands, fixture scope and pending hosted
+The 2026-10-12 candidate review (HEAD `8c96fe3` with the working tree under
+review) recorded **2,478 backend tests passed, 5 skipped**, with
+**82.12% coverage**. Standalone UI checks with the real gateway integration
+enabled recorded **326 passed, 0 failed, 0 skipped**. Ruff and package checks
+passed; Bandit reported zero medium/high findings. These are dated results
+for that checkout — re-run the commands above before trusting them for a
+later commit or any other platform. Commands, fixture scope and pending hosted
 CI/Docker gates are in [release readiness](docs/verification/RELEASE_READINESS.md).
 
 ## Project structure
@@ -515,6 +540,8 @@ Agent-Harness/
 │   ├── gateway/          # JSON-RPC server and feature handlers
 │   ├── api/              # FastAPI endpoints, authentication and rate limits
 │   ├── permissions/      # action classification, broker, approvals and shell parsing
+│   ├── plugins/          # plugin loading and registry
+│   ├── protocol/         # versioned gateway event definitions
 │   ├── connectors/       # MCP config store, SDK lifecycle, inventory and execution
 │   ├── memory/           # retrieval, persona, growth, RSI, identity and policy
 │   ├── rag/              # loading, chunking, embeddings, retrieval and reranking
@@ -575,8 +602,9 @@ credentials or private tool output into issue reports.
 - [Security model and limitations](SECURITY.md)
 - [Release notes](CHANGELOG.md) and [release checklist](docs/verification/RELEASE_READINESS.md)
 - [Feature implementation ledger](FEATURE_LEDGER.md)
+- [Historical plans and snapshots](docs/archive/) (superseded; live docs above take precedence)
 - [Successor handoff](docs/HANDOFF.md)
-- [Production completion gates](docs/plans/PRODUCTION_COMPLETION_PROGRESS.md)
+- [Production completion gates](docs/archive/plans/PRODUCTION_COMPLETION_PROGRESS.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
 
 ## License

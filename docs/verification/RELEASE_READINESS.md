@@ -23,7 +23,7 @@ All database checks used only the dedicated `agentharness_test` database. The lo
 
 ```sh
 AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test \
-  PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/Users/shadow/Agent-Harness1 \
+  PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/home/user/Agent-Harness1 \
   .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider \
   --cov=ah --cov-report=term --cov-fail-under=60
 npm --prefix ui run check
@@ -70,7 +70,7 @@ paid-model compatibility claims.
 - Run the prepared GitHub CI jobs, including Linux Docker build/Compose validation. Docker is unavailable on this local machine.
 - Validate fresh installs on the intended OS/Python/Node matrix; local verification used macOS, Python 3.14 and Node 26. CI targets Python 3.11/Node 24, but its pending run is not evidence yet. Windows locking has simulated branch tests, not a new real Windows run.
 - Exercise explicitly authorized live providers and the specific third-party MCP services you intend to support. Synthetic SDK fixtures do not establish vendor compatibility or quality gains.
-- Complete authorized staging, backup/restore, rollback, monitoring/alerts and operational budgets in [production completion](../plans/PRODUCTION_COMPLETION_PROGRESS.md).
+- Complete authorized staging, backup/restore, rollback, monitoring/alerts and operational budgets in [production completion](../archive/plans/PRODUCTION_COMPLETION_PROGRESS.md).
 - Review the candidate diff, commit/tag and publish through the repository owner's release process. No commit, push, git configuration change, publication or deployment was performed here.
 
 Passing local checks prepares a candidate; it does not close the production gates or authorize publishing v1.0.0.

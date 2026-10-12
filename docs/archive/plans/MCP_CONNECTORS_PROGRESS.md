@@ -1,12 +1,12 @@
 # MCP connector progress and successor notes
 
 **Current phase (2026-10-12):** saved local configuration, interactive management
-and broker-bound native calls are implemented. See [MCP setup](../MCP.md) and
-[current release evidence](../verification/RELEASE_READINESS.md). Earlier sections
+and broker-bound native calls are implemented. See [MCP setup](../../MCP.md) and
+[current release evidence](../../verification/RELEASE_READINESS.md). Earlier sections
 below record the historical read-only/library phase; its deferrals are superseded
 only where the final integration section explicitly says so.
 
-Verified on 2026-10-11 in `/Users/shadow/Agent-Harness1`. This is a verified
+Verified on 2026-10-11 in `/home/user/Agent-Harness1`. This is a verified
 connector **library plus read-only inspection phase**, not completed agent-loop integration.
 Read [MCP_CONNECTORS_PLAN.md](MCP_CONNECTORS_PLAN.md) for the remaining contracts.
 
@@ -26,7 +26,7 @@ $ git status --short
  M pyproject.toml
  M tests/test_integration_permissions.py
 ?? ah/connectors/
-?? docs/plans/MCP_CONNECTORS_PLAN.md
+?? docs/archive/plans/MCP_CONNECTORS_PLAN.md
 ?? docs/verification/
 ?? tests/support/mcp_fixture_server.py
 ?? tests/test_connectors_config.py
@@ -258,8 +258,8 @@ Review fixes include immutable approved launch snapshots, cwd/executable identit
 venv launcher preservation and bounded concurrency/configuration waits. HTTP
 redirect/proxy inheritance is disabled and destinations are rechecked. Actual
 SDK fixture agent calls cover approval pause/resume, errors, truncation, timeout
-uncertainty and elicitation refusal. Setup and limitations: [MCP.md](../MCP.md).
-Final verification is recorded in [release readiness](../verification/RELEASE_READINESS.md).
+uncertainty and elicitation refusal. Setup and limitations: [MCP.md](../../MCP.md).
+Final verification is recorded in [release readiness](../../verification/RELEASE_READINESS.md).
 
 Still deferred: OAuth and HTTP credential-profile auth, remote resources/prompts,
 subscriptions, automatic executable installation, complete DNS-rebinding/body

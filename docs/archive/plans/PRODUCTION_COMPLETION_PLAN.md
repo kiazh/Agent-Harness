@@ -144,6 +144,9 @@ broker-stamped execution context
 
 The code contains an unresolved security TODO:
 
+
+> NOTE (2026-10-12, HEAD 8c96fe3): this TODO is resolved — `ah/security/fetch.py:pinned_fetch()` dials the validated IP with Host/TLS verification and is wired into `web_extract()`; see `tests/test_web_extract_pinned_fetch.py`. The section below is kept as history.
+
 ```text
 TODO(pinned-ip): actually connect to the pinned IP with Host header / TLS
 ```
@@ -559,6 +562,9 @@ Add or verify tests for:
 **Files:** `ah/tools/builtins.py`
 
 Remove this TODO only after implementing the behavior:
+
+
+> NOTE (2026-10-12, HEAD 8c96fe3): this TODO is resolved — `ah/security/fetch.py:pinned_fetch()` dials the validated IP with Host/TLS verification and is wired into `web_extract()`; see `tests/test_web_extract_pinned_fetch.py`. The section below is kept as history.
 
 ```text
 TODO(pinned-ip): actually connect to the pinned IP with Host header / TLS
