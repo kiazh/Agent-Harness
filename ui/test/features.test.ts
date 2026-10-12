@@ -5,6 +5,7 @@ import { parseCommand } from "../src/commands.ts";
 import { type AskTextOptions, type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "../src/features/index.ts";
 import { resolvePrefix, table } from "../src/format.ts";
 import type { ConfigResult, HistoryEntry, SessionInfo } from "../src/protocol.ts";
+import type { OAuthProgressHandle, OAuthProgressOptions } from "../src/features/types.ts";
 
 const SESSION: SessionInfo = {
 	id: "11111111-2222-3333-4444-555555555555",
@@ -65,6 +66,22 @@ class FakeHost implements FeatureHost {
 	async askText(options: AskTextOptions): Promise<string | undefined> {
 		this.asked.push(options);
 		return this.textQueue.shift();
+	}
+	progressOptions: OAuthProgressOptions[] = [];
+	progressUpdates: Array<{ status: string; loginUrl?: string }> = [];
+	progressDisposals = 0;
+	progressCallbacks: OAuthProgressOptions[] = [];
+	showOAuthProgress(options: OAuthProgressOptions): OAuthProgressHandle {
+		this.progressOptions.push(options);
+		this.progressCallbacks.push(options);
+		return {
+			update: (status: string, loginUrl?: string) => {
+				this.progressUpdates.push({ status, loginUrl });
+			},
+			dispose: () => {
+				this.progressDisposals++;
+			},
+		};
 	}
 	async pickMany(_title: string, items: SelectItem[]) {
 		this.manyItems.push(items);
@@ -1330,7 +1347,7 @@ test("/mcp shows cached tools without connecting and marks truncation", async ()
 });
 test("/mcp advanced configuration rejects secret values", async () => {
  const host = mcpHost();
- host.picks.push("__add__", "streamable_http");
+ host.picks.push("__add__", "streamable_http", "none");
  host.textQueue.push("docs", "Docs", "https://example.com/mcp", '{"headers":{"Authorization":"secret"}}');
  await run("/mcp", host);
  assert.equal(host.last().kind, "error");
@@ -1339,7 +1356,7 @@ test("/mcp advanced configuration rejects secret values", async () => {
 
 test("/mcp configures HTTP with reference names and allowlist without connecting", async () => {
  const host = mcpHost();
- host.picks.push("__add__", "streamable_http");
+ host.picks.push("__add__", "streamable_http", "none");
  host.textQueue.push("remote", "Remote docs", "https://example.com/mcp", '{"secret_refs":["DOCS_TOKEN"],"tool_allowlist":["lookup"],"local_access":false}');
  host.responses["mcp.configure"] = { server: { ...MCP_DOCS, id: "remote", transport: "streamable_http" } };
  await run("/mcp", host);
@@ -1377,7 +1394,7 @@ test("/mcp rejected argv and credential endpoints are never configured", async (
 
 test("/mcp supports trusted_read configuration without granting broader trust", async () => {
  const host = mcpHost();
- host.picks.push("__add__", "streamable_http");
+ host.picks.push("__add__", "streamable_http", "none");
  host.textQueue.push("docs", "Docs", "https://example.com/mcp", '{"trust":"trusted_read"}');
  host.responses["mcp.configure"] = { server: MCP_DOCS };
  await run("/mcp", host);

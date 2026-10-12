@@ -98,6 +98,7 @@ def test_public_view_carries_no_secrets():
         "trust",
         "revision",
         "tool_allowlist",
+        "oauth",
     }
 
 

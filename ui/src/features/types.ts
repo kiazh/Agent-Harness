@@ -49,6 +49,12 @@ export interface FeatureHost {
 	pickTheme(): Promise<string | undefined>;
 	/** Collect free-form text in an overlay editor; undefined means cancelled. */
 	askText(options: AskTextOptions): Promise<AskTextResult>;
+	/**
+	 * Cancellable transient progress overlay for browser authorization.
+	 * Escape/cancel invokes options.onCancel; the overlay holds no secrets
+	 * after dispose. Status updates never touch the transcript.
+	 */
+	showOAuthProgress(options: OAuthProgressOptions): OAuthProgressHandle;
 	/** Inspect locally retained tool output; never re-executes tools. */
 	inspectOutput(toolId?: string): Promise<void>;
 	/** Active user profile id (preferences bucket + new-chat agent scope). */
@@ -88,6 +94,23 @@ export function requireSession(host: FeatureHost): SessionInfo {
 	const session = host.session();
 	if (!session) throw new Error("No active session. Use /new.");
 	return session;
+}
+
+/** Cancellable transient progress overlay for OAuth browser authorization. */
+export interface OAuthProgressOptions {
+	title: string;
+	status: string;
+	/** Transient login link: shown only in the overlay viewer, never printed. */
+	loginUrl?: string;
+	onOpen(): void;
+	onCancel(): void;
+}
+
+export interface OAuthProgressHandle {
+	/** Update the overlay status (and optional transient link). */
+	update(status: string, loginUrl?: string): void;
+	/** Dismiss after terminal completion. */
+	dispose(): void;
 }
 
 export function requireArgs(args: string, usage: string): string {

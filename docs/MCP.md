@@ -28,8 +28,10 @@ Calls have a total deadline including concurrency wait. Waiting without dispatch
 
 Only the schema subset enforced by `ah/connectors/policy.py` is accepted: typed values, properties/required, arrays, enum/const, numeric/string/item bounds and supported combinators. Unsupported constraints or malformed schemas fail closed rather than being silently ignored.
 
-Supported: stdio and Streamable HTTP, tools, interactive configuration/connect/disconnect/removal, durable local configuration, broker-bound native tool calls and existing exact HTTP approval continuation machinery.
+Supported: stdio and Streamable HTTP, tools, interactive configuration/connect/disconnect/removal, durable local configuration, broker-bound native tool calls, existing exact HTTP approval continuation machinery, and OAuth browser authorization (Authorization Code + S256 PKCE) for HTTP servers with encrypted persistent credentials, refresh and forget/revoke — see [MCP OAuth](MCP_OAUTH.md).
 
-Not supported: OAuth login, HTTP credential-profile authentication, legacy SSE, remote resources/prompts, catalog subscriptions, server-initiated model/filesystem callbacks, automatic executable installation, shared-process connections or complete transport-level DNS-rebinding defenses. Stdio is host execution and is refused in sandbox mode. HTTP disables redirects and inherited proxies and rechecks destinations; normalized result caps do not bound every SDK receive allocation.
+Not supported: HTTP credential-profile authentication, legacy SSE, remote resources/prompts, catalog subscriptions, server-initiated model/filesystem callbacks, automatic executable installation, shared-process connections or complete transport-level DNS-rebinding defenses. Stdio is host execution and is refused in sandbox mode. HTTP disables redirects and inherited proxies and rechecks destinations; normalized result caps do not bound every SDK receive allocation.
 
 SDK fixture tests prove transport and harness pipeline behavior. No particular external MCP vendor or live-provider quality gain is implied. See [release evidence](verification/RELEASE_READINESS.md) and the historical [connector progress](plans/MCP_CONNECTORS_PROGRESS.md).
+
+OAuth is implemented per the [implementation handoff](plans/MCP_OAUTH_IMPLEMENTATION_HANDOFF.md) with progress in [MCP OAuth progress](plans/MCP_OAUTH_PROGRESS.md). Remote hosted callbacks, device-code grants, OIDC user login, all-vendor certification and total DNS-rebinding defense remain deferred.

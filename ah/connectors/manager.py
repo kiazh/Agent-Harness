@@ -38,9 +38,11 @@ class ConnectorManager:
         self,
         registry: ConnectorRegistry | None = None,
         client_factory: Callable[[Any], MCPConnection] = MCPConnection,
+        oauth_coordinator=None,
     ) -> None:
         self.registry = registry or ConnectorRegistry()
         self._factory = client_factory
+        self._oauth_coordinator = oauth_coordinator
         self._connections: dict[str, MCPConnection] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._failures: dict[str, list[float]] = {}
@@ -96,6 +98,10 @@ class ConnectorManager:
             if existing is not None:
                 await existing.disconnect()
             connection = self._factory(launch_config or config)
+            if self._oauth_coordinator is not None and hasattr(connection, "_oauth_coordinator"):
+                # The managing service's coordinator is authoritative; an
+                # import-time global default must not shadow it.
+                connection._oauth_coordinator = self._oauth_coordinator
             self._connections[connector_id] = connection
             attempts = 1 + max(0, config.max_retries)
             last_error: Exception | None = None

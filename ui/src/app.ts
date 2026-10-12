@@ -19,12 +19,13 @@ import { ArgumentAwareAutocompleteProvider } from "./autocomplete.ts";
 import { parseCommand } from "./commands.ts";
 import { ComposerBox, Footer, header, Picker, SecretForm, TextForm, ThinkingIndicator } from "./components.ts";
 import { Menu } from "./components/Menu.ts";
+import { OAuthProgress } from "./components/OAuthProgress.ts";
 import { ApprovalCard, type ApprovalDecision } from "./components/ApprovalCard.ts";
 import { AppShell } from "./components/AppShell.ts";
 import { OutputStore, OutputViewer, type OutputRecord } from "./components/OutputViewer.ts";
 import { AnimationCoordinator } from "./design/motion.ts";
 import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features/index.ts";
-import { type AskTextOptions, PROFILE_ID_RE } from "./features/types.ts";
+import { type AskTextOptions, PROFILE_ID_RE, type OAuthProgressHandle, type OAuthProgressOptions } from "./features/types.ts";
 import type { GatewayClient } from "./gateway.ts";
 import type {
 	ConfigGetResult,
@@ -368,6 +369,43 @@ export class App implements FeatureHost {
 			form.onCancel = () => close();
 			return form;
 		});
+	}
+
+	/**
+	 * Cancellable transient overlay for OAuth browser authorization.
+	 * Escape invokes options.onCancel and closes the overlay; status
+	 * updates and the login link never touch the transcript.
+	 */
+	showOAuthProgress(options: OAuthProgressOptions): OAuthProgressHandle {
+		let component: OAuthProgress | undefined;
+		let closeDialog: ((value?: string) => void) | undefined;
+		let settled = false;
+		void this.openDialog<string>((close) => {
+			closeDialog = close;
+			component = new OAuthProgress(options.title, options.status, {
+				onOpen: options.onOpen,
+				onCancel: () => {
+					if (settled) return;
+					settled = true;
+					options.onCancel();
+					close("cancel");
+				},
+			}, options.loginUrl);
+			return component;
+		}).then(() => {
+			settled = true;
+		});
+		return {
+			update: (status: string, loginUrl?: string) => {
+				component?.setStatus(status, loginUrl);
+				this.tui.requestRender();
+			},
+			dispose: () => {
+				if (settled) return;
+				settled = true;
+				closeDialog?.();
+			},
+		};
 	}
 
 	/**

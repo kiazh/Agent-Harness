@@ -44,6 +44,21 @@ logger = logging.getLogger(__name__)
 _METADATA_HOSTS = {"169.254.169.254", "100.100.100.100", "fd00:ec2::254"}
 
 
+def _looks_like_auth_failure(error: Exception) -> bool:
+    text = f"{type(error).__name__}: {error}".lower()
+    return "401" in text or "403" in text or "unauthorized" in text or "forbidden" in text
+
+
+def _default_oauth_coordinator():
+    try:
+        from ah.core.runtime import runtime_services
+
+        service = runtime_services.get_connector_service()
+        return getattr(service, "oauth", None)
+    except Exception:
+        return None
+
+
 def _retryable_connect_error(error: Exception) -> bool:
     if isinstance(error, ExceptionGroup):
         return all(_retryable_connect_error(item) for item in error.exceptions)
@@ -184,8 +199,11 @@ def _classify_host(host: str, *, local_access: bool) -> None:
 class MCPConnection:
     """One worker-local connection to one configured MCP server."""
 
-    def __init__(self, config: ConnectorConfig) -> None:
+    def __init__(self, config: ConnectorConfig, oauth_coordinator=None) -> None:
         self.config = config
+        self._oauth_coordinator = (
+            oauth_coordinator if oauth_coordinator is not None else _default_oauth_coordinator()
+        )
         self.state = (
             ConnectionState.DISABLED if not config.enabled else ConnectionState.DISCONNECTED
         )
@@ -371,6 +389,24 @@ class MCPConnection:
             )
         import httpx2
 
+        oauth_auth = None
+        oauth_token_value = ""
+        coordinator = getattr(self, "_oauth_coordinator", None)
+        if coordinator is None:
+            coordinator = _default_oauth_coordinator()
+        if getattr(self.config, "oauth", None):
+            oauth_auth, oauth_token_value = await self._oauth_preflight(coordinator)
+            if oauth_token_value:
+                self._secret_values = tuple(
+                    sorted(
+                        set(self._secret_values)
+                        | {oauth_token_value}
+                        | {__import__("json").dumps(oauth_token_value, ensure_ascii=False)[1:-1]},
+                        key=len,
+                        reverse=True,
+                    )
+                )
+
         async def check_destination(request):
             destination = urlparse(str(request.url))
             if (destination.scheme, destination.hostname, destination.port) != (
@@ -384,21 +420,79 @@ class MCPConnection:
             )
 
         assert self._stack is not None
-        client = await self._stack.enter_async_context(
-            httpx2.AsyncClient(
-                follow_redirects=False,
-                trust_env=False,
-                timeout=httpx2.Timeout(self.config.call_timeout),
-                event_hooks={"request": [check_destination]},
+        client_kwargs: dict[str, Any] = {
+            "follow_redirects": False,
+            "trust_env": False,
+            "timeout": httpx2.Timeout(self.config.call_timeout),
+            "event_hooks": {"request": [check_destination]},
+        }
+        if oauth_auth is not None:
+            client_kwargs["auth"] = oauth_auth
+        client = await self._stack.enter_async_context(httpx2.AsyncClient(**client_kwargs))
+        try:
+            streams = await self._stack.enter_async_context(
+                streamable_http_client(
+                    self.config.endpoint, http_client=client, terminate_on_close=True
+                )
             )
-        )
-        streams = await self._stack.enter_async_context(
-            streamable_http_client(
-                self.config.endpoint, http_client=client, terminate_on_close=True
-            )
-        )
+        except Exception as exc:
+            if _looks_like_auth_failure(exc):
+                self.state = ConnectionState.AUTH_REQUIRED
+                self.last_error = self._redact("server requires authorization; authorize via /mcp")
+                raise AuthRequired(self.last_error) from exc
+            raise
         read, write = streams
-        self._session = await self._new_session(read, write)
+        try:
+            self._session = await self._new_session(read, write)
+        except Exception as exc:
+            if _looks_like_auth_failure(exc):
+                self.state = ConnectionState.AUTH_REQUIRED
+                self.last_error = self._redact("server requires authorization; authorize via /mcp")
+                raise AuthRequired(self.last_error) from exc
+            raise
+
+    async def _oauth_preflight(self, coordinator):
+        """Bounded token preflight before dispatch; never opens a browser."""
+        from ah.connectors.oauth_auth import OAuthBearerAuth
+
+        if coordinator is None:
+            raise AuthRequired("oauth authorization is required; authorize via /mcp")
+        await coordinator.refresh_auth_cache(self.config.id)
+        identity = coordinator.auth_identity(self.config.id)
+        if identity is None:
+            raise AuthRequired("oauth authorization is required; authorize via /mcp")
+        from ah.connectors.oauth_models import OAuthBinding
+
+        binding = OAuthBinding(
+            connector_id=self.config.id,
+            credential_key=str(identity.get("credentialKey", "")),
+            resource=str(identity.get("resource", "")),
+            issuer=str(identity.get("issuer", "")),
+            client_id=str(identity.get("clientId", "")),
+        )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + min(self.config.connect_timeout, 15.0)
+        try:
+            token = await coordinator.ensure_token(
+                binding, expected_grant=identity, deadline=deadline
+            )
+        except Exception as exc:
+            raise AuthRequired(str(exc) or "authorization required") from exc
+
+        def _deadline() -> float:
+            return asyncio.get_running_loop().time() + self.config.call_timeout
+
+        return OAuthBearerAuth(coordinator, binding, identity, _deadline), token
+
+    def register_oauth_token(self, token_value: str) -> None:
+        if token_value:
+            self._secret_values = tuple(
+                sorted(
+                    set(self._secret_values) | {token_value},
+                    key=len,
+                    reverse=True,
+                )
+            )
 
     async def disconnect(self) -> None:
         """Ask the owner to close; a caller timeout never cancels SDK cleanup."""
@@ -527,7 +621,16 @@ class MCPConnection:
                 outcome_unknown=True,
                 error=f"call timed out after {self.config.call_timeout}s",
             )
+        except AuthRequired as exc:
+            self.state = ConnectionState.AUTH_REQUIRED
+            self.last_error = self._redact(str(exc))
+            return CallOutcome(ok=False, outcome_unknown=True, error=self.last_error)
         except Exception as exc:
+            if _looks_like_auth_failure(exc):
+                # Post-dispatch auth failure: conservatively unknown, no replay.
+                self.state = ConnectionState.AUTH_REQUIRED
+                self.last_error = self._redact("server requires authorization; authorize via /mcp")
+                return CallOutcome(ok=False, outcome_unknown=True, error=self.last_error)
             # Without a terminal result, a transport/protocol failure cannot
             # establish whether the dispatched operation had an effect.
             return CallOutcome(

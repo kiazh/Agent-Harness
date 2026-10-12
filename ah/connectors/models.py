@@ -95,6 +95,7 @@ class ConnectorConfig:
     endpoint: str = ""
     credential_profile: str = ""
     local_access: bool = False
+    oauth: dict[str, Any] | None = None
     # Bounds and policy.
     connect_timeout: float = 15.0
     call_timeout: float = 60.0
@@ -209,10 +210,36 @@ class ConnectorConfig:
             raise ConfigError("trust must be 'untrusted' or 'trusted_read'")
         if not isinstance(self.revision, int) or self.revision < 0:
             raise ConfigError("revision must be a non-negative integer")
+        self._validate_oauth()
         return self
+
+    def _validate_oauth(self) -> None:
+        from ah.connectors.oauth_models import OAuthConfigError, OAuthSettings
+
+        if self.oauth is None:
+            return
+        if not isinstance(self.oauth, dict):
+            raise ConfigError("oauth must be an object")
+        if self.transport == Transport.STDIO.value:
+            raise ConfigError("oauth is HTTP-only; stdio connectors must not set it")
+        if self.credential_profile:
+            raise ConfigError("oauth and credential_profile are mutually exclusive")
+        try:
+            OAuthSettings.from_dict(self.oauth)
+        except OAuthConfigError as exc:
+            raise ConfigError(str(exc)) from None
 
     def public_view(self) -> dict[str, Any]:
         """Sanitized summary safe for listings, logs, and audit payloads."""
+        oauth_view: dict[str, Any] | None = None
+        if isinstance(self.oauth, dict):
+            from ah.connectors.oauth_models import OAuthSettings
+
+            try:
+                settings = OAuthSettings.from_dict(self.oauth)
+                oauth_view = settings.to_dict() if settings is not None else None
+            except Exception:
+                oauth_view = None
         return {
             "id": self.id,
             "display_name": self.display_name,
@@ -227,6 +254,7 @@ class ConnectorConfig:
             "trust": self.trust,
             "revision": self.revision,
             "tool_allowlist": list(self.tool_allowlist),
+            "oauth": oauth_view,
         }
 
 

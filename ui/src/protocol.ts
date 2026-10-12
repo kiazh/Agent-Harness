@@ -340,6 +340,63 @@ export interface MCPConnectorConfig {
  secret_refs?: string[];
  tool_allowlist?: string[];
  trust: "untrusted" | "trusted_read";
+ oauth?: MCPOAuthSettings | null;
+}
+
+/** Validated non-secret OAuth settings (never tokens or secrets). */
+export interface MCPOAuthSettings {
+ client_mode: string;
+ client_id: string;
+ client_metadata_url: string;
+ client_secret_ref: string;
+ token_endpoint_auth_method: string;
+ issuer: string;
+ scope_allowlist: string[];
+ callback_port: number;
+}
+
+export type MCPOAuthState =
+ | "not_configured" | "signed_out" | "authorizing" | "authorized"
+ | "reauthorization_required" | "storage_unavailable";
+
+/** Sanitized public OAuth identity (no tokens, URLs, or secrets). */
+export interface MCPOAuthView {
+ state: MCPOAuthState;
+ issuer?: string;
+ resource?: string;
+ grantedScopes?: string[];
+ expiresAt?: string;
+ grantId?: string;
+ generation: number;
+ reasonCode?: string;
+}
+
+export type MCPOAuthOperationState =
+ | "preparing" | "awaiting_browser" | "exchanging" | "complete"
+ | "cancelled" | "expired" | "failed";
+
+export interface MCPOAuthOperationView {
+ operationId: string;
+ connectorId: string;
+ state: MCPOAuthOperationState;
+ expiresAt: string;
+ reasonCode?: string;
+}
+
+export interface MCPOAuthReview {
+ connectorId: string;
+ revision: number;
+ endpoint: string;
+ resource: string;
+ issuer: string;
+ requestedScopes: string[];
+ registrationMode: string;
+ endpoints: Record<string, string>;
+ redirectUri: string;
+}
+/** MCP server view plus sanitized OAuth identity (never tokens). */
+export interface MCPServerViewAuth extends MCPServerView {
+ oauth?: MCPOAuthView | null;
 }
 export interface MCPToolView {
  name: string;

@@ -19,7 +19,7 @@ from ah.connectors.policy import classify_tool, validate_arguments
 from ah.permissions.policy import build_request
 
 
-def _identity(config) -> dict:
+def _identity(config, service=None) -> dict:
     identity = asdict(config)
     if config.transport == "stdio":
         executable = shutil.which(config.command)
@@ -36,7 +36,30 @@ def _identity(config) -> dict:
             stat.st_size,
             stat.st_mtime_ns,
         ]
+    oauth_identity = _service_auth_identity(config, service)
+    if oauth_identity is not None:
+        identity["oauth"] = oauth_identity
     return identity
+
+
+def _service_auth_identity(config, service=None) -> dict | None:
+    """Non-secret grant binding for broker proposals; never token material."""
+    if service is None:
+        try:
+            from ah.core.runtime import runtime_services
+
+            service = runtime_services.get_connector_service()
+        except Exception:
+            return None
+    reader = getattr(service, "auth_identity", None)
+    if reader is None:
+        return None
+    try:
+        if getattr(config, "oauth", None):
+            return reader(config.id)
+    except Exception:
+        return None
+    return None
 
 
 def _owner(config, agent_id: str) -> None:
@@ -56,7 +79,7 @@ def call_spec(service, arguments: dict[str, Any]) -> dict:
     validate_arguments(tool.remote_name, supplied, tool.schema)
     content = json.dumps(
         {
-            "connector": _identity(config),
+            "connector": _identity(config, service),
             "remote_tool": tool.remote_name,
             "schema": tool.schema,
             "schema_revision": tool.schema_revision,
@@ -88,7 +111,7 @@ async def _connect_request(
     context = await resolve_execution_context(session_id, "mcp_connect")
     if config.transport == "stdio" and context.mode == "sandbox":
         raise ConnectorToolError("stdio MCP runs on the host; switch mode explicitly to connect")
-    identity = _identity(config)
+    identity = _identity(config, service)
     return build_request(
         operation="tool.mcp_connect",
         tool="mcp_connect",
@@ -249,6 +272,8 @@ async def execute_call(service, name: str, arguments: dict, *, session_id: str, 
         remaining = config.call_timeout - (asyncio.get_running_loop().time() - started)
         if remaining <= 0:
             raise ConnectorToolError("MCP deadline expired before dispatch")
+        if getattr(config, "oauth", None):
+            await _oauth_preflight(service, config, remaining=remaining)
         try:
             async with asyncio.timeout(remaining):
                 return await connection.call_tool(tool.remote_name, arguments)
@@ -260,3 +285,40 @@ async def execute_call(service, name: str, arguments: dict, *, session_id: str, 
             )
     finally:
         semaphore.release()
+
+
+async def _oauth_preflight(service, config, *, remaining: float) -> None:
+    """Bounded eligibility check before dispatch; never opens a browser.
+
+    Raises ConnectorToolError (known not dispatched) when no usable token
+    can be produced. No refresh failure, 401, or expiry replays the call.
+    """
+    from ah.connectors.models import AuthRequired
+
+    coordinator = getattr(service, "oauth", None)
+    if coordinator is None:
+        raise ConnectorToolError("oauth authorization is required; authorize via /mcp")
+    identity = service.auth_identity(config.id)
+    if identity is None:
+        raise ConnectorToolError("oauth authorization is required; authorize via /mcp")
+    from ah.connectors.oauth_models import OAuthBinding
+
+    binding = OAuthBinding(
+        connector_id=config.id,
+        credential_key=str(identity.get("credentialKey", "")),
+        resource=str(identity.get("resource", "")),
+        issuer=str(identity.get("issuer", "")),
+        client_id=str(identity.get("clientId", "")),
+    )
+    deadline = asyncio.get_running_loop().time() + max(0.0, remaining)
+    try:
+        token = await coordinator.ensure_token(binding, expected_grant=identity, deadline=deadline)
+    except AuthRequired as exc:
+        raise ConnectorToolError(str(exc) or "authorization required") from exc
+    except Exception as exc:
+        raise ConnectorToolError(
+            str(exc) or "oauth authorization is required; authorize via /mcp"
+        ) from exc
+    connection = service.manager.connection(config.id)
+    if connection is not None and token:
+        connection.register_oauth_token(token)

@@ -154,6 +154,7 @@ test("slash commands work against the real gateway and database", { skip, timeou
 		pick: async (_title: string, items: SelectItem[]) => items.find((i) => i.value === "yes") ?? items[0],
 		pickMany: async (_title, items) => items.filter(item => item.value === current?.id),
 		askText: async () => undefined,
+		showOAuthProgress: () => ({ update: () => {}, dispose: () => {} }),
 		inspectOutput: async () => {},
 		pickTheme: async () => undefined,
 		writeFile: async (path, text) => {

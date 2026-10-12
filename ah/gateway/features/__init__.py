@@ -27,6 +27,15 @@ from ah.gateway.features.config import (
     profile_set,
     status,
 )
+from ah.gateway.features.connector_oauth import (
+    mcp_oauth_cancel,
+    mcp_oauth_forget,
+    mcp_oauth_open,
+    mcp_oauth_preview,
+    mcp_oauth_start,
+    mcp_oauth_status,
+    mcp_oauth_url,
+)
 from ah.gateway.features.connectors import (
     mcp_configure,
     mcp_connect,
@@ -119,6 +128,13 @@ METHODS: dict[str, Handler] = {
     "mcp.connect": mcp_connect,
     "mcp.disconnect": mcp_disconnect,
     "mcp.tools": mcp_tools,
+    "mcp.oauth.preview": mcp_oauth_preview,
+    "mcp.oauth.start": mcp_oauth_start,
+    "mcp.oauth.status": mcp_oauth_status,
+    "mcp.oauth.url": mcp_oauth_url,
+    "mcp.oauth.open": mcp_oauth_open,
+    "mcp.oauth.cancel": mcp_oauth_cancel,
+    "mcp.oauth.forget": mcp_oauth_forget,
     "growth.get": growth_get,
     "growth.teach": growth_teach,
     "growth.feedback": growth_feedback,

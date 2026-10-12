@@ -1,7 +1,8 @@
 // Human-operated MCP management. Inspection never connects or discovers tools.
-import type { MCPConnectorConfig, MCPServerView, MCPToolView } from "../protocol.ts";
+import type { MCPConnectorConfig, MCPOAuthSettings, MCPOAuthView, MCPServerView, MCPToolView } from "../protocol.ts";
 import { sanitizeDisplay } from "../design/text.ts";
 import { confirm, options, requireSession, type Command, type FeatureHost } from "./types.ts";
+import { authorizeConnector, forgetConnectorAccess, formatOAuthStatus } from "./mcp-oauth.ts";
 const stateOf = (server: MCPServerView): string => server.enabled ? server.state : "disabled";
 const nameOf = (server: MCPServerView): string => sanitizeDisplay(server.display_name || server.id);
 function describe(server: MCPServerView): string {
@@ -46,6 +47,16 @@ async function addServer(host: FeatureHost): Promise<void> {
   const url = new URL(endpoint.trim());
   if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("Use an HTTP(S) endpoint without credentials, query parameters or fragments. Open /mcp to try again.");
   config.endpoint = endpoint.trim();
+  const authentication = await host.pick("HTTP authentication", [
+   { value: "none", label: "None", description: "Connect without credentials" },
+   { value: "oauth", label: "OAuth", description: "Authorize in a browser with PKCE" },
+  ]);
+  if (!authentication) return;
+  if (authentication.value === "oauth") {
+   const oauth = await askOAuthSettings(host);
+   if (!oauth) return;
+   config.oauth = oauth;
+  }
  }
  const advanced = await host.askText({ title: "Advanced options (JSON, optional)", initial: "{}", description: "Allowed: local_access, secret_refs (names only), tool_allowlist, trust (untrusted or trusted_read). Never enter secret values.", example: '{"secret_refs":["DOCS_TOKEN"],"tool_allowlist":["search"]}' });
  if (advanced === undefined) return;
@@ -60,16 +71,75 @@ async function addServer(host: FeatureHost): Promise<void> {
  const { server } = await host.request<{ server: MCPServerView }>("mcp.configure", { config });
  host.print(`${nameOf(server)} saved. Open /mcp and choose Connect when ready.`, "success");
 }
+async function askOAuthSettings(host: FeatureHost): Promise<MCPOAuthSettings | undefined> {
+ const mode = await host.pick("OAuth client registration", [
+  { value: "auto", label: "Automatic", description: "Use dynamic registration when the server supports it" },
+  { value: "preregistered", label: "Pre-registered", description: "Use an existing client ID" },
+  { value: "metadata_document", label: "Client metadata document", description: "Reference a published client metadata URL" },
+ ]);
+ if (!mode) return undefined;
+ const settings: MCPOAuthSettings = {
+  client_mode: mode.value, client_id: "", client_metadata_url: "", client_secret_ref: "",
+  token_endpoint_auth_method: "none", issuer: "", scope_allowlist: [], callback_port: 0,
+ };
+ if (mode.value === "preregistered") {
+  const clientId = await host.askText({ title: "Client ID", description: "Public client ID from the provider" });
+  if (clientId === undefined) return undefined;
+  settings.client_id = clientId.trim();
+ }
+ if (mode.value === "metadata_document") {
+  const documentUrl = await host.askText({ title: "Client metadata URL", example: "https://client.example.com/metadata" });
+  if (documentUrl === undefined) return undefined;
+  settings.client_metadata_url = documentUrl.trim();
+  if (settings.client_id === "") settings.client_id = settings.client_metadata_url;
+ }
+ const issuer = await host.askText({ title: "Issuer (optional)", description: "Leave empty to use the server-advertised issuer" });
+ if (issuer === undefined) return undefined;
+ if (issuer.trim()) settings.issuer = issuer.trim();
+ const scopes = await host.askText({ title: "Allowed scopes (JSON array, optional)", initial: "[]", description: "Empty means every discovered scope needs explicit review" });
+ if (scopes === undefined) return undefined;
+ const parsed: unknown = JSON.parse(scopes || "[]");
+ if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) throw new Error("Allowed scopes must be a JSON array of strings. Open /mcp to try again.");
+ settings.scope_allowlist = parsed;
+ return settings;
+}
 async function manageServer(host: FeatureHost, id: string): Promise<void> {
- const { server } = await host.request<{ server: MCPServerView }>("mcp.status", { id });
+ const { server } = await host.request<{ server: MCPServerView & { oauth?: MCPOAuthSettings | null } }>("mcp.status", { id });
  host.print(describe(server), "plain");
+ const isHttp = server.transport === "streamable_http";
+ const hasOAuth = isHttp && server.oauth !== undefined && server.oauth !== null;
+ if (isHttp) {
+  try {
+   const session = host.session();
+   if (session) {
+    const { auth } = await host.request<{ auth: MCPOAuthView }>("mcp.oauth.status", { id, sessionId: session.id });
+    host.print(formatOAuthStatus(auth), "plain");
+   }
+  } catch {
+   // Auth status is advisory; management stays usable without it.
+  }
+ }
  const action = await host.pick(`${nameOf(server)} · actions`, [
   server.state === "connected" ? { value: "disconnect", label: "Disconnect", description: "Close this server connection" } : { value: "connect", label: "Connect", description: "Request session approval and discover tools" },
+  ...(isHttp ? [
+   { value: "authorize", label: hasOAuth ? "Authorize / Reauthorize" : "Authorize", description: "Authorize in an external browser" },
+   { value: "forget", label: "Forget access", description: "Remove saved OAuth credentials" },
+  ] : []),
+  ...(isHttp && !hasOAuth ? [{ value: "configure-oauth", label: "Configure OAuth", description: "Add OAuth settings to this server" }] : []),
   { value: "tools", label: "View tools", description: "Inspect cached tools without connecting" },
   { value: "remove", label: "Remove server", description: "Delete its configuration and close its connection" },
  ]);
  if (!action) return;
- if (action.value === "connect") {
+ if (action.value === "authorize") {
+  await authorizeConnector(host, id);
+ } else if (action.value === "forget") {
+  await forgetConnectorAccess(host, id);
+ } else if (action.value === "configure-oauth") {
+  const oauth = await askOAuthSettings(host);
+  if (!oauth) return;
+  const { server: saved } = await host.request<{ server: MCPServerView }>("mcp.configure", { config: { id, oauth } });
+  host.print(`${nameOf(saved)} OAuth settings saved. Choose Authorize when ready.`, "success");
+ } else if (action.value === "connect") {
   const session = requireSession(host);
   const preview = await host.request<{ digest: string; proposal: { argv?: string[]; cwd?: string | null; network?: string[]; backend?: string; endpoint?: string; contentPreview?: string }; description?: string }>("mcp.preview", { id, sessionId: session.id });
   const review = [`Connect ${nameOf(server)}?`, preview.proposal.argv?.length ? `Command argv: ${JSON.stringify(preview.proposal.argv)}` : "", preview.proposal.cwd ? `Working directory: ${preview.proposal.cwd}` : "", preview.proposal.endpoint ? `Endpoint: ${preview.proposal.endpoint}` : "", preview.proposal.network?.length ? `Network: ${JSON.stringify(preview.proposal.network)}` : "", preview.proposal.backend ? `Backend: ${preview.proposal.backend}` : "", preview.proposal.contentPreview ? `Configuration: ${preview.proposal.contentPreview}` : "", preview.description || ""].filter(Boolean).map(line => sanitizeDisplay(line)).join("\n");

@@ -212,7 +212,7 @@ Configuration persists in `~/.agent-harness/mcp.json`, with installation-local l
 
 The agent uses `mcp_list`, `mcp_describe` and `mcp_call` after connection. Catalogs are paged and schemas loaded individually. Remote calls require exact approval in every mode unless you explicitly configure `trusted_read` **and** an allowlist of verified read tools. Server descriptions and annotations never grant consent. Schema/configuration/argument changes invalidate approval; uncertain calls are not retried.
 
-Stdio runs on the host and is refused in sandbox mode. HTTP redirects and environment proxy inheritance are disabled; private hosts require explicit local access, and metadata addresses remain forbidden. OAuth and HTTP credential-profile authentication are **not implemented**; such connectors report `auth_required`. Resources, prompts and server-initiated sampling/elicitation/roots are not exposed. These network checks do not establish complete DNS-rebinding protection. [Setup and current evidence](docs/MCP.md).
+Stdio runs on the host and is refused in sandbox mode. HTTP redirects and environment proxy inheritance are disabled; private hosts require explicit local access, and metadata addresses remain forbidden. HTTP servers support OAuth browser authorization (Authorization Code + S256 PKCE, [setup](docs/MCP_OAUTH.md)); HTTP credential-profile authentication is **not implemented** and such connectors report `auth_required`. Resources, prompts and server-initiated sampling/elicitation/roots are not exposed. These network checks do not establish complete DNS-rebinding protection. [Setup and current evidence](docs/MCP.md).
 
 ## Technology stack
 
@@ -557,7 +557,7 @@ Agent-Harness/
 | Response or tool times out | Inspect the recorded outcome; uncertain external side effects must be checked before retrying |
 | MCP list is empty | `/mcp` shows this harness's configured servers; add one here even if another app already connects to it |
 | MCP tools are unavailable after restart | Saved config persists, live connections do not; explicitly connect again |
-| MCP reports `auth_required` | OAuth/HTTP credential profiles are deferred; use a currently supported server configuration |
+| MCP reports `auth_required` | HTTP credential profiles are deferred; OAuth HTTP servers can authorize via `/mcp` ([setup](docs/MCP_OAUTH.md)) |
 | MCP stdio refuses sandbox mode | Host stdio is outside that execution boundary; choose a supported transport/backend configuration |
 | MCP asks for approval in full mode | Untrusted remote calls still need exact consent; trusted reads require an explicit verified allowlist |
 | Persona appears unchanged in a conversation | Saved defaults apply through the profile/context; inspect `/persona` and `/growth`, and distinguish requested persona from trial revisions |

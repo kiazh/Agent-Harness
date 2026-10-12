@@ -60,15 +60,30 @@ class RuntimeServices:
         Neither runtime startup nor inspection requires the optional MCP SDK.
         """
         if self._connector_service is None:
+            from ah.connectors.oauth import OAuthCoordinator
             from ah.connectors.service import ConnectorService
             from ah.connectors.store import ConnectorStore
 
-            self._connector_service = ConnectorService(store=ConnectorStore())
+            self._connector_service = ConnectorService(
+                store=ConnectorStore(),
+                oauth_coordinator=OAuthCoordinator(),
+            )
+            self._connector_service.oauth._service = self._connector_service
         return self._connector_service
 
     async def shutdown_connectors(self, timeout: float = 10.0) -> None:
         """Retire owned connections without creating an unused service."""
         if self._connector_service is not None:
+            oauth = getattr(self._connector_service, "oauth", None)
+            if oauth is not None:
+                try:
+                    await _bounded_cleanup(
+                        oauth.shutdown(deadline=min(5.0, timeout)),
+                        min(5.0, timeout),
+                        "oauth shutdown",
+                    )
+                except Exception as error:
+                    logger.warning("oauth shutdown failed (%s)", type(error).__name__)
             await _bounded_cleanup(
                 self._connector_service.manager.shutdown_all(), timeout, "connector shutdown"
             )
