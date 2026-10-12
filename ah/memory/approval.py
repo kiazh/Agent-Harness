@@ -21,7 +21,7 @@ from typing import Any
 
 from ah.core.provider import audit_log
 from ah.core.serialization import embedding_to_str, str_to_embedding
-from ah.db.connection import db
+from ah.db.lazy import LazyDb
 from ah.memory.models import MemoryEntry
 from ah.memory.redaction import SecretRedactor
 from ah.memory.store import memory_store
@@ -34,6 +34,8 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+db = LazyDb()
 
 
 class ApprovalStatus(StrEnum):

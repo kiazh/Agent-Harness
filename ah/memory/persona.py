@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from ah.db.connection import db
+from ah.db.lazy import LazyDb
 from ah.memory.redaction import redact_secrets
 
 __all__ = [
@@ -24,6 +24,8 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+db = LazyDb()
 
 
 @dataclass

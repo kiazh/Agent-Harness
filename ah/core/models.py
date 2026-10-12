@@ -58,6 +58,7 @@ class ContextChunk:
     embedding: list[float] | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     accessed_at: datetime | None = None
+    document_source: str | None = None
 
 
 @dataclass

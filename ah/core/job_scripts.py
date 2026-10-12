@@ -306,9 +306,28 @@ async def _execute_script_command(command: list[str], cwd: Path) -> str:
             from ah.core.windows_job import create_script_job
 
             job_handle = create_script_job(process.pid)
-            process.stdin.write(b"\x00")
-            await process.stdin.drain()
-            process.stdin.close()
+            try:
+                process.stdin.write(b"\x00")
+            except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+                # Child exited before consuming the bootstrap byte: startup
+                # failure, not an unhandled transport error. Clean up below.
+                try:
+                    await _terminate_tree(process, job_handle)
+                except Exception:
+                    pass
+                raise RuntimeError(f"script startup failed: {type(exc).__name__}") from exc
+            try:
+                await process.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+                try:
+                    await _terminate_tree(process, job_handle)
+                except Exception:
+                    pass
+                raise RuntimeError(f"script startup failed: {type(exc).__name__}") from exc
+            try:
+                process.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
         stdout, stderr, _ = await asyncio.wait_for(
             asyncio.gather(
                 _read_capped(process.stdout),

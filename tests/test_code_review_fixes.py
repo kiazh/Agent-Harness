@@ -317,12 +317,18 @@ class TestCircularImport:
     """Verify retriever module imports work correctly."""
 
     def test_retriever_imports_db_at_module_level(self):
-        """MemoryRetriever should import db at module level, not in method."""
+        """db must bind lazily (ah.db.lazy), never via top-level connection import.
+
+        A top-level ``ah.db.connection`` import cycles through package init
+        (connection → ah.core.__init__ → config.load → ah.memory → …) and once
+        silently discarded the entire config file depending on import order.
+        """
         import ah.memory.retriever as retriever_module
 
         source = inspect.getsource(retriever_module)
-        # The import should be at the top of the file, not inside a method
-        assert "from ah.db.connection import db" in source
+        assert "from ah.db.connection import" not in source
+        assert "LazyDb" in source
+        assert retriever_module.db is not None
 
     def test_retriever_class_exists(self):
         """MemoryRetriever class should be importable."""

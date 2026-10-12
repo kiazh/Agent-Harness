@@ -31,6 +31,10 @@ def row_to_chunk(row: Any) -> ContextChunk:
     embedding = None
     if row["embedding"] is not None:
         embedding = str_to_embedding(row["embedding"])
+    try:
+        doc_source = row["document_source"]
+    except Exception:
+        doc_source = None
     return ContextChunk(
         id=row["id"],
         session_id=row["session_id"],
@@ -41,6 +45,7 @@ def row_to_chunk(row: Any) -> ContextChunk:
         embedding=embedding,
         created_at=row["created_at"],
         accessed_at=row["accessed_at"],
+        document_source=doc_source,
     )
 
 

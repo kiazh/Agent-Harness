@@ -11,10 +11,13 @@ import random
 import re
 import uuid
 
-from ah.db.connection import db
+from ah.db.lazy import LazyDb
 from ah.memory.policy import RetrievalPolicy, state_features
 from ah.memory.redaction import redact_secrets
 from ah.memory.rl import MemoryAction, MemoryState
+
+db = LazyDb()
+
 
 MAX_NOTES_CHARS = 2400
 MAX_EPISODES = 500

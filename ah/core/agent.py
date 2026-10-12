@@ -166,10 +166,14 @@ def _stale_tool_preview(content: str) -> str:
 
 
 def _turn_model(session, provider) -> str | None:
-    """Best-known model id for capacity: live provider first, then session/config."""
+    """Best-known model id for capacity: session first, then provider/config.
+
+    The session pins the explicit per-turn choice; the provider object is
+    built for the session and only backs it up when the session is unpinned.
+    """
     for candidate in (
-        getattr(provider, "model", None),
         getattr(session, "model", None),
+        getattr(provider, "model", None),
     ):
         if isinstance(candidate, str) and candidate:
             return candidate

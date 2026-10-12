@@ -229,6 +229,7 @@ class RAGPipeline:
                     chunk.token_count,
                     embedding_str,
                     search_text,
+                    redact_secrets(str(doc.source)).text,
                 )
             )
 
@@ -240,11 +241,11 @@ class RAGPipeline:
         rows = await db.fetch(
             """
             INSERT INTO context_chunks
-                (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
-            SELECT t.session_id, t.agent_id, t.chunk_type, t.payload_msgpack, t.token_count, t.embedding, t.search_text
-            FROM unnest($1::uuid[], $2::text[], $3::text[], $4::bytea[], $5::int[], $6::text[]::vector[], $7::text[])
-                AS t(session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
-            RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
+                (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
+            SELECT t.session_id, t.agent_id, t.chunk_type, t.payload_msgpack, t.token_count, t.embedding, t.search_text, t.document_source
+            FROM unnest($1::uuid[], $2::text[], $3::text[], $4::bytea[], $5::int[], $6::text[]::vector[], $7::text[], $8::text[])
+                AS t(session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
+            RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
             """,
             [r[0] for r in records],  # session_id array
             [r[1] for r in records],  # agent_id array
@@ -253,6 +254,7 @@ class RAGPipeline:
             [r[4] for r in records],  # token_count array
             [r[5] for r in records],  # embedding array
             [r[6] for r in records],  # search_text array
+            [r[7] for r in records],  # document_source array
         )
         stored_chunks = [self._row_to_chunk(r) for r in rows]
 

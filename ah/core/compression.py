@@ -533,8 +533,24 @@ class ContextCompressor:
                         current_tokens += t_tokens
                     # Else drop the whole group (never keep half a pair).
 
-        # Sort back to original order (by created_at)
-        selected.sort(key=lambda c: c.created_at, reverse=True)
+        # Sort back to original order (by created_at, deterministic id tiebreak).
+        # None timestamps sort with the epoch floor, matching the eviction
+        # index (COALESCE to 0001-01-01 in context.py) — never crash, never drop.
+        from datetime import UTC as _UTC
+        from datetime import datetime as _dt
+
+        _EPOCH_FLOOR = _dt(1, 1, 1, tzinfo=_UTC)
+
+        def _sort_key(c):
+            ts = c.created_at if c.created_at is not None else _EPOCH_FLOOR
+            try:
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=_UTC)
+            except Exception:
+                ts = _EPOCH_FLOOR
+            return (ts, str(c.id))
+
+        selected.sort(key=_sort_key, reverse=True)
         dropped = len(chunks) - len(selected)
         if dropped > 0:
             # Dropped chunks are evicted (archived by the caller); log for audit.

@@ -106,6 +106,30 @@ _COLUMNS = (
 )
 
 
+def _finish_status(error: str | None, paused_for: str | None) -> str:
+    """Canonical outcome status (paused > error > idle)."""
+    if paused_for:
+        return "paused_approval"
+    return "error" if error else "idle"
+
+
+def _finish_next_run(kind: str, expr: str | None, db_now) -> Any:
+    """Canonical cron rescheduling (None for non-cron or unparseable)."""
+    try:
+        if kind == "cron" and expr:
+            return next_cron_time(expr, db_now)
+    except Exception:
+        pass
+    return None
+
+
+def _finish_fencing_ok(status: str, current: Any, claim_token: Any) -> bool:
+    """Canonical token fencing: token-owned running rows need exact token."""
+    if status == "running" and current is not None and claim_token != current:
+        return False
+    return True
+
+
 def _optional_col(row: Any, name: str) -> Any:
     """Tolerate missing columns on old mocks/rows (narrow compat)."""
     try:
@@ -397,12 +421,8 @@ class JobStore:
             from datetime import UTC, datetime
 
             db_now = db_now or datetime.now(UTC)
-            # If mock returns SimpleNamespace, compute next_run directly.
-            try:
-                next_run = next_cron_time(expr, db_now) if kind == "cron" and expr else None
-            except Exception:
-                next_run = None
-            paused_status = "paused_approval" if paused_for else ("error" if error else "idle")
+            next_run = _finish_next_run(kind, expr, db_now)
+            paused_status = _finish_status(error, paused_for)
             result = await db.execute(
                 """
                     UPDATE jobs
@@ -436,20 +456,12 @@ class JobStore:
                     current = job_row["claim_token"]
                 except Exception:
                     current = None
-                if (
-                    job_row["status"] == "running"
-                    and current is not None
-                    and claim_token != current
-                ):
+                if not _finish_fencing_ok(job_row["status"], current, claim_token):
                     return False
                 job = _row_to_job(job_row)
                 db_now = await conn.fetchval("SELECT now()")
-                next_run = (
-                    next_cron_time(job.cron_expression, db_now)
-                    if job.kind == "cron" and job.cron_expression
-                    else None
-                )
-                paused_status = "paused_approval" if paused_for else ("error" if error else "idle")
+                next_run = _finish_next_run(job.kind, job.cron_expression, db_now)
+                paused_status = _finish_status(error, paused_for)
                 result = await conn.execute(
                     """
                     UPDATE jobs

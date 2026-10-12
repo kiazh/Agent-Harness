@@ -14,43 +14,9 @@ import asyncpg
 from ah.core.config import config
 from ah.core.exceptions import DatabaseError
 from ah.core.metrics import metrics
+from ah.db.lazy import parse_command_count  # noqa: F401  (single impl; re-export)
 
 logger = logging.getLogger(__name__)
-
-
-def parse_command_count(result: str | None) -> int:
-    """Parse the count from an asyncpg command result string (e.g. 'DELETE 3' -> 3).
-
-    Handles various formats: 'DELETE 3', 'UPDATE 1', 'INSERT 0 1', etc.
-    Returns 0 if the result is None, empty, or cannot be parsed.
-    Mocks returning non-strings are treated as 1 (success) to stay
-    backward-compatible with unit tests using AsyncMock.
-    """
-    if result is None:
-        return 0
-    if isinstance(result, int) and not isinstance(result, bool):
-        return result
-    if not isinstance(result, str):
-        # AsyncMock / MagicMock in tests: truthy mock means 1 row.
-        try:
-            if result:
-                return 1
-            return 0
-        except Exception:
-            return 0
-    if not result:
-        return 0
-    try:
-        parts = result.split()
-    except Exception:
-        return 1
-    if not parts:
-        return 0
-    # The count is always the last token in asyncpg command results
-    try:
-        return int(parts[-1])
-    except (ValueError, IndexError, TypeError):
-        return 0
 
 
 class Database:

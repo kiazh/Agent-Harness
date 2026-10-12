@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ah.core.provider import audit_log
-from ah.db.connection import db
+from ah.db.lazy import LazyDb
 from ah.memory.models import MemoryEntry
 from ah.security.secrets import get_secret
 
@@ -38,6 +38,7 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 # Simple sentiment words for consistency checking
+db = LazyDb()
 _POSITIVE_WORDS = {
     "great",
     "good",

@@ -15,7 +15,7 @@ from typing import Any
 
 from ah.core.provider import LLMProvider
 from ah.core.usage import usage_store
-from ah.db.connection import db
+from ah.db.lazy import LazyDb
 from ah.memory.models import MemoryEntry, RetrievedMemory
 from ah.memory.persona import EmotionTopology, PersonaMemoryStore
 from ah.memory.store import MemoryStore, memory_store
@@ -26,6 +26,7 @@ __all__ = ["MemoryRetriever"]
 logger = logging.getLogger(__name__)
 
 # Default number of results to return
+db = LazyDb()
 DEFAULT_TOP_K = 5
 
 # Weight for dense vs sparse in hybrid scoring

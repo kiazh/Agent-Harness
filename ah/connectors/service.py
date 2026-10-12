@@ -58,7 +58,7 @@ class ConnectorService:
         self._config(connector_id)
         return {"id": connector_id, "disconnected": await self.manager.disconnect(connector_id)}
 
-    async def tools_list(self, connector_id: str) -> list[dict[str, Any]]:
+    async def tools_list(self, connector_id: str) -> dict[str, Any]:
         """Bounded catalog (names + descriptions); requires a live connection.
 
         Schemas stay server-side until tools_describe: discovery must not
@@ -67,15 +67,18 @@ class ConnectorService:
         connection = self._live_connection(connector_id)
         tools, truncated = await connection.list_tools()
         stored = self.manager.registry.set_tools(connector_id, tools)
-        return [
-            {
-                "name": tool.name,
-                "remote_name": tool.remote_name,
-                "description": tool.description,
-                "verdict": classify_tool(self._config(connector_id), tool),
-            }
-            for tool in stored
-        ] + ([{"truncated": True}] if truncated else [])
+        return {
+            "tools": [
+                {
+                    "name": tool.name,
+                    "remote_name": tool.remote_name,
+                    "description": tool.description,
+                    "verdict": classify_tool(self._config(connector_id), tool),
+                }
+                for tool in stored
+            ],
+            "truncated": bool(truncated),
+        }
 
     async def tools_describe(self, name: str) -> dict[str, Any]:
         """Full schema + policy verdict for one namespaced tool."""

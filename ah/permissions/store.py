@@ -43,7 +43,12 @@ async def _db() -> Any | None:
         from ah.db.connection import db
 
         return db if db.connected else None
-    except Exception:
+    except Exception as error:
+        # Degraded, not silent: callers fall back to the memory store and
+        # report local-only durability via is_durable().
+        from ah.observability.diagnostics import record_failure
+
+        record_failure("permissions.store", error)
         return None
 
 
@@ -72,11 +77,21 @@ def _parse_ts(value: Any) -> datetime | None:
 
 
 def _grant_live(grant: dict, *, now: datetime | None = None) -> bool:
-    """Expiry + revocation + binding check, applied immediately before execution."""
+    """Expiry + revocation + binding check, applied immediately before execution.
+
+    A present-but-unparseable ``expires_at`` fails closed (not live): only an
+    absent expiry means "never expires". Stored timestamps are typed, so this
+    guards hand-built or legacy rows, never the normal path.
+    """
     if grant.get("revoked"):
         return False
-    exp = _parse_ts(grant.get("expires_at"))
-    if exp is not None and exp <= (now or _utcnow()):
+    raw = grant.get("expires_at")
+    if raw is None:
+        return True
+    exp = _parse_ts(raw)
+    if exp is None:
+        return False
+    if exp <= (now or _utcnow()):
         return False
     return True
 

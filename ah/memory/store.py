@@ -12,7 +12,7 @@ from typing import Any
 
 from ah.core.provider import audit_log
 from ah.core.serialization import embedding_to_str, str_to_embedding
-from ah.db.connection import db, parse_command_count
+from ah.db.lazy import LazyDb, parse_command_count
 from ah.memory.identity import MemoryProvenance, identity_gate
 from ah.memory.models import MemoryEntry
 from ah.memory.redaction import SecretRedactor
@@ -21,6 +21,8 @@ from ah.security.secrets import get_secret
 __all__ = ["MemoryStore", "memory_store"]
 
 logger = logging.getLogger(__name__)
+
+db = LazyDb()
 
 
 class MemoryStore:

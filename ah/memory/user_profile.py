@@ -15,10 +15,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ah.core.provider import audit_log
-from ah.db.connection import db
-from ah.memory.redaction import _default_redactor, redact_secrets
 
 #: Profile ids usable for per-profile agent scopes (`harness-<slug>`).
+from ah.db.lazy import LazyDb
+from ah.memory.redaction import _default_redactor, redact_secrets
+
+db = LazyDb()
 PROFILE_ID_RE = r"[a-z0-9][a-z0-9-]{0,39}"
 
 

@@ -58,8 +58,12 @@ def _retryable_connect_error(error: Exception) -> bool:
     }:
         return True
     # Imported only after requiring the SDK; its HTTP transport uses httpx2.
-    from httpx2 import NetworkError, TimeoutException
-
+    try:
+        from httpx2 import NetworkError, TimeoutException
+    except Exception:
+        # Optional dependency absent: classify with stdlib types only so the
+        # original connection error is never masked by an ImportError.
+        return False
     return isinstance(error, (NetworkError, TimeoutException))
 
 

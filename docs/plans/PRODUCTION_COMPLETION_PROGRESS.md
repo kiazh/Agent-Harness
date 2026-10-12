@@ -87,6 +87,45 @@ The v1.0.0 release gate remains open until operational requirements are verified
     Linux and non-editable fresh-install verification remain in progress.
 16. v1.0.0 — gated on all preceding requirements.
 
+## Production-readiness handoff P1/P2 (2026-10-12)
+
+- P1 items 1–13 fixed with failing-first regressions
+  (`tests/test_production_readiness_p1.py`, 20 tests, all RED→GREEN verified by
+  reverting each fix). P2 items 14–18 verified/fixed
+  (`tests/test_production_readiness_p2.py`, 21 tests).
+- Fixes: orchestrator `agent=None` guard; empty-env fallback (except
+  `reasoning_effort`); unknown-key rejection; auto-compact `record_failure`
+  (plus two newly found unguarded escapes: `begin_mutation` failure and the
+  status base-dict config reads); estimate `definition_prompt` init; new
+  `context_chunks.document_source` identity + pipeline/batch persistence +
+  distinct-source counting; honest status fallback (`disabled`/`unknown`);
+  recent-context `(created_at, id)` ordering; `None`-timestamp compression sort;
+  typed `CompressOutcome` (+ backward-compatible wrapper); approval-resume
+  `.get("result_preview", "")`; guarded `httpx2` import; structured
+  `tools_list` (`tests/test_connectors_service.py` updated); batch vector cast
+  verified on PG 16.15; runtime probes via `to_thread`; shared scheduler finish
+  helpers; Windows bootstrap `BrokenPipeError` handling; metrics allowlisted
+  `JsonFormatter`.
+- Full backend (dedicated test DB, `not load`): **2172 passed, 1 failed
+  (`test_context_windows.py::test_effective_turn_budget_prefers_session_then_provider_then_config`
+  — fails identically on clean HEAD, pre-existing), 5 skipped**. Ruff check +
+  format clean; Bandit medium/high gate passes with no new suppressions.
+- Evidence: `FEATURE_LEDGER.md` (Production-readiness fixes table),
+  `DEBUGGING_REPORT.md` (2026-10-12 pass).
+- P3 gates 19–24 remain open (staging, backup/restore, alerts, lockfile +
+  artifact, budgets, MCP scope). v1.0.0 stays gated.
+
+## Debug pass (2026-10-12, user-requested full look-through)
+
+- Import-cycle fix (D-01): nine modules moved to `ah.db.lazy`; per-key
+  `Config.load` isolation. `tests/test_config_import_cycle.py` (5 tests).
+- `_turn_model` session-first precedence (D-02); pre-existing suite failure fixed.
+- Permission-store hardening (D-03): `tests/test_debug_permissions_hardening.py`.
+- Stale invariant test updated (D-04); OPERATIONS.md migration warning (D-05).
+- Evidence: `FEATURE_LEDGER.md` debug table, `DEBUGGING_REPORT.md` look-through
+  section. Static sweeps (silent handlers, SQL-vs-schema) triaged; Tier-1 hits
+  resolved or documented with direction analysis.
+
 ## Environment checks
 
 - Windows Python 3.12.10 and Node installed; dedicated PostgreSQL test database.

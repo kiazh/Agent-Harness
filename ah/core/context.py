@@ -18,11 +18,13 @@ from ah.core.serialization import (
     str_to_embedding,
 )
 from ah.core.text_search import build_or_tsquery
-from ah.db.connection import db
+from ah.db.lazy import LazyDb
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["ContextChunk", "ContextManager", "context_manager"]
+
+db = LazyDb()
 
 
 def _search_text_for(payload: dict[str, Any]) -> str | None:
@@ -62,17 +64,31 @@ class ContextManager:
         payload: dict[str, Any],
         token_count: int = 0,
         embedding: list[float] | None = None,
+        document_source: str | None = None,
     ) -> ContextChunk:
         """Add a context chunk."""
         payload_msgpack = payload_to_msgpack(payload)
         embedding_str = None
         if embedding is not None:
             embedding_str = embedding_to_str(embedding)
+        if document_source is None and chunk_type == "document":
+            try:
+                src = payload.get("source")
+                if isinstance(src, str) and src:
+                    document_source = src
+                else:
+                    meta = payload.get("metadata")
+                    if isinstance(meta, dict):
+                        msrc = meta.get("source")
+                        if isinstance(msrc, str) and msrc:
+                            document_source = msrc
+            except Exception:
+                document_source = None
         row = await db.fetchrow(
             """
-            INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
+            INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
             """,
             session_id,
             agent_id,
@@ -81,6 +97,7 @@ class ContextManager:
             token_count,
             embedding_str,
             _search_text_for(payload),
+            document_source,
         )
         return self._row_to_chunk(row)
 
@@ -91,7 +108,7 @@ class ContextManager:
         """Insert multiple context chunks in a single batch operation.
 
         Each dict in *chunks* must have keys: session_id, agent_id, chunk_type, payload.
-        Optional keys: token_count, embedding.
+        Optional keys: token_count, embedding, document_source.
 
         This is significantly faster than calling add_chunk() in a loop because
         it uses a single executemany() instead of N individual INSERTs.
@@ -106,6 +123,21 @@ class ContextManager:
             embedding_str = None
             if c.get("embedding") is not None:
                 embedding_str = embedding_to_str(c["embedding"])
+            doc_src = c.get("document_source")
+            if doc_src is None and c.get("chunk_type") == "document":
+                try:
+                    payload = c["payload"]
+                    src = payload.get("source")
+                    if isinstance(src, str) and src:
+                        doc_src = src
+                    else:
+                        meta = payload.get("metadata")
+                        if isinstance(meta, dict):
+                            msrc = meta.get("source")
+                            if isinstance(msrc, str) and msrc:
+                                doc_src = msrc
+                except Exception:
+                    doc_src = None
             records.append(
                 (
                     c["session_id"],
@@ -115,6 +147,7 @@ class ContextManager:
                     c.get("token_count", 0),
                     embedding_str,
                     _search_text_for(c["payload"]),
+                    doc_src,
                 )
             )
 
@@ -130,9 +163,9 @@ class ContextManager:
         # back in one round-trip, avoiding the executemany + extra fetch.
         rows = await db.fetch(
             """
-            INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text)
-            SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::bytea[], $6::int[], $7::text[]::vector[], $8::text[])
-            RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
+            INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
+            SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::bytea[], $6::int[], $7::text[]::vector[], $8::text[], $9::text[])
+            RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
             """,
             [r[0] for r in records_with_ids],
             [r[1] for r in records_with_ids],
@@ -142,6 +175,7 @@ class ContextManager:
             [r[5] for r in records_with_ids],
             [r[6] for r in records_with_ids],
             [r[7] for r in records_with_ids],
+            [r[8] for r in records_with_ids],
         )
         return [self._row_to_chunk(r) for r in rows]
 
@@ -310,7 +344,7 @@ class ContextManager:
             SELECT payload_msgpack, chunk_type, token_count
             FROM context_chunks
             WHERE session_id = $1
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT $2
             """,
             session_id,

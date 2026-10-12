@@ -255,6 +255,7 @@ class Orchestrator:
         # Phase 4.5/6 + LP-08: same factory/accounting/cancellation pipeline
         # as normal turns. Child authority = definition ∩ parent caps, and the
         # broker enforces it at execution (not just on the stored agent).
+        agent = None
         if self._agent_factory is not None:
             agent = self._agent_factory(definition)
         else:
@@ -303,7 +304,7 @@ class Orchestrator:
                 record_failure("orchestrator.delegate", _boundary_error)
             # AH-AUDIT-026: shared owner-aware cleanup contract (bounded;
             # custom test factories inject shared agents that stay open).
-            if getattr(self, "_owns_factory_agents", False):
+            if getattr(self, "_owns_factory_agents", False) and agent is not None:
                 try:
                     from ah.core.agent_factory import close_agent_provider
 

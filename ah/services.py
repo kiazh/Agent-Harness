@@ -18,12 +18,31 @@ from ah.observability.diagnostics import record_failure
 
 __all__ = [
     "ServiceError",
+    "CompressOutcome",
     "compress_session",
+    "compress_session_with_status",
     "maybe_auto_compact",
     "export_markdown",
     "learn_skill",
     "status_summary",
 ]
+
+
+from dataclasses import dataclass
+
+
+@dataclass
+class CompressOutcome:
+    """Typed compression outcome (no-op/stale/failure are distinct, not None).
+
+    status: no_op | completed | stale_ownership | stale_snapshot | failed | busy
+    result: CompressionResult when completed, else None.
+    error: bounded diagnostic for failed (never raw payloads).
+    """
+
+    status: str
+    result: CompressionResult | None = None
+    error: str = ""
 
 
 class ServiceError(Exception):
@@ -90,6 +109,108 @@ def _compression_config() -> CompressionConfig:
     )
 
 
+async def compress_session_with_status(
+    session: Session,
+    *,
+    model: str | None = None,
+    provider: str | None = None,
+    mutation_token: str | None = None,
+) -> CompressOutcome:
+    """Compress with an explicit status (see CompressOutcome).
+
+    Ownership (LP-11): same fencing as compress_session. Stale ownership and
+    stale snapshots abort with rollback and distinct statuses, never partial.
+    Unexpected failures are recorded and returned as failed (bounded error).
+    """
+    from ah.core.turns import begin_mutation, end_mutation
+
+    owned = mutation_token is None
+    if owned:
+        try:
+            mutation_token = await begin_mutation(session.id)
+        except Exception as exc:
+            record_failure("services.compress_session", exc)
+            return CompressOutcome(status="failed", error=type(exc).__name__)
+        if not mutation_token:
+            return CompressOutcome(status="busy")
+    llm_provider = None
+    try:
+        all_chunks = await context_manager.get_all_chunks(session.id)
+        chunks = [c for c in all_chunks if c.chunk_type != "document"]
+        if not chunks:
+            return CompressOutcome(status="no_op")
+
+        comp_config = _compression_config()
+        if comp_config.llm_summarize:
+            from ah.core.provider import get_provider
+
+            try:
+                llm_provider = get_provider(
+                    provider=provider or config.get("provider"), model=model or config.get("model")
+                )
+            except Exception:
+                llm_provider = None
+
+        from ah.core.compression import ContextCompressor as _CC
+
+        compressor = _CC(config=comp_config)
+        if hasattr(compressor, "acompress"):
+            result = await compressor.acompress(
+                chunks=chunks,
+                session_id=session.id,
+                agent_id=session.agent_id,
+                llm_provider=llm_provider,
+            )
+        else:
+            result = ContextCompressor(config=comp_config).compress(
+                chunks=chunks,
+                session_id=session.id,
+                agent_id=session.agent_id,
+                llm_provider=llm_provider,
+            )
+        if result.original_count == 0:
+            return CompressOutcome(status="no_op", result=result)
+        from ah.core.exceptions import StaleOwnershipError, StaleSnapshotError
+
+        try:
+            await context_manager.replace_chunks_by_ids(
+                session.id,
+                [c.id for c in chunks],
+                result.compressed_chunks,
+                archive_reason="compressed",
+                expected_owner=mutation_token,
+            )
+        except StaleOwnershipError as exc:
+            return CompressOutcome(status="stale_ownership", error=type(exc).__name__)
+        except StaleSnapshotError as exc:
+            return CompressOutcome(status="stale_snapshot", error=type(exc).__name__)
+        return CompressOutcome(status="completed", result=result)
+    except Exception as exc:
+        record_failure("services.compress_session", exc)
+        return CompressOutcome(status="failed", error=type(exc).__name__)
+    finally:
+        try:
+            close = getattr(llm_provider, "close", None)
+            if callable(close):
+                try:
+                    import asyncio as _asyncio
+                    import inspect as _inspect
+
+                    r = close()
+                    if _inspect.isawaitable(r):
+                        await _asyncio.wait_for(r, timeout=5)
+                except Exception as e:
+                    import logging as _logging
+
+                    _logging.getLogger(__name__).warning("compression provider close failed: %s", e)
+        finally:
+            if owned:
+                try:
+                    await end_mutation(session.id, mutation_token)
+                except Exception as _boundary_error:
+                    record_failure("services.compress_session", _boundary_error)
+
+
 async def compress_session(
     session: Session,
     *,
@@ -97,15 +218,11 @@ async def compress_session(
     provider: str | None = None,
     mutation_token: str | None = None,
 ) -> CompressionResult | None:
-    """Compress a session's context in place.
+    """Compress a session's context in place (backward-compatible wrapper).
 
-    Returns ``None`` when there is nothing to compress. Uses LLM summarization
-    when enabled and a provider can be built, otherwise truncation.
-
-    Ownership (LP-11): when *mutation_token* is None a claim is held for the
-    whole operation; when supplied (explicit /compress already holds one) it
-    is verified still current BEFORE the destructive replacement, and a stale
-    snapshot aborts instead of replacing under a newer owner.
+    Returns the CompressionResult on completion, else None for no-op, busy,
+    or stale outcomes. Unexpected failures raise (legacy behavior) — use
+    compress_session_with_status when the distinction matters.
     """
     from ah.core.turns import begin_mutation, end_mutation
 
@@ -226,6 +343,7 @@ async def _estimate_next_request(session_id, budget: int) -> int:
     from ah.core.assembler import get_token_count
 
     total = 0
+    definition_prompt = ""
     # Stored context tokens (actual message content)
     try:
         total += await context_manager.get_token_usage(session_id)
@@ -306,7 +424,14 @@ async def maybe_auto_compact(session_id) -> dict | None:
         record_failure("services.maybe_auto_compact", _boundary_error)
     from ah.core.turns import begin_mutation, end_mutation
 
-    token = await begin_mutation(session_id)
+    # Claim acquisition is inside the recorder too: a failing begin_mutation
+    # is a degraded deferral (never an unhandled task exception) reported
+    # through the same operation name.
+    try:
+        token = await begin_mutation(session_id)
+    except Exception as _claim_error:
+        record_failure("services.maybe_auto_compact", _claim_error)
+        return None
     if not token:
         return None  # busy: defer, do not queue behind live work
     try:
@@ -379,7 +504,8 @@ async def maybe_auto_compact(session_id) -> dict | None:
             "evicted": evicted,
             "method": result.method,
         }
-    except Exception:
+    except Exception as _compact_error:
+        record_failure("services.maybe_auto_compact", _compact_error)
         return None
     finally:
         try:
@@ -457,6 +583,24 @@ def learn_skill(
         raise ServiceError(f"Skill rejected: {e}") from None
 
 
+def _safe_config_value(cfg, key: str) -> Any:
+    """Read a config value or report unknown — never raise out of status."""
+    try:
+        value = cfg.get(key)
+        return value if value is not None else "unknown"
+    except Exception as _boundary_error:
+        record_failure("services.status_summary", _boundary_error)
+        return "unknown"
+
+
+def _safe_config_bool(cfg, key: str) -> bool:
+    try:
+        return bool(cfg.get(key))
+    except Exception as _boundary_error:
+        record_failure("services.status_summary", _boundary_error)
+        return False
+
+
 async def status_summary() -> dict[str, Any]:
     """Database, counts, mode, and real capability health.
 
@@ -480,7 +624,7 @@ async def status_summary() -> dict[str, Any]:
         retrieval = {"mode": "keyword-only"}
     try:
         rag_docs = await db.fetchval(
-            "SELECT COUNT(DISTINCT (payload_msgpack)) FROM context_chunks WHERE chunk_type = 'document'"
+            "SELECT COUNT(DISTINCT COALESCE(document_source, id::text)) FROM context_chunks WHERE chunk_type = 'document'"
         )
     except Exception:
         rag_docs = 0
@@ -516,9 +660,9 @@ async def status_summary() -> dict[str, Any]:
             "ask",
             "host",
             "",
-            "passthrough",
-            True,
-            "ready",
+            "unknown",
+            False,
+            "unknown",
         )
     try:
         # AH-AUDIT-021: durable paused state plus legacy error rows.
@@ -537,9 +681,10 @@ async def status_summary() -> dict[str, Any]:
             "SELECT COUNT(*) FROM pending_memories WHERE status = 'pending'"
         ),
         "tools": registry.list_tools(),
-        "openrouterKeySet": bool(config.get("openrouter_api_key")),
-        "model": config.get("model"),
-        "provider": config.get("provider"),
+        # Total config failure must never crash the endpoint: report unknown.
+        "openrouterKeySet": _safe_config_bool(config, "openrouter_api_key"),
+        "model": _safe_config_value(config, "model"),
+        "provider": _safe_config_value(config, "provider"),
     }
     base.update(
         {

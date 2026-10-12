@@ -15,7 +15,9 @@ from typing import Any
 from ah.core.assembler import get_token_count
 from ah.core.config import config
 from ah.core.exceptions import DatabaseError, UsageBudgetExceededError, ValidationError
-from ah.db.connection import db, parse_command_count
+from ah.db.lazy import LazyDb, parse_command_count
+
+db = LazyDb()
 
 
 def _limits() -> dict[str, int]:

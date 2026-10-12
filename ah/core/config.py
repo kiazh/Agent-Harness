@@ -356,8 +356,13 @@ class Config:
         else:
             for name in names:
                 value = os.environ.get(name)
-                if value is not None:
-                    return validate_value(key, value)
+                if value is None:
+                    continue
+                # Empty env values are absent for normal keys; only
+                # reasoning_effort="" is an explicit provider-default signal.
+                if key != "reasoning_effort" and str(value).strip() == "":
+                    continue
+                return validate_value(key, value)
         value = getattr(self, key, None)
         return value if value is not None and value != "" else DEFAULTS.get(key)
 
@@ -375,6 +380,9 @@ class Config:
         """
         if key.startswith("_"):
             raise ValueError(f"Cannot set private key: {key}")
+        if key not in DEFAULTS:
+            valid = ", ".join(sorted(DEFAULTS.keys()))
+            raise ValueError(f"Unknown config key: {key!r}. Valid keys: {valid}")
         coerced = validate_value(key, value)
         previous = getattr(self, key, None)
         setattr(self, key, coerced)
@@ -431,21 +439,30 @@ class Config:
 
         # Load from file if it exists. AH-AUDIT-042: invalid values are
         # rejected with a warning and the default kept — never activated.
+        # Per-key isolation: one unreadable key (e.g. a startup import-cycle
+        # failure) must never discard the entire file.
         if load_path.exists():
+            file_data: dict = {}
             try:
                 with open(load_path) as f:
                     file_data = yaml.safe_load(f) or {}
-                for key, value in file_data.items():
-                    if key in DEFAULTS and key not in SECRET_KEYS:
-                        try:
-                            setattr(config, key, validate_value(key, value))
-                        except ValueError as e:
-                            logger.warning(
-                                "Ignoring invalid config %s in %s: %s", key, load_path, e
-                            )
-                logger.debug("Config loaded from %s", load_path)
             except Exception as e:
                 logger.warning("Failed to load config from %s: %s", load_path, e)
+            else:
+                logger.debug("Config loaded from %s", load_path)
+            for key, value in file_data.items():
+                if key in DEFAULTS and key not in SECRET_KEYS:
+                    try:
+                        setattr(config, key, validate_value(key, value))
+                    except ValueError as e:
+                        logger.warning("Ignoring invalid config %s in %s: %s", key, load_path, e)
+                    except Exception as e:
+                        logger.warning(
+                            "Ignoring unreadable config %s in %s: %s",
+                            key,
+                            load_path,
+                            type(e).__name__,
+                        )
 
         # Environment and backends are resolved live by get(), so rotation
         # never leaves a stale credential copied into file configuration.

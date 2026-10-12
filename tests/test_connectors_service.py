@@ -88,7 +88,9 @@ def test_mismatched_inventory_is_refused():
 async def test_connect_describe_and_disconnect_contracts():
     service, _clients = setup_service()
     assert (await service.connect("alpha"))["state"] == "connected"
-    tools = await service.tools_list("alpha")
+    out = await service.tools_list("alpha")
+    assert out["truncated"] is False
+    tools = out["tools"]
     assert tools == [
         {
             "name": "alpha__echo",
@@ -136,8 +138,8 @@ async def test_duplicate_remote_tool_names_remain_distinct_across_connectors():
     service, _clients = setup_service()
     await service.connect("alpha")
     await service.connect("beta")
-    alpha = await service.tools_list("alpha")
-    beta = await service.tools_list("beta")
+    alpha = (await service.tools_list("alpha"))["tools"]
+    beta = (await service.tools_list("beta"))["tools"]
     assert alpha[0]["name"] == "alpha__echo" and beta[0]["name"] == "beta__echo"
     assert (await service.tools_describe("alpha__echo"))["verdict"] == "trusted_read"
     assert (await service.tools_describe("beta__echo"))["verdict"] == "needs_approval"
@@ -147,6 +149,7 @@ async def test_catalog_truncation_is_reported_without_schemas():
     service, clients = setup_service()
     await service.connect("alpha")
     clients[0].truncated = True
-    tools = await service.tools_list("alpha")
-    assert tools[-1] == {"truncated": True}
-    assert all("schema" not in item for item in tools)
+    out = await service.tools_list("alpha")
+    assert out["truncated"] is True
+    assert all("schema" not in item for item in out["tools"])
+    assert all(set(item) == {"name", "remote_name", "description", "verdict"} for item in out["tools"])

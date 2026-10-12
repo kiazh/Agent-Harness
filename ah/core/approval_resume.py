@@ -59,10 +59,14 @@ async def resume_action_stream(agent, session_id, record: dict, arguments: dict)
     async for event in agent._execute_tool_calls_stream(response, [], made, session_id):
         yield event
     pauses = [entry["needs_approval"] for entry in made if "needs_approval" in entry]
+    if made:
+        content = made[0].get("result_preview", "") or "continuation ended"
+    else:
+        content = "continuation ended"
     yield StreamEvent(
         type="done",
         response=AgentResponse(
-            content=made[0]["result_preview"] if made else "continuation ended",
+            content=content,
             tool_calls=made,
             needs_approval=pauses,
         ),

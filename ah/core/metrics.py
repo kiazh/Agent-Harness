@@ -17,7 +17,38 @@ logger = logging.getLogger("ah.metrics")
 
 
 class JsonFormatter(logging.Formatter):
-    """Format log records as structured JSON."""
+    """Format log records as structured JSON (allowlisted extras only)."""
+
+    # Bounded diagnostic fields that may enter structured logs. Everything
+    # else (prompts, completions, tool args/results, credentials, raw
+    # exception payloads) is dropped so extra attributes cannot smuggle
+    # sensitive content into logs.
+    ALLOWED_EXTRA_KEYS = frozenset(
+        {
+            "operation",
+            "op",
+            "session_id",
+            "agent_id",
+            "tool",
+            "tool_name",
+            "request_id",
+            "turn_id",
+            "job_id",
+            "sessionId",
+            "agentId",
+            "count",
+            "tokens",
+            "duration_ms",
+            "error_class",
+            "error_type",
+            "status",
+            "mode",
+            "backend",
+            "reason",
+            "kind",
+        }
+    )
+    MAX_EXTRA_VALUE_CHARS = 500
 
     def format(self, record: logging.LogRecord) -> str:
         log_data = {
@@ -50,7 +81,27 @@ class JsonFormatter(logging.Formatter):
                 "exc_text",
                 "stack_info",
             }:
-                log_data[key] = value
+                if key not in self.ALLOWED_EXTRA_KEYS:
+                    continue
+                text = value
+                if isinstance(text, str):
+                    if len(text) > self.MAX_EXTRA_VALUE_CHARS:
+                        text = text[: self.MAX_EXTRA_VALUE_CHARS] + "...[truncated]"
+                    # Belt-and-braces: redact secret-looking values even in allowed keys.
+                    try:
+                        from ah.memory.redaction import redact_secrets as _redact
+
+                        text = _redact(text).text
+                    except Exception:
+                        pass
+                elif not isinstance(text, (int, float, bool)):
+                    try:
+                        text = str(text)
+                    except Exception:
+                        continue
+                    if len(text) > self.MAX_EXTRA_VALUE_CHARS:
+                        text = text[: self.MAX_EXTRA_VALUE_CHARS] + "...[truncated]"
+                log_data[key] = text
         return json.dumps(log_data, default=str)
 
 

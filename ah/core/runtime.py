@@ -112,9 +112,11 @@ class RuntimeServices:
                 report["skills"] = len(skill_registry.list_skills())
             except Exception as e:
                 report["skills_error"] = str(e)
-            report.update(_detect_providers())
-            report.update(_detect_sandbox())
-            report.update(_detect_toggles())
+            # Blocking probes (docker subprocess, ollama socket) must not stall
+            # the event loop: run detection in worker threads with same timeouts.
+            report.update(await asyncio.to_thread(_detect_providers))
+            report.update(await asyncio.to_thread(_detect_sandbox))
+            report.update(await asyncio.to_thread(_detect_toggles))
             self.capabilities = _capabilities_from_report(report)
             self._started = True
             self._last_report = report
@@ -130,9 +132,9 @@ class RuntimeServices:
                 report["db"] = "ready" if db.connected else "unavailable"
             except Exception:
                 report["db"] = "unavailable"
-            report.update(_detect_providers())
-            report.update(_detect_sandbox())
-            report.update(_detect_toggles())
+            report.update(await asyncio.to_thread(_detect_providers))
+            report.update(await asyncio.to_thread(_detect_sandbox))
+            report.update(await asyncio.to_thread(_detect_toggles))
             self.capabilities = _capabilities_from_report(report)
             self._last_report = report
             return self.status()

@@ -90,6 +90,11 @@ CREATE INDEX IF NOT EXISTS idx_context_chunks_session_eviction
 CREATE INDEX IF NOT EXISTS idx_context_chunks_embedding ON context_chunks
     USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
+-- Stable document identity (do not count serialized payloads): one source may
+-- own many chunks; identical payloads from distinct sources are distinct docs.
+ALTER TABLE context_chunks ADD COLUMN IF NOT EXISTS document_source TEXT;
+CREATE INDEX IF NOT EXISTS idx_context_chunks_doc_source ON context_chunks(document_source)
+    WHERE chunk_type = 'document';
 
 -- ─── Context Archive (reversible eviction) ─────────────────────────────────
 

@@ -114,3 +114,80 @@ git diff --check
   passing coverage of those unexecuted coroutine paths.
 - Bandit's configured medium/high gate passes after the explained false positives;
   low-severity findings remain. A passing scanner is not a general security guarantee.
+
+## Production-readiness pass (2026-10-12)
+
+Handoff items P1 1–13 (correctness) + P2 14–18 (verification). Method: reproduce each
+bug against current source (shell reproduction for config empty-env/unknown-key;
+code-path analysis for the rest), write the regression test, observe it fail on the
+unfixed code (verified RED by reverting each fix: P1-01/02/03/04/06/07/09/11/13 and
+P2-17/18), then fix and observe GREEN. No commits performed.
+
+Notable finds during the pass (fixed, not just tested):
+
+- `maybe_auto_compact` had two unguarded escapes beyond the reported silent
+  `except: return None`: a `begin_mutation` failure raised out of the function
+  (unhandled task exception on the fire-and-forget auto-compact path), and the
+  `status_summary` base dict called `config.get` outside any guard, so a total
+  config failure crashed the status endpoint instead of degrading. Both now go
+  through `record_failure` with conservative fallbacks.
+- `get_recent_context` was the only context query without the `(created_at, id)`
+  tiebreak; fixed to match.
+- `compress_session` conflated five outcomes into `None`; added
+  `compress_session_with_status` returning typed `CompressOutcome` while the
+  legacy wrapper keeps its `result/None`-or-raise contract for existing callers.
+- Document counting had no stable identity at all (distinct serialized payloads);
+  added `context_chunks.document_source`, persisted by the RAG pipeline and both
+  batch/single insert paths, counted as `COUNT(DISTINCT COALESCE(document_source,
+  id::text))`.
+- `JsonFormatter` serialized arbitrary extra attributes (prompts, completions,
+  tool args/results, credentials could enter structured logs); now allowlisted,
+  bounded, redacted, with numerics preserved.
+
+Remaining open (P3 gates 19–24, not verifiable in this workspace): staging
+deployment, backup/restore drill, alert delivery, dependency lockfile + release
+artifact, production usage budgets, MCP scope decision. See
+`docs/plans/PRODUCTION_COMPLETION_PROGRESS.md`. The v1.0.0 gate stays open.
+
+## Full look-through (2026-10-12, user-requested)
+
+Method: gateway-log triage of a live turn failure → import-order reproduction
+matrix → traceback capture (`sys.exception()` inside the logging handler) →
+cycle mapping via package-init analysis → fix → subprocess regression tests in
+three import orders → full-suite verification. Plus a static sweep (two
+subagents: silent `except` handlers, SQL columns vs schema) with targeted
+triage of Tier-1 hits, and diagnosis of the one pre-existing suite failure.
+
+### Confirmed defects and corrections
+
+| Area | Root cause and correction | Regression evidence |
+| --- | --- | --- |
+| Config silently discarded (import cycle) | First-`ah.db.connection` import order ran `Config.load` while `connection` was partial: `config.load → validate(persona) → ah.memory init → approval → provider → usage → from ah.db.connection import db` → `ImportError`, and the all-or-nothing loader discarded all 56 keys (wrong model/provider/mode downstream). Nine cycle members now use the import-safe `ah.db.lazy` proxy (`LazyDb` + moved `parse_command_count`, re-exported); `Config.load` isolates per key. | `tests/test_config_import_cycle.py` (5 tests; db-first, per-key, and delegation tests verified RED on old code) |
+| Turn capacity precedence | `_turn_model` preferred provider over session, contradicting the spec test (failed on clean HEAD). Session scope now wins; provider/config back it up. | `test_context_windows.py` (now green) |
+| Permission-store silence | `_db()` fallback logged nothing; unparseable `expires_at` authorized. Fallback now `record_failure`s; garbage expiry fails closed (matches `policy._grant_usable`); NULL stays live. | `tests/test_debug_permissions_hardening.py` (6 tests; 3 RED on old code) |
+| Live-turn outage during P1 series | New `document_source` column shipped in `schema.sql` but never migrated on the live DB (gateway does not self-migrate); first turn crashed with `UndefinedColumnError`. Migrated prod manually, smoke-tested batch insert/delete, and documented the `ah init`-before-workers requirement in OPERATIONS.md. Boot behavior intentionally unchanged. | gateway log turn `58c3ee9f`, smoke test |
+| Stale invariant test | `TestCircularImport` asserted the top-level connection import that caused the cycle; updated to the lazy invariant. | updated test green |
+
+### Triaged and left alone (with reason)
+
+- `turns.py::_live_claim` expiry-parse fail-open (`True`): the safe direction
+  for a lock (never steal a possibly-live claim); DB timestamps never fail
+  parsing in production.
+- `session.py::update_state_fields` corrupt-blob fallback (`{}`): requires a
+  corrupt msgpack blob; row lock already excludes concurrent writers.
+- ~30 remaining silent handlers in the sweep: documented fail-closed/fail-open
+  fallbacks on display, timeout, and mock-compat paths; no authorization or
+  ownership bypass found among them. `turns.py`/`scheduler.py` fencing checks
+  fail closed throughout.
+- SQL-vs-schema sweep: zero referenced columns missing; explicit projections
+  raise loudly on un-migrated DBs by design (fail fast, as observed).
+
+### Verification snapshot
+
+- Backend: final full run **2184 passed, 5 skipped, 0 failed** (dedicated
+  test DB, `not load`); the pre-existing `test_context_windows` failure from
+  the earlier run is fixed by D-02.
+- UI `npm --prefix ui run check`: 251 passed / 0 failed / 5 skipped; eslint clean.
+- Ruff check + format, Bandit medium/high (no new suppressions), `git diff --check` clean.
+- No commits performed. P3 gates (staging, backup/restore, alerts, lockfile +
+  artifact, budgets, MCP scope) remain open; v1.0.0 stays gated.
