@@ -156,6 +156,13 @@ else
   fi
 fi
 START_DIR="$PWD"
+# Make APP_DIR absolute BEFORE cd-ing into it: INSTALL_LIB below is built from
+# $APP_DIR and is checked after the cd, so a relative APP_DIR (e.g. ./machina)
+# would resolve to <checkout>/<checkout>/tools/... and falsely report "Missing".
+case "$APP_DIR" in
+  /*) : ;;
+  *) APP_DIR="$PWD/${APP_DIR#./}" ;;
+esac
 cd "$APP_DIR" || die "Cannot cd to $APP_DIR"
 
 # Testable installer primitives (function definitions only; sourcing has no
