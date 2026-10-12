@@ -2,11 +2,11 @@
 # Machina zero-friction installer.
 #
 # Just works:
-#   curl -fsSL https://raw.githubusercontent.com/kiazh/Machina/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/kiazh/Machina-Harness/main/install.sh | bash
 #
 # With options (note the `--` after `-s` when piping via curl):
-#   curl -fsSL https://raw.githubusercontent.com/kiazh/Machina/main/install.sh | bash -s -- --dir ~/machina --dev
-#   curl -fsSL https://raw.githubusercontent.com/kiazh/Machina/main/install.sh | bash -s -- --interactive
+#   curl -fsSL https://raw.githubusercontent.com/kiazh/Machina-Harness/main/install.sh | bash -s -- --dir ~/machina --dev
+#   curl -fsSL https://raw.githubusercontent.com/kiazh/Machina-Harness/main/install.sh | bash -s -- --interactive
 #
 # Local:
 #   ./install.sh [--dir DIR] [--dev] [--no-ui] [--interactive] [--yes] [--with-docker-db|--no-docker-db] [--skip-init]
@@ -26,7 +26,7 @@
 #
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/kiazh/Machina.git}"
+REPO_URL="${REPO_URL:-https://github.com/kiazh/Machina-Harness.git}"
 INSTALL_DIR="${MACHINA_INSTALL_DIR:-}"
 DO_DEV=0
 DO_UI=1

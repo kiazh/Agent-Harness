@@ -2,7 +2,7 @@
 
 A self-hosted AI agent with a terminal UI, PostgreSQL-backed conversations and memory, tools, delegation, and runtime learning.
 
-[![CI](https://github.com/kiazh/Machina/actions/workflows/ci.yml/badge.svg)](https://github.com/kiazh/Machina/actions/workflows/ci.yml)
+[![CI](https://github.com/kiazh/Machina-Harness/actions/workflows/ci.yml/badge.svg)](https://github.com/kiazh/Machina-Harness/actions/workflows/ci.yml)
 [![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Version 0.2.0.** This is a development release candidate. Local verification is recorded in [release readiness](docs/verification/RELEASE_READINESS.md); production deployment gates remain open. No live-provider quality or performance improvement is claimed from fixture tests.
@@ -29,7 +29,7 @@ A self-hosted AI agent with a terminal UI, PostgreSQL-backed conversations and m
 ### One-command installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kiazh/Machina/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kiazh/Machina-Harness/main/install.sh | bash
 ```
 
 The [installer](install.sh) clones into `./machina`, or reuses a checkout,
@@ -51,14 +51,14 @@ your shell startup file. The URL installs the published `main` checkout.
 Prompt for an OpenRouter key during the installation:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kiazh/Machina/main/install.sh | bash -s -- --interactive
+curl -fsSL https://raw.githubusercontent.com/kiazh/Machina-Harness/main/install.sh | bash -s -- --interactive
 ```
 
 Choose an installation directory or avoid automatic database/PATH changes:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kiazh/Machina/main/install.sh | bash -s -- --dir ~/machina
-curl -fsSL https://raw.githubusercontent.com/kiazh/Machina/main/install.sh | bash -s -- --no-auto-db --no-shell-rc
+curl -fsSL https://raw.githubusercontent.com/kiazh/Machina-Harness/main/install.sh | bash -s -- --dir ~/machina
+curl -fsSL https://raw.githubusercontent.com/kiazh/Machina-Harness/main/install.sh | bash -s -- --no-auto-db --no-shell-rc
 ```
 
 Other installer options: `--dev`, `--no-ui`, `--with-docker-db`,
@@ -87,7 +87,7 @@ account or API credit.
 Requirements: Python **3.11+**, Node.js **22.19+** for the TUI, and PostgreSQL **16+** with **pgvector**. Configure a supported provider key, or an accessible Ollama server for local models.
 
 ```bash
-git clone https://github.com/kiazh/Machina.git
+git clone https://github.com/kiazh/Machina-Harness.git
 cd Machina
 python3 -m venv .venv
 source .venv/bin/activate
