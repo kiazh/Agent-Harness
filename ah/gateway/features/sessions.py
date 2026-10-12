@@ -16,7 +16,7 @@ from ah.gateway.serializers import chunk_preview, json_safe_payload, session_to_
 if TYPE_CHECKING:
     from ah.gateway.server import Gateway
 
-from ah.gateway.features._common import _int, _str, _uuid
+from ah.gateway.features._common import _int, _iso, _str, _uuid
 
 
 async def session_fork(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
@@ -135,7 +135,7 @@ async def session_recall(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
                 "source": hit.source,
                 "preview": hit.preview,
                 "score": hit.score,
-                "occurredAt": hit.occurred_at.isoformat(),
+                "occurredAt": _iso(hit.occurred_at),
             }
             for hit in hits
         ]
@@ -161,7 +161,7 @@ async def session_recall_window(gw: Gateway, params: dict[str, Any]) -> dict[str
                 "type": message.chunk_type,
                 "source": message.source,
                 "payload": json_safe_payload(message.payload),
-                "occurredAt": message.occurred_at.isoformat(),
+                "occurredAt": _iso(message.occurred_at),
             }
             for message in messages
         ]

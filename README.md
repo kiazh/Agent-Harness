@@ -34,9 +34,10 @@ curl -fsSL https://raw.githubusercontent.com/kiazh/Agent-Harness/main/install.sh
 
 The [installer](install.sh) clones into `./agent-harness`, or reuses a checkout,
 creates a Python virtual environment, installs the backend and TUI dependencies,
-creates/fills `.env`, generates API/provenance keys, and tries to initialize the
-database. If initialization fails, it attempts local PostgreSQL provisioning
-through Docker, then Homebrew on macOS where available. It installs an `ah`
+creates/fills `.env`, generates API/provenance keys, and automatically runs
+`ah init` to initialize the database. If initialization fails, it attempts local
+PostgreSQL provisioning through Docker, then Homebrew on macOS where available.
+It installs an `ah`
 launcher and adds it to your shell PATH. It preserves custom database URLs.
 
 Have Python 3.11+, Git, curl and Node.js 22.19+/npm installed first. Database
@@ -57,7 +58,7 @@ Choose an installation directory or avoid automatic database/PATH changes:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kiazh/Agent-Harness/main/install.sh | bash -s -- --dir ~/agent-harness
-curl -fsSL https://raw.githubusercontent.com/kiazh/Agent-Harness/main/install.sh | bash -s -- --no-auto-db --no-shell-rc --skip-init
+curl -fsSL https://raw.githubusercontent.com/kiazh/Agent-Harness/main/install.sh | bash -s -- --no-auto-db --no-shell-rc
 ```
 
 Other installer options: `--dev`, `--no-ui`, `--with-docker-db`,
@@ -70,14 +71,16 @@ After installation:
 ```bash
 # Restart your terminal, or update PATH for this shell:
 export PATH="$HOME/.local/bin:$PATH"
-ah setup                  # add a provider key or choose local-model settings
+ah setup                  # do this first: configure provider and database settings
 ah doctor                 # inspect prerequisites, keys and database health
 ah                        # open the terminal UI
 ```
 
-If the installer reported incomplete database setup, set `DATABASE_URL` and run
-`ah init` before chatting. Cloud API credentials are yours to supply; the
-installer does not create a provider account or API credit.
+If the installer reported incomplete database setup, set `DATABASE_URL` in
+`ah setup` and run `ah init` before chatting. If setup changes the database URL
+after a successful install, run `ah init` again for that database. Cloud API
+credentials are yours to supply; the installer does not create a provider
+account or API credit.
 
 ### Manual source installation
 
@@ -162,6 +165,16 @@ rerank pipeline. PostgreSQL lexical indexes provide search without an embedding
 service; configured embeddings add semantic similarity. Persona-aware ranking
 can influence which memories are relevant. Neither retrieval nor storage makes
 a model's unsupported claims true: retrieved material remains evidence to assess.
+
+For current web research, `web_research` searches DuckDuckGo by default (or an
+optional configured SearXNG instance), fetches up to three public pages through
+the guarded HTTP fetcher, and indexes their text with source URLs in the active
+session's RAG context. Later turns can retrieve those pages with
+`search_documents`. The indexed research belongs to that session and agent; it
+does not become global knowledge. Use the returned source URLs when citing
+claims. Repeated URLs reuse the saved session snapshot. `web_search` remains
+available for discovery without fetching or saving
+pages.
 
 ### Skills, delegation and installing more
 
@@ -251,7 +264,7 @@ Stdio runs on the host and is refused in sandbox mode. HTTP redirects and enviro
 | Local models | Ollama | Local inference through an accessible Ollama service |
 | Document embeddings | OpenAI-compatible embeddings | Semantic document retrieval; default `text-embedding-3-small` |
 | Document reranking | Cohere or passthrough fallback | Optional reranking after retrieval |
-| Web search and extraction | SearXNG, DuckDuckGo, direct HTTP text extraction | Search/fetch tools with network policy checks |
+| Web search and extraction | DuckDuckGo by default; optional SearXNG; direct HTTP text extraction | Search/fetch tools with network policy checks and session-scoped web research in RAG |
 | MCP | Python MCP SDK **2.3.0**, stdio and Streamable HTTP | Reviewed server connection and native remote tool execution |
 | Skills and roles | Bundled Markdown + pinned manifests | 42 curated ECC skills and 71 ECC specialist roles, loaded selectively |
 | Configuration | YAML + environment + python-dotenv | Non-secret defaults and environment-based overrides |
@@ -382,7 +395,7 @@ Important settings include `DATABASE_URL`, `AGENT_HARNESS_PROVIDER`, `AGENT_HARN
 | `AGENT_HARNESS_MAX_TOKENS` | Requested provider response length | `4096`; separate from prompt capacity |
 | `AGENT_HARNESS_MAX_ITERATIONS` | Agent loop iteration bound | `10` |
 | `AGENT_HARNESS_TURN_TIMEOUT` | Turn deadline in seconds | `300` |
-| `SEARXNG_URL` | SearXNG search endpoint | `http://localhost:8080` |
+| `SEARXNG_URL` | Optional SearXNG search endpoint; blank uses DuckDuckGo | blank |
 | `AGENT_HARNESS_TERMINAL_SANDBOX` | Terminal backend setting | `disabled`; configure `local` or `docker` as appropriate |
 | `AH_ENV_FILE` | Alternate secret/environment file | Default resolver uses the project environment file |
 | `AH_UI_DIR` | TUI source directory override | Useful for backend wheel installs |

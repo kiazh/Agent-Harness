@@ -39,11 +39,25 @@ def _clean_text(value: str) -> str:
         return value
 
 
+def _clean_preference_keys(value: Any) -> Any:
+    """Redact user-controlled mapping keys without rewriting transport schemas."""
+    if isinstance(value, dict):
+        return {
+            _clean_text(key) if isinstance(key, str) else key: _clean_preference_keys(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_clean_preference_keys(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_clean_preference_keys(item) for item in value)
+    return value
+
+
 def _clean_preferences(preferences: dict[str, Any]) -> dict[str, Any]:
     """Recursively redact secret-looking values in a preferences mapping."""
     try:
         cleaned, _ = _default_redactor._redact_value(dict(preferences))
-        return cleaned if isinstance(cleaned, dict) else {}
+        return _clean_preference_keys(cleaned) if isinstance(cleaned, dict) else {}
     except Exception:
         return preferences
 
@@ -109,16 +123,17 @@ class UserProfile:
 
     def set_preference(self, key: str, value: Any) -> None:
         """Set a preference key-value pair."""
+        key = _clean_text(key)
         try:
             cleaned, _ = _default_redactor._redact_value(value)
         except Exception:
             cleaned = value
-        self.preferences[key] = cleaned
+        self.preferences[key] = _clean_preference_keys(cleaned)
         self.updated_at = datetime.now(UTC)
 
     def get_preference(self, key: str, default: Any = None) -> Any:
         """Get a preference value by key."""
-        return self.preferences.get(key, default)
+        return self.preferences.get(_clean_text(key), default)
 
     def get_top_topics(self, n: int = 5) -> list[tuple[str, int]]:
         """Get the top N topics by frequency."""

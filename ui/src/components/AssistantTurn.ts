@@ -1,19 +1,30 @@
-// Plain assistant turn: dim/static `●` prefix with immediate Markdown
-// rendering, no card background or border. Streaming deltas extend the block.
+// Assistant prose in a quiet square frame. Streaming deltas extend the block;
+// only its one-cell heading marker animates while text is arriving.
 
-import { Markdown, truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { Markdown, type Component } from "@earendil-works/pi-tui";
 import { BLOCK_GAP } from "../design/tokens.ts";
-import { transcriptInset } from "../design/spacing.ts";
+import { ACTIVITY_INTERVAL_MS, type ActivitySource } from "../design/motion.ts";
 import { markdownTheme } from "../theme.ts";
 import { theme } from "../theme.ts";
+import { assistantPanelContentWidth, renderAssistantPanel } from "./ToolPanel.ts";
 
 export class AssistantTurn implements Component {
 	private readonly md: Markdown;
 	private content: string;
+	private readonly activity: ActivitySource | undefined;
+	private streaming = false;
+	private startedAt = 0;
 
-	constructor(text = "") {
+	constructor(text = "", activity?: ActivitySource) {
 		this.content = text;
+		this.activity = activity;
 		this.md = new Markdown(text, 0, 0, markdownTheme, { color: theme.text });
+	}
+
+	setStreaming(active: boolean): void {
+		if (this.streaming === active) return;
+		this.streaming = active;
+		if (active) this.startedAt = Date.now();
 	}
 
 	append(delta: string): void {
@@ -37,14 +48,11 @@ export class AssistantTurn implements Component {
 	}
 
 	render(width: number): string[] {
-		const total = Math.max(0, width);
-		const gutter = " ".repeat(transcriptInset(width));
-		const inner = Math.max(1, Math.min(110, width - gutter.length - 2));
-		const rows = this.md.render(inner);
-		const out = rows.map((line, i) =>
-			i === 0 ? `${theme.dim("●")} ${truncateToWidth(line, inner)}` : `  ${truncateToWidth(line, inner)}`,
-		);
-		return [...BLOCK_GAP, ...out.map((line) => truncateToWidth(gutter + line, total))];
+		const rows = this.md.render(assistantPanelContentWidth(width));
+		const frame = this.streaming
+			? this.activity?.frame(["·", "•", "●", "•"], ACTIVITY_INTERVAL_MS, this.startedAt) ?? "·"
+			: " ";
+		return [...BLOCK_GAP, ...renderAssistantPanel(rows, width, theme.accent(frame))];
 	}
 
 	invalidate(): void {

@@ -478,6 +478,54 @@ const SKINS: Record<string, SkinDef> = {
 			neutral: "#f4f4f5",
 		},
 	},
+	linen: {
+		description: "Warm paper · terracotta and violet accents (light)",
+		art: ["  ┌─────┐", "  │LINEN│", "  │  AH │", "  └─────┘"],
+		base: {
+			text: "#302b2a",
+			muted: "#625a57",
+			dim: "#716c69",
+			accent: "#88513e",
+			secondary: "#5956a6",
+			success: "#2f6d4d",
+			warning: "#8a5b13",
+			error: "#aa3540",
+			info: "#27677b",
+			neutral: "#f7f1e7",
+		},
+	},
+	lagoon: {
+		description: "Sea glass · teal and lilac accents (light)",
+		art: ["  ┌─────┐", "  │LAG  │", "  │ OON │", "  └─────┘"],
+		base: {
+			text: "#18353a",
+			muted: "#44656a",
+			dim: "#5d7073",
+			accent: "#236a7b",
+			secondary: "#7054aa",
+			success: "#276c55",
+			warning: "#8a5f22",
+			error: "#a7424a",
+			info: "#316386",
+			neutral: "#eaf4f2",
+		},
+	},
+	afterglow: {
+		description: "Twilight ink · lavender and peach accents (dark)",
+		art: ["  ┌─────┐", "  │AFTER│", "  │ GLOW│", "  └─────┘"],
+		base: {
+			text: "#eeeaf7",
+			muted: "#adb4cc",
+			dim: "#828aa9",
+			accent: "#d9b3f5",
+			secondary: "#f4aeac",
+			success: "#9fd6c5",
+			warning: "#e9c783",
+			error: "#f08d9f",
+			info: "#8fcce2",
+			neutral: "#191b2d",
+		},
+	},
 };
 
 export const SKIN_NAMES: string[] = Object.keys(SKINS);
@@ -614,6 +662,12 @@ export function repairFill(bg: PaletteName, filledLine: string): string {
 		.split(FULL_RESET)
 		.join(`${FULL_RESET}${open}`);
 	return `${open}${repaired}${BG_CLOSE}`;
+}
+
+/** Keep draft ink explicit across the editor's reverse-video cursor reset. */
+export function styleComposerText(line: string): string {
+	const ink = foregroundAnsi(colors().text, mode);
+	return `${ink}${line.split(FULL_RESET).join(`${FULL_RESET}${ink}`)}\x1b[39m`;
 }
 
 /** Remove background color sequences while keeping foreground styling. */

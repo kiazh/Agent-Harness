@@ -25,7 +25,7 @@ class RecallHit:
     source: RecallSource
     preview: str
     score: float
-    occurred_at: datetime
+    occurred_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,7 @@ class RecallMessage:
     chunk_type: str
     source: Literal["live", "archive"]
     payload: dict[str, Any]
-    occurred_at: datetime
+    occurred_at: datetime | None
 
 
 class SessionRecall:

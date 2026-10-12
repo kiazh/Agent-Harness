@@ -80,6 +80,7 @@ BUILTIN_AGENTS: dict[str, AgentDef] = {
             "search_files",
             "web_search",
             "web_extract",
+            "web_research",
             "search_documents",
             "recall",
             "learn_personality",

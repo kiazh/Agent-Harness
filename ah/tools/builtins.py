@@ -10,7 +10,7 @@ import re
 import socket
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -52,7 +52,96 @@ class _DuckDuckGoLinks(HTMLParser):
 def _parse_duckduckgo_results(html: str) -> list[tuple[str, str]]:
     parser = _DuckDuckGoLinks()
     parser.feed(html)
-    return parser.results
+    results = []
+    for href, title in parser.results:
+        url = _canonical_result_url(href)
+        if url and title:
+            results.append((url, title))
+    return results
+
+
+def _canonical_result_url(href: str) -> str | None:
+    """Unwrap DuckDuckGo result redirects into public HTTP(S) source URLs."""
+    try:
+        url = f"https:{href}" if href.startswith("//") else href
+        parts = urlparse(url)
+        if (parts.hostname or "").lower() in {
+            "duckduckgo.com",
+            "www.duckduckgo.com",
+        } and parts.path.startswith("/l/"):
+            url = parse_qs(parts.query).get("uddg", [""])[0]
+            parts = urlparse(url)
+        host = (parts.hostname or "").lower().rstrip(".")
+        if parts.scheme not in {"http", "https"} or not host or parts.username or parts.password:
+            return None
+        _ = parts.port  # Reject malformed ports before showing a link to the agent.
+        if host in {"localhost", "localhost.localdomain"}:
+            return None
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            pass
+        else:
+            if not address.is_global:
+                return None
+        return parts._replace(fragment="").geturl()
+    except ValueError:
+        return None
+
+
+async def _search_web_results(query: str, limit: int = 5) -> list[tuple[str, str, str]]:
+    """Return validated (title, URL, snippet) search results."""
+    results: list[tuple[str, str, str]] = []
+    searxng_url = config.get("searxng_url")
+    if searxng_url:
+        try:
+            probe = f"{str(searxng_url).rstrip('/')}/search"
+            if not _is_safe_url(probe):
+                raise ValidationError(f"SearXNG URL rejected by security policy: {searxng_url}")
+        except ValidationError:
+            searxng_url = None
+    if searxng_url:
+        try:
+            resp = await asyncio.to_thread(
+                httpx.get,
+                f"{str(searxng_url).rstrip('/')}/search",
+                params={"q": query, "format": "json"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for item in data.get("results", [])[:limit]:
+                    url = _canonical_result_url(str(item.get("url", "")))
+                    title = str(item.get("title", "No title")).strip()
+                    if url and title:
+                        results.append((title, url, str(item.get("content", ""))[:300]))
+                if results:
+                    return results
+        except httpx.TimeoutException:
+            pass
+        except httpx.HTTPError:
+            pass
+        except Exception as error:
+            record_failure("builtins.web_search", error)
+
+    try:
+        resp = await asyncio.to_thread(
+            httpx.get,
+            "https://html.duckduckgo.com/html/",
+            params={"q": query},
+            timeout=10,
+            headers={"User-Agent": "AgentHarness/0.1"},
+        )
+        if resp.status_code == 200:
+            results = [(title, url, "") for url, title in _parse_duckduckgo_results(resp.text)]
+            return results[:limit]
+    except httpx.TimeoutException:
+        pass
+    except httpx.HTTPError:
+        pass
+    except Exception as error:
+        record_failure("builtins.web_search", error)
+    return []
 
 
 def _getaddrinfo_timeout(hostname: str, timeout: float = 3.0):
@@ -131,67 +220,15 @@ async def web_search(query: str, limit: int = 5) -> str:
     if not query or not query.strip():
         raise ValidationError("Empty search query")
 
-    # Try SearXNG first (self-hosted)
-    searxng_url = config.get("searxng_url")
-    if searxng_url:
-        try:
-            probe = f"{str(searxng_url).rstrip('/')}/search"
-            if not _is_safe_url(probe):
-                raise ValidationError(f"SearXNG URL rejected by security policy: {searxng_url}")
-        except ValidationError:
-            searxng_url = None
-    if searxng_url:
-        try:
-            resp = await asyncio.to_thread(
-                httpx.get,
-                f"{str(searxng_url).rstrip('/')}/search",
-                params={"q": query, "format": "json"},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                results = data.get("results", [])[:limit]
-                if results:
-                    lines = [f"Search results for '{query}':"]
-                    for r in results:
-                        lines.append(f"\n  {r.get('title', 'No title')}")
-                        lines.append(f"  {r.get('url', '')}")
-                        lines.append(f"  {r.get('content', '')[:200]}")
-                    return "\n".join(lines)
-        except httpx.TimeoutException:
-            pass
-        except httpx.HTTPError:
-            pass
-        except Exception as _boundary_error:
-            # Optional fallback preserves the primary outcome; report no payload.
-            record_failure("builtins.web_search", _boundary_error)
-
-    # Fallback: DuckDuckGo HTML
-    try:
-        resp = await asyncio.to_thread(
-            httpx.get,
-            "https://html.duckduckgo.com/html/",
-            params={"q": query},
-            timeout=10,
-            headers={"User-Agent": "AgentHarness/0.1"},
-        )
-        if resp.status_code == 200:
-            results = _parse_duckduckgo_results(resp.text)
-            if results:
-                lines = [f"Search results for '{query}':"]
-                for url, title in results[:limit]:
-                    lines.append(f"\n  {title}")
-                    lines.append(f"  {url}")
-                return "\n".join(lines)
-    except httpx.TimeoutException:
-        pass
-    except httpx.HTTPError:
-        pass
-    except Exception as _boundary_error:
-        # Optional fallback preserves the primary outcome; report no payload.
-        record_failure("builtins.web_search", _boundary_error)
-
-    raise ToolError(f"Search failed for '{query}'. No results.")
+    results = await _search_web_results(query, limit=max(1, min(int(limit), 10)))
+    if not results:
+        raise ToolError(f"Search failed for '{query}'. No results.")
+    lines = [f"Search results for '{query}':"]
+    for title, url, snippet in results:
+        lines.extend((f"\n  {title}", f"  {url}"))
+        if snippet:
+            lines.append(f"  {snippet[:200]}")
+    return "\n".join(lines)
 
 
 class _ExtractedText(HTMLParser):
@@ -227,10 +264,15 @@ async def web_extract(url: str) -> str:
     by the shared pinned fetch. TLS verifies the original host; every redirect
     undergoes the same public-address policy.
     """
-    from ah.security.fetch import FetchError, pinned_fetch
-
     if not url or not url.strip():
         raise ValidationError("Empty URL")
+    return await extract_url_text(url)
+
+
+async def extract_url_text(url: str) -> str:
+    """Fetch and extract bounded page text through the SSRF-safe fetcher."""
+    from ah.security.fetch import FetchError, pinned_fetch
+
     try:
         content = await asyncio.to_thread(pinned_fetch, url.strip(), max_bytes=20_000, timeout=30)
     except FetchError as error:

@@ -127,7 +127,7 @@ DEFAULTS: dict[str, Any] = {
     "xai_api_key": "",
     "cohere_api_key": "",
     "database_url": "",
-    "searxng_url": "http://localhost:8080",
+    "searxng_url": "",
     "agent_harness_home": "",
     "tmpdir": "",
     "temp": "",
@@ -316,7 +316,7 @@ class Config:
     xai_api_key: str = field(default="", repr=False)
     cohere_api_key: str = field(default="", repr=False)
     database_url: str = field(default="", repr=False)
-    searxng_url: str = "http://localhost:8080"
+    searxng_url: str = ""
     agent_harness_home: str = ""
     tmpdir: str = ""
     temp: str = ""

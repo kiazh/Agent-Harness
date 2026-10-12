@@ -24,7 +24,7 @@ import { sanitizeDisplay } from "./design/text.ts";
 import { LIMITS } from "./design/tokens.ts";
 import { transcriptInset } from "./design/spacing.ts";
 import { Menu } from "./components/Menu.ts";
-import { repairFill, theme } from "./theme.ts";
+import { repairFill, styleComposerText, theme } from "./theme.ts";
 
 export { Footer } from "./components/Footer.ts";
 
@@ -134,7 +134,7 @@ export function popAbove(lines: string[], popupHeight: number): string[] {
 /**
  * Codex-style composer input: the pi-tui Editor with its rules replaced by
  * filled rows, so the input reads as one solid block instead of ruled lines.
- * Scroll position survives via a dim `↑ N more` marker.
+ * Scroll position survives via a muted `↑ N more` marker.
  */
 export class ComposerInput extends Editor {
     onPaste?: (text: string) => boolean;
@@ -164,19 +164,21 @@ export class ComposerInput extends Editor {
     }
 
 	override renderTopBorder(_width: number, hiddenLineCount: number): string {
-		if (hiddenLineCount > 0) return theme.dim(`↑ ${hiddenLineCount} more`);
+		if (hiddenLineCount > 0) return theme.muted(`↑ ${hiddenLineCount} more`);
 		return "";
 	}
 
 	override renderBottomBorder(_width: number, hiddenLineCount: number): string {
-		if (hiddenLineCount > 0) return theme.dim(`↓ ${hiddenLineCount} more`);
+		if (hiddenLineCount > 0) return theme.muted(`↓ ${hiddenLineCount} more`);
 		return "";
 	}
 
 	override render(width: number): string[] {
 		const lines = super.render(width);
 		const { renderedAutocompleteHeight: popupHeight } = this as unknown as EditorPopupLayout;
-		return popAbove(lines, popupHeight);
+		const textEnd = lines.length - popupHeight - 1;
+		const colored = lines.map((line, index) => index > 0 && index < textEnd ? styleComposerText(line) : line);
+		return popAbove(colored, popupHeight);
 	}
 
 	override handleMouse(event: TuiMouseEvent): ReturnType<Editor["handleMouse"]> {
@@ -198,7 +200,7 @@ export class ComposerInput extends Editor {
 	}
 }
 
-/** Dim composer placeholder, Codex style (the Editor cannot render its own). */
+/** Muted composer placeholder (the Editor cannot render its own). */
 export const COMPOSER_PLACEHOLDER = "Ask anything, or type / for commands.";
 
 /**
@@ -241,7 +243,7 @@ export function createLayout(transcript: Component, composer: Component, footer:
 /**
  * Codex-style composer: a filled input block with a left accent bar. Wraps
  * the Editor in a background box — focus and input stay on the inner
- * editor. While the editor is empty, a dim placeholder fills the same rows
+ * editor. While the editor is empty, a muted placeholder fills the same rows
  * so the block never jumps in height.
  */
 export class ComposerBox extends Box {
@@ -277,7 +279,7 @@ export class ComposerBox extends Box {
 		};
 		const bar = theme.accent(ICONS.composerBar);
 		if (this.degradedMode) {
-			return [`${bar} ${fill(theme.dim(truncateToWidth("Too small — resize to continue (draft kept)", inner)))}`].map(
+			return [`${bar} ${fill(theme.muted(truncateToWidth("Too small — resize to continue (draft kept)", inner)))}`].map(
 				(line) => truncateToWidth(line, Math.max(0, width)),
 			);
 		}
@@ -285,7 +287,7 @@ export class ComposerBox extends Box {
 		// going through super.render would double-fill via the Box.
 		let body: string[];
 		if (this.editor.getText() === "") {
-			const placeholder = fill(theme.dim(truncateToWidth(`> ${COMPOSER_PLACEHOLDER}`, inner)));
+			const placeholder = fill(theme.muted(truncateToWidth(`> ${COMPOSER_PLACEHOLDER}`, inner)));
 			body = this.maxRows >= 3 ? [fill(""), placeholder, fill("")] : [placeholder];
 		} else {
 			const rendered = this.editor.render(inner);

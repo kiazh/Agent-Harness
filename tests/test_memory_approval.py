@@ -17,10 +17,12 @@ from ah.memory.redaction import (
     RedactionResult,
     SecretRedactor,
     redact_secrets,
+    redact_value,
 )
 from ah.memory.user_profile import (
     UserProfile,
     UserProfileStore,
+    _clean_preferences,
 )
 
 
@@ -141,6 +143,14 @@ MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy...
         result = redactor.redact_dict(data)
         assert result.was_redacted
         assert "sk-abc123" not in result.text
+
+    def test_profile_preferences_redact_nested_keys(self):
+        secret = "sk-abc123def456ghi789jkl012mno345"
+        assert secret not in str(_clean_preferences({secret: {secret: "safe"}}))
+
+    def test_redact_value_preserves_structural_keys(self, monkeypatch):
+        monkeypatch.setattr("ah.security.secrets.known_secret_values", lambda: ["learning"])
+        assert redact_value({"learning": "safe"}) == {"learning": "safe"}
 
     def test_convenience_function(self):
         result = redact_secrets("password = secret123")
@@ -367,6 +377,18 @@ class TestUserProfile:
         profile = UserProfile(id=uuid.uuid4(), user_id="test")
         profile.set_preference("theme", "dark")
         assert profile.get_preference("theme") == "dark"
+
+    def test_set_preference_redacts_secret_key(self):
+        profile = UserProfile(id=uuid.uuid4(), user_id="test")
+        secret = "sk-abc123def456ghi789jkl012mno345"
+        profile.set_preference(secret, "dark")
+        assert secret not in str(profile.to_dict())
+
+    def test_get_preference_uses_the_same_redacted_key_as_set(self):
+        profile = UserProfile(id=uuid.uuid4(), user_id="test")
+        secret = "sk-abc123def456ghi789jkl012mno345"
+        profile.set_preference(secret, "dark")
+        assert profile.get_preference(secret) == "dark"
 
     def test_get_preference_default(self):
         profile = UserProfile(id=uuid.uuid4(), user_id="test")

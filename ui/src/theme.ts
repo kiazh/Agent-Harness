@@ -17,6 +17,7 @@ export {
 	selectionBar,
 	semanticPalette,
 	setSkin,
+	styleComposerText,
 	skinArt,
 	skinBase,
 	skinDescription,

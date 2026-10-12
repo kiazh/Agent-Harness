@@ -101,6 +101,48 @@ def test_syntax_check_both_files():
         assert proc.returncode == 0, proc.stderr
 
 
+def test_install_progress_is_plain_when_output_is_piped(tmp_path):
+    proc = run_bash(
+        'run_animated "Installing backend" bash -c "printf done\\n"',
+        cwd=tmp_path,
+        env={"TERM": "xterm", "NO_COLOR": "", "CI": ""},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "Installing backend" in proc.stdout
+    assert "done" in proc.stdout
+    assert "\x1b[" not in proc.stdout
+
+
+def test_install_progress_preserves_failure_output_and_status(tmp_path):
+    proc = run_bash(
+        'run_animated "Installing backend" bash -c "echo package-failed >&2; exit 7"',
+        cwd=tmp_path,
+    )
+    assert proc.returncode == 7
+    assert "package-failed" in proc.stderr
+
+
+def test_installer_next_steps_put_setup_before_launch_and_report_init_state(tmp_path):
+    ready = run_bash("installer_next_steps ready /checkout/README.md", cwd=tmp_path)
+    assert ready.returncode == 0, ready.stderr
+    assert "initialized automatically" in ready.stdout
+    assert (
+        ready.stdout.index("ah setup")
+        < ready.stdout.index("ah doctor")
+        < ready.stdout.index("ah chat")
+    )
+    assert "If setup changes DATABASE_URL, run ah init again" in ready.stdout
+
+    failed = run_bash("installer_next_steps failed /checkout/README.md", cwd=tmp_path)
+    assert failed.returncode == 0, failed.stderr
+    assert (
+        failed.stdout.index("ah setup")
+        < failed.stdout.index("ah init")
+        < failed.stdout.index("ah chat")
+    )
+    assert "not ready" in failed.stdout
+
+
 # ─── resolve_env_file ────────────────────────────────────────────────────────
 
 
@@ -305,7 +347,7 @@ def _spawn_ctty(script, cwd, env):
     master, slave = pty.openpty()
     slave_name = os.ttyname(slave)
     merged = _base_env(env)
-    merged["TERM"] = "dumb"
+    merged["TERM"] = (env or {}).get("TERM", "dumb")
 
     def preexec():
         os.setsid()
@@ -358,6 +400,37 @@ def _echo_enabled(master):
         return bool(termios.tcgetattr(master)[3] & termios.ECHO)
     except termios.error:
         return None
+
+
+def test_install_progress_animates_only_on_a_terminal(tmp_path):
+    proc, master, _ = _spawn_ctty(
+        'run_animated "Installing backend" bash -c "sleep 0.35; echo backend-ready"',
+        cwd=tmp_path,
+        env={"TERM": "xterm", "NO_COLOR": "", "CI": ""},
+    )
+    try:
+        transcript = _drain(master, proc).decode("utf-8", "replace")
+        assert proc.wait(timeout=10) == 0, transcript
+        assert "\x1b[2K" in transcript
+        assert "Installing backend" in transcript
+        assert "backend-ready" in transcript
+    finally:
+        os.close(master)
+
+
+def test_install_progress_on_terminal_shows_failure_and_returns_status(tmp_path):
+    proc, master, _ = _spawn_ctty(
+        'run_animated "Installing backend" bash -c "echo package-failed >&2; exit 7"',
+        cwd=tmp_path,
+        env={"TERM": "xterm", "NO_COLOR": "", "CI": ""},
+    )
+    try:
+        transcript = _drain(master, proc).decode("utf-8", "replace")
+        assert proc.wait(timeout=10) == 7, transcript
+        assert "Installing backend" in transcript
+        assert "package-failed" in transcript
+    finally:
+        os.close(master)
 
 
 def test_prompt_hidden_input_round_trip(tmp_path):

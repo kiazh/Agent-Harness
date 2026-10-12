@@ -14,6 +14,8 @@ from ah.memory.redaction import redact_value
 from ah.tools.agents import active_agent_scope
 from ah.tools.base import registry
 
+_MAX_STATUS_BYTES = 8500
+
 
 @registry.register(
     name="harness_status",
@@ -70,28 +72,35 @@ async def harness_status() -> str:
         # Driver failures can contain credential-bearing DSNs; never echo them.
         raise ToolError("Harness status unavailable; current state could not be verified") from None
     safe = redact_value(result)
-    serialized = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
-    if len(serialized) > 8500:
+
+    def _shrink() -> str:
+        return json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
+
+    # Truncation ladder, cheapest context first. The final guard refuses
+    # rather than emitting truncated JSON; every omitted field is marked so
+    # absence is never misread as emptiness.
+    serialized = _shrink()
+    if len(serialized) > _MAX_STATUS_BYTES:
         # Keep JSON valid for the agent's bounded tool-message budget. Never
         # turn omitted notes into evidence that learning has no saved state.
         safe["learning"]["notes"] = {}
         safe["learning"]["notes_omitted"] = "Inspect full notes with /growth show"
-        serialized = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
-    if len(serialized) > 8500:
+        serialized = _shrink()
+    if len(serialized) > _MAX_STATUS_BYTES:
         safe["persona_description"] = None
         safe["persona_description_omitted"] = "Inspect description in the /persona Add editor"
-        serialized = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
-    if len(serialized) > 8500 and safe["learning"]["rsi"].get("trial") is not None:
+        serialized = _shrink()
+    if len(serialized) > _MAX_STATUS_BYTES and safe["learning"]["rsi"].get("trial") is not None:
         safe["learning"]["rsi"]["trial"] = None
         safe["learning"]["rsi"]["trial_omitted"] = "Inspect full trial with /growth show"
-        serialized = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
-    if len(serialized) > 8500 and "installed" in safe:
+        serialized = _shrink()
+    if len(serialized) > _MAX_STATUS_BYTES and "installed" in safe:
         installed = safe["installed"]
         for source, entry in (installed.get("skills_by_source") or {}).items():
             if isinstance(entry, dict) and entry.pop("names", None) is not None:
                 installed.setdefault("installed_omitted", []).append(source)
-        serialized = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
-    if len(serialized) > 8500:
+        serialized = _shrink()
+    if len(serialized) > _MAX_STATUS_BYTES:
         # Corrupt/legacy state must not defeat the tool-message bound and yield
         # truncated JSON. Refuse safely instead of implying omitted data is empty.
         raise ToolError("Harness status exceeds the response limit; inspect /persona and /growth")

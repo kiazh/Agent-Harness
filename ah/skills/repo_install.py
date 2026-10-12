@@ -52,6 +52,8 @@ _TEST_SUFFIXES = (
     "_test.py",
     "_test.go",
 )
+_TEST_DIRS_LOWER = frozenset(d.lower() for d in _TEST_DIRS)
+_TEST_SUFFIXES_LOWER = tuple(s.lower() for s in _TEST_SUFFIXES)
 
 # Files that are inventoried and reported but never executed or installed.
 _NEVER_RUN = {
@@ -101,9 +103,13 @@ def parse_repo_url(url: str) -> RepoSource:
     owner, repo = segments[0], segments[1]
     if repo.endswith(".git"):
         repo = repo[: -len(".git")]
-    if not _OWNER_RE.fullmatch(owner) or not _REPO_RE.fullmatch(repo):
-        raise RepoInstallError("invalid owner or repository name")
-    if set(owner) == {"."} or set(repo) == {"."} or ".." in (owner, repo):
+    if (
+        not _OWNER_RE.fullmatch(owner)
+        or not _REPO_RE.fullmatch(repo)
+        or set(owner) == {"."}
+        or set(repo) == {"."}
+        or ".." in (owner, repo)
+    ):
         raise RepoInstallError("invalid owner or repository name")
     ref = ""
     if len(segments) > 2:
@@ -161,6 +167,14 @@ def _git(args: list[str], *, cwd: Path, timeout: int = 60) -> str:
         raise RepoInstallError("repository operation failed") from exc
 
 
+def _abort_clone(parent: Path, message: str, cause: BaseException | None = None) -> None:
+    """Remove a failed clone temp dir, then refuse with a path-free error."""
+    shutil.rmtree(parent, ignore_errors=True)
+    if cause is None:
+        raise RepoInstallError(message)
+    raise RepoInstallError(message) from cause
+
+
 def clone_repo(source: RepoSource, *, _allow_file: bool = False) -> tuple[Path, str]:
     """Shallow-clone into a fresh temp dir; return (dir, revision).
 
@@ -195,16 +209,13 @@ def clone_repo(source: RepoSource, *, _allow_file: bool = False) -> tuple[Path, 
             env=_git_env(),
         )
     except subprocess.TimeoutExpired as exc:
-        shutil.rmtree(parent, ignore_errors=True)
-        raise RepoInstallError("clone timed out") from exc
+        _abort_clone(parent, "clone timed out", exc)
     except subprocess.CalledProcessError as exc:
-        shutil.rmtree(parent, ignore_errors=True)
-        raise RepoInstallError("could not clone that repository") from exc
+        _abort_clone(parent, "could not clone that repository", exc)
     try:
         revision = _git(["rev-parse", "HEAD"], cwd=target).strip()
     except RepoInstallError as exc:
-        shutil.rmtree(parent, ignore_errors=True)
-        raise RepoInstallError("cloned repository has no revision") from exc
+        _abort_clone(parent, "cloned repository has no revision", exc)
     size = 0
     for path in target.rglob("*"):
         try:
@@ -213,8 +224,7 @@ def clone_repo(source: RepoSource, *, _allow_file: bool = False) -> tuple[Path, 
         except OSError:
             continue
         if size > MAX_CLONE_BYTES:
-            shutil.rmtree(parent, ignore_errors=True)
-            raise RepoInstallError("repository exceeds the clone size limit")
+            _abort_clone(parent, "repository exceeds the clone size limit")
     return target, revision
 
 
@@ -284,13 +294,18 @@ def _is_test_path(relative: str) -> bool:
     # exclusions, not a security boundary (nothing executes; the digest
     # review is the gate).
     parts = Path(relative).parts
-    if any(part.lower() in {d.lower() for d in _TEST_DIRS} for part in parts[:-1]):
+    if any(part.lower() in _TEST_DIRS_LOWER for part in parts[:-1]):
         return True
     name = parts[-1].lower() if parts else ""
-    return name.endswith(tuple(s.lower() for s in _TEST_SUFFIXES))
+    return name.endswith(_TEST_SUFFIXES_LOWER)
 
 
 _TEXT_SUFFIXES = frozenset({".md", ".markdown", ".mdx", ".txt", ".rst"})
+
+
+def _top(relative: str) -> str:
+    parts = Path(relative).parts
+    return parts[0] if parts else ""
 
 
 def _in_hook_dir(relative: str) -> bool:
@@ -440,10 +455,7 @@ def scan_repo(repo: Path, source: RepoSource, revision: str) -> RepoPlan:
                     relative
                     for relative in sorted(tracked)
                     if relative == "SKILL.md"
-                    or (
-                        (Path(relative).parts[0] if Path(relative).parts else "") not in classified
-                        and (Path(relative).parts[0] if Path(relative).parts else "") != "skills"
-                    )
+                    or (_top(relative) not in classified and _top(relative) != "skills")
                 ]
                 try:
                     total += _collect_members(repo, members, entry, plan, SkillParser)
@@ -607,20 +619,37 @@ def _mcp_drafts(
     return drafts[:10], sorted(set(unreadable))[:10]
 
 
-def _digest_plan(plan: RepoPlan) -> str:
-    canonical = json.dumps(
+def _canonical_plan_bytes(source: str, revision: str, skills: list[dict[str, Any]]) -> bytes:
+    """Canonical digest bytes shared by _digest_plan and activate_plan.
+
+    Both sides must project skills to exactly {"name", "root", "files"} or
+    digests diverge and activation refuses.
+    """
+    return json.dumps(
         {
-            "source": plan.source.url,
-            "revision": plan.revision,
+            "source": source,
+            "revision": revision,
             "skills": [
-                {"name": skill.name, "root": skill.root, "files": skill.files}
-                for skill in plan.skills
+                {"name": skill["name"], "root": skill["root"], "files": skill["files"]}
+                for skill in skills
             ],
         },
         sort_keys=True,
         separators=(",", ":"),
-    )
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    ).encode()
+
+
+def _digest_plan(plan: RepoPlan) -> str:
+    return hashlib.sha256(
+        _canonical_plan_bytes(
+            plan.source.url,
+            plan.revision,
+            [
+                {"name": skill.name, "root": skill.root, "files": skill.files}
+                for skill in plan.skills
+            ],
+        )
+    ).hexdigest()
 
 
 _MAX_STAGED_ENTRIES = 10
@@ -635,16 +664,23 @@ def _staging_key(source: RepoSource, revision: str) -> str:
     return f"{slug}-{revision[:40]}"
 
 
-def _prune_staging(root: Path) -> None:
-    """Bound staging growth: drop entries past the count cap or TTL."""
-    import time
-
+def _staging_entries(root: Path) -> list[Path] | None:
+    """Staging dirs oldest-first, or None when the root is unreadable."""
     try:
-        entries = sorted(
+        return sorted(
             (p for p in root.iterdir() if p.is_dir() and not p.is_symlink()),
             key=lambda p: p.stat().st_mtime,
         )
     except OSError:
+        return None
+
+
+def _prune_staging(root: Path) -> None:
+    """Bound staging growth: drop entries past the count cap or TTL."""
+    import time
+
+    entries = _staging_entries(root)
+    if entries is None:
         return
     now = time.time()
     for stale in entries:
@@ -653,12 +689,8 @@ def _prune_staging(root: Path) -> None:
                 shutil.rmtree(stale, ignore_errors=True)
         except OSError:
             continue
-    try:
-        entries = sorted(
-            (p for p in root.iterdir() if p.is_dir() and not p.is_symlink()),
-            key=lambda p: p.stat().st_mtime,
-        )
-    except OSError:
+    entries = _staging_entries(root)
+    if entries is None:
         return
     for stale in entries[: max(0, len(entries) - _MAX_STAGED_ENTRIES)]:
         shutil.rmtree(stale, ignore_errors=True)
@@ -712,25 +744,12 @@ def write_staged_plan(plan: RepoPlan, repo_dir: Path) -> Path:
     plan_text = json.dumps(detail, indent=2, sort_keys=True) + "\n"
     try:
         (tmp_destination / "plan.json.tmp").write_text(plan_text, encoding="utf-8")
-        with open(tmp_destination / "plan.json.tmp", "rb") as handle:
-            os.fsync(handle.fileno())
+        _fsync_file(tmp_destination / "plan.json.tmp")
         if destination.exists():
             shutil.rmtree(destination, ignore_errors=True)
         os.replace(tmp_destination, destination)
         (destination / "plan.json.tmp").replace(destination / "plan.json")
-        try:
-            # Directory fsync is durability best-effort; platforms without
-            # it (e.g. Windows) still get atomic rename semantics.
-            dir_fd = os.open(str(destination), os.O_RDONLY)
-        except OSError:
-            dir_fd = None
-        if dir_fd is not None:
-            try:
-                os.fsync(dir_fd)
-            except OSError:
-                pass
-            finally:
-                os.close(dir_fd)
+        _fsync_dir(destination, best_effort=True)
     except OSError as exc:
         shutil.rmtree(tmp_destination, ignore_errors=True)
         raise RepoInstallError("could not stage repository files") from exc
@@ -807,44 +826,47 @@ def activate_plan(plan_detail: dict[str, Any], staged: Path, skills_dir: Path) -
         skills.append(
             {"name": skill.get("name", ""), "root": skill.get("root", ""), "files": files}
         )
-    canonical = json.dumps(
-        {
-            "source": plan_detail.get("source", ""),
-            "revision": plan_detail.get("revision", ""),
-            "skills": skills,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    if hashlib.sha256(canonical.encode()).hexdigest() != expected:
+    recomputed = hashlib.sha256(
+        _canonical_plan_bytes(
+            plan_detail.get("source", ""), plan_detail.get("revision", ""), skills
+        )
+    ).hexdigest()
+    if recomputed != expected:
         raise RepoInstallError("staged repository changed since review; stage again")
     # Phase 1 builds every skill into temp dirs: nothing live is touched
     # until all skills verify. Phase 2 renames into place with rollback.
     built: list[tuple[str, Path | None]] = []
-    for skill in skills:
-        built.append(_build_skill(staged, plan_detail, skill, skills_dir))
-    installed: list[str] = []
     try:
-        for name, tmpdir in built:
-            if tmpdir is None:
+        for skill in skills:
+            built.append(_build_skill(staged, plan_detail, skill, skills_dir))
+        installed: list[str] = []
+        committed: list[str] = []
+        try:
+            for name, tmpdir in built:
+                if tmpdir is None:
+                    installed.append(name)
+                    continue
+                try:
+                    os.replace(tmpdir, skills_dir / name.lower())
+                except OSError as exc:
+                    raise RepoInstallError(f"could not install skill '{name}'") from exc
                 installed.append(name)
-                continue
-            try:
-                os.replace(tmpdir, skills_dir / name.lower())
-            except OSError as exc:
-                raise RepoInstallError(f"could not install skill '{name}'") from exc
-            installed.append(name)
-    except RepoInstallError as exc:
-        for done in installed:
-            target = skills_dir / done.lower()
-            if (target / ".install-manifest.json").is_file():
-                shutil.rmtree(target, ignore_errors=True)
-        raise RepoInstallError(
-            f"{exc} (installed before failure and rolled back: "
-            + (", ".join(installed) or "none")
-            + ")"
-        ) from exc
-    return installed
+                committed.append(name)
+        except RepoInstallError as exc:
+            for done in committed:
+                target = skills_dir / done.lower()
+                if (target / ".install-manifest.json").is_file():
+                    shutil.rmtree(target, ignore_errors=True)
+            raise RepoInstallError(
+                f"{exc} (installed before failure and rolled back: "
+                + (", ".join(committed) or "none")
+                + ")"
+            ) from exc
+        return installed
+    finally:
+        for _, tmpdir in built:
+            if tmpdir is not None:
+                shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _verify_installed(
@@ -918,7 +940,9 @@ def _build_skill(
                     f"staged skill manifest failed validation: {relative}"
                 ) from exc
     prefix = (root + "/") if root else ""
-    tmpdir = skills_dir / f"{safe}.install-{os.getpid()}-{_rand_suffix()}"
+    # Keep incomplete builds out of the registry's direct-child scan, even
+    # if the process dies before the ordinary cleanup path runs.
+    tmpdir = skills_dir / ".install-staging" / f"{safe}.install-{os.getpid()}-{_rand_suffix()}"
     try:
         for relative, digest in sorted(skill["files"].items()):
             if prefix and not relative.startswith(prefix):
@@ -933,8 +957,7 @@ def _build_skill(
             destination = _confined(tmpdir, inner)
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(data)
-            with open(destination, "rb") as handle:
-                os.fsync(handle.fileno())
+            _fsync_file(destination)
         manifest = {
             "source": plan_detail.get("source", ""),
             "revision": plan_detail.get("revision", ""),
@@ -946,13 +969,8 @@ def _build_skill(
         }
         manifest_path = _confined(tmpdir, ".install-manifest.json")
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-        with open(manifest_path, "rb") as handle:
-            os.fsync(handle.fileno())
-        dir_fd = os.open(str(tmpdir), os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+        _fsync_file(manifest_path)
+        _fsync_dir(tmpdir)
     except RepoInstallError:
         shutil.rmtree(tmpdir, ignore_errors=True)
         raise
@@ -960,6 +978,29 @@ def _build_skill(
         shutil.rmtree(tmpdir, ignore_errors=True)
         raise RepoInstallError(f"could not stage skill '{name}'") from exc
     return name, tmpdir
+
+
+def _fsync_file(path: Path) -> None:
+    with open(path, "rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def _fsync_dir(path: Path, *, best_effort: bool = False) -> None:
+    # Staging keeps best-effort durability on platforms without directory
+    # fsync. Skill activation must refuse when its directory sync fails.
+    try:
+        dir_fd = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        if best_effort:
+            return
+        raise
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        if not best_effort:
+            raise
+    finally:
+        os.close(dir_fd)
 
 
 def _rand_suffix() -> str:

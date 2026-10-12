@@ -28,6 +28,7 @@ export class Transcript {
 	private displayed = "";
 	private readonly tools = new Map<string, ToolTurn>();
 	private readonly toolSubs = new Map<string, AnimationSubscription>();
+	private assistantSub: AnimationSubscription | undefined;
 	/** Terminal delivery guard: a repeated completion for this turn is inert. */
 	private lastCompletedTurn: string | undefined;
 
@@ -68,6 +69,7 @@ export class Transcript {
 
 	clear(): void {
 		this.hideSpinner();
+		this.stopAssistant();
 		this.stopTools();
 		this.container.clear();
 		this.current = undefined;
@@ -80,6 +82,12 @@ export class Transcript {
 	private stopTools(): void {
 		for (const sub of this.toolSubs.values()) sub.stop();
 		this.toolSubs.clear();
+	}
+
+	private stopAssistant(): void {
+		this.current?.setStreaming(false);
+		this.assistantSub?.stop();
+		this.assistantSub = undefined;
 	}
 
 	/** Re-resolve theme colors without dropping transcript content (skin switch). */
@@ -110,6 +118,7 @@ export class Transcript {
 	apply(event: GatewayEvent): TurnSummary | undefined {
 		switch (event.type) {
 		case "message.start":
+			this.stopAssistant();
 			this.current = undefined;
 			this.wroteText = false;
 			this.displayed = "";
@@ -119,8 +128,10 @@ export class Transcript {
 		case "message.delta":
 			this.hideSpinner();
 			if (!this.current) {
-				this.current = new AssistantTurn();
+				this.current = new AssistantTurn("", this.activity);
+				this.current.setStreaming(true);
 				this.container.addChild(this.current);
+				this.assistantSub = this.coordinator?.subscribe("assistant:stream", ACTIVITY_INTERVAL_MS);
 			}
 			this.current.append(event.text);
 			this.displayed += event.text;
@@ -128,6 +139,7 @@ export class Transcript {
 			return undefined;
 		case "tool.start": {
 			this.hideSpinner();
+			this.stopAssistant();
 			this.current = undefined; // text after the tool starts a new block
 			const card = new ToolTurn(event.name, event.args, this.activity);
 			this.tools.set(event.id, card);
@@ -155,6 +167,7 @@ export class Transcript {
 				return undefined;
 			case "error":
 				this.hideSpinner();
+				this.stopAssistant();
 				this.addNotice(event.message, "error");
 				return undefined;
 		case "message.stopping":
@@ -177,6 +190,7 @@ export class Transcript {
 				return undefined;
 			case "turn.ownership_lost":
 				this.hideSpinner();
+				this.stopAssistant();
 				this.addNotice("Turn ownership was lost; stopping the running action.", "warning");
 				return undefined;
 		case "turn.cleanup_pending":
@@ -225,6 +239,7 @@ export class Transcript {
 					card.settle({ text: "", backendTruncated: false, locallyTruncated: false }, "outcome_unknown");
 				}
 			}
+			this.stopAssistant();
 			this.stopTools();
 			this.tools.clear();
 			this.current = undefined;
@@ -252,6 +267,7 @@ export class Transcript {
 	/** Stop activity presentation without clearing content (disconnect/exit/switch). */
 	suspend(phase: "stopping" | "cleanup_pending" = "stopping"): void {
 		this.hideSpinner();
+		this.stopAssistant();
 		this.stopTools();
 		for (const card of this.tools.values()) card.setMotionPaused(phase);
 	}

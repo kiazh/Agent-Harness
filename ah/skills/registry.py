@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # Defaults are anchored to the project root, not the current directory, so the
 # same skills are found no matter where `ah` is launched. Override with env vars.
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_LEGACY_INSTALL_BUILD_RE = re.compile(r"[a-z0-9_-]+\.install-[0-9]+-[0-9a-f]{8}")
 
 
 def default_skills_dir() -> Path:
@@ -258,7 +259,7 @@ class SkillRegistry:
         except OSError:
             children = []
         for child in children:
-            if not child.is_dir():
+            if not child.is_dir() or _LEGACY_INSTALL_BUILD_RE.fullmatch(child.name):
                 continue
             try:
                 stat = (child / "SKILL.md").stat()
@@ -335,7 +336,7 @@ class SkillRegistry:
             self._skills.update((skill.name, skill) for skill in self._ecc_bundle.skills())
         if self.skills_dir.exists():
             for skill_dir in sorted(self.skills_dir.iterdir()):
-                if skill_dir.is_dir():
+                if skill_dir.is_dir() and not _LEGACY_INSTALL_BUILD_RE.fullmatch(skill_dir.name):
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists():
                         try:

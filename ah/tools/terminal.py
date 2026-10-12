@@ -83,64 +83,46 @@ def _validate_workdir(workdir: str) -> None:
     raise ValidationError(f"workdir '{workdir}' is not within allowed paths")
 
 
-# AH-AUDIT-010: subprocesses must not inherit provider/gateway/database
-# secrets. Exact secret names plus sensitive suffixes; additional variables
-# only via explicit AGENT_HARNESS_TERMINAL_EXTRA_ENV passthrough.
-_SECRET_ENV_EXACT = frozenset(
+# AH-AUDIT-010: child processes inherit only the platform variables they
+# need to start. Other variables, including credentials with unfamiliar
+# names, require explicit AGENT_HARNESS_TERMINAL_EXTRA_ENV passthrough.
+_CHILD_ENV_ALLOWLIST = frozenset(
     {
-        "OPENROUTER_API_KEY",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "GOOGLE_API_KEY",
-        "GEMINI_API_KEY",
-        "MISTRAL_API_KEY",
-        "GROQ_API_KEY",
-        "TOGETHER_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "XAI_API_KEY",
-        "COHERE_API_KEY",
-        "DATABASE_URL",
-        "AGENT_HARNESS_API_KEY",
-        "AGENT_HARNESS_GATEWAY_TOKEN",
-        "GATEWAY_TOKEN",
-        "PROVENANCE_KEY",
-        "AGENT_HARNESS_PROVENANCE_KEY",
-        "VAULT_TOKEN",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TERM",
+        "VIRTUAL_ENV",
+        "SYSTEMROOT",
+        "WINDIR",
+        "USERPROFILE",
+        "COMSPEC",
+        "PATHEXT",
+        "APPDATA",
+        "LOCALAPPDATA",
     }
 )
-
-_SECRET_ENV_SUFFIXES = ("_API_KEY", "_API_SECRET", "_SECRET_KEY", "_PASSWORD", "_DB_PASSWORD")
 
 
 def _sanitized_env() -> dict[str, str]:
     """Minimal child environment without secrets (AH-AUDIT-010)."""
-    try:
-        extra = {
-            e.strip().upper()
-            for e in os.environ.get("AGENT_HARNESS_TERMINAL_EXTRA_ENV", "").split(",")
-            if e.strip()
-        }
-    except Exception:
-        extra = set()
+    extra = {
+        e.strip().upper()
+        for e in os.environ.get("AGENT_HARNESS_TERMINAL_EXTRA_ENV", "").split(",")
+        if e.strip()
+    }
     env: dict[str, str] = {}
     for key, value in os.environ.items():
         upper = key.upper()
-        if upper in extra:
+        if upper in _CHILD_ENV_ALLOWLIST or upper in extra:
             env[key] = value
-            continue
-        if upper in _SECRET_ENV_EXACT:
-            continue
-        if upper.endswith(_SECRET_ENV_SUFFIXES):
-            continue
-        if upper in ("GH_TOKEN", "GITHUB_TOKEN", "HF_TOKEN"):
-            continue
-        env[key] = value
-    # Required platform/runtime variables always survive filtering.
-    for key in ("PATH", "SystemRoot", "WINDIR", "TMP", "TEMP", "TMPDIR", "HOME", "USER"):
-        if key not in env and key in os.environ:
-            env[key] = os.environ[key]
     if os.name != "nt" and not env.get("PATH"):
         env["PATH"] = "/usr/bin:/bin"
     return env

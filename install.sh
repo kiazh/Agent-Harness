@@ -22,7 +22,7 @@
 #   7. Installs an `ah` shim in ~/.local/bin, persists it to the shell rc
 #      (~/.zshrc / ~/.bash_profile / ~/.bashrc), and on Windows registers the
 #      venv in the user Path for PowerShell — so `ah` works in new shells.
-#   8. Prints exact next steps. Missing LLM key is a warning, never a fatal error.
+#   8. Tells the user to run `ah setup` before opening the UI, chat, or server.
 #
 set -euo pipefail
 
@@ -38,9 +38,21 @@ DB_AUTO="yes" # provision a local Postgres (docker, then Homebrew on macOS) when
 SHELL_RC="yes" # append ~/.local/bin to PATH in the shell rc file (opt out with --no-shell-rc)
 PYTHON_BIN=""
 
-log()  { printf '\033[1;32m[install]\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
+log() {
+  if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
+    printf '\033[1;32m[install]\033[0m %s\n' "$*"
+  else
+    printf '[install] %s\n' "$*"
+  fi
+}
+warn() {
+  if [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
+    printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2
+  else
+    printf '[warn] %s\n' "$*" >&2
+  fi
+}
+die() { warn "$*"; exit 1; }
 
 usage() {
   cat <<'EOF'
@@ -58,7 +70,7 @@ Options:
   --no-docker-db   Never use docker for the DB
   --no-auto-db     Never auto-provision Postgres (docker or Homebrew); just warn
   --no-shell-rc    Don't touch shell rc files (~/.zshrc etc.); print PATH hint only
-  --skip-init      Skip `ah init` (DB schema creation)
+  --skip-init      Skip automatic `ah init` (DB schema creation)
   -h, --help       Show this help
 
 Env: REPO_URL, AH_INSTALL_DIR
@@ -226,15 +238,12 @@ elif [ -f ".venv/Scripts/activate" ]; then
   . ".venv/Scripts/activate" 2>/dev/null || true
 fi
 
-log "Upgrading pip ($VENV_PY)"
-"$VENV_PY" -m pip install --quiet --upgrade pip
+run_animated "Upgrading pip" "$VENV_PY" -m pip install --quiet --upgrade pip
 
 if [ "$DO_DEV" = "1" ]; then
-  log "Installing AgentHarness (dev extras)"
-  "$VENV_PY" -m pip install -e ".[dev]"
+  run_animated "Installing AgentHarness (dev extras)" "$VENV_PY" -m pip install -e ".[dev]"
 else
-  log "Installing AgentHarness"
-  "$VENV_PY" -m pip install -e .
+  run_animated "Installing AgentHarness" "$VENV_PY" -m pip install -e .
 fi
 # Re-resolve: the install creates the `ah` entry point (ah / ah.exe).
 AH_BIN="$VENV_BIN/ah"
@@ -243,8 +252,7 @@ AH_BIN="$VENV_BIN/ah"
 
 # --- UI deps -------------------------------------------------------------------
 if [ "$DO_UI" = "1" ]; then
-  log "Installing UI dependencies (npm --prefix ui)"
-  npm install --ignore-scripts --prefix ui
+  run_animated "Installing UI dependencies" npm install --ignore-scripts --prefix ui
 else
   log "Skipping UI dependencies"
 fi
@@ -292,23 +300,23 @@ if [ "$ASSUME_YES" = "0" ] && { [ -t 0 ] || [ "$INTERACTIVE" = "1" ]; } && [ -e 
   CUR="$(env_get OPENROUTER_API_KEY "$ENV_FILE")"
   case "$CUR" in
     ""|"sk-or-...")
-      if ANSWER="$(prompt_secret_hidden 'OPENROUTER_API_KEY (Enter to skip, set later via /keys): ')"; then
+      if ANSWER="$(prompt_secret_hidden 'OPENROUTER_API_KEY (Enter to skip, set later via ah setup): ')"; then
         if [ -n "$ANSWER" ]; then
           env_set OPENROUTER_API_KEY "$ANSWER" "$ENV_FILE" || die "Cannot write $ENV_FILE"
           log "Saved OPENROUTER_API_KEY"
         else
-          warn "Skipped OPENROUTER_API_KEY; set it later with: ah setup  (or /keys in the UI)"
+          warn "Skipped OPENROUTER_API_KEY; set it later with: ah setup"
         fi
       else
         warn "Could not establish hidden terminal input; skipping secure prompt."
-        warn "Set the key later with: ah setup  (or /keys in the UI)"
+        warn "Set the key later with: ah setup"
       fi
       ;;
   esac
 else
   case "$(env_get OPENROUTER_API_KEY "$ENV_FILE")" in
     ""|"sk-or-...")
-      warn "No OPENROUTER_API_KEY yet; install continues. Add one later with: ah setup  (or /keys in the UI)"
+      warn "No OPENROUTER_API_KEY yet; install continues. Add one later with: ah setup"
       ;;
   esac
 fi
@@ -317,20 +325,27 @@ fi
 # Provisioning primitives live in tools/install-helpers.sh (sourced above)
 # so tests can drive them with mocked commands.
 
+INIT_STATE="failed"
 if [ "$SKIP_INIT" = "1" ]; then
+  INIT_STATE="skipped"
   log "Skipping ah init (--skip-init)"
 else
-  log "Initializing database schema (ah init)"
-  if try_init; then
-    log "Schema ready"
+  log "Running ah init automatically"
+  if INIT_OUTPUT="$(try_init 2>&1)"; then
+    INIT_STATE="ready"
+    log "Schema ready (ah init completed)"
   elif [ "$DB_AUTO" = "no" ]; then
+    printf '%s\n' "$INIT_OUTPUT" >&2
     warn "\`ah init\` failed and auto-provisioning is off (--no-auto-db)."
     warn "Start Postgres (pgvector/pgvector:pg16), check DATABASE_URL in .env, then run: ah init"
-  elif [ "$DOCKER_DB" != "no" ] && start_docker_db && wait_for_init; then
+  elif [ "$DOCKER_DB" != "no" ] && start_docker_db && INIT_OUTPUT="$(wait_for_init 2>&1)"; then
+    INIT_STATE="ready"
     log "Schema ready (via auto-started docker Postgres)"
-  elif start_brew_db && wait_for_init; then
+  elif start_brew_db && INIT_OUTPUT="$(wait_for_init 2>&1)"; then
+    INIT_STATE="ready"
     log "Schema ready (via Homebrew Postgres)"
   else
+    printf '%s\n' "$INIT_OUTPUT" >&2
     warn "\`ah init\` failed. Pick one, then re-run: ah init"
     case "$OS_FAMILY" in
       macos)
@@ -489,13 +504,4 @@ if [ "$PATH_STATE" = "shim-failed" ]; then
   echo ""
 fi
 
-cat <<EOF
-Done. Next:
-  ah                          # interactive terminal UI
-  ah chat "What is the capital of France?"   # one-shot (needs OPENROUTER_API_KEY)
-  ah serve --host 127.0.0.1 --port 8000      # HTTP API
-
-Keys:   ah setup  (or /keys in the UI; values never echo)
-Health: ah doctor
-Docs:   $(pwd)/README.md
-EOF
+installer_next_steps "$INIT_STATE" "$(pwd)/README.md"

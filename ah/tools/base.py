@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Tools that mutate state: never cached, and flush the result cache when run.
 _SIDE_EFFECT_PREFIXES = ("write_", "delete_", "create_", "update_", "send_", "post_")
 _SIDE_EFFECT_TOOLS = frozenset(
-    {"terminal", "remember", "index_document", "delegate", "share_memory"}
+    {"terminal", "remember", "index_document", "web_research", "delegate", "share_memory"}
 )
 # Read-only but non-deterministic / state-dependent: never cached.
 _UNCACHEABLE_TOOLS = frozenset(
@@ -31,6 +31,7 @@ _UNCACHEABLE_TOOLS = frozenset(
         "recall",
         "harness_status",
         "search_documents",
+        "web_research",
         "list_agents",
         "session_recall",
         "session_recall_window",

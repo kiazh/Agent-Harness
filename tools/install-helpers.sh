@@ -16,6 +16,86 @@
 # a custom URL the installer must preserve.
 INSTALLER_DEFAULT_DB_URL="postgresql://postgres:postgres@localhost:5432/agentharness"
 
+# Keep curl|bash and CI logs plain. On a real terminal, show progress only
+# while a real command is running; always reveal its output if it fails.
+run_animated() (
+  spinner_label="$1"
+  spinner_tick=0
+  shift
+  if [ ! -t 1 ] || [ -n "${NO_COLOR:-}" ] || [ -n "${CI:-}" ] || [ "${TERM:-dumb}" = "dumb" ]; then
+    log "$spinner_label"
+    "$@"
+    exit $?
+  fi
+  spinner_output_file="$(mktemp "${TMPDIR:-/tmp}/ah-install.XXXXXX" 2>/dev/null)" || {
+    log "$spinner_label"
+    "$@"
+    exit $?
+  }
+  chmod 600 "$spinner_output_file" || {
+    rm -f "$spinner_output_file"
+    log "$spinner_label"
+    "$@"
+    exit $?
+  }
+  "$@" >"$spinner_output_file" 2>&1 &
+  spinner_pid=$!
+  trap 'if [ -n "${spinner_pid:-}" ]; then kill "$spinner_pid" 2>/dev/null || true; wait "$spinner_pid" 2>/dev/null || true; fi; rm -f "$spinner_output_file"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  while kill -0 "$spinner_pid" 2>/dev/null; do
+    case $((spinner_tick % 4)) in
+      0) spinner_frame='◜' ;;
+      1) spinner_frame='◝' ;;
+      2) spinner_frame='◞' ;;
+      *) spinner_frame='◟' ;;
+    esac
+    printf '\r\033[2K\033[36m[install]\033[0m %s %s' "$spinner_frame" "$spinner_label"
+    spinner_tick=$((spinner_tick + 1))
+    sleep 0.12
+  done
+  if wait "$spinner_pid"; then spinner_status=0; else spinner_status=$?; fi
+  spinner_pid=""
+  printf '\r\033[2K'
+  if [ "$spinner_status" = "0" ]; then
+    log "✓ $spinner_label"
+    [ ! -s "$spinner_output_file" ] || tail -n 3 "$spinner_output_file"
+  else
+    warn "✗ $spinner_label failed"
+    cat "$spinner_output_file" >&2
+  fi
+  exit "$spinner_status"
+)
+
+installer_next_steps() {
+  local state="$1" docs="$2" step=2
+  printf '\nAgentHarness installed. Next, in this order:\n'
+  printf '  1. ah setup            Configure your provider and database before opening the UI, chat, or server.\n'
+  case "$state" in
+    ready)
+      printf '  Database schema initialized automatically.\n'
+      printf '  If setup changes DATABASE_URL, run ah init again.\n'
+      ;;
+    skipped)
+      printf '  Database schema was skipped (--skip-init).\n'
+      printf '  2. ah init             Create the schema after setup.\n'
+      step=3
+      ;;
+    *)
+      printf '  Database schema is not ready.\n'
+      printf '  2. ah init             Create the schema after fixing DATABASE_URL/PostgreSQL in setup.\n'
+      step=3
+      ;;
+  esac
+  printf '  %s. ah doctor           Check your configuration.\n' "$step"
+  step=$((step + 1))
+  printf '  %s. ah                  Open the terminal UI.\n' "$step"
+  printf '     ah chat "Hello"     Run a one-shot chat after setup.\n'
+  printf '     ah serve            Start the HTTP API after setup.\n'
+  printf '\nDocs: %s\n' "$docs"
+}
+
 # resolve_env_file <startup_dir> — stdout: absolute env-file path.
 # AH_ENV_FILE absolute wins as-is; relative AH_ENV_FILE anchors to the
 # startup directory (so a later cd into the checkout cannot redirect it);

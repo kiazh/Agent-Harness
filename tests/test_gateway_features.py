@@ -111,6 +111,29 @@ class TestProfileScope:
 
 
 class TestSessions:
+    async def test_recall_serializes_legacy_null_chunk_timestamp(self, h):
+        """Recall remains usable when a legacy chunk has no timestamp."""
+        sid = await new_session(h)
+        tag = f"nullstamp{uuid.uuid4().hex[:10]}"
+        try:
+            chunk = await context_manager.add_chunk(
+                uuid.UUID(sid), "harness", "user_message", {"content": tag}
+            )
+            await db.execute("UPDATE context_chunks SET created_at=NULL WHERE id=$1", chunk.id)
+            hits = result(await h.call("session.recall", {"sessionId": sid, "query": tag}))["hits"]
+            assert len(hits) == 1
+            assert hits[0]["occurredAt"] is None
+            window = result(
+                await h.call(
+                    "session.recall.window",
+                    {"sessionId": sid, "targetSessionId": sid, "chunkId": str(chunk.id)},
+                )
+            )["messages"]
+            assert len(window) == 1
+            assert window[0]["occurredAt"] is None
+        finally:
+            await session_manager.delete(uuid.UUID(sid))
+
     async def test_recall_search_and_window_are_scoped_to_current_agent(self, h):
         tag = f"quartzotter{uuid.uuid4().hex[:8]}"
         sid = await new_session(h, "Recall owner")

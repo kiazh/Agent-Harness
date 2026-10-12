@@ -5,6 +5,8 @@ test hook. Upstream code is never executed anywhere in this file.
 """
 
 import json
+import os
+import stat
 import subprocess
 from pathlib import Path
 
@@ -232,6 +234,30 @@ def test_stage_activate_roundtrip_and_registry_pickup(tmp_path, monkeypatch):
     assert "reference" in registry.get_skill_content("alpha") or True
     # Idempotent second activation with the same manifest.
     assert activate_plan(detail, found, skills_dir) == ["alpha"]
+
+
+def test_activation_refuses_directory_sync_failure(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    revision = make_repo(root, {"skills/alpha/SKILL.md": ALPHA_SKILL})
+    monkeypatch.setattr(repo_install, "staging_root", lambda: tmp_path / "staging")
+    plan = scan_repo(root, parse_repo_url("https://github.com/o/r"), revision)
+    staged = write_staged_plan(plan, root)
+    detail, _ = load_staged_plan(plan.digest)
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+
+    real_fsync = os.fsync
+
+    def fail_directory_sync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError("directory sync failed")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fail_directory_sync)
+    with pytest.raises(RepoInstallError, match="could not stage skill"):
+        activate_plan(detail, staged, skills_dir)
+    assert not (skills_dir / "alpha").exists()
 
 
 def test_activate_refuses_tampered_staging(tmp_path, monkeypatch):
@@ -486,6 +512,106 @@ def test_partial_activation_rolls_back_and_reports(tmp_path, monkeypatch):
         activate_plan(detail, staged, skills_dir)
     assert "rolled back" in str(error2.value)
     assert not (skills_dir / "alpha").exists()
+    assert not (skills_dir / "beta").exists()
+
+
+def test_failed_activation_does_not_expose_or_leave_built_skill(tmp_path, monkeypatch):
+    from ah.skills.registry import SkillRegistry
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    revision = make_repo(
+        root,
+        {
+            "skills/alpha/SKILL.md": ALPHA_SKILL,
+            "skills/beta/SKILL.md": ALPHA_SKILL.replace("alpha", "beta"),
+        },
+    )
+    monkeypatch.setattr(repo_install, "staging_root", lambda: tmp_path / "staging")
+    plan = scan_repo(root, parse_repo_url("https://github.com/o/r"), revision)
+    staged = write_staged_plan(plan, root)
+    detail, _ = load_staged_plan(plan.digest)
+    skills_dir = tmp_path / "skills"
+    (skills_dir / "beta").mkdir(parents=True)
+    (skills_dir / "beta" / "SKILL.md").write_text(ALPHA_SKILL.replace("alpha", "beta"))
+
+    with pytest.raises(RepoInstallError, match="already exists"):
+        activate_plan(detail, staged, skills_dir)
+
+    registry = SkillRegistry(skills_dir=skills_dir)
+    registry.load_all()
+    assert registry.get("alpha") is None
+    assert not list(skills_dir.rglob("alpha.install-*"))
+
+
+def test_skill_is_invisible_until_activation_commits(tmp_path, monkeypatch):
+    from ah.skills.registry import SkillRegistry
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    revision = make_repo(root, {"skills/alpha/SKILL.md": ALPHA_SKILL})
+    monkeypatch.setattr(repo_install, "staging_root", lambda: tmp_path / "staging")
+    plan = scan_repo(root, parse_repo_url("https://github.com/o/r"), revision)
+    staged = write_staged_plan(plan, root)
+    detail, _ = load_staged_plan(plan.digest)
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    real_replace = os.replace
+
+    def inspect_before_commit(src, dst):
+        registry = SkillRegistry(skills_dir=skills_dir)
+        registry.load_all()
+        assert registry.get("alpha") is None
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", inspect_before_commit)
+    assert activate_plan(detail, staged, skills_dir) == ["alpha"]
+
+
+def test_registry_ignores_legacy_incomplete_install_dir(tmp_path):
+    from ah.skills.registry import SkillRegistry
+
+    skills_dir = tmp_path / "skills"
+    unfinished = skills_dir / "alpha.install-123-deadbeef"
+    unfinished.mkdir(parents=True)
+    (unfinished / "SKILL.md").write_text(ALPHA_SKILL)
+
+    registry = SkillRegistry(skills_dir=skills_dir)
+    registry.load_all()
+    assert registry.get("alpha") is None
+
+
+def test_failed_second_install_preserves_preexisting_verified_skill(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    revision = make_repo(
+        root,
+        {
+            "skills/alpha/SKILL.md": ALPHA_SKILL,
+            "skills/beta/SKILL.md": ALPHA_SKILL.replace("alpha", "beta"),
+        },
+    )
+    monkeypatch.setattr(repo_install, "staging_root", lambda: tmp_path / "staging")
+    plan = scan_repo(root, parse_repo_url("https://github.com/o/r"), revision)
+    staged = write_staged_plan(plan, root)
+    detail, _ = load_staged_plan(plan.digest)
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    assert activate_plan(detail, staged, skills_dir) == ["alpha", "beta"]
+    import shutil
+
+    shutil.rmtree(skills_dir / "beta")
+    real_replace = os.replace
+
+    def fail_beta_install(src, dst):
+        if Path(dst) == skills_dir / "beta":
+            raise OSError("disk full")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", fail_beta_install)
+    with pytest.raises(RepoInstallError, match="rolled back"):
+        activate_plan(detail, staged, skills_dir)
+    assert (skills_dir / "alpha" / "SKILL.md").is_file()
     assert not (skills_dir / "beta").exists()
 
 

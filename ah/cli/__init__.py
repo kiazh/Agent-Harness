@@ -927,7 +927,7 @@ def doctor():
 
     _run(_check_db())
     console.print()
-    output.muted("Run `ah` to open the interactive UI.")
+    output.muted("New install? Run `ah setup` before opening the UI with `ah`.")
 
 
 @app.command()

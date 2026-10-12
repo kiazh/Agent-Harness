@@ -179,6 +179,8 @@ class OAuthCoordinator:
                     )
             mode = self._registration_mode(settings, discovered)
             # Pre-registered providers require their exact registered path.
+            # Bound the callback reservation (5s): long enough for reserve()
+            # to bind, short enough not to squat the port if discovery stalls.
             reservation = {"port": settings.callback_port, "deadline": loop.time() + 5.0}
             if mode == "preregistered":
                 reservation["path"] = settings.callback_path
@@ -234,13 +236,8 @@ class OAuthCoordinator:
                     "redirectUri": redirect_uri,
                 },
             }
-        except BaseException:
-            try:
-                await network.aclose()
-            except Exception:
-                pass
-            raise
         finally:
+            # aclose is idempotent: one close site covers success and failure.
             try:
                 await network.aclose()
             except Exception:
@@ -448,9 +445,8 @@ class OAuthCoordinator:
                 async with self._lock:
                     operation["client"] = client
                     operation["verifier"] = pkce.code_verifier
-                    operation["state"] = state
+                    operation["oauth_state"] = state
                     operation["client_secret_ref"] = client_secret_ref
-                    operation["state"] = state
                 auth_url = self._authorization_url(snapshot, client, pkce.code_challenge, state)
                 async with self._lock:
                     operation["authorization_url"] = auth_url
@@ -605,6 +601,7 @@ class OAuthCoordinator:
                 op = self._operations.get(operation_id)
                 if op is not None:
                     op.pop("verifier", None)
+                    op.pop("oauth_state", None)
                     op.pop("authorization_url", None)
                     op.pop("client_secret_ref", None)
             try:
@@ -626,6 +623,8 @@ class OAuthCoordinator:
                         self._operations.pop(operation_id, None)
 
             try:
+                # Skip retention scheduling while shutting down or when this
+                # task is itself being cancelled (create_task would raise).
                 if not self._shutting_down and not asyncio.current_task().cancelling():
                     task = asyncio.create_task(_evict())
                     self._retention_tasks.add(task)
@@ -1033,7 +1032,7 @@ class OAuthCoordinator:
                     raise OAuthError("authority changed", reason="oauth_config_changed")
             elif bindings[key][1] != expected_generation:
                 raise OAuthError("authority changed", reason="oauth_config_changed")
-            elif key is not None:
+            else:
                 # Validate the review-bound generation before retiring siblings.
                 selected = bindings.pop(key)
                 bindings = {key: selected, **bindings}

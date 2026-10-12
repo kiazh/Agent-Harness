@@ -13,7 +13,6 @@ import hashlib
 import ipaddress
 import json
 import socket
-from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote_plus, urlparse
 
@@ -32,6 +31,7 @@ from ah.connectors.oauth_models import (
     RegisteredOAuthClient,
 )
 
+# Cloud metadata IPs are never OAuth targets (SSRF).
 _METADATA_HOSTS = {"169.254.169.254", "100.100.100.100", "fd00:ec2::254"}
 _LOOPBACK_LITERALS = {"127.0.0.1", "::1", "0:0:0:0:0:0:0:1", "::ffff:127.0.0.1"}
 
@@ -65,6 +65,9 @@ def _is_literal_loopback(host: str) -> bool:
 
 
 def classify_url_host(host: str, *, local_access: bool) -> tuple[str, ...]:
+    """SSRF fence: DNS-resolve every OAuth host, refuse metadata/link-local/
+    multicast/reserved addresses, require local_access for loopback/private,
+    and refuse hosts resolving to mixed classes. Never follow redirects."""
     lowered = (host or "").lower().rstrip(".")
     if lowered in ("localhost",) or lowered.endswith(".localhost"):
         if not local_access:
@@ -140,21 +143,19 @@ def awaitable_dns(host: str):
 
 
 def validate_outbound_url(url: str, *, local_access: bool, allow_http_loopback: bool = True) -> str:
+    """HTTPS only, except literal-loopback http with explicit local_access."""
     parts = urlparse(url)
     if parts.username or parts.password:
         raise OAuthNetworkError(
             "oauth url must not embed userinfo", reason="oauth_unsafe_destination"
         )
-    if parts.scheme == "https":
-        pass
-    elif (
+    http_loopback_ok = (
         parts.scheme == "http"
         and allow_http_loopback
         and _is_literal_loopback(parts.hostname or "")
         and local_access
-    ):
-        pass
-    else:
+    )
+    if parts.scheme != "https" and not http_loopback_ok:
         raise OAuthNetworkError(
             "oauth url must be https (literal-loopback http only with local access)",
             reason="oauth_unsafe_destination",
@@ -163,6 +164,13 @@ def validate_outbound_url(url: str, *, local_access: bool, allow_http_loopback: 
         raise OAuthNetworkError("oauth url must have a host", reason="oauth_unsafe_destination")
     classify_url_host(parts.hostname, local_access=local_access)
     return url
+
+
+def _remaining_or_raise(deadline: float, message: str) -> float:
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise OAuthNetworkError(message)
+    return remaining
 
 
 def parse_bearer_challenges(header_value: str) -> list[dict[str, str]]:
@@ -266,11 +274,6 @@ def issuer_metadata_candidates(issuer: str) -> list[str]:
     return candidates
 
 
-@dataclass
-class _StubTransport:
-    handler: Any = None
-
-
 class OAuthNetworkClient:
     def __init__(
         self,
@@ -309,9 +312,9 @@ class OAuthNetworkClient:
             self._client = None
 
     async def _validate_url(self, url: str, *, deadline: float, stage: str) -> None:
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            raise OAuthNetworkError(f"oauth destination check deadline expired during {stage}")
+        remaining = _remaining_or_raise(
+            deadline, f"oauth destination check deadline expired during {stage}"
+        )
         local_access = self._local_access
         try:
             await run_dns_check(
@@ -351,9 +354,7 @@ class OAuthNetworkClient:
         request_timeout: float | None = None,
     ) -> tuple[int, dict[str, str], bytes]:
         """Read identity response chunks under one timeout and cumulative cap."""
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            raise OAuthNetworkError("oauth deadline expired")
+        remaining = _remaining_or_raise(deadline, "oauth deadline expired")
         client = await self._get_client()
         assert client is not None
         timeout = min(remaining, self._timeout if request_timeout is None else request_timeout)
@@ -381,9 +382,7 @@ class OAuthNetworkClient:
         self, url: str, *, max_bytes: int, deadline: float, extra_headers: dict | None = None
     ) -> tuple[int, dict[str, str], bytes]:
         await self._validate_url(url, deadline=deadline, stage="metadata fetch")
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            raise OAuthNetworkError("oauth discovery deadline expired")
+        remaining = _remaining_or_raise(deadline, "oauth discovery deadline expired")
         headers = {"Accept": "application/json", "Accept-Encoding": "identity"}
         if extra_headers:
             headers.update(extra_headers)
@@ -409,9 +408,7 @@ class OAuthNetworkClient:
         expect_json: bool = True,
     ) -> dict[str, Any]:
         await self._validate_url(url, deadline=deadline, stage="token request")
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            raise OAuthNetworkError("oauth deadline expired")
+        remaining = _remaining_or_raise(deadline, "oauth deadline expired")
         headers = {"Accept": "application/json", "Accept-Encoding": "identity"}
         if extra_headers:
             headers.update(extra_headers)

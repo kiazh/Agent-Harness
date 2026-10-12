@@ -115,6 +115,25 @@ async def test_failed_index_lock_closes_descriptor_without_changing_authority(
 
 
 @pytest.mark.asyncio
+async def test_failed_forget_index_write_preserves_committed_grant(tmp_path, monkeypatch):
+    store = OAuthCredentialStore(tmp_path / "oauth", key_provider=_key_provider)
+    binding = _binding()
+    await store.save(_record(binding), expected_generation=0)
+
+    def fail_index_write(_index):
+        raise OSError("injected index write failure")
+
+    monkeypatch.setattr(store, "_write_index", fail_index_write)
+    with pytest.raises(OSError, match="injected index write failure"):
+        await store.forget(binding, expected_generation=1)
+
+    committed = await store.load(binding)
+    assert committed is not None
+    assert committed.generation == 1
+    assert committed.access_token == SECRET
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mutation", ["rotate", "forget"])
 async def test_load_retries_when_snapshot_envelope_is_replaced(tmp_path, monkeypatch, mutation):
     import threading

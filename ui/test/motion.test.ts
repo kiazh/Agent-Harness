@@ -1,15 +1,55 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { Container, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { ICONS } from "../src/design/icons.ts";
 import { AnimationCoordinator } from "../src/design/motion.ts";
 import { Footer } from "../src/components/Footer.ts";
+import type { GatewayEvent } from "../src/protocol.ts";
+import { Transcript } from "../src/transcript.ts";
 
 function coordinatorWithCounter(reducedMotion = false): { coordinator: AnimationCoordinator; renders: () => number } {
 	let renders = 0;
 	const coordinator = new AnimationCoordinator(() => renders++, reducedMotion);
 	return { coordinator, renders: () => renders };
 }
+
+test("streaming response frame animates on the shared timer and settles on completion", (t) => {
+	t.mock.timers.enable({ apis: ["Date", "setInterval", "setTimeout"], now: 1000 });
+	const coordinator = new AnimationCoordinator(() => {}, false);
+	const view = new Container();
+	const spinner = { start() {}, stop() {}, render: () => [], invalidate() {} };
+	const transcript = new Transcript(view, spinner, coordinator);
+	t.after(() => coordinator.dispose());
+	const event = (value: Record<string, unknown>): GatewayEvent => ({ sessionId: "s", turnId: "t", ...value }) as GatewayEvent;
+	transcript.apply(event({ type: "message.start" }));
+	transcript.apply(event({ type: "message.delta", text: "Hello" }));
+	assert.equal(coordinator.timerCount, 1);
+	const first = view.render(80).map(stripTerminalSequences).join("\n");
+	t.mock.timers.tick(200);
+	const second = view.render(80).map(stripTerminalSequences).join("\n");
+	assert.notEqual(second, first, "the frame marker advances while text streams");
+	transcript.apply(event({ type: "message.complete", text: "Hello", tokens: 0, cancelled: false }));
+	assert.equal(coordinator.timerCount, 0, "completion retires the frame animation");
+	const settled = view.render(80).map(stripTerminalSequences).join("\n");
+	t.mock.timers.tick(1000);
+	assert.equal(view.render(80).map(stripTerminalSequences).join("\n"), settled);
+});
+
+test("streaming response frame stays still with reduced motion and retires on suspend", (t) => {
+	t.mock.timers.enable({ apis: ["Date", "setInterval", "setTimeout"], now: 1000 });
+	const coordinator = new AnimationCoordinator(() => {}, true);
+	const view = new Container();
+	const spinner = { start() {}, stop() {}, render: () => [], invalidate() {} };
+	const transcript = new Transcript(view, spinner, coordinator);
+	t.after(() => coordinator.dispose());
+	transcript.apply({ sessionId: "s", turnId: "t", type: "message.delta", text: "Hello" } as GatewayEvent);
+	assert.equal(coordinator.timerCount, 0);
+	const first = view.render(80).map(stripTerminalSequences).join("\n");
+	t.mock.timers.tick(1000);
+	assert.equal(view.render(80).map(stripTerminalSequences).join("\n"), first);
+	transcript.suspend();
+	assert.equal(coordinator.size, 0);
+});
 
 test("working footer pulses without relying on thinking or tool subscriptions", (t) => {
 	t.mock.timers.enable({ apis: ["Date", "setInterval", "setTimeout"], now: 1000 });

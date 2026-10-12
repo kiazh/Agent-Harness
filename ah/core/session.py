@@ -355,14 +355,27 @@ class SessionManager:
                 # would otherwise stamp every copy with the same now(), scrambling order.
                 await conn.execute(
                     """
-                    INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, created_at, accessed_at)
-                    SELECT $2, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, created_at, accessed_at
+                    INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source, created_at, accessed_at)
+                    SELECT $2, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source, created_at, accessed_at
                     FROM context_chunks
                     WHERE session_id = $1
                     """,
                     session_id,
                     new_session.id,
                 )
+                # Existing installations may not have applied the image-cache
+                # migration yet. Ordinary context must still be forkable.
+                if await conn.fetchval("SELECT to_regclass('session_image_context')") is not None:
+                    await conn.execute(
+                        """
+                        INSERT INTO session_image_context (session_id, agent_id, images_msgpack)
+                        SELECT $2, agent_id, images_msgpack
+                        FROM session_image_context
+                        WHERE session_id = $1
+                        """,
+                        session_id,
+                        new_session.id,
+                    )
         await self._cache_put(new_session)
         return new_session
 

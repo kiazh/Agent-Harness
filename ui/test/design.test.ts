@@ -39,7 +39,7 @@ test("theme_registry_preserves_all_saved_ids", () => {
 	for (const id of REQUIRED_THEME_IDS) {
 		assert.ok(SKIN_NAMES.includes(id), `missing required theme: ${id}`);
 	}
-	for (const id of ["opencode", "light"]) {
+	for (const id of ["opencode", "light", "linen", "lagoon", "afterglow"]) {
 		assert.ok(SKIN_NAMES.includes(id), `missing added theme: ${id}`);
 	}
 	for (const name of SKIN_NAMES) {
@@ -53,6 +53,27 @@ test("theme_registry_preserves_all_saved_ids", () => {
 		assert.ok(sem, `${name} has a semantic palette`);
 		for (const [slot, value] of Object.entries(sem)) {
 			assert.match(value, /^#[0-9a-fA-F]{6}$/, `${name}.${slot} is a hex color`);
+		}
+	}
+});
+
+test("new calm palettes keep text and selection accents readable", () => {
+	const luminance = (hex: string): number => {
+		const [r, g, b] = hex.slice(1).match(/../g)!.map((pair) => {
+			const channel = Number.parseInt(pair, 16) / 255;
+			return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+		});
+		return r! * 0.2126 + g! * 0.7152 + b! * 0.0722;
+	};
+	const contrast = (a: string, b: string): number => {
+		const values = [luminance(a), luminance(b)].sort((x, y) => y - x);
+		return (values[0]! + 0.05) / (values[1]! + 0.05);
+	};
+	for (const name of ["linen", "lagoon", "afterglow"]) {
+		const base = skinBase(name);
+		assert.ok(base);
+		for (const role of ["text", "muted", "dim", "accent", "secondary", "success", "warning", "error", "info"] as const) {
+			assert.ok(contrast(base.neutral, base[role]) >= 4.5, `${name} ${role} contrast`);
 		}
 	}
 });

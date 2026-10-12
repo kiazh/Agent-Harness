@@ -372,7 +372,11 @@ def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
     ):
         return Decision("allowed", "routine project file operation", req)
     if req.mode in ("ask", "workspace", "sandbox"):
-        if req.operation == "network.fetch" and req.tool in {"web_search", "web_extract"}:
+        if req.operation == "network.fetch" and req.tool in {
+            "web_search",
+            "web_extract",
+            "web_research",
+        }:
             return Decision("allowed", "built-in web read (backend validates URLs)", req)
         if req.operation == "process.exec":
             from ah.permissions.commands import routine_project_command, routine_shell_command

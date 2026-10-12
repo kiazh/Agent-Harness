@@ -15,6 +15,7 @@ from ah.tools import (
     session_recall,  # noqa: F401 — transcript recall
     skills,  # noqa: F401 — skill discovery and reading
     terminal,  # noqa: F401 — terminal
+    web_research,  # noqa: F401 — session-scoped public web research
 )
 from ah.tools.base import Tool, ToolRegistry, registry
 
@@ -32,4 +33,5 @@ __all__ = [
     "session_recall",
     "skills",
     "agents",
+    "web_research",
 ]

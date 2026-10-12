@@ -45,7 +45,7 @@ export interface RecallHit {
 	source: "live" | "archive" | "title";
 	preview: string;
 	score: number;
-	occurredAt: string;
+	occurredAt: string | null;
 }
 
 export interface RecallMessage {
@@ -54,7 +54,7 @@ export interface RecallMessage {
 	type: string;
 	source: "live" | "archive";
 	payload: Record<string, unknown>;
-	occurredAt: string;
+	occurredAt: string | null;
 }
 
 export interface RecallResult { hits: RecallHit[] }

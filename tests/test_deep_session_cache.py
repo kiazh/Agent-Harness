@@ -81,6 +81,10 @@ class SessionRows:
         self.rows[args[0]]["state_msgpack"] = args[1]
         return "UPDATE 1"
 
+    async def fetchval(self, query, *args):
+        assert query == "SELECT to_regclass('session_image_context')" and not args
+        return None
+
     @asynccontextmanager
     async def acquire(self):
         yield self

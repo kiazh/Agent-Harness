@@ -252,7 +252,7 @@ test("formatArgs summarizes arguments", () => {
 	assert.equal(formatArgs({ path: "a.py", limit: 20, flags: ["-n"] }), 'path=a.py, limit=20, flags=["-n"]');
 });
 
-test("assistant output renders borderless markdown and respects width", async () => {
+test("assistant output renders a square response frame and respects width", async () => {
 	const { AssistantTurn, header } = await import("../src/components.ts");
 	const message = new AssistantTurn("hello **world**");
 	message.append(" more");
@@ -263,8 +263,9 @@ test("assistant output renders borderless markdown and respects width", async ()
 	}
 	const rendered = plain(message, 80);
 	assert.match(rendered, /hello/);
-	assert.match(rendered, /●/, "assistant turns carry a plain marker, not a card");
-	assert.doesNotMatch(rendered, /─/, "no box rules around ordinary assistant text");
+	assert.match(rendered, /┌─ assistant/);
+	assert.match(rendered, /│ hello world/);
+	assert.match(rendered, /└─/);
 	const banner = plain(header("0.1.0"), 80);
 	assert.match(banner, />_ AgentHarness/);
 	assert.doesNotMatch(banner, /─/);
@@ -466,6 +467,49 @@ test("composer is a filled codex-style block with no rules", async () => {
 	);
 });
 
+test("composer draft uses theme ink before and after the editor cursor", async () => {
+	const { ComposerBox } = await import("../src/components.ts");
+	const { editorTheme, getSkin, setSkin, theme } = await import("../src/theme.ts");
+	const previous = getSkin();
+	try {
+		for (const skin of ["linen", "lagoon", "afterglow"]) {
+			setSkin(skin);
+			const composer = new ComposerBox({ terminal: { rows: 40 }, requestRender() {} } as never, editorTheme, { paddingX: 1 });
+			composer.editor.setText("hello world");
+			for (let i = 0; i < 5; i++) composer.editor.handleInput("\x1b[D");
+			const line = composer.render(60).find((row) => row.includes("hello"));
+			assert.ok(line, `${skin} renders the draft`);
+			const ink = theme.text("x").split("x")[0];
+			const head = line.indexOf("hello");
+			const reset = line.indexOf("\x1b[0m", head);
+			const tail = line.indexOf("orld", reset);
+			assert.ok(head > 0 && reset > head && tail > reset, `${skin} renders text around the cursor`);
+			assert.ok(line.slice(0, head).endsWith(`${ink} `), `${skin} uses theme ink for typed text`);
+			assert.ok(line.slice(reset, tail).includes(ink), `${skin} restores theme ink after the cursor`);
+		}
+	} finally {
+		setSkin(previous);
+	}
+});
+
+test("light theme composer placeholder uses readable muted ink", async () => {
+	const { ComposerBox } = await import("../src/components.ts");
+	const { editorTheme, getSkin, setSkin, theme } = await import("../src/theme.ts");
+	const previous = getSkin();
+	try {
+		for (const skin of ["linen", "lagoon"]) {
+			setSkin(skin);
+			const composer = new ComposerBox({ terminal: { rows: 40 } } as never, editorTheme);
+			const line = composer.render(60).find((row) => row.includes("Ask anything"));
+			assert.ok(line, `${skin} renders the placeholder`);
+			const ink = theme.muted("x").split("x")[0];
+			assert.ok(line.slice(0, line.indexOf("> Ask anything")).endsWith(ink), `${skin} placeholder uses muted ink`);
+		}
+	} finally {
+		setSkin(previous);
+	}
+});
+
 test("session header is a minimal codex-style brand line", async () => {
 	const { header } = await import("../src/components.ts");
 	const out = plain(header("0.1.0", { model: "gpt-x", provider: "acme", cwd: "/repo", branch: "main" }), 80);
@@ -561,7 +605,7 @@ test("every skin keeps its accent roles distinct", async () => {
 	}
 });
 
-test("V01 multiline user text stays plain and assistant markdown renders immediately", async () => {
+test("V01 multiline user text stays plain and assistant markdown renders inside a frame", async () => {
 	const { AssistantTurn, UserTurn } = await import("../src/components.ts");
 	const user = new UserTurn("first line\nsecond **not markdown**");
 	const rendered = plain(user, 40);
@@ -573,8 +617,8 @@ test("V01 multiline user text stays plain and assistant markdown renders immedia
 	assistant.append("**world**");
 	const aria = plain(assistant, 60);
 	assert.match(aria, /world/);
-	assert.match(aria, /● Hello/, "single marker column, no card padding");
-	assert.doesNotMatch(aria, /─/, "no ordinary assistant cards");
+	assert.match(aria, /┌─ assistant/);
+	assert.match(aria, /│ Hello world/, "streamed markdown appears inside the response frame");
 });
 
 test("V02 tool previews count wrapping with honest local and backend truncation", async () => {

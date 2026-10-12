@@ -319,6 +319,21 @@ def test_010_child_env_strips_secrets_keeps_platform(monkeypatch):
     assert _sanitized_env()["OPENAI_API_KEY"] == "sk-test-secret"
 
 
+def test_010_child_env_requires_explicit_passthrough_for_unlisted_credentials(monkeypatch):
+    from ah.tools.terminal import _sanitized_env
+
+    monkeypatch.delenv("AGENT_HARNESS_TERMINAL_EXTRA_ENV", raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE00000000")
+    monkeypatch.setenv("ACME_AUTH_TOKEN", "synthetic-token")
+    env = _sanitized_env()
+    assert "AWS_ACCESS_KEY_ID" not in env
+    assert "ACME_AUTH_TOKEN" not in env
+    assert env.get("PATH")
+
+    monkeypatch.setenv("AGENT_HARNESS_TERMINAL_EXTRA_ENV", "AWS_ACCESS_KEY_ID")
+    assert _sanitized_env()["AWS_ACCESS_KEY_ID"] == "AKIAEXAMPLE00000000"
+
+
 def test_010_terminal_runs_without_inheriting_secrets(monkeypatch):
 
     from ah.tools import terminal as tmod

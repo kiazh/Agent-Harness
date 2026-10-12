@@ -155,6 +155,9 @@ jobs:
       - name: Install UI dependencies (lockfile, no lifecycle scripts)
         run: npm ci --ignore-scripts
 
+      - name: Audit UI dependencies
+        run: npm audit --audit-level=moderate
+
       - name: Typecheck, tests and lint
         run: npm run check
 

@@ -15,6 +15,7 @@ approved → claimed → completed / failed / cancelled (execution consumption).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -162,15 +163,14 @@ async def save_grant(grant: dict, *, connection: Any | None = None) -> dict:
 
 async def list_grants(session_id: str) -> list[dict]:
     """Live grants only: revoked/expired/foreign rows are never returned."""
-    now = _utcnow()
-    rows: list[dict] = [
-        g
-        for g in _mem.grants.values()
-        if g.get("session_id") == str(session_id) and _grant_live(g, now=now)
-    ]
     db = await _db()
     if db is None:
-        return rows
+        now = _utcnow()
+        return [
+            g
+            for g in _mem.grants.values()
+            if g.get("session_id") == str(session_id) and _grant_live(g, now=now)
+        ]
     try:
         recs = await db.fetch(
             f"""SELECT {GRANT_COLUMNS} FROM permission_grants
@@ -178,12 +178,13 @@ async def list_grants(session_id: str) -> list[dict]:
                   AND (expires_at IS NULL OR expires_at > now())""",  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
             uuid.UUID(session_id),
         )
-        for r in recs:
-            rows.append(_row_to_grant(r))
     except Exception:
         logger.exception("durable grant read failed")
         raise
-    return rows
+    # Once durable authority is reachable, discard local grants from an
+    # earlier outage so they cannot reappear during a later outage.
+    _mem.grants.clear()
+    return [_row_to_grant(r) for r in recs]
 
 
 async def revoke_grants(session_id: str, grant_id: str | None = None) -> int:
@@ -198,8 +199,9 @@ async def revoke_grants(session_id: str, grant_id: str | None = None) -> int:
         try:
             if grant_id:
                 result = await db.execute(
-                    "UPDATE permission_grants SET revoked = TRUE WHERE id = $1",
+                    "UPDATE permission_grants SET revoked = TRUE WHERE id = $1 AND session_id = $2",
                     uuid.UUID(grant_id),
+                    uuid.UUID(session_id),
                 )
             else:
                 result = await db.execute(
@@ -482,16 +484,22 @@ def _with_completeness(rec: dict | None) -> dict | None:
     if rec is None:
         return None
     out = dict(rec)
+    # asyncpg returns UUIDs and JSONB text, while the in-memory record uses
+    # strings and a proposal mapping. Keep the store interface identical for
+    # both backends so origin checks and resumed actions use durable records.
+    for key in ("id", "session_id"):
+        if isinstance(out.get(key), uuid.UUID):
+            out[key] = str(out[key])
+    if isinstance(out.get("proposal"), str):
+        try:
+            out["proposal"] = json.loads(out["proposal"])
+        except (ValueError, TypeError):
+            out["proposal"] = None
     out["proposal_complete"] = bool(out.get("proposal"))
     return out
 
 
 async def get_approval(request_id: str) -> dict | None:
-    async with _mem.lock:
-        rec = _mem.approvals.get(request_id)
-        mem_copy = dict(rec) if rec is not None else None
-    if mem_copy is not None and mem_copy.get("proposal"):
-        return _with_completeness(mem_copy)
     db = await _db()
     if db is not None:
         try:
@@ -503,19 +511,14 @@ async def get_approval(request_id: str) -> dict | None:
         except Exception as error:
             logger.error("durable approval read failed (%s)", type(error).__name__)
             raise
+        return None
+    async with _mem.lock:
+        rec = _mem.approvals.get(request_id)
+        mem_copy = dict(rec) if rec is not None else None
     return _with_completeness(mem_copy)
 
 
 async def find_pending(session_id: str, digest: str) -> dict | None:
-    async with _mem.lock:
-        for rec in _mem.approvals.values():
-            if (
-                rec.get("session_id") == str(session_id)
-                and rec.get("digest") == digest
-                and rec.get("status") == "pending"
-                and not rec.get("consumed")
-            ):
-                return rec
     db = await _db()
     if db is not None:
         try:
@@ -527,10 +530,20 @@ async def find_pending(session_id: str, digest: str) -> dict | None:
                 digest,
             )
             if row:
-                return dict(row)
+                return _with_completeness(dict(row))
         except Exception as error:
             logger.error("durable approval read failed (%s)", type(error).__name__)
             raise
+        return None
+    async with _mem.lock:
+        for rec in _mem.approvals.values():
+            if (
+                rec.get("session_id") == str(session_id)
+                and rec.get("digest") == digest
+                and rec.get("status") == "pending"
+                and not rec.get("consumed")
+            ):
+                return dict(rec)
     return None
 
 
@@ -541,16 +554,6 @@ async def find_approved_unclaimed(session_id: str, digest: str) -> dict | None:
     is not informed approval (AH-AUDIT-005). The caller creates a fresh
     approval card instead (fail closed).
     """
-    async with _mem.lock:
-        for rec in _mem.approvals.values():
-            if (
-                rec.get("session_id") == str(session_id)
-                and rec.get("digest") == digest
-                and rec.get("status") == "approved"
-                and not rec.get("consumed")
-                and rec.get("proposal")
-            ):
-                return rec
     db = await _db()
     if db is not None:
         try:
@@ -570,16 +573,21 @@ async def find_approved_unclaimed(session_id: str, digest: str) -> dict | None:
         except Exception as error:
             logger.error("durable approval read failed (%s)", type(error).__name__)
             raise
+        return None
+    async with _mem.lock:
+        for rec in _mem.approvals.values():
+            if (
+                rec.get("session_id") == str(session_id)
+                and rec.get("digest") == digest
+                and rec.get("status") == "approved"
+                and not rec.get("consumed")
+                and rec.get("proposal")
+            ):
+                return _with_completeness(rec)
     return None
 
 
 async def list_pending(session_id: str) -> list[dict]:
-    async with _mem.lock:
-        out = [
-            r
-            for r in _mem.approvals.values()
-            if r.get("session_id") == str(session_id) and r.get("status") == "pending"
-        ]
     db = await _db()
     if db is not None:
         try:
@@ -589,12 +597,13 @@ async def list_pending(session_id: str) -> list[dict]:
                    ORDER BY created_at DESC LIMIT 50""",
                 uuid.UUID(session_id),
             )
-            seen = {r.get("request_id") for r in out}
-            for row in rows:
-                d = dict(row)
-                if d.get("request_id") not in seen:
-                    out.append(d)
+            return [_with_completeness(dict(row)) for row in rows]
         except Exception as error:
             logger.error("durable approval read failed (%s)", type(error).__name__)
             raise
-    return out
+    async with _mem.lock:
+        return [
+            dict(rec)
+            for rec in _mem.approvals.values()
+            if rec.get("session_id") == str(session_id) and rec.get("status") == "pending"
+        ]

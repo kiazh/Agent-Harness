@@ -441,20 +441,21 @@ class MCPConnection:
                 )
             )
         except Exception as exc:
-            if _looks_like_auth_failure(exc):
-                self.state = ConnectionState.AUTH_REQUIRED
-                self.last_error = self._redact("server requires authorization; authorize via /mcp")
-                raise AuthRequired(self.last_error) from exc
+            self._raise_auth_required(exc)
             raise
         read, write = streams
         try:
             self._session = await self._new_session(read, write)
         except Exception as exc:
-            if _looks_like_auth_failure(exc):
-                self.state = ConnectionState.AUTH_REQUIRED
-                self.last_error = self._redact("server requires authorization; authorize via /mcp")
-                raise AuthRequired(self.last_error) from exc
+            self._raise_auth_required(exc)
             raise
+
+    def _raise_auth_required(self, exc: Exception) -> None:
+        """Mark AUTH_REQUIRED for transport auth failures; no-op otherwise."""
+        if _looks_like_auth_failure(exc):
+            self.state = ConnectionState.AUTH_REQUIRED
+            self.last_error = self._redact("server requires authorization; authorize via /mcp")
+            raise AuthRequired(self.last_error) from exc
 
     async def _oauth_preflight(self, coordinator):
         """Bounded token preflight before dispatch; never opens a browser."""

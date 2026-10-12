@@ -41,9 +41,12 @@ for (const trueColor of [true, false]) {
 		assert.match(plain[topRow]!, /^ {4}┌─+┐\s*$/);
 		assert.match(plain[resultRow]!, /^ {4}│ {3}Example inspection.* │\s*$/);
 		assert.match(plain[resultRow + 1]!, /^ {4}└─+┘\s*$/);
-		const assistant = plain.find(row => row.includes("I’ll inspect"));
-		assert.match(assistant!, /^ {2}● /, "chat keeps its marker away from the terminal edge");
-		assert.equal(plain[topRow]!.indexOf("┌"), assistant!.indexOf("●") + 2, "panel edge aligns with the assistant text column");
+		const assistantRow = plain.findIndex(row => row.includes("I’ll inspect"));
+		const assistant = plain[assistantRow]!;
+		assert.match(plain[assistantRow - 1]!, /^ {2}┌─ assistant .*┐\s*$/, "assistant response has a square heading");
+		assert.match(assistant, /^ {2}│ I’ll inspect.* │\s*$/, "assistant prose stays inside its frame");
+		assert.match(plain[assistantRow + 1]!, /^ {2}└─+┘\s*$/, "assistant frame closes cleanly");
+		assert.equal(plain[topRow]!.indexOf("┌"), assistant.indexOf("I’ll"), "tool edge aligns with the assistant text column");
 		assert.equal(plain[topRow - 1]?.trim(), "", "space outside the panel");
 		const edge = luminance(color(screen[topRow]!));
 		const fill = luminance(color(screen[resultRow]!, true));

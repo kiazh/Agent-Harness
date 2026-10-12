@@ -3,7 +3,7 @@
 Layout (root never supplied by RPC):
     <root>/index.json
     <root>/index.lock
-    <root>/grants/<sha256>. <writeid>.enc
+    <root>/grants/<sha256>.<writeid>.enc
     <root>/locks/<sha256>.lock
 
 AES-GCM with a 32-byte master key, fresh 12-byte nonce per write, AAD
@@ -72,24 +72,35 @@ def _check_secret_file(path: Path, *, max_bytes: int) -> None:
         raise ValueError("credential file must not be group/world accessible")
 
 
-def _ensure_dirs(root: Path) -> None:
-    root.mkdir(parents=True, exist_ok=True)
+def _chmod_700(path: Path) -> None:
     if os.name != "nt":
         try:
-            os.chmod(root, 0o700)
+            os.chmod(path, 0o700)
         except OSError:
             pass
+
+
+def _index_floor(index: dict[str, Any], key: str) -> tuple[dict[str, Any] | None, int, int]:
+    """Current grant entry, its generation, and the commit floor."""
+    current = index["grants"].get(key)
+    current_gen = int(current.get("generation", 0)) if current else 0
+    tombstone_gen = int(index["tombstones"].get(key, 0))
+    return current, current_gen, max(current_gen, tombstone_gen)
+
+
+def _ensure_dirs(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    _chmod_700(root)
     for sub in ("grants", "locks"):
         path = root / sub
         path.mkdir(parents=True, exist_ok=True)
-        if os.name != "nt":
-            try:
-                os.chmod(path, 0o700)
-            except OSError:
-                pass
+        _chmod_700(path)
 
 
 def _atomic_write(path: Path, data: bytes, *, mode: int = 0o600) -> None:
+    """Crash-safe replace: temp file + fsync + rename + dir fsync, so a
+    crash never leaves a half-written credential or index file. Tmp file is
+    cleaned on failure."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".oauth-")
     try:
@@ -375,10 +386,7 @@ class OAuthCredentialStore:
                     raise TimeoutError("oauth store lock acquisition timed out")
                 try:
                     index = self._read_index()
-                    current = index["grants"].get(key)
-                    current_gen = int(current.get("generation", 0)) if current else 0
-                    tombstone_gen = int(index["tombstones"].get(key, 0))
-                    floor = max(current_gen, tombstone_gen)
+                    current, current_gen, floor = _index_floor(index, key)
                     if expected_generation != floor:
                         raise ValueError("oauth generation mismatch; stale writer")
                     if record.generation != floor + 1 and not (
@@ -417,7 +425,7 @@ class OAuthCredentialStore:
                     os.close(fd)
 
         committed = await asyncio.to_thread(_commit)
-        # Defense in depth: report failure loudly; caller marks flow failed.
+
         return committed
 
     async def forget(
@@ -440,10 +448,7 @@ class OAuthCredentialStore:
                     raise TimeoutError("oauth store lock acquisition timed out")
                 try:
                     index = self._read_index()
-                    current = index["grants"].get(key)
-                    current_gen = int(current.get("generation", 0)) if current else 0
-                    tombstone_gen = int(index["tombstones"].get(key, 0))
-                    floor = max(current_gen, tombstone_gen)
+                    current, current_gen, floor = _index_floor(index, key)
                     if (
                         max_config_revision is not None
                         and current is not None
@@ -453,15 +458,17 @@ class OAuthCredentialStore:
                     if expected_generation != floor:
                         raise ValueError("oauth generation mismatch; stale forget")
                     new_gen = floor + 1
+                    old = None
                     if current is not None:
                         old = self.root / "grants" / str(current.get("envelope", ""))
+                        del index["grants"][key]
+                    index["tombstones"][key] = new_gen
+                    self._write_index(index)
+                    if old is not None:
                         try:
                             old.unlink()
                         except OSError:
                             pass
-                        del index["grants"][key]
-                    index["tombstones"][key] = new_gen
-                    self._write_index(index)
                     return new_gen
                 finally:
                     _file_lock_release(fd)
@@ -536,10 +543,3 @@ class OAuthCredentialStore:
                         os.close(fd)
             finally:
                 lock.release()
-
-    async def mark_refresh_state(self, binding: OAuthBinding, state: str) -> None:
-        record = await self.load(binding)
-        if record is None:
-            return
-        record.refresh_state = state
-        await self.save(record, expected_generation=record.generation)

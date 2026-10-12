@@ -736,3 +736,97 @@ async def test_legacy_fallback_seeds_cache_before_compaction(image_gateway, db_p
             await resumed.gateway.close()
     finally:
         await db.initialize_runtime_schema()
+
+
+async def test_legacy_scan_skips_newer_non_image_candidates(image_gateway, db_pool, caplog):
+    """The legacy scan must continue past a newer text chunk whose payload
+    trips the images-substring prefilter (a standalone "images" string that
+    is not the dict key), and must not log a spurious cap warning."""
+    import logging
+    import time
+
+    harness, sid, _provider = image_gateway
+    session_id = uuid.UUID(sid)
+    await context_manager.add_chunk(
+        session_id,
+        "harness",
+        "user_message",
+        {"content": "old picture", "images": [png()]},
+    )
+    time.sleep(0.02)
+    await context_manager.add_chunk(
+        session_id,
+        "harness",
+        "user_message",
+        {"content": "images"},
+    )
+    await db_pool.execute(
+        "DELETE FROM session_image_context WHERE session_id=$1 AND agent_id='harness'",
+        session_id,
+    )
+    with caplog.at_level(logging.WARNING, logger="ah.core.context"):
+        assert await context_manager.get_latest_images(session_id, "harness") == [png()]
+    assert "exhausted" not in caplog.text
+
+
+async def test_legacy_scan_advances_past_null_timestamp_candidate(image_gateway, db_pool):
+    """Legacy rows with NULL timestamps still advance after a false image match."""
+    import msgpack
+
+    _harness, sid, _provider = image_gateway
+    session_id = uuid.UUID(sid)
+    image_id, text_id = sorted((uuid.uuid4(), uuid.uuid4()))
+    for chunk_id, payload in (
+        (image_id, {"content": "old picture", "images": [png()]}),
+        (text_id, {"content": "images"}),
+    ):
+        await db_pool.execute(
+            """INSERT INTO context_chunks
+               (id, session_id, agent_id, chunk_type, payload_msgpack, created_at)
+               VALUES ($1, $2, 'harness', 'user_message', $3, NULL)""",
+            chunk_id,
+            session_id,
+            msgpack.packb(payload, use_bin_type=True),
+        )
+
+    assert await context_manager.get_latest_images(session_id, "harness") == [png()]
+
+
+async def test_fork_preserves_compacted_image_context(image_gateway):
+    """A fork keeps the latest image after its source chunk was compacted."""
+    from ah.core.session import session_manager
+
+    _harness, sid, _provider = image_gateway
+    source_id = uuid.UUID(sid)
+    image = png()
+    chunk = await context_manager.add_chunk(
+        source_id, "harness", "user_message", {"content": "picture", "images": [image]}
+    )
+    await context_manager.replace_chunks_by_ids(source_id, [chunk.id], [])
+    assert await context_manager.get_latest_images(source_id, "harness") == [image]
+    fork = await session_manager.fork(source_id)
+    try:
+        assert await context_manager.get_latest_images(fork.id, "harness") == [image]
+    finally:
+        await session_manager.delete(fork.id)
+
+
+async def test_fork_without_image_cache_table_keeps_text_chunks(image_gateway, db_pool):
+    """Forking on an unmigrated database still copies ordinary context."""
+    from ah.core.session import session_manager
+
+    _harness, sid, _provider = image_gateway
+    source_id = uuid.UUID(sid)
+    await context_manager.add_chunk(
+        source_id, "harness", "user_message", {"content": "keep this text"}
+    )
+    await db_pool.execute("DROP TABLE IF EXISTS session_image_context")
+    fork = None
+    try:
+        fork = await session_manager.fork(source_id)
+        copied = await context_manager.get_chunks(fork.id)
+        assert [chunk.payload["content"] for chunk in copied] == ["keep this text"]
+    finally:
+        if fork is not None:
+            await session_manager.delete(fork.id)
+        await db.initialize_runtime_schema()

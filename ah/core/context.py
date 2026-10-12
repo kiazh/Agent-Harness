@@ -33,6 +33,27 @@ db = LazyDb()
 _MAX_IMAGE_CONTEXT_BYTES = MAX_TOTAL_IMAGE_BYTES + 8192
 
 
+def _document_source_for(
+    chunk_type: Any, payload: dict[str, Any], current: str | None
+) -> str | None:
+    """Resolve a document chunk's source: explicit value wins, else the
+    payload's source/metadata.source fallback. Never raises."""
+    if current is not None or chunk_type != "document":
+        return current
+    try:
+        src = payload.get("source")
+        if isinstance(src, str) and src:
+            return src
+        meta = payload.get("metadata")
+        if isinstance(meta, dict):
+            msrc = meta.get("source")
+            if isinstance(msrc, str) and msrc:
+                return msrc
+    except Exception:
+        return None
+    return None
+
+
 def _is_missing_image_relation(exc: BaseException) -> bool:
     """Detect a missing session_image_context table (unmigrated database).
 
@@ -137,11 +158,7 @@ def _search_text_for(payload: dict[str, Any]) -> str | None:
 
 
 class ContextManager:
-    """CRUD for context chunks stored as MessagePack with batch insert support.
-
-    Includes an LRU cache for recent context per session to avoid redundant
-    database queries when the same session is accessed repeatedly.
-    """
+    """CRUD for context chunks stored as MessagePack with batch insert support."""
 
     def __init__(self, batch_size: int = 50, cache_size: int = 128) -> None:
         self._batch_size = batch_size
@@ -162,19 +179,7 @@ class ContextManager:
         embedding_str = None
         if embedding is not None:
             embedding_str = embedding_to_str(embedding)
-        if document_source is None and chunk_type == "document":
-            try:
-                src = payload.get("source")
-                if isinstance(src, str) and src:
-                    document_source = src
-                else:
-                    meta = payload.get("metadata")
-                    if isinstance(meta, dict):
-                        msrc = meta.get("source")
-                        if isinstance(msrc, str) and msrc:
-                            document_source = msrc
-            except Exception:
-                document_source = None
+        document_source = _document_source_for(chunk_type, payload, document_source)
         query = _ADD_CHUNK_SQL
         base_args = (
             session_id,
@@ -216,12 +221,12 @@ class ContextManager:
         Optional keys: token_count, embedding, document_source.
 
         This is significantly faster than calling add_chunk() in a loop because
-        it uses a single executemany() instead of N individual INSERTs.
+        it uses a single execute with UNNEST + RETURNING instead of N individual INSERTs.
         """
         if not chunks:
             return []
 
-        # Prepare records for executemany
+        # Prepare columns for the single UNNEST execute
         records = []
         image_updates: dict[tuple[uuid.UUID, str], bytes] = {}
         for c in chunks:
@@ -232,21 +237,9 @@ class ContextManager:
             embedding_str = None
             if c.get("embedding") is not None:
                 embedding_str = embedding_to_str(c["embedding"])
-            doc_src = c.get("document_source")
-            if doc_src is None and c.get("chunk_type") == "document":
-                try:
-                    payload = c["payload"]
-                    src = payload.get("source")
-                    if isinstance(src, str) and src:
-                        doc_src = src
-                    else:
-                        meta = payload.get("metadata")
-                        if isinstance(meta, dict):
-                            msrc = meta.get("source")
-                            if isinstance(msrc, str) and msrc:
-                                doc_src = msrc
-                except Exception:
-                    doc_src = None
+            doc_src = _document_source_for(
+                c.get("chunk_type"), c.get("payload") or {}, c.get("document_source")
+            )
             records.append(
                 (
                     c["session_id"],
@@ -261,7 +254,7 @@ class ContextManager:
             )
 
         # Assign ids client-side so the batch insert can be a single
-        # executemany() *and* we can still fetch back exactly the rows we
+        # UNNEST execute *and* we can still fetch back exactly the rows we
         # inserted. Selecting by session_id with a LIMIT would also match
         # pre-existing rows in that session (created_at is identical for every
         # row written in one transaction, so the ordering is nondeterministic).
@@ -458,13 +451,16 @@ class ContextManager:
                      AND chunk_type IN ('user', 'user_message')
                      AND octet_length(payload_msgpack) <= $3
                      AND position($4::bytea IN payload_msgpack) > 0
-                     AND ($5::timestamptz IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
-                               < ($5, $6::uuid))
+                     AND ($6::uuid IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
+                               < (COALESCE($5::timestamptz, '0001-01-01 00:00:00+00'::timestamptz), $6::uuid))
                    ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) DESC,
                             id DESC LIMIT 1""",
                 session_id,
                 agent_id,
                 MAX_TOTAL_IMAGE_BYTES * 2,
+                # b"\xa6images" is the MessagePack fixstr encoding of the
+                # 'images' key: pre-filters text-only rows. The size cap is 2x
+                # the image budget to admit base64 expansion in old payloads.
                 b"\xa6images",
                 before[0] if before else None,
                 before[1] if before else None,
@@ -489,13 +485,13 @@ class ContextManager:
                     exc_info=True,
                 )
             before = (row["created_at"], row["id"])
-            logger.warning(
-                "legacy image scan exceeded %d rows for session %s agent %s; stopping",
-                _LEGACY_SCAN_ROW_LIMIT,
-                session_id,
-                agent_id,
-            )
-            return []
+        logger.warning(
+            "legacy image scan exhausted %d rows without images for session %s agent %s; stopping",
+            _LEGACY_SCAN_ROW_LIMIT,
+            session_id,
+            agent_id,
+        )
+        return []
 
     async def get_chunks(
         self,
@@ -512,7 +508,7 @@ class ContextManager:
         if chunk_type:
             rows = await db.fetch(
                 """
-                SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
+                SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
                 FROM context_chunks
                 WHERE session_id = $1 AND chunk_type = $2
                 ORDER BY created_at DESC, id DESC
@@ -526,7 +522,7 @@ class ContextManager:
         else:
             rows = await db.fetch(
                 """
-                SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
+                SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
                 FROM context_chunks
                 WHERE session_id = $1
                 ORDER BY created_at DESC, id DESC
@@ -557,11 +553,11 @@ class ContextManager:
         if chunk_type:
             rows = await db.fetch(
                 """
-                SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
+                SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
                 FROM context_chunks
                 WHERE session_id = $1 AND chunk_type = $2
-                  AND ($3::timestamptz IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
-                       < ($3, $4::uuid))
+                  AND ($4::uuid IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
+                       < (COALESCE($3::timestamptz, '0001-01-01 00:00:00+00'::timestamptz), $4::uuid))
                 ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) DESC, id DESC
                 LIMIT $5
                 """,
@@ -574,11 +570,11 @@ class ContextManager:
         else:
             rows = await db.fetch(
                 """
-                SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
+                SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
                 FROM context_chunks
                 WHERE session_id = $1
-                  AND ($2::timestamptz IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
-                       < ($2, $3::uuid))
+                  AND ($3::uuid IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
+                       < (COALESCE($2::timestamptz, '0001-01-01 00:00:00+00'::timestamptz), $3::uuid))
                 ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) DESC, id DESC
                 LIMIT $4
                 """,
@@ -604,11 +600,11 @@ class ContextManager:
         """
         rows = await db.fetch(
             """
-            SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at
+            SELECT id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
             FROM context_chunks
             WHERE session_id = $1
-              AND ($2::timestamptz IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
-                   > ($2, $3::uuid))
+              AND ($3::uuid IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
+                   > (COALESCE($2::timestamptz, '0001-01-01 00:00:00+00'::timestamptz), $3::uuid))
             ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) ASC, id ASC
             LIMIT $4
             """,
@@ -711,7 +707,8 @@ class ContextManager:
         return results
 
     async def mark_accessed(self, chunk_id: uuid.UUID) -> None:
-        """Mark a chunk as accessed (for LRU eviction)."""
+        """Mark a chunk as accessed (updates accessed_at for observability;
+        eviction is FIFO by created_at, not LRU)."""
         await db.execute(
             "UPDATE context_chunks SET accessed_at = now() WHERE id = $1",
             chunk_id,
@@ -1004,9 +1001,6 @@ class ContextManager:
             )
         for row in rows:
             sim = row["similarity"]
-            # Build a ContextChunk from the archived row
-            from ah.core.serialization import str_to_embedding
-
             payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
             emb = str_to_embedding(row["embedding"]) if row["embedding"] else None
             chunk = ContextChunk(
@@ -1184,7 +1178,6 @@ class ContextManager:
                         rows_to_archive = [row for row in selected if row["id"] in claimed_ids]
 
                         if rows_to_archive:
-                            # Batch insert into context_archive
                             await conn.executemany(
                                 """
                                 INSERT INTO context_archive
@@ -1214,7 +1207,6 @@ class ContextManager:
                                     for row in rows_to_archive
                                 ],
                             )
-                            # Batch delete
                             await conn.execute(
                                 "DELETE FROM context_chunks WHERE id = ANY($1::uuid[])",
                                 [row["id"] for row in rows_to_archive],

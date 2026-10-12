@@ -52,7 +52,7 @@ def action_for_tool(name: str, args: dict) -> dict:
         return {"operation": "file.read", "targets": [str(args.get("path", ""))]}
     if name == "search_documents":
         return {"operation": "context.read", "targets": []}
-    if name in ("web_search", "web_extract"):
+    if name in ("web_search", "web_extract", "web_research"):
         return {
             "operation": "network.fetch",
             "network": [str(args.get("url", args.get("query", "")))[:300]],
