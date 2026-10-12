@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 from ah.core.exceptions import ToolError
 from ah.core.self_knowledge import FEATURES, configuration
@@ -29,6 +30,7 @@ async def harness_status() -> str:
 
         growth = await growth_store.get(agent_id)
         rsi = await growth_store.rsi_status(agent_id)
+        installed = _installed_inventory()
         return {
             "read_only": True,
             "session": {
@@ -57,6 +59,7 @@ async def harness_status() -> str:
                 },
             },
             "features": FEATURES,
+            "installed": installed,
         }
 
     try:
@@ -82,8 +85,67 @@ async def harness_status() -> str:
         safe["learning"]["rsi"]["trial"] = None
         safe["learning"]["rsi"]["trial_omitted"] = "Inspect full trial with /growth show"
         serialized = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) > 8500 and "installed" in safe:
+        installed = safe["installed"]
+        for source, entry in (installed.get("skills_by_source") or {}).items():
+            if isinstance(entry, dict) and entry.pop("names", None) is not None:
+                installed.setdefault("installed_omitted", []).append(source)
+        serialized = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
     if len(serialized) > 8500:
         # Corrupt/legacy state must not defeat the tool-message bound and yield
         # truncated JSON. Refuse safely instead of implying omitted data is empty.
         raise ToolError("Harness status exceeds the response limit; inspect /persona and /growth")
     return serialized
+
+
+def _installed_inventory() -> dict:
+    """Bounded skill inventory by provenance for self-knowledge questions.
+
+    Bundled skills are reported by count only (hundreds of names would
+    exhaust the tool-message budget); custom sources list names. Skills
+    installed from repo links carry an install manifest: they report as
+    url provenance with their source link instead of merging into local.
+    A registry failure is marked unavailable rather than reported as an
+    empty inventory.
+    """
+    try:
+        import ah.skills.registry as skills_module
+
+        registry = skills_module.skill_registry
+        registry.load_all()
+        by_source: dict[str, list[str]] = {}
+        for skill in registry.list_skills():
+            if not skill.enabled:
+                continue
+            by_source.setdefault(_provenance_of(registry, skill), []).append(skill.name)
+        inventory: dict[str, dict] = {}
+        for source, names in sorted(by_source.items()):
+            entry: dict = {"count": len(names)}
+            if source != "builtin-ecc":
+                entry["names"] = sorted(names)[:30]
+            inventory[source] = entry
+        return {"skills_by_source": inventory}
+    except Exception:
+        return {"skills_by_source": {}, "inventory_unavailable": True}
+
+
+def _provenance_of(registry, skill) -> str:
+    """Resolve display provenance, consulting install manifests for locals."""
+    if (skill.source_type or "local") != "local":
+        return skill.source_type
+    candidates = {Path(skill.file_path).parent}
+    try:
+        candidates.add(registry.skills_dir / skill.name.lower())
+    except (OSError, ValueError):
+        pass
+    for directory in candidates:
+        try:
+            manifest = json.loads(
+                (directory / ".install-manifest.json").read_text(encoding="utf-8")
+            )
+        except (ValueError, OSError):
+            continue
+        source = manifest.get("source", "")
+        if isinstance(source, str) and source.startswith("https://github.com/"):
+            return f"url:{source}"
+    return "local"

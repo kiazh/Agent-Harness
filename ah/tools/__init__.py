@@ -11,6 +11,7 @@ from ah.tools import (
     mcp,  # noqa: F401 — lazy connector catalogs and exact remote calls
     memory,  # noqa: F401 — remember, recall
     rag,  # noqa: F401 — index_document, search_documents
+    repo,  # noqa: F401 — repo_stage, repo_activate
     session_recall,  # noqa: F401 — transcript recall
     skills,  # noqa: F401 — skill discovery and reading
     terminal,  # noqa: F401 — terminal
@@ -27,6 +28,7 @@ __all__ = [
     "terminal",
     "memory",
     "rag",
+    "repo",
     "session_recall",
     "skills",
     "agents",
