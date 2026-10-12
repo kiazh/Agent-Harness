@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ah.core.models import LLMResponse
-from ah.memory import (
+from machina.core.models import LLMResponse
+from machina.memory import (
     ForgettingModel,
     ImportanceScorer,
     MemoryConsolidator,
@@ -231,7 +231,7 @@ class TestMemoryStore:
 
     async def test_add_memory(self, store, mock_db):
         """Test adding a memory entry."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=_make_row())
             entry = await store.add(
                 session_id=uuid.uuid4(),
@@ -246,7 +246,7 @@ class TestMemoryStore:
     async def test_get_memory(self, store, mock_db):
         """Test retrieving a memory by ID."""
         entry_id = uuid.uuid4()
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=_make_row(id=entry_id))
             entry = await store.get(entry_id)
             assert entry is not None
@@ -254,28 +254,28 @@ class TestMemoryStore:
 
     async def test_get_memory_not_found(self, store, mock_db):
         """Test retrieving a non-existent memory."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=None)
             entry = await store.get(uuid.uuid4())
             assert entry is None
 
     async def test_search_memories(self, store, mock_db):
         """Test searching memories."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.fetch = AsyncMock(return_value=[_make_row()])
             entries = await store.search(agent_id="harness")
             assert len(entries) == 1
 
     async def test_search_memories_empty(self, store, mock_db):
         """Test searching memories when none exist."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.fetch = AsyncMock(return_value=[])
             entries = await store.search(agent_id="harness")
             assert entries == []
 
     async def test_search_by_category(self, store, mock_db):
         """Test searching memories filtered by category."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.fetch = AsyncMock(return_value=[_make_row(category="preference")])
             entries = await store.search(category="preference")
             assert len(entries) == 1
@@ -283,21 +283,21 @@ class TestMemoryStore:
 
     async def test_delete_memory(self, store, mock_db):
         """Test deleting a memory entry."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.execute = AsyncMock(return_value="DELETE 1")
             result = await store.delete(uuid.uuid4())
             assert result is True
 
     async def test_delete_memory_not_found(self, store, mock_db):
         """Test deleting a non-existent memory."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.execute = AsyncMock(return_value="DELETE 0")
             result = await store.delete(uuid.uuid4())
             assert result is False
 
     async def test_search_by_embedding(self, store, mock_db):
         """Test searching memories by embedding similarity."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.fetch = AsyncMock(return_value=[{**_make_row(), "similarity": 0.95}])
             results = await store.search_by_embedding([0.1] * 1536, limit=5)
             assert len(results) == 1
@@ -306,42 +306,42 @@ class TestMemoryStore:
 
     async def test_update_access(self, store, mock_db):
         """Test updating access count."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.execute = AsyncMock(return_value="UPDATE 1")
             await store.update_access(uuid.uuid4())
             mock_db.execute.assert_called_once()
 
     async def test_update_importance(self, store, mock_db):
         """Test updating importance."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.execute = AsyncMock(return_value="UPDATE 1")
             await store.update_importance(uuid.uuid4(), 0.9)
             mock_db.execute.assert_called_once()
 
     async def test_list_all(self, store, mock_db):
         """Test listing all memories."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.fetch = AsyncMock(return_value=[_make_row()])
             entries = await store.list_all()
             assert len(entries) == 1
 
     async def test_count(self, store, mock_db):
         """Test counting memories."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.fetchval = AsyncMock(return_value=42)
             count = await store.count()
             assert count == 42
 
     async def test_delete_by_session(self, store, mock_db):
         """Test deleting all memories for a session."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.execute = AsyncMock(return_value="DELETE 5")
             count = await store.delete_by_session(uuid.uuid4())
             assert count == 5
 
     async def test_get_weak_memories(self, store, mock_db):
         """Test getting weak memories for forgetting."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.fetch = AsyncMock(return_value=[_make_row(importance=0.02)])
             entries = await store.get_weak_memories(threshold=0.05)
             assert len(entries) == 1
@@ -466,7 +466,7 @@ class TestImportanceScorer:
         assert score1 == score2
 
     def test_breakdown_uses_one_recency_snapshot(self, scorer, monkeypatch):
-        import ah.memory.scorer as module
+        import machina.memory.scorer as module
 
         entry = MemoryEntry(uuid.uuid4(), None, "harness", "Test", "fact")
         ages = iter([1.0, 20.0])
@@ -711,7 +711,7 @@ class TestMemoryRetriever:
 
         attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
-        with patch("ah.memory.retriever.db", mock_db):
+        with patch("machina.memory.retriever.db", mock_db):
             results = await retriever.retrieve("Python")
         assert isinstance(results, list)
 
@@ -742,7 +742,7 @@ class TestMemoryRetriever:
 
         attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
-        with patch("ah.memory.retriever.db", mock_db):
+        with patch("machina.memory.retriever.db", mock_db):
             results = await retriever.retrieve("nonexistent")
         assert isinstance(results, list)
 
@@ -763,7 +763,7 @@ class TestMemoryRetriever:
 
         attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
-        with patch("ah.memory.retriever.db", mock_db):
+        with patch("machina.memory.retriever.db", mock_db):
             results = await retriever.retrieve("test", agent_id="harness")
         assert isinstance(results, list)
 
@@ -784,7 +784,7 @@ class TestMemoryRetriever:
 
         attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
-        with patch("ah.memory.retriever.db", mock_db):
+        with patch("machina.memory.retriever.db", mock_db):
             results = await retriever.retrieve("test", category="preference")
         assert isinstance(results, list)
 
@@ -806,7 +806,7 @@ class TestMemoryRetriever:
 
         attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
-        with patch("ah.memory.retriever.db", mock_db):
+        with patch("machina.memory.retriever.db", mock_db):
             await retriever.retrieve("test")
         # update_access may or may not be called depending on implementation
         assert isinstance(mock_store.update_access, AsyncMock)
@@ -836,7 +836,7 @@ class TestMemoryRetriever:
 
         attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
-        with patch("ah.memory.retriever.db", mock_db):
+        with patch("machina.memory.retriever.db", mock_db):
             results = await retriever.retrieve(
                 "test",
                 query_embedding=[0.1] * 1536,
@@ -944,7 +944,7 @@ class TestMemoryConsolidator:
 
     async def test_consolidate_session_no_chunks(self, consolidator, mock_store):
         """Test consolidating session with no chunks."""
-        with patch("ah.memory.consolidator.context_manager") as mock_cm:
+        with patch("machina.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[])
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
             assert results.status == "empty" and results.entries == []
@@ -960,13 +960,13 @@ class TestMemoryIntegration:
 
     async def test_full_lifecycle(self, mock_db):
         """Test the full memory lifecycle: add → retrieve → score → forget."""
-        from ah.memory import ForgettingModel, ImportanceScorer, MemoryStore
+        from machina.memory import ForgettingModel, ImportanceScorer, MemoryStore
 
         store = MemoryStore()
         scorer = ImportanceScorer()
         forgetting = ForgettingModel()
 
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             # Add memory
             mock_db.fetchrow = AsyncMock(return_value=_make_row())
             entry = await store.add(
@@ -987,12 +987,12 @@ class TestMemoryIntegration:
 
     async def test_memory_with_agent_context(self, mock_db):
         """Test that memories integrate with agent context."""
-        from ah.memory import MemoryStore
+        from machina.memory import MemoryStore
 
         store = MemoryStore()
         session_id = uuid.uuid4()
 
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=_make_row(session_id=session_id))
             entry = await store.add(
                 session_id=session_id,

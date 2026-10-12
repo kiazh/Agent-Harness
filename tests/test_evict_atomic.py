@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ah.memory.store import MemoryStore
+from machina.memory.store import MemoryStore
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ class TestEvictWeakMemoriesAtomic:
         """With max_memories and no agent filter, should use single CTE query."""
         mock_db.fetchval = AsyncMock(return_value=100)
         mock_db.execute = AsyncMock(return_value="DELETE 90")
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             count = await store.evict_weak_memories(max_memories=10)
         assert count == 90
         # Should NOT have separate COUNT then DELETE — should use CTE
@@ -42,7 +42,7 @@ class TestEvictWeakMemoriesAtomic:
         """With max_memories and agent filter, should use single CTE query."""
         mock_db.fetchval = AsyncMock(return_value=50)
         mock_db.execute = AsyncMock(return_value="DELETE 40")
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             count = await store.evict_weak_memories(max_memories=10, agent_id="harness")
         assert count == 40
         mock_db.fetchval.assert_not_called()
@@ -51,20 +51,20 @@ class TestEvictWeakMemoriesAtomic:
         """When count <= max_memories, should return 0 without DELETE."""
         mock_db.fetchval = AsyncMock(return_value=5)
         mock_db.execute = AsyncMock(return_value="DELETE 0")
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             count = await store.evict_weak_memories(max_memories=10)
         assert count == 0
 
     async def test_evict_by_threshold_still_works(self, store, mock_db):
         """Threshold-based eviction should still work as before."""
         mock_db.execute = AsyncMock(return_value="DELETE 3")
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             count = await store.evict_weak_memories(threshold=0.05)
         assert count == 3
 
     async def test_evict_by_threshold_with_agent(self, store, mock_db):
         """Threshold-based eviction with agent filter should still work."""
         mock_db.execute = AsyncMock(return_value="DELETE 2")
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             count = await store.evict_weak_memories(threshold=0.05, agent_id="harness")
         assert count == 2

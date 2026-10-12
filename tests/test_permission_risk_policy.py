@@ -5,9 +5,9 @@ import uuid
 
 import pytest
 
-from ah.core.config import config
-from ah.permissions.policy import build_request, decide
-from ah.permissions.tools import action_for_tool
+from machina.core.config import config
+from machina.permissions.policy import build_request, decide
+from machina.permissions.tools import action_for_tool
 
 
 @pytest.fixture
@@ -132,7 +132,7 @@ def test_grouped_file_option_cannot_use_full_grant_to_read_credentials(workspace
         "pytest -oaddopts=whatever",
         "cp config.txt .git/config",
         "touch .git/config",
-        "touch .agent-harness/config.yaml",
+        "touch .machina/config.yaml",
     ],
 )
 def test_command_options_and_security_settings_need_review(workspace, command):
@@ -141,8 +141,8 @@ def test_command_options_and_security_settings_need_review(workspace, command):
 
 
 async def test_docker_routine_project_work_has_writable_mount(workspace, monkeypatch):
-    from ah.permissions.broker import clear_execution_context, permission_broker
-    from ah.tools import terminal as backend
+    from machina.permissions.broker import clear_execution_context, permission_broker
+    from machina.tools import terminal as backend
 
     seen = []
 
@@ -168,7 +168,7 @@ async def test_docker_routine_project_work_has_writable_mount(workspace, monkeyp
 
 
 def test_extension_approval_binds_arguments(workspace, monkeypatch):
-    from ah.tools.base import Tool, registry
+    from machina.tools.base import Tool, registry
 
     monkeypatch.setitem(
         registry._tools,
@@ -194,10 +194,10 @@ def test_extension_approval_binds_arguments(workspace, monkeypatch):
 
 
 async def test_real_tool_loop_writes_and_reads_without_approval(workspace, monkeypatch):
-    from ah.core.agent import BaseReActAgent
-    from ah.core.context import context_manager
-    from ah.core.models import LLMResponse
-    from ah.permissions.broker import set_approval_handler
+    from machina.core.agent import BaseReActAgent
+    from machina.core.context import context_manager
+    from machina.core.models import LLMResponse
+    from machina.permissions.broker import set_approval_handler
 
     class Agent(BaseReActAgent):
         def __init__(self):
@@ -243,8 +243,8 @@ async def test_real_tool_loop_writes_and_reads_without_approval(workspace, monke
 
 
 async def test_broker_authorized_terminal_uses_project_cwd(workspace):
-    from ah.permissions.broker import clear_execution_context, permission_broker
-    from ah.tools.terminal import terminal
+    from machina.permissions.broker import clear_execution_context, permission_broker
+    from machina.tools.terminal import terminal
 
     request = build_request(tool="terminal", **action_for_tool("terminal", {"command": "pwd"}))
     try:
@@ -255,8 +255,8 @@ async def test_broker_authorized_terminal_uses_project_cwd(workspace):
 
 
 async def test_project_test_runner_executes_without_card(workspace):
-    from ah.permissions.broker import clear_execution_context, permission_broker
-    from ah.tools.terminal import terminal
+    from machina.permissions.broker import clear_execution_context, permission_broker
+    from machina.tools.terminal import terminal
 
     request = build_request(
         tool="terminal", **action_for_tool("terminal", {"command": "python -m pytest --version"})

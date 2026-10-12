@@ -8,12 +8,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ah.memory.identity import (
+from machina.memory.identity import (
     AgentBelief,
     IdentityGate,
     MemoryProvenance,
 )
-from ah.memory.models import MemoryEntry
+from machina.memory.models import MemoryEntry
 
 
 def _make_belief(**overrides):
@@ -108,7 +108,7 @@ class TestMemoryProvenance:
 
     def test_memory_provenance_signature(self, monkeypatch):
         """Verify memory provenance is signed."""
-        monkeypatch.setenv("AGENT_HARNESS_PROVENANCE_KEY", "test-provenance-secret")
+        monkeypatch.setenv("MACHINA_PROVENANCE_KEY", "test-provenance-secret")
         memory_id = uuid.uuid4()
         content = "Test memory content"
         source_agent = "harness"
@@ -166,7 +166,7 @@ class TestIdentityGate:
         """Verify consistent memories pass validation."""
         memory = _make_memory(content="Python is a great programming language")
 
-        with patch("ah.memory.identity.db", mock_db):
+        with patch("machina.memory.identity.db", mock_db):
             mock_db.fetchrow = AsyncMock(
                 side_effect=[
                     _make_belief_row(),  # load beliefs
@@ -182,7 +182,7 @@ class TestIdentityGate:
         """Verify inconsistent memories are rejected."""
         memory = _make_memory(content="Python is terrible and should never be used")
 
-        with patch("ah.memory.identity.db", mock_db):
+        with patch("machina.memory.identity.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=_make_belief_row())
             result = await gate.validate_incoming("harness", memory)
 
@@ -193,7 +193,7 @@ class TestIdentityGate:
         """Verify irrelevant memories are rejected."""
         memory = _make_memory(content="The weather is nice today")
 
-        with patch("ah.memory.identity.db", mock_db):
+        with patch("machina.memory.identity.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=_make_belief_row())
             result = await gate.validate_incoming("harness", memory)
 
@@ -204,7 +204,7 @@ class TestIdentityGate:
         memory = _make_memory(content="Python is a great programming language")
         mock_db.fetchrow = AsyncMock(side_effect=RuntimeError("database unavailable"))
 
-        with patch("ah.memory.identity.db", mock_db):
+        with patch("machina.memory.identity.db", mock_db):
             result = await gate.validate_incoming("harness", memory)
 
         assert result.is_valid is False
@@ -216,7 +216,7 @@ class TestIdentityGate:
             side_effect=[_make_belief_row(), RuntimeError("provenance table unavailable")]
         )
 
-        with patch("ah.memory.identity.db", mock_db):
+        with patch("machina.memory.identity.db", mock_db):
             result = await gate.validate_incoming("harness", memory)
 
         assert result.is_valid is False
@@ -228,7 +228,7 @@ class TestIdentityGate:
         memory = _make_memory()
         provenance = MemoryProvenance(memory.id, "harness", "invalid-signature")
 
-        with patch("ah.memory.identity.db", mock_db):
+        with patch("machina.memory.identity.db", mock_db):
             result = await gate.validate_incoming("harness", memory, provenance)
 
         assert result.is_valid is False
@@ -248,7 +248,7 @@ class TestIdentityGate:
         """Verify affected memories are quarantined on drift."""
         memory_ids = [uuid.uuid4(), uuid.uuid4()]
 
-        with patch("ah.memory.identity.db", mock_db):
+        with patch("machina.memory.identity.db", mock_db):
             mock_db.execute = AsyncMock(return_value="UPDATE 2")
             result = await gate.contain_drift("harness", memory_ids)
 

@@ -4,12 +4,12 @@ import asyncio
 
 import pytest
 
-from ah.observability.audit import AuditPersistence
+from machina.observability.audit import AuditPersistence
 
 
 @pytest.mark.asyncio
 async def test_stop_finishes_when_queue_is_full_and_database_is_stalled(monkeypatch):
-    from ah.observability import audit
+    from machina.observability import audit
 
     started = asyncio.Event()
     release = asyncio.Event()

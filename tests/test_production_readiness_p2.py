@@ -15,10 +15,10 @@ from unittest.mock import AsyncMock
 
 async def test_batch_vector_insert_with_embeddings(db_pool, monkeypatch):
     """$7::text[]::vector[] cast accepted by the real PG16 + pgvector server."""
-    import ah.core.context as cmod
+    import machina.core.context as cmod
 
     monkeypatch.setattr(cmod, "db", db_pool)
-    from ah.core.context import context_manager
+    from machina.core.context import context_manager
 
     sid = None
     try:
@@ -50,10 +50,10 @@ async def test_batch_vector_insert_with_embeddings(db_pool, monkeypatch):
 
 
 async def test_batch_insert_all_none_embeddings(db_pool, monkeypatch):
-    import ah.core.context as cmod
+    import machina.core.context as cmod
 
     monkeypatch.setattr(cmod, "db", db_pool)
-    from ah.core.context import context_manager
+    from machina.core.context import context_manager
 
     sid = None
     try:
@@ -84,10 +84,10 @@ async def test_batch_insert_all_none_embeddings(db_pool, monkeypatch):
 
 async def test_batch_insert_concurrent_with_single_inserts(db_pool, monkeypatch):
     """Concurrent single-row inserts are not lost or corrupted by a batch."""
-    import ah.core.context as cmod
+    import machina.core.context as cmod
 
     monkeypatch.setattr(cmod, "db", db_pool)
-    from ah.core.context import context_manager
+    from machina.core.context import context_manager
 
     sid = None
     try:
@@ -133,10 +133,10 @@ async def test_batch_insert_concurrent_with_single_inserts(db_pool, monkeypatch)
 
 async def test_unsupported_vector_dimension_fails_loudly(db_pool, monkeypatch):
     """A clear failure is surfaced when the vector cast cannot work."""
-    import ah.core.context as cmod
+    import machina.core.context as cmod
 
     monkeypatch.setattr(cmod, "db", db_pool)
-    from ah.core.context import context_manager
+    from machina.core.context import context_manager
 
     row = await db_pool.fetchrow(
         "INSERT INTO sessions (title, agent_id) VALUES ($1,$2) RETURNING id",
@@ -168,10 +168,10 @@ async def test_unsupported_vector_dimension_fails_loudly(db_pool, monkeypatch):
 
 async def test_batch_insert_preserves_document_source(db_pool, monkeypatch):
     """Batch insert persists document_source so counts use document identity."""
-    import ah.core.context as cmod
+    import machina.core.context as cmod
 
     monkeypatch.setattr(cmod, "db", db_pool)
-    from ah.core.context import context_manager
+    from machina.core.context import context_manager
 
     sid = None
     try:
@@ -209,7 +209,7 @@ async def test_batch_insert_preserves_document_source(db_pool, monkeypatch):
 
 async def test_startup_and_refresh_run_detection_off_loop(monkeypatch):
     """startup()/refresh() execute probes via asyncio.to_thread."""
-    import ah.core.runtime as rt
+    import machina.core.runtime as rt
 
     calls = {"providers": 0, "sandbox": 0, "toggles": 0}
     orig_p, orig_s, orig_t = rt._detect_providers, rt._detect_sandbox, rt._detect_toggles
@@ -247,7 +247,7 @@ async def test_detection_runs_while_a_slow_probe_blocks_the_thread(monkeypatch):
     """A blocking thread must not stall the event loop."""
     import threading
 
-    import ah.core.runtime as rt
+    import machina.core.runtime as rt
 
     release = threading.Event()
     entered = threading.Event()
@@ -293,7 +293,7 @@ async def test_detection_runs_while_a_slow_probe_blocks_the_thread(monkeypatch):
 
 async def test_probe_timeout_and_missing_docker_degrade(monkeypatch):
     """Timeouts keep producing degraded/unavailable, never ready-by-default."""
-    import ah.core.runtime as rt
+    import machina.core.runtime as rt
 
     def run(*a, **k):
         raise TimeoutError("docker probe timed out")
@@ -312,7 +312,7 @@ async def test_probe_timeout_and_missing_docker_degrade(monkeypatch):
 
 async def test_ollama_probe_timeout_reports_unavailable(monkeypatch):
     """A slow Ollama socket probe still yields unavailable, not a hang."""
-    import ah.core.runtime as rt
+    import machina.core.runtime as rt
 
     def slow_connect(*a, **k):
         raise TimeoutError("ollama timed out")
@@ -327,7 +327,7 @@ async def test_ollama_probe_timeout_reports_unavailable(monkeypatch):
 
 def _finish_status_test_helpers():
     """Canonical shared helpers keep mock and production paths aligned."""
-    from ah.core.scheduler import _finish_fencing_ok, _finish_next_run, _finish_status
+    from machina.core.scheduler import _finish_fencing_ok, _finish_next_run, _finish_status
 
     assert _finish_status("e", None) == "error"
     assert _finish_status(None, None) == "idle"
@@ -349,10 +349,10 @@ async def _isolated_job(db_pool, monkeypatch, name, kind, interval_seconds=10, *
     claim_due() is global (ORDER BY next_run_at ASC), so push every other job
     into the future: assertions then describe only this test's job.
     """
-    import ah.core.scheduler as schedmod
+    import machina.core.scheduler as schedmod
 
     monkeypatch.setattr(schedmod, "db", db_pool)
-    from ah.core.scheduler import JobStore
+    from machina.core.scheduler import JobStore
 
     store = JobStore()
     sid = (
@@ -478,7 +478,7 @@ async def _run_broken_pipe_case(monkeypatch, pipe, cleaned):
     import sys
     import types
 
-    import ah.core.job_scripts as js
+    import machina.core.job_scripts as js
 
     class Proc:
         pid = 4242
@@ -496,11 +496,11 @@ async def _run_broken_pipe_case(monkeypatch, pipe, cleaned):
     async def fake_terminate(process, handle):
         cleaned.append(process)
 
-    # ah.core.windows_job imports COMError, which does not exist on macOS;
+    # machina.core.windows_job imports COMError, which does not exist on macOS;
     # stub it so the windows branch can be exercised on any host.
     monkeypatch.setitem(
         sys.modules,
-        "ah.core.windows_job",
+        "machina.core.windows_job",
         types.SimpleNamespace(create_script_job=lambda pid: 999, close_script_job=lambda h: None),
     )
     # Patch only this module's platform view; mutating the shared os module
@@ -521,7 +521,7 @@ async def _run_broken_pipe_case(monkeypatch, pipe, cleaned):
 
 async def test_broken_pipe_is_startup_failure(monkeypatch):
     """An early-exiting Windows bootstrap must not raise BrokenPipeError."""
-    from ah.core.job_scripts import js_broken_pipe_pipe as _mk
+    from machina.core.job_scripts import js_broken_pipe_pipe as _mk
 
     pipe = _mk(variant="write")
     cleaned = []
@@ -533,7 +533,7 @@ async def test_broken_pipe_is_startup_failure(monkeypatch):
 
 async def test_broken_pipe_on_drain_and_close(monkeypatch):
     """drain() raising is also a bounded startup failure, not a crash."""
-    from ah.core.job_scripts import js_broken_pipe_pipe as _mk
+    from machina.core.job_scripts import js_broken_pipe_pipe as _mk
 
     pipe = _mk(variant="drain")
     cleaned = []
@@ -567,8 +567,8 @@ def js_broken_pipe_pipe(variant: str = "write"):
 
 
 # Keep the helper importable from the module under test as well, so tests can
-# use ``from ah.core.job_scripts import js_broken_pipe_pipe``.
-import ah.core.job_scripts as _js  # noqa: E402
+# use ``from machina.core.job_scripts import js_broken_pipe_pipe``.
+import machina.core.job_scripts as _js  # noqa: E402
 
 _js.js_broken_pipe_pipe = js_broken_pipe_pipe
 
@@ -592,7 +592,7 @@ def _record(**extras):
 
 
 def test_json_formatter_drops_sensitive_extras():
-    from ah.core.metrics import JsonFormatter
+    from machina.core.metrics import JsonFormatter
 
     rec = _record(
         prompt="the user's private prompt",
@@ -611,7 +611,7 @@ def test_json_formatter_drops_sensitive_extras():
 
 
 def test_json_formatter_keeps_bounded_diagnostics():
-    from ah.core.metrics import JsonFormatter
+    from machina.core.metrics import JsonFormatter
 
     rec = _record(operation="rag.search", session_id="abc-123", count=5, duration_ms=12.5)
     out = JsonFormatter().format(rec)
@@ -622,7 +622,7 @@ def test_json_formatter_keeps_bounded_diagnostics():
 
 
 def test_json_formatter_bounds_and_redacts_allowed_values():
-    from ah.core.metrics import JsonFormatter
+    from machina.core.metrics import JsonFormatter
 
     rec = _record(
         operation="very-long " * 300,
@@ -636,13 +636,13 @@ def test_json_formatter_bounds_and_redacts_allowed_values():
 
 
 def test_json_formatter_preserves_standard_fields():
-    from ah.core.metrics import JsonFormatter
+    from machina.core.metrics import JsonFormatter
 
     rec = _record()
-    rec.name = "ah.metrics"
+    rec.name = "machina.metrics"
     out = JsonFormatter().format(rec)
     assert '"level": "INFO"' in out
-    assert '"logger": "ah.metrics"' in out
+    assert '"logger": "machina.metrics"' in out
     assert '"message": "message"' in out
 
 

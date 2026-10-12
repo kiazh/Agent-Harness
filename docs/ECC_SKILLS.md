@@ -26,7 +26,7 @@ Names are prefixed with `ecc-` to avoid local collisions: for example, `ecc-pyth
 
 Skills are reference instructions subordinate to the user, the agent's core role, and the harness permission broker. Skill reads are side-effect-free and do not add approval prompts. Scripts, installation, networking, deployment, and other effects still use existing authorized tools. Upstream Claude/OpenCode slash commands, hooks, external integrations, providers, and agent launchers are not installed or executed merely by loading a skill; the model must translate workflows into available harness tools and state missing external prerequisites when relevant. The request to bundle skills does not authorize purchases, messages, or deployments.
 
-`AGENT_HARNESS_SKILLS_DIR` changes the local skill directory while leaving the packaged ECC defaults available. Wheels and Docker images include the bundle. `ah skills` and the existing skills UI list the defaults; `skills.show` returns complete instructions. Local skill creation and learned skills retain their existing validation and management behavior.
+`MACHINA_SKILLS_DIR` changes the local skill directory while leaving the packaged ECC defaults available. Wheels and Docker images include the bundle. `machina skills` and the existing skills UI list the defaults; `skills.show` returns complete instructions. Local skill creation and learned skills retain their existing validation and management behavior.
 
 ## Reproducing the bundle
 
@@ -36,7 +36,7 @@ Clone ECC and check out the pinned revision, then run:
 .venv/bin/python tools/vendor_ecc.py /path/to/ECC
 ```
 
-The importer rejects a different revision or modified tracked files, selects the curated set and static dependencies, copies bytes without running upstream scripts, checks existing managed hashes before overwriting/deleting, prunes only previously manifest-owned files, and regenerates `skills/ecc/manifest.json`. Its SHA-256 must match `MANIFEST_SHA256` in `ah/skills/bundle.py`. Updating the pin requires deliberately updating both constants and rerunning bundle, routing, permission, and packaging checks. No update or download occurs during chat.
+The importer rejects a different revision or modified tracked files, selects the curated set and static dependencies, copies bytes without running upstream scripts, checks existing managed hashes before overwriting/deleting, prunes only previously manifest-owned files, and regenerates `skills/ecc/manifest.json`. Its SHA-256 must match `MANIFEST_SHA256` in `machina/skills/bundle.py`. Updating the pin requires deliberately updating both constants and rerunning bundle, routing, permission, and packaging checks. No update or download occurs during chat.
 
 ECC is MIT licensed: Copyright (c) 2026 Affaan Mustafa. The full notice is preserved in [the bundled license](../skills/ecc/LICENSE) and [third-party notices](../THIRD_PARTY_NOTICES.md).
 

@@ -12,17 +12,17 @@ import uuid
 import pytest
 import pytest_asyncio
 
-from ah.core.agent import ReActAgent
-from ah.core.config import config
-from ah.core.context import context_manager
-from ah.core.models import AgentResponse, LLMResponse, StreamEvent
-from ah.core.provider import LLMProvider
-from ah.db.connection import db
-from ah.gateway.errors import INVALID_PARAMS
-from ah.gateway.server import Gateway
+from machina.core.agent import ReActAgent
+from machina.core.config import config
+from machina.core.context import context_manager
+from machina.core.models import AgentResponse, LLMResponse, StreamEvent
+from machina.core.provider import LLMProvider
+from machina.db.connection import db
+from machina.gateway.errors import INVALID_PARAMS
+from machina.gateway.server import Gateway
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL"),
+    not os.environ.get("MACHINA_TEST_DATABASE_URL"),
     reason="requires the dedicated test database",
 )
 
@@ -118,8 +118,8 @@ class ImageGateway:
 @pytest_asyncio.fixture
 async def image_gateway(db_pool, monkeypatch):
     monkeypatch.setattr(db, "_pool", db_pool._pool)
-    monkeypatch.setenv("AH_GATEWAY_NO_SCHEDULER", "1")
-    monkeypatch.setenv("AH_GATEWAY_TOKEN", "image-fixture-gateway-token")
+    monkeypatch.setenv("MACHINA_GATEWAY_NO_SCHEDULER", "1")
+    monkeypatch.setenv("MACHINA_GATEWAY_TOKEN", "image-fixture-gateway-token")
     for name in (
         "memory_enabled",
         "memory_consolidation_enabled",
@@ -539,10 +539,10 @@ async def test_image_cache_sql_bound_matches_application_constant():
     import re
     from pathlib import Path
 
-    from ah.core.images import MAX_TOTAL_IMAGE_BYTES
+    from machina.core.images import MAX_TOTAL_IMAGE_BYTES
 
     sql = (
-        Path(__file__).resolve().parents[1] / "ah" / "db" / "image_context_schema.sql"
+        Path(__file__).resolve().parents[1] / "machina" / "db" / "image_context_schema.sql"
     ).read_text()
     match = re.search(r"octet_length\(images_msgpack\) <= (\d+)", sql)
     assert match is not None
@@ -617,7 +617,7 @@ async def test_image_writes_fall_back_to_plain_chunks_without_table(image_gatewa
 
 
 async def test_latest_image_storage_accepts_total_limit_with_unicode_names(image_gateway):
-    from ah.core.images import MAX_IMAGES, MAX_TOTAL_IMAGE_BYTES
+    from machina.core.images import MAX_IMAGES, MAX_TOTAL_IMAGE_BYTES
 
     _, sid, _ = image_gateway
     size = MAX_TOTAL_IMAGE_BYTES // MAX_IMAGES
@@ -634,7 +634,7 @@ async def test_latest_image_storage_accepts_total_limit_with_unicode_names(image
 
 
 async def test_runtime_schema_updates_existing_image_size_constraint(image_gateway, db_pool):
-    from ah.core.context import _MAX_IMAGE_CONTEXT_BYTES
+    from machina.core.context import _MAX_IMAGE_CONTEXT_BYTES
 
     await db_pool.execute("""
         ALTER TABLE session_image_context DROP CONSTRAINT session_image_context_images_msgpack_check;
@@ -764,7 +764,7 @@ async def test_legacy_scan_skips_newer_non_image_candidates(image_gateway, db_po
         "DELETE FROM session_image_context WHERE session_id=$1 AND agent_id='harness'",
         session_id,
     )
-    with caplog.at_level(logging.WARNING, logger="ah.core.context"):
+    with caplog.at_level(logging.WARNING, logger="machina.core.context"):
         assert await context_manager.get_latest_images(session_id, "harness") == [png()]
     assert "exhausted" not in caplog.text
 
@@ -794,7 +794,7 @@ async def test_legacy_scan_advances_past_null_timestamp_candidate(image_gateway,
 
 async def test_fork_preserves_compacted_image_context(image_gateway):
     """A fork keeps the latest image after its source chunk was compacted."""
-    from ah.core.session import session_manager
+    from machina.core.session import session_manager
 
     _harness, sid, _provider = image_gateway
     source_id = uuid.UUID(sid)
@@ -813,7 +813,7 @@ async def test_fork_preserves_compacted_image_context(image_gateway):
 
 async def test_fork_without_image_cache_table_keeps_text_chunks(image_gateway, db_pool):
     """Forking on an unmigrated database still copies ordinary context."""
-    from ah.core.session import session_manager
+    from machina.core.session import session_manager
 
     _harness, sid, _provider = image_gateway
     source_id = uuid.UUID(sid)

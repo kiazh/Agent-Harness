@@ -6,15 +6,15 @@ from unittest.mock import AsyncMock
 
 from httpx import ASGITransport, AsyncClient
 
-from ah.api.app import create_app
-from ah.core.models import AgentResponse, Session, StreamEvent
+from machina.api.app import create_app
+from machina.core.models import AgentResponse, Session, StreamEvent
 
 
 async def test_sse_releases_turn_before_done_with_resistant_learning(monkeypatch):
-    import ah.core.agent_factory as factory
-    from ah import services
-    from ah.core import turns
-    from ah.core.session import session_manager
+    import machina.core.agent_factory as factory
+    from machina import services
+    from machina.core import turns
+    from machina.core.session import session_manager
 
     started, release = asyncio.Event(), asyncio.Event()
 
@@ -42,7 +42,7 @@ async def test_sse_releases_turn_before_done_with_resistant_learning(monkeypatch
         assert token == "sse-owner"
         released.set()
 
-    monkeypatch.setenv("AGENT_HARNESS_API_KEY", "cleanup-test-key")
+    monkeypatch.setenv("MACHINA_API_KEY", "cleanup-test-key")
     monkeypatch.setattr(session_manager, "get_fresh", AsyncMock(return_value=session))
     monkeypatch.setattr(factory, "build_agent_for_session", AsyncMock(return_value=Agent()))
     monkeypatch.setattr(services, "maybe_auto_compact", AsyncMock())

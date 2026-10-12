@@ -5,7 +5,7 @@ import logging
 
 import pytest
 
-from ah.connectors.oauth_callback import LoopbackOAuthCallback
+from machina.connectors.oauth_callback import LoopbackOAuthCallback
 
 
 async def _reserve():
@@ -157,7 +157,7 @@ def test_response_headers_and_no_secret_logging(caplog):
         try:
             callback.arm(state="sekret-state", issuer="iss", require_iss=False)
             path = callback.redirect_uri.split(f"127.0.0.1:{callback.port}")[1]
-            with caplog.at_level(logging.INFO, logger="ah.connectors.oauth_callback"):
+            with caplog.at_level(logging.INFO, logger="machina.connectors.oauth_callback"):
                 head = await _get(callback.port, path, "?code=sekret-code&state=sekret-state")
             assert "Cache-Control: no-store" in head
             assert "Referrer-Policy: no-referrer" in head

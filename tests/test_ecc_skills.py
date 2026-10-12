@@ -2,11 +2,11 @@
 
 import pytest
 
-from ah.skills.registry import SkillRegistry
+from machina.skills.registry import SkillRegistry
 
 
 def test_curated_ecc_skills_are_mandatory_even_with_local_override(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     skills = SkillRegistry()
     skills.load_all()
     bundled = [s for s in skills.list_skills() if s.source_type == "builtin-ecc"]
@@ -23,7 +23,7 @@ def test_curated_ecc_skills_are_mandatory_even_with_local_override(tmp_path, mon
 
 
 def test_ecc_router_and_budget():
-    from ah.skills.runtime import automatic_skill_context, rank_skills
+    from machina.skills.runtime import automatic_skill_context, rank_skills
 
     skills = SkillRegistry()
     skills.load_all()
@@ -35,7 +35,7 @@ def test_ecc_router_and_budget():
     ]:
         assert expected in [s.name for s in rank_skills(skills, query)[:3]]
     assert not rank_skills(skills, "hello thanks")
-    from ah.core.assembler import get_token_count
+    from machina.core.assembler import get_token_count
 
     text = automatic_skill_context(
         "Write Python unit tests using pytest", skills=skills, budget=600
@@ -46,7 +46,7 @@ def test_ecc_router_and_budget():
 
 
 def test_resources_reject_escape_and_detect_tampering(tmp_path):
-    from ah.skills.bundle import ECCBundle
+    from machina.skills.bundle import ECCBundle
 
     bundle = ECCBundle()
     with pytest.raises(ValueError):
@@ -69,16 +69,16 @@ async def test_skill_read_continuation_reaches_model_without_silent_truncation(m
     import uuid
     from unittest.mock import AsyncMock
 
-    import ah.skills.registry as module
-    from ah.core.agent import BaseReActAgent
-    from ah.core.models import LLMResponse
+    import machina.skills.registry as module
+    from machina.core.agent import BaseReActAgent
+    from machina.core.models import LLMResponse
 
     skills = SkillRegistry()
     skills.load_all()
     monkeypatch.setattr(module, "skill_registry", skills)
-    monkeypatch.setattr("ah.core.agent.context_manager.add_chunk", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.context_manager.add_chunk", AsyncMock())
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
     )
     agent = BaseReActAgent(provider=object(), allowed_tools=["skill_read"])
     messages = []
@@ -108,27 +108,27 @@ async def test_default_skills_reach_first_provider_call(streaming, monkeypatch):
     import uuid
     from unittest.mock import AsyncMock
 
-    from ah.core.agent import ReActAgent
-    from ah.core.config import config
-    from ah.core.models import LLMResponse, Session, StreamEvent
+    from machina.core.agent import ReActAgent
+    from machina.core.config import config
+    from machina.core.models import LLMResponse, Session, StreamEvent
 
     session = Session(id=uuid.uuid4(), context_budget=8000)
     for field in ("memory_enabled", "rag_enabled", "personality_growth_enabled"):
         monkeypatch.setattr(config, field, False)
-    monkeypatch.setattr("ah.core.agent.session_manager.get", AsyncMock(return_value=session))
-    monkeypatch.setattr("ah.core.agent.session_manager.update_activity", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.session_manager.get", AsyncMock(return_value=session))
+    monkeypatch.setattr("machina.core.agent.session_manager.update_activity", AsyncMock())
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.get_recent_context", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.get_recent_context", AsyncMock(return_value=[])
     )
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.search_archive_text", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.search_archive_text", AsyncMock(return_value=[])
     )
-    monkeypatch.setattr("ah.core.agent.context_manager.add_chunks_batch", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.context_manager.add_chunks_batch", AsyncMock())
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
     )
-    monkeypatch.setattr("ah.core.agent.BaseReActAgent._reserve_usage", AsyncMock(return_value=None))
-    monkeypatch.setattr("ah.core.agent.BaseReActAgent._finish_usage", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.BaseReActAgent._reserve_usage", AsyncMock(return_value=None))
+    monkeypatch.setattr("machina.core.agent.BaseReActAgent._finish_usage", AsyncMock())
 
     class Provider:
         calls = []
@@ -163,9 +163,9 @@ async def test_default_skills_reach_first_provider_call(streaming, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ecc_resource_tool_pages_and_read_policy(monkeypatch):
-    import ah.skills.registry as module
-    from ah.permissions.tools import action_for_tool
-    from ah.tools.skills import skill_resource
+    import machina.skills.registry as module
+    from machina.permissions.tools import action_for_tool
+    from machina.tools.skills import skill_resource
 
     skills = SkillRegistry()
     skills.load_all()
@@ -181,9 +181,9 @@ async def test_ecc_resource_tool_pages_and_read_policy(monkeypatch):
 
 
 def test_all_canonical_bodies_are_readable_and_telemetry_does_not_reparse(tmp_path, monkeypatch):
-    from ah.skills.registry import SkillParser
+    from machina.skills.registry import SkillParser
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     skills = SkillRegistry()
     skills.load_all()
     canonical = [s for s in skills.list_skills() if s.source_type == "builtin-ecc"]
@@ -200,10 +200,10 @@ def test_all_canonical_bodies_are_readable_and_telemetry_does_not_reparse(tmp_pa
 
 @pytest.mark.parametrize("budget", [0, 50, 100, 150, 300, 600, 1200, 10000])
 def test_skill_context_never_exceeds_its_budget(budget, tmp_path, monkeypatch):
-    from ah.core.assembler import get_token_count
-    from ah.skills.runtime import automatic_skill_context
+    from machina.core.assembler import get_token_count
+    from machina.skills.runtime import automatic_skill_context
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     text = automatic_skill_context(
         "Create Python tests with pytest and PostgreSQL queries",
         skills=SkillRegistry(),
@@ -214,9 +214,9 @@ def test_skill_context_never_exceeds_its_budget(budget, tmp_path, monkeypatch):
 
 
 def test_skill_context_tells_model_not_to_page_greetings(tmp_path, monkeypatch):
-    from ah.skills.runtime import automatic_skill_context
+    from machina.skills.runtime import automatic_skill_context
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     # No skill evidence: nothing injected at all (conduct lives in SYSTEM_PROMPT).
     assert automatic_skill_context("hello!", skills=SkillRegistry()) == ""
     text = automatic_skill_context("Implement a Python API", skills=SkillRegistry())
@@ -225,8 +225,8 @@ def test_skill_context_tells_model_not_to_page_greetings(tmp_path, monkeypatch):
 
 
 def test_skill_list_description_discourages_catalog_enumeration():
-    import ah.tools.skills  # noqa: F401 — registers skill_list on the global registry
-    from ah.tools.base import registry
+    import machina.tools.skills  # noqa: F401 — registers skill_list on the global registry
+    from machina.tools.base import registry
 
     desc = next(d.description for d in registry.get_tool_definitions() if d.name == "skill_list")
     assert "Never enumerate the whole catalog" in desc
@@ -242,13 +242,13 @@ def test_skill_list_description_discourages_catalog_enumeration():
     ],
 )
 def test_representative_ecc_routing(query, expected):
-    from ah.skills.runtime import rank_skills
+    from machina.skills.runtime import rank_skills
 
     assert expected in [s.name for s in rank_skills(SkillRegistry(), query)[:3]]
 
 
 def test_bundled_names_cannot_be_shadowed_but_derived_names_survive(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     skills = SkillRegistry()
     with pytest.raises(ValueError, match="bundled"):
         skills.create_skill("ecc-python-testing", "replacement", "wrong instructions")
@@ -262,10 +262,10 @@ def test_bundled_names_cannot_be_shadowed_but_derived_names_survive(tmp_path, mo
 
 
 def test_builtin_curation_and_restricted_context(tmp_path, monkeypatch):
-    from ah.skills.registry import SkillCurator
-    from ah.skills.runtime import automatic_skill_context
+    from machina.skills.registry import SkillCurator
+    from machina.skills.runtime import automatic_skill_context
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     skills = SkillRegistry()
     skills.load_all()
     assert SkillCurator(skills).cleanup_unused(dry_run=False) == []
@@ -282,7 +282,7 @@ def test_builtin_curation_and_restricted_context(tmp_path, monkeypatch):
 
 
 def test_explicit_local_trigger_wins_without_a_technology_keyword(tmp_path):
-    from ah.skills.runtime import rank_skills
+    from machina.skills.runtime import rank_skills
 
     skills = SkillRegistry(tmp_path)
     skills.create_skill(
@@ -295,11 +295,11 @@ def test_explicit_local_trigger_wins_without_a_technology_keyword(tmp_path):
 async def test_gateway_show_returns_full_default_instructions(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    import ah.skills.registry as module
-    from ah.gateway.errors import RpcError
-    from ah.gateway.features.skills import skills_delete, skills_show
+    import machina.skills.registry as module
+    from machina.gateway.errors import RpcError
+    from machina.gateway.features.skills import skills_delete, skills_show
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     monkeypatch.setattr(module, "skill_registry", SkillRegistry())
     gw = SimpleNamespace(require_db=lambda: None)
     result = await skills_show(gw, {"name": "ecc-python-testing"})

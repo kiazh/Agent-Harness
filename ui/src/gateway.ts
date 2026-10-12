@@ -1,4 +1,4 @@
-// JSON-RPC client for the Python gateway (`python -m ah.gateway`).
+// JSON-RPC client for the Python gateway (`python -m machina.gateway`).
 //
 // JsonRpcChannel is transport-agnostic (feed it lines, give it a writer) so it
 // can be unit tested; GatewayClient wires it to a child process over stdio.
@@ -91,11 +91,11 @@ export class JsonRpcChannel {
 }
 
 export interface GatewayClientOptions {
-	/** Python interpreter with AgentHarness installed. */
+	/** Python interpreter with Machina installed. */
 	python: string;
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
-	/** Auth token for the gateway (read from AH_GATEWAY_TOKEN by default). */
+	/** Auth token for the gateway (read from MACHINA_GATEWAY_TOKEN by default). */
 	token?: string;
 }
 
@@ -119,7 +119,7 @@ export class GatewayClient {
 	}
 
 	start(): void {
-		const proc = spawn(this.options.python, ["-m", "ah.gateway"], {
+		const proc = spawn(this.options.python, ["-m", "machina.gateway"], {
 			cwd: this.options.cwd ?? process.cwd(),
 			env: { ...process.env, ...this.options.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" },
 			stdio: ["pipe", "pipe", "pipe"],
@@ -157,7 +157,7 @@ export class GatewayClient {
 		if (!this.channel) return Promise.reject(new Error("gateway not started"));
 		// The gateway rejects every method except `initialize` unless the caller
 		// presents the auth token, so attach it to each request when configured.
-		const token = this.options.token ?? process.env.AH_GATEWAY_TOKEN;
+		const token = this.options.token ?? process.env.MACHINA_GATEWAY_TOKEN;
 		const withToken = token ? { ...params, token } : params;
 		return this.channel.request<T>(method, withToken, timeoutMs);
 	}

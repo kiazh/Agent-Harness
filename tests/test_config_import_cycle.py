@@ -1,13 +1,13 @@
 """Regression tests for the config import-cycle (order-dependent silent discard).
 
-Root cause: ``ah.db.connection`` (partial, line 14) → ``ah.core.__init__`` →
+Root cause: ``machina.db.connection`` (partial, line 14) → ``machina.core.__init__`` →
 ``get_config()`` → ``Config.load()`` → ``validate_value(persona_description)``
-→ ``ah.memory`` package init → ``approval → provider → usage`` →
-``from ah.db.connection import db`` → ImportError. The old all-or-nothing
+→ ``machina.memory`` package init → ``approval → provider → usage`` →
+``from machina.db.connection import db`` → ImportError. The old all-or-nothing
 ``load()`` then discarded the ENTIRE config file, so affected processes ran on
 defaults (wrong model/provider/mode) with only one warning.
 
-Fix: lazy ``db`` binding (``ah.db.lazy``) in the nine cycle members plus
+Fix: lazy ``db`` binding (``machina.db.lazy``) in the nine cycle members plus
 per-key isolation in ``Config.load``.
 """
 
@@ -34,8 +34,8 @@ def test_db_first_import_order_keeps_file_config(tmp_path):
         encoding="utf-8",
     )
     code = (
-        "from ah.db.connection import db;"  # poison order: partial connection first
-        "from ah.core.config import Config;"
+        "from machina.db.connection import db;"  # poison order: partial connection first
+        "from machina.core.config import Config;"
         f"c = Config.load(r'{cfg_file}');"
         "assert c.model == 'probe-model-xyz', repr(c.model);"
         "assert c.execution_mode == 'workspace', repr(c.execution_mode);"
@@ -52,8 +52,8 @@ def test_memory_first_import_order_keeps_file_config(tmp_path):
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text("model: probe-model-xyz\n", encoding="utf-8")
     code = (
-        "import ah.memory.redaction;"
-        "from ah.core.config import Config;"
+        "import machina.memory.redaction;"
+        "from machina.core.config import Config;"
         f"c = Config.load(r'{cfg_file}');"
         "assert c.model == 'probe-model-xyz', repr(c.model);"
         "print('ORDER-OK')"
@@ -67,8 +67,8 @@ def test_gateway_first_import_order_keeps_file_config(tmp_path):
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text("model: probe-model-xyz\n", encoding="utf-8")
     code = (
-        "import ah.gateway.server;"
-        "from ah.core.config import Config;"
+        "import machina.gateway.server;"
+        "from machina.core.config import Config;"
         f"c = Config.load(r'{cfg_file}');"
         "assert c.model == 'probe-model-xyz', repr(c.model);"
         "print('ORDER-OK')"
@@ -82,7 +82,7 @@ def test_unreadable_key_does_not_discard_file(tmp_path, monkeypatch):
     """One failing key must not discard the other keys (per-key isolation)."""
     import importlib
 
-    cfgmod = importlib.import_module("ah.core.config")
+    cfgmod = importlib.import_module("machina.core.config")
 
     real = cfgmod.validate_value
 
@@ -101,10 +101,10 @@ def test_unreadable_key_does_not_discard_file(tmp_path, monkeypatch):
 
 def test_lazy_db_delegates_to_live_singleton():
     """The lazy handle resolves to the real shared Database object."""
-    from ah.core import context as ctxmod
-    from ah.core import usage as usagemod
-    from ah.db import connection as connmod
-    from ah.db.lazy import LazyDb, parse_command_count
+    from machina.core import context as ctxmod
+    from machina.core import usage as usagemod
+    from machina.db import connection as connmod
+    from machina.db.lazy import LazyDb, parse_command_count
 
     assert isinstance(ctxmod.db, LazyDb)
     assert isinstance(usagemod.db, LazyDb)

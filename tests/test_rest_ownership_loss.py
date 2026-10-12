@@ -7,16 +7,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.api import app as api
-from ah.core.models import Session
+from machina.api import app as api
+from machina.core.models import Session
 
 
 @pytest.mark.parametrize("renewal_error", [False, True])
 async def test_rest_lost_claim_cancels_execution(monkeypatch, renewal_error):
-    import ah.core.agent_factory as factory
-    from ah import services
-    from ah.core import turns
-    from ah.core.session import session_manager
+    import machina.core.agent_factory as factory
+    from machina import services
+    from machina.core import turns
+    from machina.core.session import session_manager
 
     started, stopped, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
     effects = []

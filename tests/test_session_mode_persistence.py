@@ -4,11 +4,11 @@ import asyncio
 
 import pytest
 
-from ah.core import session_mode
-from ah.core.config import config
-from ah.core.session import SessionManager
-from ah.gateway.features import mode as mode_feature
-from ah.permissions import store
+from machina.core import session_mode
+from machina.core.config import config
+from machina.core.session import SessionManager
+from machina.gateway.features import mode as mode_feature
+from machina.permissions import store
 
 
 class ModeGateway:
@@ -26,8 +26,8 @@ class ModeGateway:
 
 @pytest.fixture
 async def durable_modes(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.db.connection.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.db.connection.db", db_pool)
     monkeypatch.setattr(config, "execution_mode", "ask")
     sessions = SessionManager()
     created = []
@@ -45,7 +45,7 @@ async def durable_modes(db_pool, monkeypatch):
 
 async def test_mode_survives_registry_restart_and_other_worker(durable_modes, monkeypatch):
     # Pins the repo `ask` default regardless of the developer's live config.
-    monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
+    monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
     database, sessions, gateway, create = durable_modes
     session = await create()
     await mode_feature.mode_set(gateway, {"sessionId": str(session.id), "mode": "workspace"})
@@ -60,9 +60,9 @@ async def test_global_default_affects_only_new_sessions(durable_modes, monkeypat
     database, sessions, gateway, create = durable_modes
     # Phase the global default explicitly: repo `ask` first, then `full`.
     # (Never inherits the developer's live config either way.)
-    monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
+    monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
     old = await create()
-    monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "full")
+    monkeypatch.setenv("MACHINA_EXECUTION_MODE", "full")
     await mode_feature.mode_set(gateway, {"scope": "global", "mode": "full"})
     new = await create()
     assert (await sessions.get_fresh(old.id)).execution_mode == "ask"

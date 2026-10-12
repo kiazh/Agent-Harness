@@ -7,9 +7,9 @@ import textwrap
 import pytest
 import yaml
 
-from ah.core.agent_def import AgentDef
-from ah.soulspec import (
-    AgentHarnessAdapter,
+from machina.core.agent_def import AgentDef
+from machina.soulspec import (
+    MachinaAdapter,
     ClaudeCodeAdapter,
     CodexAdapter,
     SoulSpec,
@@ -158,7 +158,7 @@ class TestAgentDefConversion:
 
     def test_agent_def_to_soulspec(self, sample_agent_def: AgentDef) -> None:
         """AgentDef can be converted to SoulSpec."""
-        spec = AgentHarnessAdapter.to_soulspec(sample_agent_def)
+        spec = MachinaAdapter.to_soulspec(sample_agent_def)
         assert isinstance(spec, SoulSpec)
         assert spec.name == "Harness Agent"
         assert spec.persona is not None
@@ -171,7 +171,7 @@ class TestAgentDefConversion:
 
     def test_roundtrip_agent_def(self, sample_agent_def: AgentDef) -> None:
         """AgentDef → SoulSpec → AgentDef preserves key fields."""
-        spec = AgentHarnessAdapter.to_soulspec(sample_agent_def)
+        spec = MachinaAdapter.to_soulspec(sample_agent_def)
         agent = spec.to_agent_def()
         assert agent.name == sample_agent_def.name
         assert agent.description == sample_agent_def.description
@@ -393,8 +393,8 @@ class TestAdapters:
         assert "python-expert" in output
 
     def test_adapter_agent_harness(self, sample_agent_def: AgentDef) -> None:
-        """AgentHarness adapter round-trips AgentDef."""
-        adapter = AgentHarnessAdapter()
+        """Machina adapter round-trips AgentDef."""
+        adapter = MachinaAdapter()
         spec = adapter.to_soulspec(sample_agent_def)
         assert isinstance(spec, SoulSpec)
         assert spec.name == sample_agent_def.name

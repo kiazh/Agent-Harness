@@ -15,13 +15,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.core.context import ContextManager
-from ah.core.exceptions import ValidationError
-from ah.core.provider import _validate_messages, _validate_params
-from ah.core.session import SessionManager
-from ah.db.connection import Database
-from ah.memory.retriever import MemoryRetriever
-from ah.skills.registry import Skill, SkillCurator, SkillHub, SkillRegistry
+from machina.core.context import ContextManager
+from machina.core.exceptions import ValidationError
+from machina.core.provider import _validate_messages, _validate_params
+from machina.core.session import SessionManager
+from machina.db.connection import Database
+from machina.memory.retriever import MemoryRetriever
+from machina.skills.registry import Skill, SkillCurator, SkillHub, SkillRegistry
 
 # ============================================================================
 # 1. TTLCache Docstring Fix
@@ -77,7 +77,7 @@ class TestEvictionLogic:
         """No eviction when within limits."""
         session_id = uuid.uuid4()
         # Mock db calls
-        with patch("ah.core.context.db") as mock_db:
+        with patch("machina.core.context.db") as mock_db:
             mock_db.fetchrow = AsyncMock(return_value={"total_chunks": 5, "total_tokens": 100})
             mock_db.fetch = AsyncMock(return_value=[])
             result = await context_manager.evict_old_chunks(
@@ -166,7 +166,7 @@ class TestEvictionLogic:
         ]
         for row in mock_rows:
             row.update(agent_id="harness", payload_msgpack=b"\x80", embedding=None)
-        with patch("ah.core.context.db") as mock_db:
+        with patch("machina.core.context.db") as mock_db:
             mock_db.fetchrow = AsyncMock(return_value={"total_chunks": 12, "total_tokens": 1200})
             mock_db.fetch = AsyncMock(return_value=mock_rows)
             mock_db.execute = AsyncMock(return_value="DELETE 1")
@@ -196,7 +196,7 @@ class TestEvictionLogic:
         ]
         for row in mock_rows:
             row.update(agent_id="harness", payload_msgpack=b"\x80", embedding=None)
-        with patch("ah.core.context.db") as mock_db:
+        with patch("machina.core.context.db") as mock_db:
             mock_db.fetchrow = AsyncMock(return_value={"total_chunks": 15, "total_tokens": 150})
             mock_db.fetch = AsyncMock(return_value=mock_rows)
             mock_db.execute = AsyncMock(return_value="DELETE 1")
@@ -227,7 +227,7 @@ class TestEvictionLogic:
         ]
         for row in mock_rows:
             row.update(agent_id="harness", payload_msgpack=b"\x80", embedding=None)
-        with patch("ah.core.context.db") as mock_db:
+        with patch("machina.core.context.db") as mock_db:
             mock_db.fetchrow = AsyncMock(return_value={"total_chunks": 15, "total_tokens": 1500})
             mock_db.fetch = AsyncMock(return_value=mock_rows)
             mock_db.execute = AsyncMock(return_value="DELETE 1")
@@ -317,16 +317,16 @@ class TestCircularImport:
     """Verify retriever module imports work correctly."""
 
     def test_retriever_imports_db_at_module_level(self):
-        """db must bind lazily (ah.db.lazy), never via top-level connection import.
+        """db must bind lazily (machina.db.lazy), never via top-level connection import.
 
-        A top-level ``ah.db.connection`` import cycles through package init
-        (connection → ah.core.__init__ → config.load → ah.memory → …) and once
+        A top-level ``machina.db.connection`` import cycles through package init
+        (connection → machina.core.__init__ → config.load → machina.memory → …) and once
         silently discarded the entire config file depending on import order.
         """
-        import ah.memory.retriever as retriever_module
+        import machina.memory.retriever as retriever_module
 
         source = inspect.getsource(retriever_module)
-        assert "from ah.db.connection import" not in source
+        assert "from machina.db.connection import" not in source
         assert "LazyDb" in source
         assert retriever_module.db is not None
 

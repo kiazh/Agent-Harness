@@ -11,12 +11,12 @@ import uuid
 
 import pytest
 
-from ah.core.session import SessionManager
-from ah.research.workflow_trial import GraphApprovalTrial, NativeApprovalTrial
+from machina.core.session import SessionManager
+from machina.research.workflow_trial import GraphApprovalTrial, NativeApprovalTrial
 
 
 async def test_native_approval_is_scoped_and_idempotent_after_reopen(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     owner = f"trial-{uuid.uuid4()}"
     session = await SessionManager().create(title="trial", agent_id=owner)
     run_id = uuid.uuid4()
@@ -40,7 +40,7 @@ async def test_native_approval_is_scoped_and_idempotent_after_reopen(db_pool, mo
 async def test_native_denial_and_cancellation_never_execute(
     db_pool, monkeypatch, decision, expected
 ):
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     owner = f"trial-{uuid.uuid4()}"
     session = await SessionManager().create(title="trial", agent_id=owner)
     run_id = uuid.uuid4()
@@ -60,7 +60,7 @@ async def test_graph_postgres_checkpoint_resumes_after_reopen_and_blocks_replay(
     db_pool, monkeypatch
 ):
     pytest.importorskip("langgraph")
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     owner = f"trial-{uuid.uuid4()}"
     session = await SessionManager().create(title="trial", agent_id=owner)
     run_id = uuid.uuid4()
@@ -85,7 +85,7 @@ async def test_graph_denial_and_cancellation_never_execute(
     db_pool, monkeypatch, decision, expected
 ):
     pytest.importorskip("langgraph")
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     owner = f"trial-{uuid.uuid4()}"
     session = await SessionManager().create(title="graph trial", agent_id=owner)
     run_id = uuid.uuid4()
@@ -102,13 +102,13 @@ async def test_graph_denial_and_cancellation_never_execute(
 
 async def test_graph_approval_survives_a_new_process(db_pool, monkeypatch):
     pytest.importorskip("langgraph")
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     owner = f"trial-{uuid.uuid4()}"
     session = await SessionManager().create(title="process trial", agent_id=owner)
     run_id = uuid.uuid4()
     inherited = {"PATH", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "VIRTUAL_ENV"}
     environment = {key: value for key, value in os.environ.items() if key.upper() in inherited}
-    environment["AGENT_HARNESS_TEST_DATABASE_URL"] = db_pool.dsn
+    environment["MACHINA_TEST_DATABASE_URL"] = db_pool.dsn
 
     async def stage(command: str, value: str) -> dict:
         process = await asyncio.to_thread(
@@ -116,7 +116,7 @@ async def test_graph_approval_survives_a_new_process(db_pool, monkeypatch):
             [
                 sys.executable,
                 "-m",
-                "ah.research.workflow_trial",
+                "machina.research.workflow_trial",
                 "--backend",
                 "graph",
                 "--command",

@@ -1,4 +1,4 @@
-"""Tests for the JSON-RPC gateway (ah.gateway)."""
+"""Tests for the JSON-RPC gateway (machina.gateway)."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from ah.core.models import AgentResponse, ContextChunk, StreamEvent
-from ah.gateway.server import (
+from machina.core.models import AgentResponse, ContextChunk, StreamEvent
+from machina.gateway.server import (
     DATABASE_UNAVAILABLE,
     INVALID_PARAMS,
     INVALID_REQUEST,
@@ -26,8 +26,8 @@ from ah.gateway.server import (
     history_from_chunks,
 )
 
-TEST_DSN = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL", "")
-needs_db = pytest.mark.skipif(not TEST_DSN, reason="AGENT_HARNESS_TEST_DATABASE_URL not set")
+TEST_DSN = os.environ.get("MACHINA_TEST_DATABASE_URL", "")
+needs_db = pytest.mark.skipif(not TEST_DSN, reason="MACHINA_TEST_DATABASE_URL not set")
 
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ class Harness:
     """Drives a Gateway in-process and records every frame it writes."""
 
     def __init__(self, agent: FakeAgent | None = None) -> None:
-        os.environ["AH_GATEWAY_NO_SCHEDULER"] = "1"  # tests drive the runner directly
+        os.environ["MACHINA_GATEWAY_NO_SCHEDULER"] = "1"  # tests drive the runner directly
         self.frames: list[dict] = []
         self.agent = agent or FakeAgent(scripted_turn())
         self.gateway = Gateway(self.frames.append, agent_factory=lambda model, provider: self.agent)
@@ -163,24 +163,24 @@ class TestProtocolErrors:
         assert ok["result"]["provider"] == "ollama"
 
     async def test_config_set_persist_syncs_env(self, monkeypatch, tmp_path):
-        """A saved default must survive restarts: AGENT_HARNESS_* in .env
+        """A saved default must survive restarts: MACHINA_* in .env
         shadows config.yaml (env wins in Config.get), so persist must sync
         both the live env and the .env file."""
         import sys
 
-        from ah.core.config import get_config
+        from machina.core.config import get_config
 
-        # NOTE: `ah.core.config` as an attribute is the singleton (the
+        # NOTE: `machina.core.config` as an attribute is the singleton (the
         # package re-exports it), so patch the real module object.
-        config_module = sys.modules["ah.core.config"]
+        config_module = sys.modules["machina.core.config"]
 
         env_file = tmp_path / ".env"
         env_file.write_text(
-            "AGENT_HARNESS_MODEL=openrouter/free\nAGENT_HARNESS_PROVIDER=openrouter\n"
+            "MACHINA_MODEL=openrouter/free\nMACHINA_PROVIDER=openrouter\n"
         )
-        monkeypatch.setenv("AH_ENV_FILE", str(env_file))
-        monkeypatch.setenv("AGENT_HARNESS_MODEL", "openrouter/free")
-        monkeypatch.setenv("AGENT_HARNESS_PROVIDER", "openrouter")
+        monkeypatch.setenv("MACHINA_ENV_FILE", str(env_file))
+        monkeypatch.setenv("MACHINA_MODEL", "openrouter/free")
+        monkeypatch.setenv("MACHINA_PROVIDER", "openrouter")
         monkeypatch.setattr(config_module, "DEFAULT_CONFIG_PATH", tmp_path / "config.yaml")
         old_model, old_provider = get_config().model, get_config().provider
         try:
@@ -193,11 +193,11 @@ class TestProtocolErrors:
                 "config.set", {"key": "provider", "value": "deepseek", "persist": True}
             )
             assert ok["result"]["provider"] == "deepseek"
-            assert os.environ["AGENT_HARNESS_MODEL"] == "deepseek-chat"
-            assert os.environ["AGENT_HARNESS_PROVIDER"] == "deepseek"
+            assert os.environ["MACHINA_MODEL"] == "deepseek-chat"
+            assert os.environ["MACHINA_PROVIDER"] == "deepseek"
             text = env_file.read_text()
-            assert "AGENT_HARNESS_MODEL=deepseek-chat" in text
-            assert "AGENT_HARNESS_PROVIDER=deepseek" in text
+            assert "MACHINA_MODEL=deepseek-chat" in text
+            assert "MACHINA_PROVIDER=deepseek" in text
             # Live reads now see the saved default, not the stale env.
             assert get_config().get("model") == "deepseek-chat"
             assert get_config().get("provider") == "deepseek"
@@ -280,7 +280,7 @@ class TestTurnTimeout:
 
     async def test_turn_timeout_configurable(self):
         """The turn timeout should be configurable via config."""
-        from ah.core.config import config
+        from machina.core.config import config
 
         original = config.get("turn_timeout")
         try:
@@ -465,7 +465,7 @@ class TestSessionsAndTurns:
 
 @needs_db
 def test_gateway_process_speaks_clean_json_over_stdio():
-    """`python -m ah.gateway` answers requests and writes nothing but JSON to stdout."""
+    """`python -m machina.gateway` answers requests and writes nothing but JSON to stdout."""
     token = "test-token-for-e2e"
     requests = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"token": token}},
@@ -481,10 +481,10 @@ def test_gateway_process_speaks_clean_json_over_stdio():
         **os.environ,
         "DATABASE_URL": TEST_DSN,
         "PYTHONIOENCODING": "utf-8",
-        "AH_GATEWAY_TOKEN": token,
+        "MACHINA_GATEWAY_TOKEN": token,
     }
     proc = subprocess.run(
-        [sys.executable, "-m", "ah.gateway"],
+        [sys.executable, "-m", "machina.gateway"],
         input="".join(json.dumps(r) + "\n" for r in requests),
         capture_output=True,
         text=True,

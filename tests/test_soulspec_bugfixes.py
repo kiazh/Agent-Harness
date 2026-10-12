@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ah.soulspec.merge import SoulSpecMerger
-from ah.soulspec.schema import SoulSpec
+from machina.soulspec.merge import SoulSpecMerger
+from machina.soulspec.schema import SoulSpec
 
 # ─── Bug 3: merge.py uses defaults as sentinels ─────────────────────────────
 

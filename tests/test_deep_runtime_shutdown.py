@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from ah.core.runtime import RuntimeServices
-from ah.observability.audit import AuditPersistence
+from machina.core.runtime import RuntimeServices
+from machina.observability.audit import AuditPersistence
 
 
 class CleanupBoundary:
@@ -45,8 +45,8 @@ class CleanupBoundary:
 @pytest.fixture
 def cleanup_boundary(monkeypatch, request):
     boundary = CleanupBoundary(request.param)
-    monkeypatch.setattr("ah.observability.audit.audit_persistence.stop", boundary.stop_audit)
-    monkeypatch.setattr("ah.db.connection.db.close", boundary.close_database)
+    monkeypatch.setattr("machina.observability.audit.audit_persistence.stop", boundary.stop_audit)
+    monkeypatch.setattr("machina.db.connection.db.close", boundary.close_database)
     return boundary
 
 
@@ -89,7 +89,7 @@ async def test_shutdown_propagates_caller_cancellation_during_service_cleanup(cl
 async def test_cancelled_shutdown_releases_audit_ownership_before_runtime_restart(
     monkeypatch, phase
 ):
-    from ah.core import runtime as runtime_module
+    from machina.core import runtime as runtime_module
 
     started, cancelling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
@@ -108,14 +108,14 @@ async def test_cancelled_shutdown_releases_audit_ownership_before_runtime_restar
 
     database = Database()
     writer = AuditPersistence()
-    monkeypatch.setattr("ah.db.connection.db", database)
-    monkeypatch.setattr("ah.observability.audit.db", database)
-    monkeypatch.setattr("ah.observability.audit.audit_persistence", writer)
+    monkeypatch.setattr("machina.db.connection.db", database)
+    monkeypatch.setattr("machina.observability.audit.db", database)
+    monkeypatch.setattr("machina.observability.audit.audit_persistence", writer)
     monkeypatch.setattr(runtime_module, "_detect_providers", lambda: {})
     monkeypatch.setattr(runtime_module, "_detect_sandbox", lambda: {})
     monkeypatch.setattr(runtime_module, "_detect_toggles", lambda: {})
-    monkeypatch.setattr("ah.skills.registry.skill_registry.load_all", lambda: None)
-    monkeypatch.setattr("ah.skills.registry.skill_registry.list_skills", lambda: [])
+    monkeypatch.setattr("machina.skills.registry.skill_registry.load_all", lambda: None)
+    monkeypatch.setattr("machina.skills.registry.skill_registry.list_skills", lambda: [])
     runtime = RuntimeServices()
     await runtime.startup()
     tasks = [writer._task]

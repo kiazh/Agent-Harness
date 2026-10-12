@@ -1,4 +1,4 @@
-"""Property-based tests using Hypothesis for AgentHarness components.
+"""Property-based tests using Hypothesis for Machina components.
 
 These tests verify invariants that should hold for all inputs:
 - Prompt assembly never produces empty prompts
@@ -16,10 +16,10 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from ah.core.assembler import PromptAssembler, get_token_count
-from ah.core.models import ContextChunk
-from ah.core.provider import AsyncTokenBucket, _validate_messages, _validate_params
-from ah.tools.base import ToolRegistry
+from machina.core.assembler import PromptAssembler, get_token_count
+from machina.core.models import ContextChunk
+from machina.core.provider import AsyncTokenBucket, _validate_messages, _validate_params
+from machina.tools.base import ToolRegistry
 
 # ===========================================================================
 # PromptAssembler Properties
@@ -638,7 +638,7 @@ class TestContextManagerProperties:
     @settings(max_examples=30)
     def test_batch_size_respected(self, num_chunks):
         """Property: Batch insert handles variable number of chunks."""
-        from ah.core.context import ContextManager
+        from machina.core.context import ContextManager
 
         cm = ContextManager(batch_size=10)
         assert cm._batch_size == 10
@@ -660,7 +660,7 @@ class TestModelProperties:
     @settings(max_examples=50)
     def test_session_creation(self, title, agent_id, context_budget):
         """Property: Session can be created with various parameters."""
-        from ah.core.models import Session
+        from machina.core.models import Session
 
         s = Session(
             id=uuid.uuid4(),
@@ -678,7 +678,7 @@ class TestModelProperties:
     @settings(max_examples=50)
     def test_llm_response_creation(self, content, model):
         """Property: LLMResponse can be created with various content."""
-        from ah.core.models import LLMResponse
+        from machina.core.models import LLMResponse
 
         r = LLMResponse(content=content, model=model)
         assert r.content == content
@@ -693,7 +693,7 @@ class TestModelProperties:
     @settings(max_examples=50)
     def test_tool_definition_creation(self, name, description):
         """Property: ToolDefinition can be created."""
-        from ah.core.models import ToolDefinition
+        from machina.core.models import ToolDefinition
 
         td = ToolDefinition(
             name=name,

@@ -3,7 +3,7 @@
 Date: 2026-10-11. All commands executed in the repository checkout described
 below; no live credentials, shell startup files, production databases, or the
 operator terminal were mutated by tests (isolated tmp dirs, stubbed commands,
-isolated pseudo-terminals, disposable `agentharness_test` database).
+isolated pseudo-terminals, disposable `machina_test` database).
 
 ## Revision and environment
 
@@ -20,7 +20,7 @@ isolated pseudo-terminals, disposable `agentharness_test` database).
 - Interpreter/toolchain: Python 3.14.5 (venv), Node v26.10.0, psql 16.15
   (Homebrew), GNU bash 3.2.57 (the shell that runs installer tests —
   lib code is restricted to POSIX + bash-3.2 constructs).
-- Services: local PostgreSQL 16 with `agentharness` and `agentharness_test`
+- Services: local PostgreSQL 16 with `machina` and `machina_test`
   databases reachable; **no Docker** on this machine.
 - Official MCP Python SDK index state: `mcp` 2.3.0 latest (1.0.0–2.3.0
   listed); not yet installed at the initial installer review. The subsequent
@@ -45,7 +45,7 @@ isolated pty — never the operator terminal or database.
   guarded on unset/default (`install.sh` ex-398–409).
 - Fix: both branches route through `maybe_write_db_url`, which replaces
   only an unset URL or the documented installer placeholder
-  (`postgresql://postgres:postgres@localhost:5432/agentharness`); custom
+  (`postgresql://postgres:postgres@localhost:5432/machina`); custom
   URLs are preserved with a warning. Existing roles still never get password
   resets (unchanged `ALTER USER` gating).
 - Regressions: custom+new-role unchanged; default/unset replaced;
@@ -53,11 +53,11 @@ isolated pty — never the operator terminal or database.
   provisioning failure returns nonzero with byte-identical config.
 - Red/green: `test_brew_custom_url_survives_new_role` fails against a
   copy of the lib with the guard reverted to the old unconditional write
-  (via `AH_INSTALL_LIB` override), passes against the fixed lib.
+  (via `MACHINA_INSTALL_LIB` override), passes against the fixed lib.
 
-### 2. AH_ENV_FILE ignored by install.sh — FIXED
+### 2. MACHINA_ENV_FILE ignored by install.sh — FIXED
 
-- Root cause: the Python resolver honored `AH_ENV_FILE` while `install.sh`
+- Root cause: the Python resolver honored `MACHINA_ENV_FILE` while `install.sh`
   hardcoded `.env` for creation, secrets, and both DB branches.
 - Fix: `resolve_env_file` runs once (absolute wins; relative anchors to the
   startup directory so the later `cd` cannot redirect it; unset means the
@@ -108,16 +108,16 @@ isolated pty — never the operator terminal or database.
 ```sh
 pytest tests/ -q --tb=short --cov=ah --cov-fail-under=60
 # 1965 passed, 5 skipped in ~113s. TOTAL 16282 stmts, 3036 missed: 81.35% (>= 60 gate).
-ruff check ah/                                  # All checks passed (133 files).
-ruff format --check ah/                         # 133 files already formatted.
-python -m bandit -r ah/ -ll -x ah/cli/          # 0 medium/high severity (42 low, nosec-annotated sites).
+ruff check machina/                                  # All checks passed (133 files).
+ruff format --check machina/                         # 133 files already formatted.
+python -m bandit -r machina/ -ll -x machina/cli/          # 0 medium/high severity (42 low, nosec-annotated sites).
 npm --prefix ui run check                       # typecheck + 132 passed/5 skipped + eslint, all green.
 git diff --check                                # clean.
 ```
 
 - Real integration exercised (not mocked): UI/gateway over stdio JSON-RPC
   (137 UI tests incl. layout on a real alt-screen), PostgreSQL-backed
-  suites against disposable `agentharness_test`, installer functions
+  suites against disposable `machina_test`, installer functions
   against stubbed OS commands, fresh non-editable install (wheel built
   with hatchling, installed into a disposable Python 3.14 venv: 42-skill
   bundle hash verified, agent + context-window modules importable).
@@ -167,16 +167,16 @@ commit/push/deployment or git configuration changes were made.
 ```sh
 .venv/bin/python -m pytest -q tests/test_connectors_client.py tests/test_connectors_config.py tests/test_connectors_policy.py tests/test_connectors_manager.py tests/test_connectors_service.py --tb=short -p no:cacheprovider
 # 84 passed in 8.58s.
-AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider
+MACHINA_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/machina_test .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider
 # Final: 2049 passed, 5 skipped in 78.27s; 0 failed.
 npm --prefix ui run check
 # Exit 0: typecheck, 132 tests passed / 5 skipped, eslint.
 # UI gateway/DB tests require an explicit opt-in environment and were skipped.
-.venv/bin/python -m ruff check ah/connectors tests/test_connectors_client.py tests/test_connectors_config.py tests/test_connectors_policy.py tests/test_connectors_manager.py tests/test_connectors_service.py tests/support/mcp_fixture_server.py
+.venv/bin/python -m ruff check machina/connectors tests/test_connectors_client.py tests/test_connectors_config.py tests/test_connectors_policy.py tests/test_connectors_manager.py tests/test_connectors_service.py tests/support/mcp_fixture_server.py
 # All checks passed.
-.venv/bin/python -m ruff format --check ah/connectors tests/test_connectors_client.py tests/test_connectors_config.py tests/test_connectors_policy.py tests/test_connectors_manager.py tests/test_connectors_service.py tests/support/mcp_fixture_server.py
+.venv/bin/python -m ruff format --check machina/connectors tests/test_connectors_client.py tests/test_connectors_config.py tests/test_connectors_policy.py tests/test_connectors_manager.py tests/test_connectors_service.py tests/support/mcp_fixture_server.py
 # 13 files already formatted (line-length 100).
-.venv/bin/python -m bandit -r ah/connectors/ -ll
+.venv/bin/python -m bandit -r machina/connectors/ -ll
 # Exit 0: 0 medium/high. Unfiltered run reports 7 low and exits 1.
 git diff --check
 # Exit 0.
@@ -252,7 +252,7 @@ The expectation/bootstrap were corrected. Exact affected checks passed on clean
 HEAD `0ea164e` in a managed worktree (5 passed), and current checkout (5 passed).
 Final sequential full-backend outcome follows; no failure is waived.
 
-Tests use only the dedicated `agentharness_test` DB, isolated home lookup and empty
+Tests use only the dedicated `machina_test` DB, isolated home lookup and empty
 .env; no live credentials, production DB or startup files were touched. No commit,
 push, deploy or git configuration modification occurred. Existing release gates and
 approval reopen-on-return remain separate from this UI/inspection evidence.
@@ -260,7 +260,7 @@ approval reopen-on-return remain separate from this UI/inspection evidence.
 Final sequential verification after the review fixes: **2106 passed / 5 skipped /
 0 failed in 115.43 s**, including the real gateway restart wrapper (all **252 UI
 tests**, zero skipped UI tests). Command:
-`AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`,
+`MACHINA_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/machina_test .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`,
 with a disposable home/env bootstrap supplied through PYTHONPATH as described in
 the visual review. Standalone UI check: 247 passed / 5 optional skips / 0 failures;
 typecheck and eslint passed. No unresolved failure remains in the recorded checks.
@@ -270,7 +270,7 @@ typecheck and eslint passed. No unresolved failure remains in the recorded check
 
 MCP is now usable through `/mcp`: add a stdio or HTTP server, review its launch,
 connect, inspect tools, disconnect or remove. Configurations persist in the
-installation's `~/.agent-harness/mcp.json`; inventory does not start servers.
+installation's `~/.machina/mcp.json`; inventory does not start servers.
 The default installation includes the MCP SDK. Native `mcp_list`, `mcp_describe`
 and `mcp_call` tools use the runtime connector service and existing approval
 broker. Untrusted external calls require approval even in full mode; explicitly
@@ -291,7 +291,7 @@ typecheck/lint passed. The backend's real gateway wrapper runs all **295 UI
 tests with no UI skips**. Ruff check/format passed; Bandit reports **0 medium,
 0 high, 67 low** findings. Lockfile freshness and diff whitespace checks passed.
 Wheel/source builds pass isolated imports, bundled resource hashes and source
-archive cleanliness checks. Only the dedicated `agentharness_test` database
+archive cleanliness checks. Only the dedicated `machina_test` database
 was used, with disposable HOME/config and cleared live credentials.
 
 Release cleanup preserves the 71 pinned ECC roles and 42 curated skills, adds

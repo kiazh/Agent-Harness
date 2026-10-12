@@ -31,7 +31,7 @@ for (const trueColor of [true, false]) {
 			const f = await referenceFixture();
 			try { console.log(JSON.stringify(f.tui.getScreenLines())); }
 			finally { await f.app.exit(); }
-		`], { cwd: new URL("..", import.meta.url), env: { ...process.env, PI_TRUE_COLOR: trueColor ? "1" : "0", AH_UI_REDUCED_MOTION: "1" }, encoding: "utf8", timeout: 10000 });
+		`], { cwd: new URL("..", import.meta.url), env: { ...process.env, PI_TRUE_COLOR: trueColor ? "1" : "0", MACHINA_UI_REDUCED_MOTION: "1" }, encoding: "utf8", timeout: 10000 });
 		assert.equal(child.status, 0, child.stderr);
 		const screen = JSON.parse(child.stdout) as string[];
 		const plain = screen.map(stripTerminalSequences);

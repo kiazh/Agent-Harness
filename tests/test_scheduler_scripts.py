@@ -4,14 +4,14 @@ import uuid
 
 import pytest
 
-from ah.core.scheduler import JobRunner, JobStore
-from ah.core.session import SessionManager
+from machina.core.scheduler import JobRunner, JobStore
+from machina.core.session import SessionManager
 
 
 async def test_script_job_persists_and_delivers_stdout_without_an_agent(
     db_pool, monkeypatch, tmp_path
 ):
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     from tests.support.scripts import allow_scripts
 
     allow_scripts(
@@ -26,8 +26,8 @@ async def test_script_job_persists_and_delivers_stdout_without_an_agent(
         },
     )
     (tmp_path / "watch.py").write_text("print('disk alert')", encoding="utf-8")
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
     session = await SessionManager().create(title="script", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
     chunks = []
@@ -35,7 +35,7 @@ async def test_script_job_persists_and_delivers_stdout_without_an_agent(
     async def add_chunk(**kwargs):
         chunks.append(kwargs)
 
-    monkeypatch.setattr("ah.core.context.context_manager.add_chunk", add_chunk)
+    monkeypatch.setattr("machina.core.context.context_manager.add_chunk", add_chunk)
     try:
         job = await store.create(
             name="watch",
@@ -56,7 +56,7 @@ async def test_script_job_persists_and_delivers_stdout_without_an_agent(
         monkeypatch.setattr(runner, "_build_agent", no_agent)
         # AH-AUDIT-009: broker-governed scripts pause first; drive the real
         # pause → human resolve → execute flow.
-        from ah.permissions import store as perm_store
+        from machina.permissions import store as perm_store
 
         with pytest.raises(PermissionError, match="needs_approval"):
             await runner._execute(job)
@@ -75,9 +75,9 @@ async def test_script_job_persists_and_delivers_stdout_without_an_agent(
 
 @pytest.mark.asyncio
 async def test_script_runner_rejects_traversal_and_hides_provider_secret(monkeypatch, tmp_path):
-    from ah.core.job_scripts import run_job_script
+    from machina.core.job_scripts import run_job_script
 
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     from tests.support.scripts import allow_scripts
 
     allow_scripts(
@@ -105,9 +105,9 @@ async def test_script_runner_rejects_traversal_and_hides_provider_secret(monkeyp
 
 @pytest.mark.asyncio
 async def test_script_runner_bounds_time_and_suppresses_empty_output(monkeypatch, tmp_path):
-    from ah.core import job_scripts
+    from machina.core import job_scripts
 
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     from tests.support.scripts import allow_scripts
 
     allow_scripts(
@@ -130,9 +130,9 @@ async def test_script_runner_bounds_time_and_suppresses_empty_output(monkeypatch
 
 
 async def test_gateway_creates_script_job_without_prompt(db_pool, monkeypatch, tmp_path):
-    from ah.gateway.features.jobs import jobs_create
+    from machina.gateway.features.jobs import jobs_create
 
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     from tests.support.scripts import allow_scripts
 
     allow_scripts(
@@ -147,8 +147,8 @@ async def test_gateway_creates_script_job_without_prompt(db_pool, monkeypatch, t
         },
     )
     (tmp_path / "check.py").write_text("print('ok')", encoding="utf-8")
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
     session = await SessionManager().create(
         title="gateway script", agent_id=f"agent-{uuid.uuid4()}"
     )
@@ -173,7 +173,7 @@ async def test_gateway_creates_script_job_without_prompt(db_pool, monkeypatch, t
         )
         assert result["job"]["noAgent"] is True
         assert result["job"]["scriptPath"] == "check.py"
-        from ah.gateway.errors import INVALID_PARAMS, RpcError
+        from machina.gateway.errors import INVALID_PARAMS, RpcError
 
         with pytest.raises(RpcError) as error:
             await jobs_create(
@@ -186,7 +186,7 @@ async def test_gateway_creates_script_job_without_prompt(db_pool, monkeypatch, t
 
 
 async def test_script_job_rejects_an_unused_prompt(db_pool, monkeypatch, tmp_path):
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     from tests.support.scripts import allow_scripts
 
     allow_scripts(
@@ -201,8 +201,8 @@ async def test_script_job_rejects_an_unused_prompt(db_pool, monkeypatch, tmp_pat
         },
     )
     (tmp_path / "check.py").write_text("print('ok')", encoding="utf-8")
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
     session = await SessionManager().create(title="script prompt", agent_id=f"agent-{uuid.uuid4()}")
     try:
         with pytest.raises(ValueError, match="prompt"):
@@ -223,9 +223,9 @@ async def test_script_job_rejects_an_unused_prompt(db_pool, monkeypatch, tmp_pat
 async def test_script_timeout_terminates_child_processes(monkeypatch, tmp_path):
     import asyncio
 
-    from ah.core import job_scripts
+    from machina.core import job_scripts
 
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     from tests.support.scripts import allow_scripts
 
     allow_scripts(
@@ -261,9 +261,9 @@ async def test_script_children_do_not_outlive_successful_parent(
 ):
     import asyncio
 
-    from ah.core import job_scripts
+    from machina.core import job_scripts
 
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     from tests.support.scripts import allow_scripts
 
     allow_scripts(

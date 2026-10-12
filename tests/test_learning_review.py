@@ -8,16 +8,16 @@ import uuid
 
 import pytest
 
-from ah.core.models import LLMResponse
-from ah.core.session import SessionManager
-from ah.skills.learning import LearningReviewer
-from ah.skills.registry import SkillRegistry
+from machina.core.models import LLMResponse
+from machina.core.session import SessionManager
+from machina.skills.learning import LearningReviewer
+from machina.skills.registry import SkillRegistry
 
 
 async def test_successful_turn_schedules_opt_in_learning_without_blocking(monkeypatch):
-    from ah.core.agent import BaseReActAgent
-    from ah.core.config import config
-    from ah.core.models import AgentResponse
+    from machina.core.agent import BaseReActAgent
+    from machina.core.config import config
+    from machina.core.models import AgentResponse
 
     calls = []
 
@@ -25,7 +25,7 @@ async def test_successful_turn_schedules_opt_in_learning_without_blocking(monkey
         async def review_turn(self, *args, **kwargs):
             calls.append((args, kwargs))
 
-    monkeypatch.setattr("ah.skills.learning.learning_reviewer", FakeReviewer())
+    monkeypatch.setattr("machina.skills.learning.learning_reviewer", FakeReviewer())
     monkeypatch.setattr(config, "learning_review_enabled", True)
     agent = BaseReActAgent(provider=FakeProvider("null"), agent_id="researcher")
     session_id = uuid.uuid4()
@@ -66,8 +66,8 @@ class FakeProvider:
 async def test_review_stages_one_redacted_skill_and_approves_only_after_review(
     db_pool, monkeypatch, tmp_path
 ):
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
     registry = SkillRegistry(tmp_path / "skills")
@@ -117,8 +117,8 @@ async def test_review_stages_one_redacted_skill_and_approves_only_after_review(
 async def test_review_rejects_existing_skill_and_does_not_spend_when_trigger_absent(
     db_pool, monkeypatch, tmp_path
 ):
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
     registry = SkillRegistry(tmp_path / "skills")
@@ -155,8 +155,8 @@ async def test_review_rejects_existing_skill_and_does_not_spend_when_trigger_abs
 async def test_reviewer_rejects_invalid_proposal_and_foreign_approval(
     db_pool, monkeypatch, tmp_path
 ):
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
     registry = SkillRegistry(tmp_path / "skills")
@@ -200,15 +200,15 @@ async def test_reviewer_rejects_invalid_proposal_and_foreign_approval(
 async def test_gateway_lists_and_reviews_only_the_current_agents_proposals(
     db_pool, monkeypatch, tmp_path
 ):
-    from ah.gateway.features import METHODS
+    from machina.gateway.features import METHODS
 
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
     registry = SkillRegistry(tmp_path / "skills")
     reviewer = LearningReviewer(registry=registry)
-    monkeypatch.setattr("ah.skills.learning.learning_reviewer", reviewer)
+    monkeypatch.setattr("machina.skills.learning.learning_reviewer", reviewer)
     provider = FakeProvider(
         json.dumps(
             {
@@ -247,10 +247,10 @@ async def test_gateway_lists_and_reviews_only_the_current_agents_proposals(
 
 
 async def test_concurrent_turns_cannot_exceed_review_cap(db_pool, monkeypatch, tmp_path):
-    from ah.core.config import config
+    from machina.core.config import config
 
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     monkeypatch.setattr(config, "learning_review_max_per_session", 2)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review cap", agent_id=agent_id)
@@ -288,10 +288,10 @@ async def test_concurrent_turns_cannot_exceed_review_cap(db_pool, monkeypatch, t
 
 async def test_review_returns_none_when_max_reviews_is_zero(db_pool, monkeypatch, tmp_path):
     """review_turn() returns None when learning_review_max_per_session is 0."""
-    from ah.core.config import config
+    from machina.core.config import config
 
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     monkeypatch.setattr(config, "learning_review_max_per_session", 0)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
@@ -313,8 +313,8 @@ async def test_review_returns_none_when_max_reviews_is_zero(db_pool, monkeypatch
 
 async def test_review_raises_lookup_error_for_missing_session(db_pool, monkeypatch, tmp_path):
     """review_turn() raises LookupError when the session does not exist."""
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     reviewer = LearningReviewer(registry=SkillRegistry(tmp_path / "skills"))
     with pytest.raises(LookupError, match="session not found"):
@@ -329,8 +329,8 @@ async def test_review_raises_lookup_error_for_missing_session(db_pool, monkeypat
 
 async def test_review_raises_permission_error_for_foreign_session(db_pool, monkeypatch, tmp_path):
     """review_turn() raises PermissionError when the session belongs to another agent."""
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     other_agent = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=other_agent)
@@ -350,8 +350,8 @@ async def test_review_raises_permission_error_for_foreign_session(db_pool, monke
 
 async def test_review_includes_tool_calls_in_prompt(db_pool, monkeypatch, tmp_path):
     """review_turn() includes tool call names in the prompt when tool_calls are provided."""
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
     provider = FakeProvider(
@@ -384,8 +384,8 @@ async def test_review_includes_tool_calls_in_prompt(db_pool, monkeypatch, tmp_pa
 
 async def test_review_marks_error_when_provider_raises(db_pool, monkeypatch, tmp_path):
     """review_turn() marks the review as 'error' when the provider call fails."""
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
 
@@ -465,8 +465,8 @@ async def test_validate_rejects_prompt_injection_in_content():
 
 async def test_approve_raises_lookup_error_for_missing_review(db_pool, monkeypatch, tmp_path):
     """approve() raises LookupError when the review does not exist."""
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     reviewer = LearningReviewer(registry=SkillRegistry(tmp_path / "skills"))
     with pytest.raises(LookupError, match="learning proposal not found"):
         await reviewer.approve(uuid.uuid4(), agent_id="any-agent")
@@ -474,8 +474,8 @@ async def test_approve_raises_lookup_error_for_missing_review(db_pool, monkeypat
 
 async def test_approve_raises_value_error_when_skill_exists(db_pool, monkeypatch, tmp_path):
     """approve() raises ValueError when the skill already exists at approval time."""
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
     registry = SkillRegistry(tmp_path / "skills")
@@ -509,8 +509,8 @@ async def test_approve_raises_value_error_when_skill_exists(db_pool, monkeypatch
 
 async def test_reject_raises_lookup_error_for_missing_review(db_pool, monkeypatch, tmp_path):
     """reject() raises LookupError when the review does not exist."""
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     reviewer = LearningReviewer(registry=SkillRegistry(tmp_path / "skills"))
     with pytest.raises(LookupError, match="learning proposal not found"):
         await reviewer.reject(uuid.uuid4(), agent_id="any-agent")
@@ -518,8 +518,8 @@ async def test_reject_raises_lookup_error_for_missing_review(db_pool, monkeypatc
 
 async def test_reject_raises_permission_error_for_foreign_review(db_pool, monkeypatch, tmp_path):
     """reject() raises PermissionError when the review belongs to another agent."""
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
     registry = SkillRegistry(tmp_path / "skills")
@@ -551,8 +551,8 @@ async def test_reject_raises_permission_error_for_foreign_review(db_pool, monkey
 
 async def test_reject_returns_current_for_non_pending_review(db_pool, monkeypatch, tmp_path):
     """reject() returns the current review when it is not in 'pending' status."""
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
     registry = SkillRegistry(tmp_path / "skills")
@@ -591,8 +591,8 @@ async def test_reject_returns_current_for_non_pending_review(db_pool, monkeypatc
 
 async def test_orphaned_reviewing_row_is_recovered_after_restart(db_pool, monkeypatch, tmp_path):
     """A review stuck in 'reviewing' (process died mid-call) is re-claimed and completed."""
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
     registry = SkillRegistry(tmp_path / "skills")
@@ -643,8 +643,8 @@ async def test_orphaned_reviewing_row_is_recovered_after_restart(db_pool, monkey
 
 async def test_claim_prevents_double_processing(db_pool, monkeypatch, tmp_path):
     """Two concurrent recovery attempts for the same orphaned review — only one processes it."""
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
     registry = SkillRegistry(tmp_path / "skills")
@@ -717,10 +717,10 @@ async def test_claim_prevents_double_processing(db_pool, monkeypatch, tmp_path):
 
 async def test_review_cap_still_enforced_after_recovery(db_pool, monkeypatch, tmp_path):
     """The MAX_PENDING_LEARNING_REVIEWS cap is preserved even with recovery."""
-    from ah.core.agent import MAX_PENDING_LEARNING_REVIEWS
+    from machina.core.agent import MAX_PENDING_LEARNING_REVIEWS
 
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
     session = await SessionManager().create(title="review", agent_id=agent_id)
     SkillRegistry(tmp_path / "skills")
@@ -741,15 +741,15 @@ async def test_review_cap_still_enforced_after_recovery(db_pool, monkeypatch, tm
         )
 
     # Now try to schedule a new review — should be capped
-    from ah.core.agent import _pending_learning_reviews
+    from machina.core.agent import _pending_learning_reviews
 
     _pending_learning_reviews.clear()  # simulate fresh process
     # Manually fill to cap
     for _ in range(MAX_PENDING_LEARNING_REVIEWS):
         _pending_learning_reviews.add(object())
 
-    from ah.core.agent import BaseReActAgent
-    from ah.core.models import AgentResponse
+    from machina.core.agent import BaseReActAgent
+    from machina.core.models import AgentResponse
 
     agent = BaseReActAgent(provider=FakeProvider("null"), agent_id=agent_id)
     session_id = uuid.uuid4()

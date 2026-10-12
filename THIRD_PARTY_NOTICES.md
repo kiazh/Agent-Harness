@@ -13,7 +13,7 @@ A curated set of 42 canonical skills and retained reference dependencies are cop
 
 The 71 canonical subagent definitions are separately pinned to revision
 `b92f181b3b748d1abbc2afd94af6aa7d8c8fca29` of the same ECC repository.
-Original Markdown and MIT license are retained under `ah/bundled_agents/ecc/`.
+Original Markdown and MIT license are retained under `machina/bundled_agents/ecc/`.
 The manifest records source paths and SHA-256 hashes. See
 [the integration notes](docs/ECC_AGENTS.md) for tool mappings and limitations.
 No upstream hooks, services or executable installers are activated.

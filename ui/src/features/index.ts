@@ -38,7 +38,7 @@ const appCommands: Command[] = [
 	},
 	{
 		name: "exit",
-		description: "Quit AgentHarness",
+		description: "Quit Machina",
 		async run(_args, host) {
 			await host.exit();
 		},

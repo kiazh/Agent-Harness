@@ -1,4 +1,4 @@
-"""Extended tests for ah.core.session_recall — discover() and window()."""
+"""Extended tests for machina.core.session_recall — discover() and window()."""
 
 from __future__ import annotations
 
@@ -6,15 +6,15 @@ import uuid
 
 import pytest
 
-from ah.core.context import ContextManager
-from ah.core.serialization import payload_to_msgpack
-from ah.core.session_recall import SessionRecall
+from machina.core.context import ContextManager
+from machina.core.serialization import payload_to_msgpack
+from machina.core.session_recall import SessionRecall
 
 
 async def test_discover_live_chunks_only(db_pool, monkeypatch):
     """discover() finds matches in live context_chunks only."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-live-{uuid.uuid4()}"
@@ -39,8 +39,8 @@ async def test_discover_live_chunks_only(db_pool, monkeypatch):
 
 async def test_discover_archive_only(db_pool, monkeypatch):
     """discover() finds matches in context_archive only."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-arch-{uuid.uuid4()}"
@@ -69,8 +69,8 @@ async def test_discover_archive_only(db_pool, monkeypatch):
 
 async def test_discover_title_only(db_pool, monkeypatch):
     """discover() finds matches in session titles only."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     agent = f"recall-title-{uuid.uuid4()}"
     session_id = await db_pool.fetchval(
@@ -90,8 +90,8 @@ async def test_discover_title_only(db_pool, monkeypatch):
 
 async def test_discover_all_three_sources(db_pool, monkeypatch):
     """discover() returns hits from live, archive, and title in one query."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-all3-{uuid.uuid4()}"
@@ -128,8 +128,8 @@ async def test_discover_all_three_sources(db_pool, monkeypatch):
 
 async def test_discover_no_matches(db_pool, monkeypatch):
     """discover() returns empty list when nothing matches."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     agent = f"recall-none-{uuid.uuid4()}"
     session_id = await db_pool.fetchval(
@@ -149,8 +149,8 @@ async def test_discover_no_matches(db_pool, monkeypatch):
 
 async def test_discover_agent_scoping(db_pool, monkeypatch):
     """discover() does not return other agents' sessions."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent_a = f"recall-a-{uuid.uuid4()}"
@@ -188,8 +188,8 @@ async def test_discover_agent_scoping(db_pool, monkeypatch):
 
 async def test_discover_agent_scoping_archive(db_pool, monkeypatch):
     """discover() does not return other agents' archived chunks."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent_a = f"recall-arch-a-{uuid.uuid4()}"
@@ -233,7 +233,7 @@ async def test_discover_agent_scoping_archive(db_pool, monkeypatch):
 
 async def test_discover_empty_agent_id_raises(db_pool, monkeypatch):
     """discover() raises ValueError for empty agent_id."""
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     with pytest.raises(ValueError, match="agent_id is required"):
         await recall.discover("", "query")
@@ -243,7 +243,7 @@ async def test_discover_empty_agent_id_raises(db_pool, monkeypatch):
 
 async def test_discover_limit_validation(db_pool, monkeypatch):
     """discover() raises ValueError for out-of-range limit."""
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     with pytest.raises(ValueError, match="limit must be between 1 and 100"):
         await recall.discover("agent", "query", limit=0)
@@ -255,7 +255,7 @@ async def test_discover_limit_validation(db_pool, monkeypatch):
 
 async def test_discover_query_too_long_raises(db_pool, monkeypatch):
     """discover() raises ValueError for query > 200 chars."""
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     with pytest.raises(ValueError, match="query must be at most 200 characters"):
         await recall.discover("agent", "a" * 201)
@@ -263,7 +263,7 @@ async def test_discover_query_too_long_raises(db_pool, monkeypatch):
 
 async def test_discover_empty_query_returns_empty(db_pool, monkeypatch):
     """discover() returns empty list for empty/whitespace query."""
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     assert await recall.discover("agent", "") == []
     assert await recall.discover("agent", "   ") == []
@@ -271,15 +271,15 @@ async def test_discover_empty_query_returns_empty(db_pool, monkeypatch):
 
 async def test_discover_stopword_only_query_returns_empty(db_pool, monkeypatch):
     """discover() returns empty list when query is all stopwords."""
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     assert await recall.discover("agent", "the and or") == []
 
 
 async def test_discover_respects_limit(db_pool, monkeypatch):
     """discover() respects the limit parameter."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-limit-{uuid.uuid4()}"
@@ -301,8 +301,8 @@ async def test_discover_respects_limit(db_pool, monkeypatch):
 
 async def test_discover_deduplicates_live_and_archive(db_pool, monkeypatch):
     """discover() deduplicates when same chunk_id exists in both live and archive."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-dedup-{uuid.uuid4()}"
@@ -336,8 +336,8 @@ async def test_discover_deduplicates_live_and_archive(db_pool, monkeypatch):
 
 async def test_window_clamping_at_start(db_pool, monkeypatch):
     """window() clamps to available chunks when before exceeds available history."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-clamp-{uuid.uuid4()}"
@@ -362,8 +362,8 @@ async def test_window_clamping_at_start(db_pool, monkeypatch):
 
 async def test_window_clamping_at_end(db_pool, monkeypatch):
     """window() clamps to available chunks when after exceeds available future."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-clamp2-{uuid.uuid4()}"
@@ -388,8 +388,8 @@ async def test_window_clamping_at_end(db_pool, monkeypatch):
 
 async def test_window_empty_when_no_chunks(db_pool, monkeypatch):
     """window() returns empty list when session has no chunks."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     agent = f"recall-empty-{uuid.uuid4()}"
     session_id = await db_pool.fetchval(
@@ -405,8 +405,8 @@ async def test_window_empty_when_no_chunks(db_pool, monkeypatch):
 
 async def test_window_ordering_chronological(db_pool, monkeypatch):
     """window() returns messages in chronological order."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-order-{uuid.uuid4()}"
@@ -439,8 +439,8 @@ async def test_window_ordering_chronological(db_pool, monkeypatch):
 
 async def test_window_before_zero(db_pool, monkeypatch):
     """window() with before=0 returns only anchor and after chunks."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-b0-{uuid.uuid4()}"
@@ -463,8 +463,8 @@ async def test_window_before_zero(db_pool, monkeypatch):
 
 async def test_window_after_zero(db_pool, monkeypatch):
     """window() with after=0 returns only before chunks and anchor."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-a0-{uuid.uuid4()}"
@@ -487,8 +487,8 @@ async def test_window_after_zero(db_pool, monkeypatch):
 
 async def test_window_both_zero(db_pool, monkeypatch):
     """window() with before=0 and after=0 returns only the anchor chunk."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-both0-{uuid.uuid4()}"
@@ -512,8 +512,8 @@ async def test_window_both_zero(db_pool, monkeypatch):
 
 async def test_window_agent_scope_enforced(db_pool, monkeypatch):
     """window() returns empty for sessions owned by another agent."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent_a = f"recall-scope-a-{uuid.uuid4()}"
@@ -536,7 +536,7 @@ async def test_window_agent_scope_enforced(db_pool, monkeypatch):
 
 async def test_window_empty_agent_id_raises(db_pool, monkeypatch):
     """window() raises ValueError for empty agent_id."""
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     with pytest.raises(ValueError, match="agent_id is required"):
         await recall.window("", uuid.uuid4(), uuid.uuid4())
@@ -544,7 +544,7 @@ async def test_window_empty_agent_id_raises(db_pool, monkeypatch):
 
 async def test_window_before_out_of_range_raises(db_pool, monkeypatch):
     """window() raises ValueError for before > 20."""
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     with pytest.raises(ValueError, match="before and after must be between 0 and 20"):
         await recall.window("agent", uuid.uuid4(), uuid.uuid4(), before=21)
@@ -552,7 +552,7 @@ async def test_window_before_out_of_range_raises(db_pool, monkeypatch):
 
 async def test_window_after_out_of_range_raises(db_pool, monkeypatch):
     """window() raises ValueError for after > 20."""
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     with pytest.raises(ValueError, match="before and after must be between 0 and 20"):
         await recall.window("agent", uuid.uuid4(), uuid.uuid4(), after=21)
@@ -560,7 +560,7 @@ async def test_window_after_out_of_range_raises(db_pool, monkeypatch):
 
 async def test_window_negative_before_raises(db_pool, monkeypatch):
     """window() raises ValueError for negative before."""
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     with pytest.raises(ValueError, match="before and after must be between 0 and 20"):
         await recall.window("agent", uuid.uuid4(), uuid.uuid4(), before=-1)
@@ -568,7 +568,7 @@ async def test_window_negative_before_raises(db_pool, monkeypatch):
 
 async def test_window_negative_after_raises(db_pool, monkeypatch):
     """window() raises ValueError for negative after."""
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     with pytest.raises(ValueError, match="before and after must be between 0 and 20"):
         await recall.window("agent", uuid.uuid4(), uuid.uuid4(), after=-1)
@@ -576,8 +576,8 @@ async def test_window_negative_after_raises(db_pool, monkeypatch):
 
 async def test_window_includes_archived_chunks(db_pool, monkeypatch):
     """window() includes archived chunks in the window."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-arch-win-{uuid.uuid4()}"
@@ -621,8 +621,8 @@ async def test_window_includes_archived_chunks(db_pool, monkeypatch):
 
 async def test_window_max_boundary_values(db_pool, monkeypatch):
     """window() accepts before=20 and after=20 (max boundary)."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-max-{uuid.uuid4()}"
@@ -645,8 +645,8 @@ async def test_window_max_boundary_values(db_pool, monkeypatch):
 
 async def test_discover_preview_truncated(db_pool, monkeypatch):
     """discover() preview is truncated to 240 chars."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-prev-{uuid.uuid4()}"
@@ -667,8 +667,8 @@ async def test_discover_preview_truncated(db_pool, monkeypatch):
 
 async def test_discover_multiple_sessions_same_agent(db_pool, monkeypatch):
     """discover() can return hits from multiple sessions of the same agent."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
     recall = SessionRecall()
     agent = f"recall-multi-{uuid.uuid4()}"
@@ -697,8 +697,8 @@ async def test_discover_multiple_sessions_same_agent(db_pool, monkeypatch):
 
 async def test_window_nonexistent_chunk_returns_empty(db_pool, monkeypatch):
     """window() returns empty for a chunk_id not in the session."""
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     agent = f"recall-nochunk-{uuid.uuid4()}"
     session_id = await db_pool.fetchval(
@@ -716,7 +716,7 @@ async def test_window_nonexistent_chunk_returns_empty(db_pool, monkeypatch):
 
 async def test_window_nonexistent_session_returns_empty(db_pool, monkeypatch):
     """window() returns empty for a session_id that doesn't exist."""
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     window = await recall.window("agent", uuid.uuid4(), uuid.uuid4(), before=2, after=2)
     assert window == []

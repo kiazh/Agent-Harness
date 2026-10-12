@@ -10,7 +10,7 @@ import uuid
 
 import pytest
 
-from ah.memory.rl import (
+from machina.memory.rl import (
     MemoryAction,
     MemoryDecision,
     MemoryReward,
@@ -68,7 +68,7 @@ class TestMemoryState:
 
     def test_create_with_memory_entries(self):
         """Test creating MemoryState with existing memory entries."""
-        from ah.memory.models import MemoryEntry
+        from machina.memory.models import MemoryEntry
 
         entry = MemoryEntry(
             id=uuid.uuid4(),

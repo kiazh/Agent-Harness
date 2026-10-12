@@ -14,10 +14,10 @@ pytestmark = [pytest.mark.integration, pytest.mark.db]
 @pytest.fixture
 async def workers(db_pool, monkeypatch):
     async with isolated_schema(db_pool) as (schema, database):
-        monkeypatch.setattr("ah.db.connection.db", database)
-        monkeypatch.setattr("ah.core.session.db", database)
-        monkeypatch.setattr("ah.core.scheduler.db", database)
-        from ah.core.session import SessionManager
+        monkeypatch.setattr("machina.db.connection.db", database)
+        monkeypatch.setattr("machina.core.session.db", database)
+        monkeypatch.setattr("machina.core.scheduler.db", database)
+        from machina.core.session import SessionManager
 
         session = await SessionManager().create(title="independent workers")
         processes = []
@@ -61,7 +61,7 @@ async def test_expired_owner_cannot_release_successor(workers):
 
 async def test_two_job_workers_and_stale_finish(workers):
     database, sid, (first, second) = workers
-    from ah.core.scheduler import job_store
+    from machina.core.scheduler import job_store
 
     job = await job_store.create(
         name="process fencing",
@@ -88,8 +88,8 @@ async def test_two_job_workers_and_stale_finish(workers):
 
 async def test_approval_consumed_once_across_processes(workers):
     _, sid, processes = workers
-    from ah.permissions import store
-    from ah.permissions.policy import ActionRequest, normalize_request
+    from machina.permissions import store
+    from machina.permissions.policy import ActionRequest, normalize_request
 
     request = normalize_request(
         ActionRequest(
@@ -116,7 +116,7 @@ async def test_approval_consumed_once_across_processes(workers):
 
 async def test_mode_change_reaches_other_process_despite_local_cache(workers):
     _, sid, processes = workers
-    from ah.core.session_mode import activate_durable_mode
+    from machina.core.session_mode import activate_durable_mode
 
     await activate_durable_mode(sid, "harness", "workspace")
     assert (await processes[0].call("mode", session_id=sid))["mode"] == "workspace"

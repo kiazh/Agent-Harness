@@ -5,7 +5,7 @@ from __future__ import annotations
 
 def test_all_feature_methods_accessible_after_split():
     """All methods from the original features.py must be importable from sub-modules."""
-    from ah.gateway.features import METHODS
+    from machina.gateway.features import METHODS
 
     expected = {
         "session.fork",
@@ -88,7 +88,7 @@ def test_all_feature_methods_accessible_after_split():
 
 def test_submodules_importable():
     """Each domain module must be importable."""
-    from ah.gateway.features import agents, config, jobs, memory, secrets, sessions, skills
+    from machina.gateway.features import agents, config, jobs, memory, secrets, sessions, skills
 
     assert hasattr(sessions, "session_fork")
     assert hasattr(memory, "memory_list")
@@ -101,8 +101,8 @@ def test_submodules_importable():
 
 def test_register_still_works():
     """register() must still add all methods to a gateway."""
-    from ah.gateway.features import METHODS, register
-    from ah.gateway.server import Gateway
+    from machina.gateway.features import METHODS, register
+    from machina.gateway.server import Gateway
 
     gw = Gateway(lambda frame: None)
     register(gw)
@@ -111,7 +111,7 @@ def test_register_still_works():
 
 def test_coerce_config_value_preserved():
     """coerce_config_value must still be accessible."""
-    from ah.gateway.features import coerce_config_value
+    from machina.gateway.features import coerce_config_value
 
     assert coerce_config_value("max_iterations", "7") == 7
     assert coerce_config_value("verbose", "off") is False

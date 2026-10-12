@@ -6,17 +6,17 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.models import AgentResponse, StreamEvent
-from ah.core.orchestrator import DelegationResult
+from machina.core.models import AgentResponse, StreamEvent
+from machina.core.orchestrator import DelegationResult
 
 
 @pytest.mark.asyncio
 async def test_rpc_sequential_delegation_returns_early_pause(monkeypatch):
-    from ah.gateway.features.agents import agents_run
+    from machina.gateway.features.agents import agents_run
 
     paused = DelegationResult("coder", "first", "paused", uuid.uuid4(), 1, 1, "waiting_approval")
     runner = AsyncMock(return_value=[paused])
-    monkeypatch.setattr("ah.core.orchestrator.orchestrator.run_sequential", runner)
+    monkeypatch.setattr("machina.core.orchestrator.orchestrator.run_sequential", runner)
     gateway = SimpleNamespace(require_db=lambda: None)
     result = await agents_run(
         gateway,
@@ -26,7 +26,7 @@ async def test_rpc_sequential_delegation_returns_early_pause(monkeypatch):
 
 
 def test_rpc_delegation_result_preserves_typed_pauses():
-    from ah.gateway.features.agents import _delegation
+    from machina.gateway.features.agents import _delegation
 
     child = uuid.uuid4()
     pause = {
@@ -45,7 +45,7 @@ def test_rpc_delegation_result_preserves_typed_pauses():
 
 
 def test_sse_completion_preserves_child_continuation_identity():
-    from ah.api.app import _serialize_event
+    from machina.api.app import _serialize_event
 
     child = str(uuid.uuid4())
     pause = {

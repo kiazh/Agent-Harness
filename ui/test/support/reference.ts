@@ -15,7 +15,7 @@ export async function referenceFixture(columns = 140, rows = 52) {
   start(){}, async stop(){}, stderr:() => [],
   async request(method:string, params:Record<string, unknown> = {}) {
    requests.push({method,params});
-   if (method === "initialize") return {version:"fixture", model:"preview", cwd:"~/agent-harness", branch:"main", provider:"fixture"};
+   if (method === "initialize") return {version:"fixture", model:"preview", cwd:"~/machina", branch:"main", provider:"fixture"};
    if (method === "config.get") return {config:{theme:"codex"}};
    if (method === "mode.get") return {mode:"ask"};
    if (method === "session.create") return {session:{id:"reference-session", title:"Preview", model:"preview", provider:"fixture", status:"active", lastActivity:null}};
@@ -33,7 +33,7 @@ export async function referenceFixture(columns = 140, rows = 52) {
  emit({type:"tool.start", id:"read-1", name:"read_file", args:{path:"install.sh"}});
  emit({type:"tool.complete", id:"read-1", name:"read_file", result:"Example inspection · Homebrew fallback configuration", isError:false});
  emit({type:"message.delta", text:"The proposed change preserves the existing URL. Review the file-write evidence below; approval options are docked above the composer."});
- const approval = (requestId:string) => ({type:"needs_approval", requestId, operation:"write_file", tool:"write_file", target:"install.sh", argv:[], cwd:"~/agent-harness", backend:"local", timeout:30, capabilities:["file.write"], fileDiff:{diff:"@@ proposed installer guard · illustrative preview @@\n- write_generated_database_url()\n+ if custom_database_url_is_set; then\n+   log \"Preserving custom DATABASE_URL\"\n+ else\n+   write_generated_database_url()\n+ fi"}});
+ const approval = (requestId:string) => ({type:"needs_approval", requestId, operation:"write_file", tool:"write_file", target:"install.sh", argv:[], cwd:"~/machina", backend:"local", timeout:30, capabilities:["file.write"], fileDiff:{diff:"@@ proposed installer guard · illustrative preview @@\n- write_generated_database_url()\n+ if custom_database_url_is_set; then\n+   log \"Preserving custom DATABASE_URL\"\n+ else\n+   write_generated_database_url()\n+ fi"}});
  emit(approval("demo-7f2a"));
  tui.renderNow(true);
  return {app, tui, term, emit, approval, requests, type:(data:string) => input(data), plain:() => tui.getScreenLines().map(stripTerminalSequences)};

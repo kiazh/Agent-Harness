@@ -8,13 +8,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.compression import (
+from machina.core.compression import (
     CompressionConfig,
     CompressionResult,
     ContextCompressor,
     RollingCompaction,
 )
-from ah.core.models import ContextChunk, LLMResponse
+from machina.core.models import ContextChunk, LLMResponse
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -364,7 +364,7 @@ class TestCompressionIntegration:
 
     def test_compress_context_chunks_function(self, sample_chunks):
         """Test the compress_context_chunks convenience function."""
-        from ah.core.assembler import compress_context_chunks
+        from machina.core.assembler import compress_context_chunks
 
         result = compress_context_chunks(
             chunks=sample_chunks,
@@ -376,7 +376,7 @@ class TestCompressionIntegration:
 
     def test_config_from_global_config(self):
         """Test building CompressionConfig from global config."""
-        from ah.core.config import config
+        from machina.core.config import config
 
         comp_config = CompressionConfig(
             enabled=config.get("compression_enabled"),

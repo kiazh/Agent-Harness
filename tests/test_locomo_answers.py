@@ -11,8 +11,8 @@ import json
 
 import pytest
 
-from ah.core.models import LLMResponse
-from ah.research.locomo import (
+from machina.core.models import LLMResponse
+from machina.research.locomo import (
     AnswerMetrics,
     Conversation,
     DialogueTurn,
@@ -155,7 +155,7 @@ async def test_generate_answer_with_empty_question():
 async def test_generate_answer_handles_none_content():
     """A provider can return None content (e.g. an empty/filtered completion);
     that must yield an empty answer, not crash the corpus run."""
-    from ah.core.models import LLMResponse
+    from machina.core.models import LLMResponse
 
     class NoneProvider:
         async def complete(self, *a, **k):
@@ -169,7 +169,7 @@ async def test_generate_answer_handles_none_content():
 async def test_generate_answer_retries_transient_failure():
     """A corpus run must survive transient provider errors (429s) by retrying
     with backoff instead of aborting the whole measurement."""
-    from ah.core.models import LLMResponse
+    from machina.core.models import LLMResponse
 
     class FlakyProvider:
         def __init__(self):
@@ -408,7 +408,7 @@ async def test_end_to_end_with_locomo_json(tmp_path):
         ),
         encoding="utf-8",
     )
-    from ah.research.locomo import load_locomo
+    from machina.research.locomo import load_locomo
 
     conversations = load_locomo(path)
     provider = StubProvider(answer="Toronto")

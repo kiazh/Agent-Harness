@@ -8,17 +8,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from ah.core.agent import BaseReActAgent
-from ah.core.config import config
-from ah.core.models import LLMResponse, StreamEvent, ToolDefinition
-from ah.core.provider import (
+from machina.core.agent import BaseReActAgent
+from machina.core.config import config
+from machina.core.models import LLMResponse, StreamEvent, ToolDefinition
+from machina.core.provider import (
     PROVIDER_SPECS,
     AnthropicProvider,
     DirectProvider,
     OllamaProvider,
     OpenRouterProvider,
 )
-from ah.core.usage import _estimate_tokens, usage_store
+from machina.core.usage import _estimate_tokens, usage_store
 
 
 def _stream_provider(chunks):

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.scheduler import (
+from machina.core.scheduler import (
     DEFAULT_HEARTBEAT_PROMPT,
     JobRunner,
     JobStore,
@@ -136,9 +136,9 @@ async def test_script_path_requires_no_agent():
 
 async def test_list_without_session_id(db_pool, monkeypatch):
     """list() without session_id returns all jobs."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="list all", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -158,9 +158,9 @@ async def test_list_without_session_id(db_pool, monkeypatch):
 
 async def test_renew_lease(db_pool, monkeypatch):
     """renew_lease extends next_run_at for a running job."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="renew", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -183,7 +183,7 @@ async def test_renew_lease(db_pool, monkeypatch):
 
 async def test_finish_nonexistent_job(db_pool, monkeypatch):
     """finish() on a missing job is a no-op."""
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
     store = JobStore()
     # Should not raise
     await store.finish(uuid.uuid4())
@@ -224,7 +224,7 @@ async def test_run_due_once_returns_false_when_no_jobs(monkeypatch):
 
 async def test_run_due_once_handles_cancelled_error(monkeypatch):
     """run_due_once propagates CancelledError from _execute."""
-    from ah.core.scheduler import Job
+    from machina.core.scheduler import Job
 
     job = Job(
         id=uuid.uuid4(),
@@ -274,7 +274,7 @@ async def test_keep_lease_renews_periodically(monkeypatch):
 
 async def test_keep_lease_continues_after_renew_error(monkeypatch):
     """_keep_lease logs renew errors and keeps looping."""
-    monkeypatch.setattr("ah.core.scheduler.RUN_LEASE_SECONDS", 0.3)
+    monkeypatch.setattr("machina.core.scheduler.RUN_LEASE_SECONDS", 0.3)
     store = JobStore()
     store.renew_lease = AsyncMock(side_effect=RuntimeError("db gone"))
     runner = JobRunner(store=store)
@@ -291,7 +291,7 @@ async def test_keep_lease_continues_after_renew_error(monkeypatch):
 
 async def test_execute_raises_without_session():
     """_execute raises RuntimeError when job has no session_id."""
-    from ah.core.scheduler import Job
+    from machina.core.scheduler import Job
 
     job = Job(
         id=uuid.uuid4(),
@@ -315,7 +315,7 @@ async def test_execute_raises_without_session():
 
 async def test_build_agent_raises_for_unknown_agent(monkeypatch):
     """_build_agent fails closed for unknown agent names (shared factory)."""
-    monkeypatch.setattr("ah.core.agent_def.agent_registry.get", AsyncMock(return_value=None))
+    monkeypatch.setattr("machina.core.agent_def.agent_registry.get", AsyncMock(return_value=None))
     runner = JobRunner()
     with pytest.raises(ValueError, match="unknown agent"):
         await runner._build_agent("nonexistent")
@@ -326,9 +326,9 @@ async def test_build_agent_raises_for_unknown_agent(monkeypatch):
 
 async def test_create_cron_job(db_pool, monkeypatch):
     """Cron jobs are created with a cron_expression."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="cron", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -350,9 +350,9 @@ async def test_create_cron_job(db_pool, monkeypatch):
 
 async def test_set_enabled_cron_recalculates_next_run(db_pool, monkeypatch):
     """Enabling a cron job recalculates next_run_at from the cron expression."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="cron toggle", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -381,9 +381,9 @@ async def test_set_enabled_cron_recalculates_next_run(db_pool, monkeypatch):
 
 async def test_claim_due_returns_oldest_first(db_pool, monkeypatch):
     """claim_due returns the job with the earliest next_run_at."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="ordering", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -421,9 +421,9 @@ async def test_claim_due_returns_oldest_first(db_pool, monkeypatch):
 
 async def test_claim_due_with_no_due_jobs(db_pool, monkeypatch):
     """claim_due returns None when no jobs are due."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="empty", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -448,9 +448,9 @@ async def test_claim_due_with_no_due_jobs(db_pool, monkeypatch):
 
 async def test_concurrent_claim_no_double_execute(db_pool, monkeypatch):
     """Two concurrent claim_due calls cannot claim the same job."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="concurrent", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -481,9 +481,9 @@ async def test_concurrent_claim_no_double_execute(db_pool, monkeypatch):
 
 async def test_expired_lease_is_reclaimable(db_pool, monkeypatch):
     """A running job with an expired lease can be claimed again."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="expired", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -515,9 +515,9 @@ async def test_expired_lease_is_reclaimable(db_pool, monkeypatch):
 
 async def test_heartbeat_job_uses_default_prompt(db_pool, monkeypatch):
     """Heartbeat jobs use DEFAULT_HEARTBEAT_PROMPT when prompt is empty."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="hb", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -541,9 +541,9 @@ async def test_heartbeat_job_uses_default_prompt(db_pool, monkeypatch):
 
 async def test_interval_job_next_run_is_future(db_pool, monkeypatch):
     """Interval jobs have next_run_at in the future."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="interval", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -568,9 +568,9 @@ async def test_interval_job_next_run_is_future(db_pool, monkeypatch):
 
 async def test_set_enabled_interval_reschedules(db_pool, monkeypatch):
     """Enabling an interval job resets next_run_at to now + interval."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="toggle", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -599,7 +599,7 @@ async def test_set_enabled_interval_reschedules(db_pool, monkeypatch):
 
 async def test_set_enabled_nonexistent_returns_none(db_pool, monkeypatch):
     """set_enabled on a missing job returns None."""
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
     store = JobStore()
     result = await store.set_enabled(uuid.uuid4(), True)
     assert result is None
@@ -610,7 +610,7 @@ async def test_set_enabled_nonexistent_returns_none(db_pool, monkeypatch):
 
 async def test_delete_nonexistent_returns_false(db_pool, monkeypatch):
     """delete on a missing job returns False."""
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
     store = JobStore()
     result = await store.delete(uuid.uuid4())
     assert result is False
@@ -621,7 +621,7 @@ async def test_delete_nonexistent_returns_false(db_pool, monkeypatch):
 
 async def test_get_nonexistent_returns_none(db_pool, monkeypatch):
     """get on a missing job returns None."""
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
     store = JobStore()
     result = await store.get(uuid.uuid4())
     assert result is None
@@ -632,9 +632,9 @@ async def test_get_nonexistent_returns_none(db_pool, monkeypatch):
 
 async def test_finish_cron_reschedules_from_expression(db_pool, monkeypatch):
     """finish() on a cron job reschedules using the cron expression."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="cron finish", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -661,9 +661,9 @@ async def test_finish_cron_reschedules_from_expression(db_pool, monkeypatch):
 
 async def test_finish_with_error_sets_status(db_pool, monkeypatch):
     """finish() with an error sets status to 'error' and records the message."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="error", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -754,10 +754,10 @@ async def test_loop_drains_backlog_immediately(monkeypatch):
 
 async def test_run_due_once_with_agent_factory(db_pool, monkeypatch):
     """run_due_once uses the agent_factory to build agents."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.models import AgentResponse
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.models import AgentResponse
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="factory", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -796,10 +796,10 @@ async def test_run_due_once_with_agent_factory(db_pool, monkeypatch):
 
 async def test_run_due_once_cron_job(db_pool, monkeypatch):
     """run_due_once works for cron jobs."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.models import AgentResponse
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.models import AgentResponse
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="cron run", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -839,14 +839,14 @@ async def test_run_due_once_cron_job(db_pool, monkeypatch):
 
 async def test_execute_no_agent_script(db_pool, monkeypatch, tmp_path):
     """_execute for no_agent jobs runs the script and adds a chunk."""
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     from tests.support.scripts import allow_scripts
 
     allow_scripts(tmp_path, {"hello.py": [], "silent.py": [], "check.py": []})
     (tmp_path / "hello.py").write_text("print('hello world')", encoding="utf-8")
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="script exec", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -855,7 +855,7 @@ async def test_execute_no_agent_script(db_pool, monkeypatch, tmp_path):
     async def add_chunk(**kwargs):
         chunks.append(kwargs)
 
-    monkeypatch.setattr("ah.core.context.context_manager.add_chunk", add_chunk)
+    monkeypatch.setattr("machina.core.context.context_manager.add_chunk", add_chunk)
     try:
         job = await store.create(
             name="script",
@@ -874,7 +874,7 @@ async def test_execute_no_agent_script(db_pool, monkeypatch, tmp_path):
         monkeypatch.setattr(runner, "_build_agent", no_agent)
         # AH-AUDIT-009: broker-governed scripts pause for human approval
         # first; the test drives the real pause → resolve → execute flow.
-        from ah.permissions import store as perm_store
+        from machina.permissions import store as perm_store
 
         with pytest.raises(PermissionError, match="needs_approval"):
             await runner._execute(job)
@@ -896,14 +896,14 @@ async def test_execute_no_agent_script(db_pool, monkeypatch, tmp_path):
 
 async def test_execute_no_agent_empty_output(db_pool, monkeypatch, tmp_path):
     """_execute for no_agent jobs with empty output does not add a chunk."""
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     from tests.support.scripts import allow_scripts
 
     allow_scripts(tmp_path, {"hello.py": [], "silent.py": [], "check.py": []})
     (tmp_path / "silent.py").write_text("pass", encoding="utf-8")
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="silent", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -912,7 +912,7 @@ async def test_execute_no_agent_empty_output(db_pool, monkeypatch, tmp_path):
     async def add_chunk(**kwargs):
         chunks.append(kwargs)
 
-    monkeypatch.setattr("ah.core.context.context_manager.add_chunk", add_chunk)
+    monkeypatch.setattr("machina.core.context.context_manager.add_chunk", add_chunk)
     try:
         job = await store.create(
             name="silent",
@@ -930,7 +930,7 @@ async def test_execute_no_agent_empty_output(db_pool, monkeypatch, tmp_path):
 
         monkeypatch.setattr(runner, "_build_agent", no_agent)
         # AH-AUDIT-009: same pause → resolve → execute flow as above.
-        from ah.permissions import store as perm_store
+        from machina.permissions import store as perm_store
 
         with pytest.raises(PermissionError, match="needs_approval"):
             await runner._execute(job)
@@ -951,10 +951,10 @@ async def test_execute_no_agent_empty_output(db_pool, monkeypatch, tmp_path):
 
 async def test_execute_heartbeat_uses_default_prompt(db_pool, monkeypatch):
     """_execute for heartbeat jobs uses DEFAULT_HEARTBEAT_PROMPT when prompt is empty."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.models import AgentResponse
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.models import AgentResponse
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="hb exec", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -988,10 +988,10 @@ async def test_execute_heartbeat_uses_default_prompt(db_pool, monkeypatch):
 
 async def test_execute_passes_model_and_provider(db_pool, monkeypatch):
     """_execute passes model and provider to _build_agent."""
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    from ah.core.models import AgentResponse
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    from machina.core.models import AgentResponse
+    from machina.core.session import SessionManager
 
     session = await SessionManager().create(title="pin", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
@@ -1046,7 +1046,7 @@ async def test_build_agent_uses_factory():
 
 async def test_build_agent_without_factory_unknown_raises(monkeypatch):
     """_build_agent without factory raises for unknown agents."""
-    monkeypatch.setattr("ah.core.agent_def.agent_registry.get", AsyncMock(return_value=None))
+    monkeypatch.setattr("machina.core.agent_def.agent_registry.get", AsyncMock(return_value=None))
     runner = JobRunner()
     with pytest.raises(ValueError, match="unknown agent"):
         await runner._build_agent("ghost")
@@ -1057,7 +1057,7 @@ async def test_build_agent_without_factory_unknown_raises(monkeypatch):
 
 def test_job_to_dict():
     """Job.to_dict serializes all fields."""
-    from ah.core.scheduler import Job
+    from machina.core.scheduler import Job
 
     job = Job(
         id=uuid.uuid4(),
@@ -1089,7 +1089,7 @@ def test_job_to_dict():
 
 def test_job_to_dict_with_all_fields():
     """Job.to_dict with all optional fields set."""
-    from ah.core.scheduler import Job
+    from machina.core.scheduler import Job
 
     now = datetime.now(UTC)
     job = Job(

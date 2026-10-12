@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.exceptions import ToolError, ValidationError
-from ah.rag.loaders import FileLoader
-from ah.tools import rag
-from ah.tools.agents import current_agent_id, current_session_id
+from machina.core.exceptions import ToolError, ValidationError
+from machina.rag.loaders import FileLoader
+from machina.tools import rag
+from machina.tools.agents import current_agent_id, current_session_id
 
 
 @pytest.mark.parametrize("operation", ["index_document", "search_documents"])
@@ -19,7 +19,7 @@ async def test_rag_tool_rejects_another_session(monkeypatch, operation):
     other_session = uuid.uuid4()
     owner_token = current_agent_id.set("owner")
     session_token = current_session_id.set(own_session)
-    monkeypatch.setattr("ah.tools.agents.db.fetchval", AsyncMock(return_value="owner"))
+    monkeypatch.setattr("machina.tools.agents.db.fetchval", AsyncMock(return_value="owner"))
     pipeline = AsyncMock()
     monkeypatch.setattr(rag, "get_rag_pipeline", AsyncMock(return_value=pipeline))
     try:
@@ -39,7 +39,7 @@ async def test_rag_tool_allows_its_own_session(monkeypatch):
     session = uuid.uuid4()
     owner_token = current_agent_id.set("owner")
     session_token = current_session_id.set(session)
-    monkeypatch.setattr("ah.tools.agents.db.fetchval", AsyncMock(return_value="owner"))
+    monkeypatch.setattr("machina.tools.agents.db.fetchval", AsyncMock(return_value="owner"))
     pipeline = AsyncMock()
     pipeline.search.return_value = []
     monkeypatch.setattr(rag, "get_rag_pipeline", AsyncMock(return_value=pipeline))

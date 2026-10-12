@@ -1,4 +1,4 @@
-"""Comprehensive tests for AgentHarness."""
+"""Comprehensive tests for Machina."""
 
 import asyncio
 import os
@@ -12,35 +12,35 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from ah.cli import app
-from ah.core.agent import SYSTEM_PROMPT, ReActAgent
-from ah.core.assembler import PromptAssembler
+from machina.cli import app
+from machina.core.agent import SYSTEM_PROMPT, ReActAgent
+from machina.core.assembler import PromptAssembler
 
 # Import all modules to ensure clean imports
-from ah.core.context import context_manager
-from ah.core.models import (
+from machina.core.context import context_manager
+from machina.core.models import (
     AgentResponse,
     ContextChunk,
     LLMResponse,
     Session,
     ToolDefinition,
 )
-from ah.core.provider import (
+from machina.core.provider import (
     LLMProvider,
     OllamaProvider,
     OpenRouterProvider,
     get_provider,
 )
-from ah.core.session import session_manager
-from ah.db.connection import Database
-from ah.skills.registry import SkillCurator, SkillHub, SkillParser, SkillRegistry, skill_registry
-from ah.tools import (
+from machina.core.session import session_manager
+from machina.db.connection import Database
+from machina.skills.registry import SkillCurator, SkillHub, SkillParser, SkillRegistry, skill_registry
+from machina.tools import (
     builtins,  # noqa: F401 — registers web_search, web_extract, search_files
     file,  # noqa: F401 — registers read_file, write_file, list_files
     terminal,  # noqa: F401 — registers terminal
 )
-from ah.tools.base import ToolRegistry
-from ah.tools.file import list_files, read_file, write_file
+from machina.tools.base import ToolRegistry
+from machina.tools.file import list_files, read_file, write_file
 
 # ============================================================================
 # Fixtures
@@ -815,64 +815,64 @@ class TestErrorHandling:
 
     def test_read_file_not_found(self, temp_dir):
         """Test read_file with non-existent file."""
-        from ah.core.exceptions import ToolError
+        from machina.core.exceptions import ToolError
 
-        with patch("ah.tools.file._BASE_DIR", temp_dir):
+        with patch("machina.tools.file._BASE_DIR", temp_dir):
             with pytest.raises(ToolError, match="File not found"):
                 asyncio.run(read_file(str(temp_dir / "nonexistent.txt")))
 
     def test_read_file_directory(self, temp_dir):
         """Test read_file with directory path."""
-        from ah.core.exceptions import ToolError
+        from machina.core.exceptions import ToolError
 
-        with patch("ah.tools.file._BASE_DIR", temp_dir):
+        with patch("machina.tools.file._BASE_DIR", temp_dir):
             with pytest.raises(ToolError, match="Not a file"):
                 asyncio.run(read_file(str(temp_dir)))
 
     def test_write_file_invalid_path(self, monkeypatch):
         """Test write_file with invalid path (ask-mode boundaries)."""
         # Full mode deliberately widens the writable scope; pin ask here.
-        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
-        from ah.core.exceptions import ToolError
+        monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
+        from machina.core.exceptions import ToolError
 
         with pytest.raises(ToolError, match="escapes the allowed base directory"):
             asyncio.run(write_file("/some/path/test.txt", "content"))
 
     def test_list_files_not_found(self, temp_dir):
         """Test list_files with non-existent directory."""
-        from ah.core.exceptions import ToolError
+        from machina.core.exceptions import ToolError
 
-        with patch("ah.tools.file._BASE_DIR", temp_dir):
+        with patch("machina.tools.file._BASE_DIR", temp_dir):
             with pytest.raises(ToolError, match="Directory not found"):
                 asyncio.run(list_files(str(temp_dir / "nonexistent")))
 
     def test_list_files_file_path(self, temp_dir):
         """Test list_files with file path instead of directory."""
-        from ah.core.exceptions import ToolError
+        from machina.core.exceptions import ToolError
 
         test_file = temp_dir / "test.txt"
         test_file.write_text("content")
-        with patch("ah.tools.file._BASE_DIR", temp_dir):
+        with patch("machina.tools.file._BASE_DIR", temp_dir):
             with pytest.raises(ToolError, match="Not a directory"):
                 asyncio.run(list_files(str(test_file)))
 
     def test_terminal_invalid_command(self, monkeypatch):
         """Test terminal with invalid command (ask-mode allowlist)."""
         # Full mode deliberately resolves host commands instead; pin ask here.
-        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
-        from ah.core.exceptions import ValidationError
-        from ah.tools.terminal import terminal as terminal_fn
+        monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
+        from machina.core.exceptions import ValidationError
+        from machina.tools.terminal import terminal as terminal_fn
 
         with pytest.raises(ValidationError, match="not in the allowlist"):
             asyncio.run(terminal_fn("this_command_does_not_exist_12345"))
 
     def test_terminal_timeout(self, monkeypatch):
         """Test terminal with timeout."""
-        monkeypatch.setenv("AGENT_HARNESS_TERMINAL_SANDBOX", "docker")
-        from ah.core.exceptions import ToolError
-        from ah.tools.terminal import terminal as terminal_fn
+        monkeypatch.setenv("MACHINA_TERMINAL_SANDBOX", "docker")
+        from machina.core.exceptions import ToolError
+        from machina.tools.terminal import terminal as terminal_fn
 
-        with patch("ah.tools.terminal._run_bounded") as mock_run:
+        with patch("machina.tools.terminal._run_bounded") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="test", timeout=1)
             with pytest.raises(ToolError, match="timed out"):
                 asyncio.run(terminal_fn("git status", timeout=1))
@@ -939,7 +939,7 @@ class TestSessionManagerMocked:
 
     async def test_create_session(self, mock_session_row):
         """Test creating a session with mocked DB."""
-        with patch("ah.core.session.db") as mock_db:
+        with patch("machina.core.session.db") as mock_db:
             mock_db.fetchrow = AsyncMock(return_value=mock_session_row)
             session = await session_manager.create(title="Test Session")
             assert session.title == "Test Session"
@@ -947,7 +947,7 @@ class TestSessionManagerMocked:
 
     async def test_get_session(self, mock_session_row):
         """Test getting a session with mocked DB."""
-        with patch("ah.core.session.db") as mock_db:
+        with patch("machina.core.session.db") as mock_db:
             mock_db.fetchrow = AsyncMock(return_value=mock_session_row)
             session = await session_manager.get(mock_session_row["id"])
             assert session is not None
@@ -955,14 +955,14 @@ class TestSessionManagerMocked:
 
     async def test_get_session_not_found(self):
         """Test getting a non-existent session."""
-        with patch("ah.core.session.db") as mock_db:
+        with patch("machina.core.session.db") as mock_db:
             mock_db.fetchrow = AsyncMock(return_value=None)
             session = await session_manager.get(uuid.uuid4())
             assert session is None
 
     async def test_list_sessions(self, mock_session_row):
         """Test listing sessions with mocked DB."""
-        with patch("ah.core.session.db") as mock_db:
+        with patch("machina.core.session.db") as mock_db:
             mock_db.fetch = AsyncMock(return_value=[mock_session_row])
             sessions = await session_manager.list_sessions()
             assert len(sessions) == 1
@@ -970,21 +970,21 @@ class TestSessionManagerMocked:
 
     async def test_update_state(self):
         """Test updating session state."""
-        with patch("ah.core.session.db") as mock_db:
+        with patch("machina.core.session.db") as mock_db:
             mock_db.execute = AsyncMock(return_value="UPDATE 1")
             await session_manager.update_state(uuid.uuid4(), {"key": "value"})
             mock_db.execute.assert_called_once()
 
     async def test_archive_session(self):
         """Test archiving a session."""
-        with patch("ah.core.session.db") as mock_db:
+        with patch("machina.core.session.db") as mock_db:
             mock_db.execute = AsyncMock(return_value="UPDATE 1")
             await session_manager.archive(uuid.uuid4())
             mock_db.execute.assert_called_once()
 
     async def test_set_goal(self):
         """Test setting session goal."""
-        with patch("ah.core.session.db") as mock_db:
+        with patch("machina.core.session.db") as mock_db:
             mock_db.execute = AsyncMock(return_value="UPDATE 1")
             await session_manager.set_goal(uuid.uuid4(), "New goal")
             mock_db.execute.assert_called_once()
@@ -1012,7 +1012,7 @@ class TestContextManagerMocked:
 
     async def test_add_chunk(self, mock_chunk_row):
         """Test adding a context chunk."""
-        with patch("ah.core.context.db") as mock_db:
+        with patch("machina.core.context.db") as mock_db:
             mock_db.fetchrow = AsyncMock(return_value=mock_chunk_row)
             chunk = await context_manager.add_chunk(
                 session_id=mock_chunk_row["session_id"],
@@ -1025,7 +1025,7 @@ class TestContextManagerMocked:
 
     async def test_get_chunks(self, mock_chunk_row):
         """Test getting context chunks."""
-        with patch("ah.core.context.db") as mock_db:
+        with patch("machina.core.context.db") as mock_db:
             mock_db.fetch = AsyncMock(return_value=[mock_chunk_row])
             chunks = await context_manager.get_chunks(mock_chunk_row["session_id"])
             assert len(chunks) == 1
@@ -1033,7 +1033,7 @@ class TestContextManagerMocked:
 
     async def test_get_recent_context(self, mock_chunk_row):
         """Test getting recent context."""
-        with patch("ah.core.context.db") as mock_db:
+        with patch("machina.core.context.db") as mock_db:
             mock_db.fetch = AsyncMock(return_value=[mock_chunk_row])
             context = await context_manager.get_recent_context(mock_chunk_row["session_id"])
             assert len(context) == 1
@@ -1041,21 +1041,21 @@ class TestContextManagerMocked:
 
     async def test_delete_chunks(self):
         """Test deleting context chunks."""
-        with patch("ah.core.context.db") as mock_db:
+        with patch("machina.core.context.db") as mock_db:
             mock_db.execute = AsyncMock(return_value="DELETE 5")
             count = await context_manager.delete_chunks(uuid.uuid4())
             assert count == 5
 
     async def test_get_token_usage(self):
         """Test getting token usage."""
-        with patch("ah.core.context.db") as mock_db:
+        with patch("machina.core.context.db") as mock_db:
             mock_db.fetchval = AsyncMock(return_value=150)
             tokens = await context_manager.get_token_usage(uuid.uuid4())
             assert tokens == 150
 
     async def test_mark_accessed(self):
         """Test marking chunk as accessed."""
-        with patch("ah.core.context.db") as mock_db:
+        with patch("machina.core.context.db") as mock_db:
             mock_db.execute = AsyncMock(return_value="UPDATE 1")
             await context_manager.mark_accessed(uuid.uuid4())
             mock_db.execute.assert_called_once()
@@ -1081,7 +1081,7 @@ class TestCLI:
         runner = CliRunner()
         result = runner.invoke(app, ["doctor"])
         assert result.exit_code == 0
-        assert "AgentHarness Doctor" in result.output
+        assert "Machina Doctor" in result.output
 
     def test_skills_command(self):
         """Test skills command."""
@@ -1093,7 +1093,7 @@ class TestCLI:
     def test_status_command_no_db(self):
         """Test status command fails gracefully when DB is not available."""
         runner = CliRunner()
-        with patch("ah.cli.db") as mock_db:
+        with patch("machina.cli.db") as mock_db:
             mock_db.connect = AsyncMock(side_effect=Exception("Connection refused"))
             mock_db.pool = None
             result = runner.invoke(app, ["status"])
@@ -1105,9 +1105,9 @@ class TestCLI:
         """Test chat command without message."""
         runner = CliRunner()
         with (
-            patch("ah.cli.db") as mock_db,
-            patch("ah.cli.session_manager") as mock_sm,
-            patch("ah.cli.context_manager") as mock_cm,
+            patch("machina.cli.db") as mock_db,
+            patch("machina.cli.session_manager") as mock_sm,
+            patch("machina.cli.context_manager") as mock_cm,
         ):
             mock_db.connect = AsyncMock()
             mock_db.close = AsyncMock()
@@ -1129,7 +1129,7 @@ class TestCLI:
     def test_sessions_command_no_db(self):
         """Test sessions command without database."""
         runner = CliRunner()
-        with patch("ah.cli.db") as mock_db, patch("ah.core.session.db") as mock_session_db:
+        with patch("machina.cli.db") as mock_db, patch("machina.core.session.db") as mock_session_db:
             mock_db.connect = AsyncMock()
             mock_db.close = AsyncMock()
             mock_session_db.fetch = AsyncMock(return_value=[])
@@ -1142,9 +1142,9 @@ class TestCLI:
         """Test context command without arguments."""
         runner = CliRunner()
         with (
-            patch("ah.cli.db") as mock_db,
-            patch("ah.core.session.db") as mock_session_db,
-            patch("ah.core.context.db") as mock_context_db,
+            patch("machina.cli.db") as mock_db,
+            patch("machina.core.session.db") as mock_session_db,
+            patch("machina.core.context.db") as mock_context_db,
         ):
             mock_db.connect = AsyncMock()
             mock_db.close = AsyncMock()
@@ -1402,11 +1402,11 @@ class TestReActAgent:
 
     async def test_agent_run_no_tool_calls(self, mock_provider, mock_session):
         """Test agent run with no tool calls."""
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -1421,10 +1421,10 @@ class TestReActAgent:
 
     async def test_agent_run_with_tool_calls(self, mock_provider, mock_session, monkeypatch):
         """Test agent run with tool calls."""
-        from ah.core.config import config
+        from machina.core.config import config
 
         monkeypatch.setattr(config, "workspace_root", "/tmp")
-        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
+        monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
         # First call returns tool call, second returns final answer
         tool_call_response = LLMResponse(
             content="",
@@ -1448,11 +1448,11 @@ class TestReActAgent:
 
         mock_provider.complete = AsyncMock(side_effect=[tool_call_response, final_response])
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -1467,7 +1467,7 @@ class TestReActAgent:
 
     async def test_agent_session_not_found(self, mock_provider):
         """Test agent run with non-existent session."""
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=None)
 
             agent = ReActAgent(provider=mock_provider)
@@ -1476,10 +1476,10 @@ class TestReActAgent:
 
     async def test_agent_max_iterations(self, mock_provider, mock_session, monkeypatch):
         """Test agent reaching max iterations."""
-        from ah.core.config import config
+        from machina.core.config import config
 
         monkeypatch.setattr(config, "workspace_root", "/tmp")
-        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
+        monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
         # Always return tool calls
         tool_call_response = LLMResponse(
             content="",
@@ -1497,11 +1497,11 @@ class TestReActAgent:
         )
         mock_provider.complete = AsyncMock(return_value=tool_call_response)
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -1526,7 +1526,7 @@ class TestBuiltinTools:
         """Test reading an existing file."""
         test_file = temp_dir / "test.txt"
         test_file.write_text("line1\nline2\nline3", encoding="utf-8")
-        with patch("ah.tools.file._BASE_DIR", temp_dir):
+        with patch("machina.tools.file._BASE_DIR", temp_dir):
             result = asyncio.run(read_file(str(test_file)))
         assert "line1" in result
         assert "line2" in result
@@ -1535,7 +1535,7 @@ class TestBuiltinTools:
         """Test reading file with offset."""
         test_file = temp_dir / "test.txt"
         test_file.write_text("line1\nline2\nline3", encoding="utf-8")
-        with patch("ah.tools.file._BASE_DIR", temp_dir):
+        with patch("machina.tools.file._BASE_DIR", temp_dir):
             result = asyncio.run(read_file(str(test_file), offset=2))
         assert "line1" not in result
         assert "line2" in result
@@ -1544,14 +1544,14 @@ class TestBuiltinTools:
         """Test reading file with limit."""
         test_file = temp_dir / "test.txt"
         test_file.write_text("line1\nline2\nline3", encoding="utf-8")
-        with patch("ah.tools.file._BASE_DIR", temp_dir):
+        with patch("machina.tools.file._BASE_DIR", temp_dir):
             result = asyncio.run(read_file(str(test_file), limit=2))
         assert "line3" not in result
 
     def test_write_file_success(self, temp_dir):
         """Test writing a file."""
         test_file = temp_dir / "output.txt"
-        with patch("ah.tools.file._BASE_DIR", temp_dir):
+        with patch("machina.tools.file._BASE_DIR", temp_dir):
             result = asyncio.run(write_file(str(test_file), "test content"))
         assert "Successfully wrote" in result
         assert test_file.read_text() == "test content"
@@ -1559,7 +1559,7 @@ class TestBuiltinTools:
     def test_write_file_creates_dirs(self, temp_dir):
         """Test writing a file creates parent directories."""
         test_file = temp_dir / "subdir" / "output.txt"
-        with patch("ah.tools.file._BASE_DIR", temp_dir):
+        with patch("machina.tools.file._BASE_DIR", temp_dir):
             result = asyncio.run(write_file(str(test_file), "test content"))
         assert test_file.exists()
         assert "Successfully wrote" in result
@@ -1568,7 +1568,7 @@ class TestBuiltinTools:
         """Test listing files."""
         (temp_dir / "file1.txt").write_text("content1")
         (temp_dir / "file2.txt").write_text("content2")
-        with patch("ah.tools.file._BASE_DIR", temp_dir):
+        with patch("machina.tools.file._BASE_DIR", temp_dir):
             result = asyncio.run(list_files(str(temp_dir)))
         assert "file1.txt" in result
         assert "file2.txt" in result
@@ -1577,7 +1577,7 @@ class TestBuiltinTools:
         """Test listing files with pattern."""
         (temp_dir / "file1.txt").write_text("content1")
         (temp_dir / "file2.py").write_text("content2")
-        with patch("ah.tools.file._BASE_DIR", temp_dir):
+        with patch("machina.tools.file._BASE_DIR", temp_dir):
             result = asyncio.run(list_files(str(temp_dir), pattern="*.py"))
         assert "file2.py" in result
         assert "file1.txt" not in result
@@ -1586,7 +1586,7 @@ class TestBuiltinTools:
         """Test searching files."""
         (temp_dir / "file1.txt").write_text("hello world")
         (temp_dir / "file2.txt").write_text("goodbye world")
-        with patch("ah.tools.file._BASE_DIR", temp_dir):
+        with patch("machina.tools.file._BASE_DIR", temp_dir):
             result = asyncio.run(builtins.search_files("hello", str(temp_dir)))
         assert "hello" in result
         assert "file1.txt" in result
@@ -1594,7 +1594,7 @@ class TestBuiltinTools:
     def test_search_files_no_match(self, temp_dir):
         """Test searching files with no match."""
         (temp_dir / "file1.txt").write_text("hello world")
-        with patch("ah.tools.file._BASE_DIR", temp_dir):
+        with patch("machina.tools.file._BASE_DIR", temp_dir):
             result = asyncio.run(builtins.search_files("nonexistent", str(temp_dir)))
         assert "No matches" in result
 
@@ -1613,7 +1613,7 @@ class TestDatabaseSchema:
             db_obj = Database()
             # Default DSN should be a fallback without password
             assert "127.0.0.1" in db_obj.dsn or "localhost" in db_obj.dsn
-            assert "agentharness" in db_obj.dsn
+            assert "machina" in db_obj.dsn
 
     def test_database_custom_dsn(self):
         """Test custom DSN."""
@@ -1658,7 +1658,7 @@ class TestSystemPrompt:
 
     def test_system_prompt_content(self):
         """Test system prompt content."""
-        assert "AgentHarness" in SYSTEM_PROMPT
+        assert "Machina" in SYSTEM_PROMPT
         assert "tools" in SYSTEM_PROMPT.lower()
 
 

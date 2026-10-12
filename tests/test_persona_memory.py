@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ah.memory.models import MemoryEntry
-from ah.memory.persona import (
+from machina.memory.models import MemoryEntry
+from machina.memory.persona import (
     EmotionTopology,
     PersonaMemory,
     PersonaMemoryStore,
@@ -335,7 +335,7 @@ class TestDualStreamSeparation:
 
     def test_persona_store_separate_from_factual(self, mock_db):
         """Test that PersonaMemoryStore is separate from MemoryStore."""
-        from ah.memory.store import MemoryStore
+        from machina.memory.store import MemoryStore
 
         persona_store = PersonaMemoryStore()
         factual_store = MemoryStore()
@@ -365,9 +365,9 @@ class TestDualStreamSeparation:
         """Test that the schema defines persona_memories table."""
 
         # Read the schema file
-        import ah.db
+        import machina.db
 
-        schema_path = ah.db.__file__.replace("__init__.py", "schema.sql")
+        schema_path = machina.db.__file__.replace("__init__.py", "schema.sql")
         with open(schema_path) as f:
             schema = f.read()
         assert "persona_memories" in schema
@@ -416,7 +416,7 @@ class TestPersonaMemoryStore:
         }
         mock_db.fetchrow = AsyncMock(return_value=row)
 
-        with patch("ah.memory.persona.db", mock_db):
+        with patch("machina.memory.persona.db", mock_db):
             result = await store.add_persona(
                 fact_id=sample_fact.id,
                 persona_id="harness",
@@ -450,7 +450,7 @@ class TestPersonaMemoryStore:
         }
         mock_db.fetchrow = AsyncMock(return_value=row)
 
-        with patch("ah.memory.persona.db", mock_db):
+        with patch("machina.memory.persona.db", mock_db):
             result = await store.get_persona(row["id"])
 
         assert isinstance(result, PersonaMemory)
@@ -460,7 +460,7 @@ class TestPersonaMemoryStore:
         """Test getting a non-existent persona memory."""
         mock_db.fetchrow = AsyncMock(return_value=None)
 
-        with patch("ah.memory.persona.db", mock_db):
+        with patch("machina.memory.persona.db", mock_db):
             result = await store.get_persona(uuid.uuid4())
 
         assert result is None
@@ -494,7 +494,7 @@ class TestPersonaMemoryStore:
         ]
         mock_db.fetch = AsyncMock(return_value=rows)
 
-        with patch("ah.memory.persona.db", mock_db):
+        with patch("machina.memory.persona.db", mock_db):
             results = await store.search_persona(fact_id=sample_fact.id)
 
         assert len(results) == 2
@@ -517,7 +517,7 @@ class TestPersonaMemoryStore:
         }
         mock_db.fetchrow = AsyncMock(return_value=row)
 
-        with patch("ah.memory.persona.db", mock_db):
+        with patch("machina.memory.persona.db", mock_db):
             result = await store.update_persona(
                 persona_id,
                 interpretation="Updated interpretation",
@@ -536,7 +536,7 @@ class TestPersonaMemoryStore:
         """Test deleting a persona memory."""
         mock_db.execute = AsyncMock(return_value="DELETE 1")
 
-        with patch("ah.memory.persona.db", mock_db):
+        with patch("machina.memory.persona.db", mock_db):
             result = await store.delete_persona(uuid.uuid4())
 
         assert result is True
@@ -545,7 +545,7 @@ class TestPersonaMemoryStore:
         """Test deleting a non-existent persona memory."""
         mock_db.execute = AsyncMock(return_value="DELETE 0")
 
-        with patch("ah.memory.persona.db", mock_db):
+        with patch("machina.memory.persona.db", mock_db):
             result = await store.delete_persona(uuid.uuid4())
 
         assert result is False
@@ -562,7 +562,7 @@ class TestMemoryRetrieverIntegration:
     @pytest.fixture
     def retriever(self):
         """Create a MemoryRetriever instance."""
-        from ah.memory.retriever import MemoryRetriever
+        from machina.memory.retriever import MemoryRetriever
 
         return MemoryRetriever()
 
@@ -592,8 +592,8 @@ class TestMemoryRetrieverIntegration:
         mock_db.fetch = AsyncMock(return_value=[])
 
         with (
-            patch("ah.memory.retriever.db", mock_db),
-            patch("ah.memory.retriever.PersonaMemoryStore") as mock_store_cls,
+            patch("machina.memory.retriever.db", mock_db),
+            patch("machina.memory.retriever.PersonaMemoryStore") as mock_store_cls,
         ):
             mock_store_cls.return_value = mock_persona_store
             results = await retriever.retrieve(

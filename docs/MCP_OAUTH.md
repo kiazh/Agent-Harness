@@ -37,10 +37,10 @@ session cannot operate another session's preview or operation.
 
 ## Credential storage and recovery
 
-- Encrypted at rest (AES-GCM) under `~/.agent-harness/oauth/`; file mode
+- Encrypted at rest (AES-GCM) under `~/.machina/oauth/`; file mode
   0600, directory 0700.
-- Master key: `AGENT_HARNESS_OAUTH_MASTER_KEY` (base64, 32 bytes) first,
-  otherwise the OS keyring (`AgentHarness/MCP-OAuth`). No plaintext
+- Master key: `MACHINA_OAUTH_MASTER_KEY` (base64, 32 bytes) first,
+  otherwise the OS keyring (`Machina/MCP-OAuth`). No plaintext
   fallback: without a usable key the state is `storage_unavailable` with
   setup guidance.
 - Lost key or corrupt store: authorize again after a confirmed local reset.

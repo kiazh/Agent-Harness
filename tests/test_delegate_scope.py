@@ -8,9 +8,9 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_delegate_refuses_a_parent_session_owned_by_another_agent(monkeypatch):
-    from ah.core import orchestrator as module
-    from ah.core.exceptions import ToolError
-    from ah.tools.agents import current_agent_id, current_session_id, delegate
+    from machina.core import orchestrator as module
+    from machina.core.exceptions import ToolError
+    from machina.tools.agents import current_agent_id, current_session_id, delegate
 
     calls = []
 
@@ -21,7 +21,7 @@ async def test_delegate_refuses_a_parent_session_owned_by_another_agent(monkeypa
         calls.append((args, kwargs))
         return SimpleNamespace(status="complete", response="leaked")
 
-    monkeypatch.setattr("ah.tools.agents.db.fetchval", fake_owner)
+    monkeypatch.setattr("machina.tools.agents.db.fetchval", fake_owner)
     monkeypatch.setattr(module.orchestrator, "delegate", fake_delegate)
     session_token = current_session_id.set(uuid4())
     agent_token = current_agent_id.set("researcher")
@@ -36,8 +36,8 @@ async def test_delegate_refuses_a_parent_session_owned_by_another_agent(monkeypa
 
 @pytest.mark.asyncio
 async def test_delegate_records_the_actual_parent_agent(monkeypatch):
-    from ah.core import orchestrator as module
-    from ah.tools.agents import current_agent_id, current_session_id, delegate
+    from machina.core import orchestrator as module
+    from machina.tools.agents import current_agent_id, current_session_id, delegate
 
     calls = []
 
@@ -48,7 +48,7 @@ async def test_delegate_records_the_actual_parent_agent(monkeypatch):
         calls.append(kwargs)
         return SimpleNamespace(status="complete", response="done")
 
-    monkeypatch.setattr("ah.tools.agents.db.fetchval", fake_owner)
+    monkeypatch.setattr("machina.tools.agents.db.fetchval", fake_owner)
     monkeypatch.setattr(module.orchestrator, "delegate", fake_delegate)
     session_id = uuid4()
     session_token = current_session_id.set(session_id)
@@ -71,7 +71,7 @@ async def test_delegate_records_the_actual_parent_agent(monkeypatch):
 
 
 def test_system_prompt_teaches_parallel_fan_out():
-    from ah.core.agent import SYSTEM_PROMPT
+    from machina.core.agent import SYSTEM_PROMPT
 
     assert "list_agents" in SYSTEM_PROMPT
     assert "no more than three" in SYSTEM_PROMPT
@@ -79,8 +79,8 @@ def test_system_prompt_teaches_parallel_fan_out():
 
 
 def test_delegate_description_advertises_parallel_fan_out():
-    import ah.tools.agents  # noqa: F401 — registers delegate on the global registry
-    from ah.tools.base import registry
+    import machina.tools.agents  # noqa: F401 — registers delegate on the global registry
+    from machina.tools.base import registry
 
     desc = next(d.description for d in registry.get_tool_definitions() if d.name == "delegate")
     assert "single block" in desc
@@ -96,26 +96,26 @@ async def test_parallel_delegate_fan_out_runs_every_subagent(tmp_path, monkeypat
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from ah.core.agent import BaseReActAgent, ReActAgent
-    from ah.core.config import config
-    from ah.core.models import LLMResponse, Session, StreamEvent
-    from ah.permissions.broker import set_approval_handler
+    from machina.core.agent import BaseReActAgent, ReActAgent
+    from machina.core.config import config
+    from machina.core.models import LLMResponse, Session, StreamEvent
+    from machina.permissions.broker import set_approval_handler
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path / "skills"))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path / "skills"))
     for field in ("memory_enabled", "rag_enabled", "personality_growth_enabled"):
         monkeypatch.setattr(config, field, False)
     session = Session(id=uuid.uuid4(), context_budget=8000)
-    monkeypatch.setattr("ah.core.agent.session_manager.get", AsyncMock(return_value=session))
-    monkeypatch.setattr("ah.core.agent.session_manager.update_activity", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.session_manager.get", AsyncMock(return_value=session))
+    monkeypatch.setattr("machina.core.agent.session_manager.update_activity", AsyncMock())
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.get_recent_context", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.get_recent_context", AsyncMock(return_value=[])
     )
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.search_archive_text", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.search_archive_text", AsyncMock(return_value=[])
     )
-    monkeypatch.setattr("ah.core.agent.context_manager.add_chunks_batch", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.context_manager.add_chunks_batch", AsyncMock())
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
     )
     monkeypatch.setattr(BaseReActAgent, "_reserve_usage", AsyncMock(return_value=None))
     monkeypatch.setattr(BaseReActAgent, "_finish_usage", AsyncMock())
@@ -125,8 +125,8 @@ async def test_parallel_delegate_fan_out_runs_every_subagent(tmp_path, monkeypat
 
     set_approval_handler(unexpected_approval)
 
-    from ah.core import orchestrator as orchestrator_module
-    from ah.tools import agents as agents_module
+    from machina.core import orchestrator as orchestrator_module
+    from machina.tools import agents as agents_module
 
     ran = []
 

@@ -10,10 +10,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.agent import BaseReActAgent, ReActAgent
-from ah.core.config import config
-from ah.core.models import LLMResponse, Session, StreamEvent
-from ah.permissions.broker import set_approval_handler
+from machina.core.agent import BaseReActAgent, ReActAgent
+from machina.core.config import config
+from machina.core.models import LLMResponse, Session, StreamEvent
+from machina.permissions.broker import set_approval_handler
 
 
 def _msgs(*contents):
@@ -58,8 +58,8 @@ def test_positionally_addressed_skill_pages_never_condense():
 
 
 def test_no_skill_evidence_injects_nothing():
-    from ah.skills.registry import SkillRegistry
-    from ah.skills.runtime import automatic_skill_context
+    from machina.skills.registry import SkillRegistry
+    from machina.skills.runtime import automatic_skill_context
 
     skills = SkillRegistry()
     assert automatic_skill_context("hello!", skills=skills) == ""
@@ -67,7 +67,7 @@ def test_no_skill_evidence_injects_nothing():
 
 
 def test_system_prompt_carries_general_agent_conduct():
-    from ah.core.agent import SYSTEM_PROMPT
+    from machina.core.agent import SYSTEM_PROMPT
 
     assert "general-purpose agent" in SYSTEM_PROMPT
     assert "Never enumerate" in SYSTEM_PROMPT
@@ -82,21 +82,21 @@ async def test_loop_condenses_earlier_terminal_output(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(config, "workspace_root", str(tmp_path / "work"))
     monkeypatch.setattr(config, "execution_mode", "ask")
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path / "skills"))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path / "skills"))
     for field in ("memory_enabled", "rag_enabled", "personality_growth_enabled"):
         monkeypatch.setattr(config, field, False)
     session = Session(id=uuid.uuid4(), context_budget=8000)
-    monkeypatch.setattr("ah.core.agent.session_manager.get", AsyncMock(return_value=session))
-    monkeypatch.setattr("ah.core.agent.session_manager.update_activity", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.session_manager.get", AsyncMock(return_value=session))
+    monkeypatch.setattr("machina.core.agent.session_manager.update_activity", AsyncMock())
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.get_recent_context", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.get_recent_context", AsyncMock(return_value=[])
     )
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.search_archive_text", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.search_archive_text", AsyncMock(return_value=[])
     )
-    monkeypatch.setattr("ah.core.agent.context_manager.add_chunks_batch", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.context_manager.add_chunks_batch", AsyncMock())
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
     )
     monkeypatch.setattr(BaseReActAgent, "_reserve_usage", AsyncMock(return_value=None))
     monkeypatch.setattr(BaseReActAgent, "_finish_usage", AsyncMock())

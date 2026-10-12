@@ -5,13 +5,13 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock
 
-from ah.memory.models import MemoryEntry, RetrievedMemory
-from ah.memory.persona import PersonaMemoryStore
-from ah.memory.retriever import MemoryRetriever
+from machina.memory.models import MemoryEntry, RetrievedMemory
+from machina.memory.persona import PersonaMemoryStore
+from machina.memory.retriever import MemoryRetriever
 
 
 async def test_persona_store_searches_facts_in_one_query(monkeypatch):
-    from ah.memory import persona
+    from machina.memory import persona
 
     fetch = AsyncMock(return_value=[])
     monkeypatch.setattr(persona.db, "fetch", fetch)
@@ -41,7 +41,7 @@ async def test_emotion_retrieval_batches_candidate_ids():
 
 
 async def test_persona_batch_preserves_per_fact_limit_in_database(db_pool, monkeypatch):
-    from ah.memory import persona
+    from machina.memory import persona
 
     monkeypatch.setattr(persona, "db", db_pool)
     fact_ids = [uuid.uuid4(), uuid.uuid4()]

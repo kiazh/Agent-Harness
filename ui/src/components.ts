@@ -105,7 +105,7 @@ export interface SessionHeaderInfo {
 export function header(_version: string, info?: SessionHeaderInfo): Component {
 	return {
 		render(width: number): string[] {
-			const brand = `${theme.accent(">_")} ${theme.bold("AgentHarness")}`;
+			const brand = `${theme.accent(">_")} ${theme.bold("Machina")}`;
 			const where = info?.cwd ? theme.dim(sanitizeDisplay(shortCwd(info.cwd) + (info.branch ? ` · ${info.branch}` : ""))) : "";
 			const room = Math.max(0, width - visibleWidth(brand) - 3);
 			const right = room >= 6 ? truncateToWidth(where, room) : "";

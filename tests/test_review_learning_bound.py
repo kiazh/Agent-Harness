@@ -6,12 +6,12 @@ import asyncio
 import uuid
 from unittest.mock import AsyncMock
 
-from ah.core.agent import ReActAgent
-from ah.core.models import AgentResponse
+from machina.core.agent import ReActAgent
+from machina.core.models import AgentResponse
 
 
 async def test_learning_reviews_have_a_process_wide_pending_limit(monkeypatch):
-    from ah.core import agent as module
+    from machina.core import agent as module
 
     monkeypatch.setattr(module.config, "get", lambda key: key == "learning_review_enabled")
     gate = asyncio.Event()

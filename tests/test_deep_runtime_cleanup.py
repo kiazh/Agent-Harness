@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from ah.core.agent_factory import close_agent_provider
-from ah.core.runtime import _bounded_join
+from machina.core.agent_factory import close_agent_provider
+from machina.core.runtime import _bounded_join
 
 
 async def _resist_cancellation(started, release):

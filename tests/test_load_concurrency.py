@@ -29,7 +29,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from ah.core.config import config
+from machina.core.config import config
 
 # ─── configuration ───────────────────────────────────────────────────────────
 
@@ -50,7 +50,7 @@ def _chunks_per_task() -> int:
 @pytest_asyncio.fixture
 async def load_db(db_pool):
     """Wire the global db singleton to the real test pool for this test."""
-    from ah.db.connection import db
+    from machina.db.connection import db
 
     original_dsn = db.dsn
     db._pool = db_pool._pool
@@ -114,9 +114,9 @@ async def test_concurrent_usage_reservations_no_deadlock(load_db, clean_load_dat
     Invariant: all reservations complete (no deadlock), and the final state
     has zero orphaned 'reserved' rows.
     """
-    from ah.core.usage import UsageStore
+    from machina.core.usage import UsageStore
 
-    monkeypatch.setattr("ah.core.usage.db", load_db)
+    monkeypatch.setattr("machina.core.usage.db", load_db)
     # Disable budget limits so all reservations succeed
     monkeypatch.setattr(config, "usage_session_request_limit", 0)
     monkeypatch.setattr(config, "usage_session_token_limit", 0)
@@ -178,9 +178,9 @@ async def test_concurrent_usage_with_failures_balances(load_db, clean_load_data,
     - Successful calls get status='complete' with real token counts
     - No orphaned 'reserved' rows remain
     """
-    from ah.core.usage import UsageStore
+    from machina.core.usage import UsageStore
 
-    monkeypatch.setattr("ah.core.usage.db", load_db)
+    monkeypatch.setattr("machina.core.usage.db", load_db)
     monkeypatch.setattr(config, "usage_session_request_limit", 0)
     monkeypatch.setattr(config, "usage_session_token_limit", 0)
     monkeypatch.setattr(config, "usage_agent_request_limit", 0)
@@ -244,11 +244,11 @@ async def test_concurrent_context_writes_no_loss_or_duplication(
 
     Also tests concurrent reads while writes are in flight.
     """
-    from ah.core.context import ContextManager
-    from ah.core.session import SessionManager
+    from machina.core.context import ContextManager
+    from machina.core.session import SessionManager
 
-    monkeypatch.setattr("ah.core.context.db", load_db)
-    monkeypatch.setattr("ah.core.session.db", load_db)
+    monkeypatch.setattr("machina.core.context.db", load_db)
+    monkeypatch.setattr("machina.core.session.db", load_db)
 
     N = _concurrency()
     M = _chunks_per_task()
@@ -320,11 +320,11 @@ async def test_concurrent_context_mixed_read_write(load_db, clean_load_data, mon
     This tests that the LRU cache invalidation works correctly under
     concurrency — a stale cache must not cause missing chunks.
     """
-    from ah.core.context import ContextManager
-    from ah.core.session import SessionManager
+    from machina.core.context import ContextManager
+    from machina.core.session import SessionManager
 
-    monkeypatch.setattr("ah.core.context.db", load_db)
-    monkeypatch.setattr("ah.core.session.db", load_db)
+    monkeypatch.setattr("machina.core.context.db", load_db)
+    monkeypatch.setattr("machina.core.session.db", load_db)
 
     N = _concurrency()
     M = _chunks_per_task()
@@ -385,9 +385,9 @@ async def test_concurrent_session_creation_and_listing(load_db, clean_load_data,
     """N concurrent tasks create sessions, then list them. All created
     sessions must appear in the listing — no lost creates, no duplicates.
     """
-    from ah.core.session import SessionManager
+    from machina.core.session import SessionManager
 
-    monkeypatch.setattr("ah.core.session.db", load_db)
+    monkeypatch.setattr("machina.core.session.db", load_db)
 
     N = _concurrency()
     agent_id = f"load-test-sess-{uuid.uuid4()}"
@@ -425,9 +425,9 @@ async def test_concurrent_session_state_updates(load_db, clean_load_data, monkey
     must be one of the written values (last-writer-wins is acceptable, but
     the state must be consistent — not a mix of values).
     """
-    from ah.core.session import SessionManager
+    from machina.core.session import SessionManager
 
-    monkeypatch.setattr("ah.core.session.db", load_db)
+    monkeypatch.setattr("machina.core.session.db", load_db)
 
     N = _concurrency()
     agent_id = f"load-test-state-{uuid.uuid4()}"
@@ -461,10 +461,10 @@ async def test_concurrent_usage_same_session_no_overspend(load_db, clean_load_da
     UsageBudgetExceededError. This tests that the advisory lock correctly
     serializes budget checks.
     """
-    from ah.core.exceptions import UsageBudgetExceededError
-    from ah.core.usage import UsageStore
+    from machina.core.exceptions import UsageBudgetExceededError
+    from machina.core.usage import UsageStore
 
-    monkeypatch.setattr("ah.core.usage.db", load_db)
+    monkeypatch.setattr("machina.core.usage.db", load_db)
     monkeypatch.setattr(config, "usage_session_request_limit", 1)
     monkeypatch.setattr(config, "usage_session_token_limit", 0)
     monkeypatch.setattr(config, "usage_agent_request_limit", 0)
@@ -516,7 +516,7 @@ async def test_rpc_gateway_concurrent_calls(load_db, monkeypatch):
 
     Each call must receive its own response — no cross-talk.
     """
-    from ah.api.app import _RpcGateway
+    from machina.api.app import _RpcGateway
 
     N = _concurrency()
 
@@ -582,11 +582,11 @@ async def test_concurrent_eviction_preserves_recent_chunks(load_db, clean_load_d
     10 chunks. The cursor-based pagination with batch archive+delete in a
     single transaction must be safe under concurrency.
     """
-    from ah.core.context import ContextManager
-    from ah.core.session import SessionManager
+    from machina.core.context import ContextManager
+    from machina.core.session import SessionManager
 
-    monkeypatch.setattr("ah.core.context.db", load_db)
-    monkeypatch.setattr("ah.core.session.db", load_db)
+    monkeypatch.setattr("machina.core.context.db", load_db)
+    monkeypatch.setattr("machina.core.session.db", load_db)
 
     agent_id = f"load-test-evict-{uuid.uuid4()}"
     session_mgr = SessionManager()
@@ -653,13 +653,13 @@ async def test_concurrent_mixed_workload(load_db, clean_load_data, monkeypatch):
     chunks, some create sessions, some list sessions. All must complete
     without errors and the final state must be consistent.
     """
-    from ah.core.context import ContextManager
-    from ah.core.session import SessionManager
-    from ah.core.usage import UsageStore
+    from machina.core.context import ContextManager
+    from machina.core.session import SessionManager
+    from machina.core.usage import UsageStore
 
-    monkeypatch.setattr("ah.core.usage.db", load_db)
-    monkeypatch.setattr("ah.core.context.db", load_db)
-    monkeypatch.setattr("ah.core.session.db", load_db)
+    monkeypatch.setattr("machina.core.usage.db", load_db)
+    monkeypatch.setattr("machina.core.context.db", load_db)
+    monkeypatch.setattr("machina.core.session.db", load_db)
     monkeypatch.setattr(config, "usage_session_request_limit", 0)
     monkeypatch.setattr(config, "usage_session_token_limit", 0)
     monkeypatch.setattr(config, "usage_agent_request_limit", 0)

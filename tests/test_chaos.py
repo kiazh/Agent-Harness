@@ -1,4 +1,4 @@
-"""Chaos engineering tests for AgentHarness.
+"""Chaos engineering tests for Machina.
 
 These tests inject failures to validate that the agent recovers gracefully:
 - LLM failures (malformed responses, timeouts, empty content)
@@ -16,9 +16,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ah.core.agent import ReActAgent
-from ah.core.models import LLMResponse, Session
-from ah.tools.base import ToolRegistry
+from machina.core.agent import ReActAgent
+from machina.core.models import LLMResponse, Session
+from machina.tools.base import ToolRegistry
 
 # ===========================================================================
 # Fixtures
@@ -61,11 +61,11 @@ class TestLLMChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -98,11 +98,11 @@ class TestLLMChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -135,11 +135,11 @@ class TestLLMChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -171,11 +171,11 @@ class TestLLMChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -193,11 +193,11 @@ class TestLLMChaos:
         provider = AsyncMock()
         provider.complete = AsyncMock(side_effect=TimeoutError("LLM timeout"))
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -215,11 +215,11 @@ class TestLLMChaos:
         provider = AsyncMock()
         provider.complete = AsyncMock(side_effect=Exception("429 Too Many Requests"))
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -243,11 +243,11 @@ class TestLLMChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -272,11 +272,11 @@ class TestLLMChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -300,11 +300,11 @@ class TestLLMChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -380,17 +380,17 @@ class TestToolChaos:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                with patch("ah.core.agent.registry", test_registry):
+                with patch("machina.core.agent.registry", test_registry):
                     agent = ReActAgent(provider=provider, max_iterations=5)
                     response = await agent.run(mock_session.id, "test", verbose=False)
 
@@ -421,21 +421,21 @@ class TestToolChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                with patch("ah.core.agent.registry", test_registry):
+                with patch("machina.core.agent.registry", test_registry):
                     # Pin a short per-tool timeout so this test exercises the
                     # timeout *mechanism* deterministically, independent of the
                     # production default (which is sized for slow network tools).
-                    with patch.dict("ah.core.agent._TOOL_TIMEOUTS", {"slow_tool": 0.5}):
+                    with patch.dict("machina.core.agent._TOOL_TIMEOUTS", {"slow_tool": 0.5}):
                         agent = ReActAgent(provider=provider, max_iterations=5)
 
                         # Agent should have its own timeout mechanism for tool execution
@@ -480,17 +480,17 @@ class TestToolChaos:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                with patch("ah.core.agent.registry", test_registry):
+                with patch("machina.core.agent.registry", test_registry):
                     agent = ReActAgent(provider=provider, max_iterations=5)
                     response = await agent.run(mock_session.id, "test", verbose=False)
 
@@ -522,17 +522,17 @@ class TestToolChaos:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                with patch("ah.core.agent.registry", test_registry):
+                with patch("machina.core.agent.registry", test_registry):
                     agent = ReActAgent(provider=provider, max_iterations=5)
                     response = await agent.run(mock_session.id, "test", verbose=False)
 
@@ -567,17 +567,17 @@ class TestToolChaos:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                with patch("ah.core.agent.registry", test_registry):
+                with patch("machina.core.agent.registry", test_registry):
                     agent = ReActAgent(provider=provider, max_iterations=5)
                     response = await agent.run(mock_session.id, "test", verbose=False)
 
@@ -604,11 +604,11 @@ class TestContextChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 # Simulate context overflow by returning huge context
@@ -641,11 +641,11 @@ class TestContextChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 # Return corrupted context
@@ -668,7 +668,7 @@ class TestContextChaos:
         provider = AsyncMock()
         provider.complete = AsyncMock()
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=None)
 
             agent = ReActAgent(provider=provider, max_iterations=5)
@@ -696,11 +696,11 @@ class TestDatabaseChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 # First call succeeds, second fails
                 mock_cm.add_chunk = AsyncMock(
                     side_effect=[
@@ -731,11 +731,11 @@ class TestDatabaseChaos:
         async def slow_add_chunk(*args, **kwargs):
             await asyncio.sleep(0.1)  # Simulate slow query
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock(side_effect=slow_add_chunk)
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
@@ -759,11 +759,11 @@ class TestDatabaseChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock(side_effect=Exception("Pool exhausted"))
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
@@ -787,18 +787,18 @@ class TestStreamingChaos:
         provider = AsyncMock()
 
         async def interrupted_stream(*args, **kwargs):
-            from ah.core.models import StreamEvent
+            from machina.core.models import StreamEvent
 
             yield StreamEvent(type="text", content="partial")
             raise Exception("Stream interrupted")
 
         provider.stream_complete = interrupted_stream
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -818,7 +818,7 @@ class TestStreamingChaos:
         provider = AsyncMock()
 
         async def malformed_stream(*args, **kwargs):
-            from ah.core.models import StreamEvent
+            from machina.core.models import StreamEvent
 
             yield StreamEvent(type="text", content="data: {invalid json}\n\n")
             yield StreamEvent(
@@ -832,11 +832,11 @@ class TestStreamingChaos:
 
         provider.stream_complete = malformed_stream
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -871,11 +871,11 @@ class TestConcurrentChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -919,17 +919,17 @@ class TestConcurrentChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                with patch("ah.core.agent.registry", test_registry):
+                with patch("machina.core.agent.registry", test_registry):
                     agent = ReActAgent(provider=provider, max_iterations=5)
 
                     # Run multiple agents concurrently
@@ -1011,17 +1011,17 @@ class TestRecoveryChaos:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                with patch("ah.core.agent.registry", test_registry):
+                with patch("machina.core.agent.registry", test_registry):
                     agent = ReActAgent(provider=provider, max_iterations=10)
                     response = await agent.run(mock_session.id, "test", verbose=False)
 
@@ -1051,17 +1051,17 @@ class TestRecoveryChaos:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                with patch("ah.core.agent.registry", test_registry):
+                with patch("machina.core.agent.registry", test_registry):
                     agent = ReActAgent(provider=provider, max_iterations=3)
                     response = await agent.run(mock_session.id, "test", verbose=False)
 

@@ -17,7 +17,7 @@ version: 1.0.0
 
 | Skill | Practice |
 |---|---|
-| Typer | Build ah chat, ah skills list, ah memory add |
+| Typer | Build machina chat, machina skills list, machina memory add |
 | Rich | Syntax highlighting, progress bars, status panels |
 | Textual | Reactive TUI with widgets |
 | Async I/O | Stream LLM tokens without blocking UI |

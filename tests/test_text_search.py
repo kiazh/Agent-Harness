@@ -1,8 +1,8 @@
-"""Unit tests for ah.core.text_search.build_or_tsquery."""
+"""Unit tests for machina.core.text_search.build_or_tsquery."""
 
 from __future__ import annotations
 
-from ah.core.text_search import build_or_tsquery
+from machina.core.text_search import build_or_tsquery
 
 
 class TestBuildOrTsquery:

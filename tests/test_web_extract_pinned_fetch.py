@@ -2,9 +2,9 @@
 
 import pytest
 
-from ah.core.exceptions import ToolError
-from ah.security import fetch
-from ah.tools import builtins
+from machina.core.exceptions import ToolError
+from machina.security import fetch
+from machina.tools import builtins
 from tests.test_handoff_regressions import _fake_pinned_transport, _ok
 
 

@@ -7,21 +7,21 @@ import uuid
 
 import pytest
 
-from ah.core.agent import ReActAgent
-from ah.core.agent_def import BUILTIN_AGENTS, AgentDef, agent_registry
-from ah.core.models import AgentResponse
-from ah.gateway.server import INVALID_PARAMS, NOT_FOUND
+from machina.core.agent import ReActAgent
+from machina.core.agent_def import BUILTIN_AGENTS, AgentDef, agent_registry
+from machina.core.models import AgentResponse
+from machina.gateway.server import INVALID_PARAMS, NOT_FOUND
 from tests.test_gateway import Harness
 
-TEST_DSN = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL", "")
-needs_db = pytest.mark.skipif(not TEST_DSN, reason="AGENT_HARNESS_TEST_DATABASE_URL not set")
+TEST_DSN = os.environ.get("MACHINA_TEST_DATABASE_URL", "")
+needs_db = pytest.mark.skipif(not TEST_DSN, reason="MACHINA_TEST_DATABASE_URL not set")
 
 
 @pytest.fixture
 async def connected_db():
     """Connect the shared db for tests that call the registry/orchestrator directly
     (the gateway Harness connects via initialize, so its tests don't need this)."""
-    from ah.db.connection import db
+    from machina.db.connection import db
 
     await db.connect()
     yield
@@ -40,7 +40,7 @@ def test_builtin_agents_have_prompts_and_tool_scopes():
 
 
 def test_agent_tool_allowlist_filters_definitions():
-    import ah.tools  # noqa: F401 — ensure tools are registered
+    import machina.tools  # noqa: F401 — ensure tools are registered
 
     unrestricted = ReActAgent.__new__(ReActAgent)
     unrestricted.allowed_tools = None
@@ -106,7 +106,7 @@ class TestRegistry:
 class TestOrchestrator:
     @pytest.fixture
     def orch(self):
-        from ah.core.orchestrator import Orchestrator
+        from machina.core.orchestrator import Orchestrator
 
         return Orchestrator(agent_factory=FakeAgent)
 
@@ -126,13 +126,13 @@ class TestOrchestrator:
         assert history[0]["tokens"] == 11
 
     async def test_unknown_agent_raises(self, orch):
-        from ah.core.orchestrator import AgentNotFoundError
+        from machina.core.orchestrator import AgentNotFoundError
 
         with pytest.raises(AgentNotFoundError):
             await orch.delegate("nobody", "task")
 
     async def test_cancelled_status_is_recorded(self, orch):
-        from ah.db.connection import db
+        from machina.db.connection import db
 
         # Apply the 'cancelled' CHECK migration in case the database was
         # initialized from an older schema revision.
@@ -161,7 +161,7 @@ class TestOrchestrator:
                 captured.append(user_message)
                 return await super().run(session_id, user_message, verbose)
 
-        from ah.core.orchestrator import Orchestrator
+        from machina.core.orchestrator import Orchestrator
 
         orch = Orchestrator(agent_factory=Recorder)
         results = await orch.run_sequential(
@@ -181,9 +181,9 @@ class TestOrchestrator:
 @pytest.mark.usefixtures("connected_db")
 class TestDelegateTool:
     async def test_delegate_tool_uses_orchestrator(self, monkeypatch):
-        import ah.tools  # noqa: F401
-        from ah.core import orchestrator as orch_mod
-        from ah.tools.base import registry
+        import machina.tools  # noqa: F401
+        from machina.core import orchestrator as orch_mod
+        from machina.tools.base import registry
 
         monkeypatch.setattr(orch_mod.orchestrator, "_agent_factory", FakeAgent)
         out = await registry.execute("delegate", agent="researcher", task="summarize the readme")
@@ -192,16 +192,16 @@ class TestDelegateTool:
         assert "researcher" in out
 
     async def test_delegate_tool_unknown_agent(self):
-        import ah.tools  # noqa: F401
-        from ah.core.exceptions import ToolError
-        from ah.tools.base import registry
+        import machina.tools  # noqa: F401
+        from machina.core.exceptions import ToolError
+        from machina.tools.base import registry
 
         with pytest.raises(ToolError, match="no agent named"):
             await registry.execute("delegate", agent="ghost", task="x")
 
     async def test_list_agents_tool(self):
-        import ah.tools  # noqa: F401
-        from ah.tools.base import registry
+        import machina.tools  # noqa: F401
+        from machina.tools.base import registry
 
         out = await registry.execute("list_agents")
         assert "researcher:" in out and "coder:" in out
@@ -211,7 +211,7 @@ class TestDelegateTool:
 class TestGatewayAgents:
     @pytest.fixture
     async def h(self, monkeypatch):
-        from ah.core import orchestrator as orch_mod
+        from machina.core import orchestrator as orch_mod
 
         monkeypatch.setattr(orch_mod.orchestrator, "_agent_factory", FakeAgent)
         harness = Harness()
@@ -276,6 +276,6 @@ class TestGatewayAgents:
 
 
 async def _parent_session() -> uuid.UUID:
-    from ah.core.session import session_manager
+    from machina.core.session import session_manager
 
     return (await session_manager.create(title="parent")).id

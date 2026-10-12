@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from ah.memory.growth import GrowthStore
+from machina.memory.growth import GrowthStore
 
 
 @pytest.fixture
@@ -140,8 +140,8 @@ async def test_first_agent_trial_can_restore_original_baseline(rsi_store):
 async def test_human_choice_cannot_be_undone_by_stale_trial_ratings(
     rsi_store, monkeypatch, operation
 ):
-    from ah.core.config import config
-    from ah.memory.growth import initial_policy
+    from machina.core.config import config
+    from machina.memory.growth import initial_policy
 
     store, owner = rsi_store
     await store.teach(owner, "style", "tone", "Stable")
@@ -167,8 +167,8 @@ async def test_human_choice_cannot_be_undone_by_stale_trial_ratings(
 async def test_human_reward_replaces_automatic_memory_update(rsi_store, db_pool, reward):
     import json
 
-    from ah.memory.policy import RetrievalPolicy
-    from ah.memory.rl import MemoryAction
+    from machina.memory.policy import RetrievalPolicy
+    from machina.memory.rl import MemoryAction
 
     store, owner = rsi_store
     episode = await store.begin(owner, None, "fix Python bug", 4000)
@@ -189,8 +189,8 @@ async def test_human_reward_replaces_automatic_memory_update(rsi_store, db_pool,
 
 
 def test_execution_status_controls_reward_even_when_response_claims_success():
-    from ah.core.models import AgentResponse
-    from ah.memory.rsi import operational_reward, summarize_outcome
+    from machina.core.models import AgentResponse
+    from machina.memory.rsi import operational_reward, summarize_outcome
 
     response = AgentResponse(
         content="session request budget exceeded (1/1)",
@@ -202,7 +202,7 @@ def test_execution_status_controls_reward_even_when_response_claims_success():
 
 @pytest.mark.parametrize("restore", ["manual", "trial", "import_baseline"])
 async def test_restored_policy_keeps_provenance_for_later_human_rating(rsi_store, restore):
-    from ah.memory.growth import initial_policy
+    from machina.memory.growth import initial_policy
 
     store, owner = rsi_store
     episode = await store.begin(owner, None, "fix Python", 4000)
@@ -271,7 +271,7 @@ async def test_inflight_completion_after_policy_replacement_can_be_human_correct
 def test_failed_shell_exit_has_typed_status_even_with_output(tmp_path):
     import sys
 
-    from ah.tools.terminal import _run_bounded
+    from machina.tools.terminal import _run_bounded
 
     result = _run_bounded(
         [sys.executable, "-c", "print('test failed'); raise SystemExit(1)"], 3, str(tmp_path)
@@ -281,8 +281,8 @@ def test_failed_shell_exit_has_typed_status_even_with_output(tmp_path):
 
 
 def test_rsi_outcome_summary_ignores_raw_response_and_redacts_tool_identifiers():
-    from ah.core.models import AgentResponse
-    from ah.memory.rsi import summarize_outcome
+    from machina.core.models import AgentResponse
+    from machina.memory.rsi import summarize_outcome
 
     secret = "sk-or-v1-" + "a" * 50
     summary = summarize_outcome(

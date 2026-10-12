@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from ah.api.app import _serialize_event
-from ah.core.models import AgentResponse, StreamEvent
+from machina.api.app import _serialize_event
+from machina.core.models import AgentResponse, StreamEvent
 
 
 @pytest.mark.parametrize(
@@ -38,7 +38,7 @@ def test_http_v2_uses_shared_fields(event, name):
     assert payload["protocolVersion"] == 2
     assert payload["sessionId"] == "session"
     assert payload["turnId"] == "turn"
-    from ah.protocol import validate_event
+    from machina.protocol import validate_event
 
     validate_event(payload)
 
@@ -51,7 +51,7 @@ def test_legacy_http_keeps_existing_shape():
 
 
 def test_schema_rejects_undeclared_fields_and_wrong_types():
-    from ah.protocol import wire_event
+    from machina.protocol import wire_event
 
     with pytest.raises(ValueError, match="field"):
         wire_event("message.delta", "session", "turn", text="hello", surprise=True)
@@ -62,24 +62,24 @@ def test_schema_rejects_undeclared_fields_and_wrong_types():
 
 
 def test_typescript_types_generated_from_wire_schema():
-    from ah.protocol import typescript_source
+    from machina.protocol import typescript_source
 
     assert Path("ui/src/events.ts").read_text(encoding="utf-8") == typescript_source()
-    schema = json.loads(Path("ah/protocol/events.json").read_text(encoding="utf-8"))
+    schema = json.loads(Path("machina/protocol/events.json").read_text(encoding="utf-8"))
     assert schema["version"] == 2
     for event in schema["events"]:
         assert f'"{event}"' in typescript_source()
 
 
 async def test_gateway_v2_emitted_events_conform(db_pool, monkeypatch):
-    from ah.protocol import validate_event
+    from machina.protocol import validate_event
     from tests.test_gateway import Harness
 
-    monkeypatch.setattr("ah.gateway.server.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.db.connection.db", db_pool)
-    monkeypatch.setattr("ah.core.usage.db", db_pool)
+    monkeypatch.setattr("machina.gateway.server.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.db.connection.db", db_pool)
+    monkeypatch.setattr("machina.core.usage.db", db_pool)
     h = Harness()
     try:
         initialized = await h.call("initialize", {"protocolVersion": 2})
@@ -94,7 +94,7 @@ async def test_gateway_v2_emitted_events_conform(db_pool, monkeypatch):
     finally:
         import uuid
 
-        from ah.core.session import session_manager
+        from machina.core.session import session_manager
 
         if "sid" in locals():
             await session_manager.delete(uuid.UUID(sid))

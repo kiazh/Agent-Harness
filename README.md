@@ -1,8 +1,8 @@
-# AgentHarness
+# Machina
 
 A self-hosted AI agent with a terminal UI, PostgreSQL-backed conversations and memory, tools, delegation, and runtime learning.
 
-[![CI](https://github.com/kiazh/Agent-Harness/actions/workflows/ci.yml/badge.svg)](https://github.com/kiazh/Agent-Harness/actions/workflows/ci.yml)
+[![CI](https://github.com/kiazh/Machina/actions/workflows/ci.yml/badge.svg)](https://github.com/kiazh/Machina/actions/workflows/ci.yml)
 [![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Version 0.2.0.** This is a development release candidate. Local verification is recorded in [release readiness](docs/verification/RELEASE_READINESS.md); production deployment gates remain open. No live-provider quality or performance improvement is claimed from fixture tests.
@@ -29,15 +29,15 @@ A self-hosted AI agent with a terminal UI, PostgreSQL-backed conversations and m
 ### One-command installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kiazh/Agent-Harness/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kiazh/Machina/main/install.sh | bash
 ```
 
-The [installer](install.sh) clones into `./agent-harness`, or reuses a checkout,
+The [installer](install.sh) clones into `./machina`, or reuses a checkout,
 creates a Python virtual environment, installs the backend and TUI dependencies,
 creates/fills `.env`, generates API/provenance keys, and automatically runs
-`ah init` to initialize the database. If initialization fails, it attempts local
+`machina init` to initialize the database. If initialization fails, it attempts local
 PostgreSQL provisioning through Docker, then Homebrew on macOS where available.
-It installs an `ah`
+It installs an `machina`
 launcher and adds it to your shell PATH. It preserves custom database URLs.
 
 Have Python 3.11+, Git, curl and Node.js 22.19+/npm installed first. Database
@@ -51,14 +51,14 @@ your shell startup file. The URL installs the published `main` checkout.
 Prompt for an OpenRouter key during the installation:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kiazh/Agent-Harness/main/install.sh | bash -s -- --interactive
+curl -fsSL https://raw.githubusercontent.com/kiazh/Machina/main/install.sh | bash -s -- --interactive
 ```
 
 Choose an installation directory or avoid automatic database/PATH changes:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kiazh/Agent-Harness/main/install.sh | bash -s -- --dir ~/agent-harness
-curl -fsSL https://raw.githubusercontent.com/kiazh/Agent-Harness/main/install.sh | bash -s -- --no-auto-db --no-shell-rc
+curl -fsSL https://raw.githubusercontent.com/kiazh/Machina/main/install.sh | bash -s -- --dir ~/machina
+curl -fsSL https://raw.githubusercontent.com/kiazh/Machina/main/install.sh | bash -s -- --no-auto-db --no-shell-rc
 ```
 
 Other installer options: `--dev`, `--no-ui`, `--with-docker-db`,
@@ -71,14 +71,14 @@ After installation:
 ```bash
 # Restart your terminal, or update PATH for this shell:
 export PATH="$HOME/.local/bin:$PATH"
-ah setup                  # do this first: configure provider and database settings
-ah doctor                 # inspect prerequisites, keys and database health
-ah                        # open the terminal UI
+machina setup                  # do this first: configure provider and database settings
+machina doctor                 # inspect prerequisites, keys and database health
+machina                    # open the terminal UI
 ```
 
 If the installer reported incomplete database setup, set `DATABASE_URL` in
-`ah setup` and run `ah init` before chatting. If setup changes the database URL
-after a successful install, run `ah init` again for that database. Cloud API
+`machina setup` and run `machina init` before chatting. If setup changes the database URL
+after a successful install, run `machina init` again for that database. Cloud API
 credentials are yours to supply; the installer does not create a provider
 account or API credit.
 
@@ -87,22 +87,22 @@ account or API credit.
 Requirements: Python **3.11+**, Node.js **22.19+** for the TUI, and PostgreSQL **16+** with **pgvector**. Configure a supported provider key, or an accessible Ollama server for local models.
 
 ```bash
-git clone https://github.com/kiazh/Agent-Harness.git
-cd Agent-Harness
+git clone https://github.com/kiazh/Machina.git
+cd Machina
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
 npm ci --ignore-scripts --prefix ui
-ah setup
+machina setup
 ```
 
-`ah setup` prompts for configuration. Supply your PostgreSQL URL and provider credentials; review `.env` before initializing your chosen database. Secrets belong in `.env` or a supported secret backend, never in committed files or non-secret YAML.
+`machina setup` prompts for configuration. Supply your PostgreSQL URL and provider credentials; review `.env` before initializing your chosen database. Secrets belong in `.env` or a supported secret backend, never in committed files or non-secret YAML.
 
 ```bash
-ah doctor
-ah init
-ah                         # interactive terminal UI
-ah chat "Explain this project"  # one-shot CLI
+machina doctor
+machina init
+machina                     # interactive terminal UI
+machina chat "Explain this project"  # one-shot CLI
 ```
 
 On Windows, activate with `.venv\Scripts\Activate.ps1` in PowerShell. Shell tools depend on the commands installed on your host.
@@ -113,11 +113,11 @@ The [installer](install.sh) can provision a local database through Docker or Hom
 bash install.sh
 ```
 
-A Python wheel installs the backend, bundled skills and subagents. It does **not** bundle Node dependencies or the terminal UI: use the source checkout above, or set `AH_UI_DIR` to its `ui/` directory and run `npm ci --ignore-scripts` there.
+A Python wheel installs the backend, bundled skills and subagents. It does **not** bundle Node dependencies or the terminal UI: use the source checkout above, or set `MACHINA_UI_DIR` to its `ui/` directory and run `npm ci --ignore-scripts` there.
 
 ## Terminal UI
 
-The fullscreen interface has a scrolling conversation, framed tool results, a docked composer and approval controls. Themes color the full alternate screen; the normal terminal is restored on exit. Motion can be disabled with `AH_UI_REDUCED_MOTION=1`.
+The fullscreen interface has a scrolling conversation, framed tool results, a docked composer and approval controls. Themes color the full alternate screen; the normal terminal is restored on exit. Motion can be disabled with `MACHINA_UI_REDUCED_MOTION=1`.
 
 Type `/` for commands. Management commands open pickers or forms; `?` on empty input and F1 show shortcuts. Enter selects, Escape cancels, and Space toggles checklist entries. Drop image files or paste with Ctrl+V (Cmd+V when the terminal forwards it); attachments show as numbered `[image N]` markers and need a vision-capable model. Limits: PNG/JPEG/GIF/WebP, at most 5 images per message, 5 MiB each and 20 MiB total; follow-up turns keep the latest images through tool churn and compaction.
 
@@ -191,9 +191,9 @@ in a repo come back as configuration drafts for human `/mcp` review and are
 never connected automatically. Manage skills from the CLI:
 
 ```bash
-ah learn <file-or-url>        # learn a skill from a file, URL or skill name
-ah hub list | search | install # community skill hub
-ah curator report              # skill usage, staleness and cleanup
+machina learn <file-or-url>        # learn a skill from a file, URL or skill name
+machina hub list | search | install # community skill hub
+machina curator report              # skill usage, staleness and cleanup
 ```
 
 Subagents provide specialist instructions for coding, review, research and other
@@ -239,7 +239,7 @@ Prompt capacity follows the selected model/provider's context-window metadata or
 
 MCP is included in the default Python installation. `/mcp` opens Add and server actions. Configure a local executable with a separate JSON argument array, or an HTTP endpoint. Adding a server saves configuration without launching it. Connect shows the exact launch preview and requires confirmation; a changed configuration needs a fresh preview.
 
-Configuration persists in `~/.agent-harness/mcp.json`, with installation-local locking, atomic replacement and revisions. Connections remain worker-local and do not automatically restart. To share this inventory across workers, use the same administrator-controlled home directory. Values belong in the existing secret backend; use `secret_refs` to pass named environment secrets to stdio servers, never literal tokens in arguments.
+Configuration persists in `~/.machina/mcp.json`, with installation-local locking, atomic replacement and revisions. Connections remain worker-local and do not automatically restart. To share this inventory across workers, use the same administrator-controlled home directory. Values belong in the existing secret backend; use `secret_refs` to pass named environment secrets to stdio servers, never literal tokens in arguments.
 
 The agent uses `mcp_list`, `mcp_describe` and `mcp_call` after connection. Catalogs are paged and schemas loaded individually. Remote calls require exact approval in every mode unless you explicitly configure `trusted_read` **and** an allowlist of verified read tools. Server descriptions and annotations never grant consent. Schema/configuration/argument changes invalidate approval; uncertain calls are not retried.
 
@@ -252,7 +252,7 @@ Stdio runs on the host and is refused in sandbox mode. HTTP redirects and enviro
 | Backend runtime | Python 3.11+, asyncio | Agent execution, concurrent tools, lifecycle and cancellation |
 | Terminal UI | TypeScript, Node.js 22.19+, `@earendil-works/pi-tui` | Fullscreen rendering, Markdown, menus, themes and approval controls |
 | UI transport | JSON-RPC 2.0 over stdio | Separate Node UI and Python gateway processes; streamed versioned events |
-| CLI | Typer + Rich | `ah` commands, setup, diagnostics and formatted output |
+| CLI | Typer + Rich | `machina` commands, setup, diagnostics and formatted output |
 | HTTP service | FastAPI + Uvicorn | Authenticated API, SSE prompt streams and health endpoints |
 | Database | PostgreSQL 16+ | Sessions, context, memory, documents, jobs, approvals and usage |
 | Retrieval indexes | pgvector HNSW, PostgreSQL full-text and pg_trgm GIN | Vector similarity, lexical search and substring matching |
@@ -357,7 +357,7 @@ retrieval reranking, not a chat provider.
 Example non-secret defaults for an Ollama installation:
 
 ```yaml
-# ~/.agent-harness/config.yaml
+# ~/.machina/config.yaml
 provider: ollama
 model: llama3.2
 execution_mode: ask
@@ -370,36 +370,36 @@ behavior and context capacity can differ.
 
 ## Configuration and HTTP
 
-Non-secret defaults live in `~/.agent-harness/config.yaml`; environment overrides use `AGENT_HARNESS_<KEY>`. Session overrides take precedence where supported. `.env` fills missing environment values. `AH_ENV_FILE` selects an alternate file; [`.env.example`](.env.example) lists common settings.
+Non-secret defaults live in `~/.machina/config.yaml`; environment overrides use `MACHINA_<KEY>`. Session overrides take precedence where supported. `.env` fills missing environment values. `MACHINA_ENV_FILE` selects an alternate file; [`.env.example`](.env.example) lists common settings.
 
-Important settings include `DATABASE_URL`, `AGENT_HARNESS_PROVIDER`, `AGENT_HARNESS_MODEL`, `AGENT_HARNESS_PERSONA_DESCRIPTION`, `AGENT_HARNESS_EXECUTION_MODE`, and the `AGENT_HARNESS_USAGE_*` budgets (`0` means unlimited). Learning flags are `AGENT_HARNESS_MEMORY_ENABLED`, `AGENT_HARNESS_PERSONALITY_GROWTH_ENABLED` and `AGENT_HARNESS_RSI_ENABLED`.
+Important settings include `DATABASE_URL`, `MACHINA_PROVIDER`, `MACHINA_MODEL`, `MACHINA_PERSONA_DESCRIPTION`, `MACHINA_EXECUTION_MODE`, and the `MACHINA_USAGE_*` budgets (`0` means unlimited). Learning flags are `MACHINA_MEMORY_ENABLED`, `MACHINA_PERSONALITY_GROWTH_ENABLED` and `MACHINA_RSI_ENABLED`.
 
 ### Configuration reference
 
 | Setting | Meaning | Default / guidance |
 | --- | --- | --- |
 | `DATABASE_URL` | Application PostgreSQL connection | Required for persistent operation |
-| `AGENT_HARNESS_PROVIDER` | Chat provider adapter | `openrouter` |
-| `AGENT_HARNESS_MODEL` | Model identifier | `openrouter/free`; availability is provider-dependent |
-| `AGENT_HARNESS_REASONING_EFFORT` | Requested reasoning depth | Blank uses provider default |
-| `AGENT_HARNESS_EXECUTION_MODE` | Default mode for new sessions | `ask` |
-| `AGENT_HARNESS_PERSONA_DESCRIPTION` | Requested tone and character | Empty; maximum 2,000 characters |
-| `AGENT_HARNESS_MEMORY_ENABLED` | Automatic memory integration | `true` |
-| `AGENT_HARNESS_PERSONALITY_GROWTH_ENABLED` | Persistent personality learning | `true` |
-| `AGENT_HARNESS_RSI_ENABLED` | Runtime strategy/ranking adaptation | `true` |
-| `AGENT_HARNESS_PERSONA_MEMORY_ENABLED` | Persona-aware memory ranking | `true` |
-| `AGENT_HARNESS_PERSONA_DEFAULT_EMOTION` | Fallback persona-memory emotion | `trust` |
-| `AGENT_HARNESS_USAGE_SESSION_TOKEN_LIMIT` / `AGENT_HARNESS_USAGE_SESSION_REQUEST_LIMIT` | Optional session usage budgets | `0` = unlimited |
-| `AGENT_HARNESS_USAGE_AGENT_TOKEN_LIMIT` / `AGENT_HARNESS_USAGE_AGENT_REQUEST_LIMIT` | Optional agent usage budgets | `0` = unlimited |
-| `AGENT_HARNESS_CONTEXT_BUDGET` | Legacy compatibility setting | Does not impose a cumulative turn-token cap |
-| `AGENT_HARNESS_MAX_TOKENS` | Requested provider response length | `4096`; separate from prompt capacity |
-| `AGENT_HARNESS_MAX_ITERATIONS` | Agent loop iteration bound | `10` |
-| `AGENT_HARNESS_TURN_TIMEOUT` | Turn deadline in seconds | `300` |
+| `MACHINA_PROVIDER` | Chat provider adapter | `openrouter` |
+| `MACHINA_MODEL` | Model identifier | `openrouter/free`; availability is provider-dependent |
+| `MACHINA_REASONING_EFFORT` | Requested reasoning depth | Blank uses provider default |
+| `MACHINA_EXECUTION_MODE` | Default mode for new sessions | `ask` |
+| `MACHINA_PERSONA_DESCRIPTION` | Requested tone and character | Empty; maximum 2,000 characters |
+| `MACHINA_MEMORY_ENABLED` | Automatic memory integration | `true` |
+| `MACHINA_PERSONALITY_GROWTH_ENABLED` | Persistent personality learning | `true` |
+| `MACHINA_RSI_ENABLED` | Runtime strategy/ranking adaptation | `true` |
+| `MACHINA_PERSONA_MEMORY_ENABLED` | Persona-aware memory ranking | `true` |
+| `MACHINA_PERSONA_DEFAULT_EMOTION` | Fallback persona-memory emotion | `trust` |
+| `MACHINA_USAGE_SESSION_TOKEN_LIMIT` / `MACHINA_USAGE_SESSION_REQUEST_LIMIT` | Optional session usage budgets | `0` = unlimited |
+| `MACHINA_USAGE_AGENT_TOKEN_LIMIT` / `MACHINA_USAGE_AGENT_REQUEST_LIMIT` | Optional agent usage budgets | `0` = unlimited |
+| `MACHINA_CONTEXT_BUDGET` | Legacy compatibility setting | Does not impose a cumulative turn-token cap |
+| `MACHINA_MAX_TOKENS` | Requested provider response length | `4096`; separate from prompt capacity |
+| `MACHINA_MAX_ITERATIONS` | Agent loop iteration bound | `10` |
+| `MACHINA_TURN_TIMEOUT` | Turn deadline in seconds | `300` |
 | `SEARXNG_URL` | Optional SearXNG search endpoint; blank uses DuckDuckGo | blank |
-| `AGENT_HARNESS_TERMINAL_SANDBOX` | Terminal backend setting | `disabled`; configure `local` or `docker` as appropriate |
-| `AH_ENV_FILE` | Alternate secret/environment file | Default resolver uses the project environment file |
-| `AH_UI_DIR` | TUI source directory override | Useful for backend wheel installs |
-| `AH_UI_REDUCED_MOTION` | Disable working/learning animation | Set `1` |
+| `MACHINA_TERMINAL_SANDBOX` | Terminal backend setting | `disabled`; configure `local` or `docker` as appropriate |
+| `MACHINA_ENV_FILE` | Alternate secret/environment file | Default resolver uses the project environment file |
+| `MACHINA_UI_DIR` | TUI source directory override | Useful for backend wheel installs |
+| `MACHINA_UI_REDUCED_MOTION` | Disable working/learning animation | Set `1` |
 
 For example, persist a non-secret persona through `/persona` or YAML:
 
@@ -419,16 +419,16 @@ controls future sessions. Configuration precedence and migration details are in
 [OPERATIONS.md](OPERATIONS.md).
 
 Not configuration keys (no `config.yaml` entry, managed through the secret
-path instead): `AGENT_HARNESS_API_KEY` (HTTP API authentication, required for
-protected endpoints), `AGENT_HARNESS_PROVENANCE_KEY` (generated by
-setup/installer), and `AGENT_HARNESS_TEST_DATABASE_URL` (dedicated test
+path instead): `MACHINA_API_KEY` (HTTP API authentication, required for
+protected endpoints), `MACHINA_PROVENANCE_KEY` (generated by
+setup/installer), and `MACHINA_TEST_DATABASE_URL` (dedicated test
 database — never point it at the application database).
 
 ### HTTP API reference
 
 ```bash
-# Configure AGENT_HARNESS_API_KEY in your environment or .env first.
-ah serve --host 127.0.0.1 --port 8000
+# Configure MACHINA_API_KEY in your environment or .env first.
+machina serve --host 127.0.0.1 --port 8000
 ```
 
 The HTTP API provides sessions, SSE prompts, memory, documents, jobs and approval operations. Requests use `Authorization: Bearer …` or `X-API-Key`; public `/health` and `/ready` expose limited health information. Missing API authentication configuration fails closed. The [wire contract](communications/ui-gateway-protocol.md) describes gateway events and approval semantics.
@@ -458,12 +458,12 @@ The HTTP API provides sessions, SSE prompts, memory, documents, jobs and approva
 Create a session, then copy its returned ID into the streaming request:
 
 ```bash
-curl -sS -H "Authorization: Bearer $AGENT_HARNESS_API_KEY" \
+curl -sS -H "Authorization: Bearer $MACHINA_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"title":"First API session"}' \
   http://127.0.0.1:8000/api/v1/sessions
 
-curl -N -H "Authorization: Bearer $AGENT_HARNESS_API_KEY" \
+curl -N -H "Authorization: Bearer $MACHINA_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"text":"Explain the project architecture"}' \
   http://127.0.0.1:8000/api/v1/sessions/SESSION_ID/prompt
@@ -501,7 +501,7 @@ training jobs or require research dependencies.
 | LoCoMo / identity evaluation | Evaluation harnesses and scenarios | Live accuracy studies need authorized provider calls and budgets |
 | Native vs. LangGraph | Workflow trial and benchmark modules | Optional comparison; native execution remains the default |
 
-Relevant code lives in `ah/memory/`, `ah/soulspec/` and `ah/research/`. Install
+Relevant code lives in `machina/memory/`, `machina/soulspec/` and `machina/research/`. Install
 `.[workflow-trial]` for the LangGraph trial. Historical measurements describe
 those experiments' fixtures and environments, not present model intelligence or
 performance guarantees.
@@ -512,15 +512,15 @@ performance guarantees.
 python -m pip install -e '.[dev,connectors,workflow-trial]'
 npm ci --ignore-scripts --prefix ui
 # Point this only at a disposable database, never your application database.
-export AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test
+export MACHINA_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/machina_test
 python -m pytest -q --tb=short -p no:cacheprovider
-python -m ruff check ah/ tools/
-python -m ruff format --check ah/ tools/
-python -m bandit -r ah/ -ll -x ah/cli/
+python -m ruff check machina/ tools/
+python -m ruff format --check machina/ tools/
+python -m bandit -r machina/ -ll -x machina/cli/
 npm --prefix ui run check
 ```
 
-Database tests require the dedicated DSN. Real gateway UI tests additionally require `AH_TEST_PYTHON` and their test environment; the backend's real-gateway wrapper configures those automatically. Missing prerequisites produce explicit skips, not verification evidence. Do not run concurrent backend suites against the same test database.
+Database tests require the dedicated DSN. Real gateway UI tests additionally require `MACHINA_TEST_PYTHON` and their test environment; the backend's real-gateway wrapper configures those automatically. Missing prerequisites produce explicit skips, not verification evidence. Do not run concurrent backend suites against the same test database.
 
 Build and inspect artifacts:
 
@@ -546,8 +546,8 @@ CI/Docker gates are in [release readiness](docs/verification/RELEASE_READINESS.m
 ## Project structure
 
 ```text
-Agent-Harness/
-├── ah/
+Machina/
+├── machina/
 │   ├── core/             # agent loop, providers, context, runtime, sessions, jobs, usage
 │   ├── db/               # asyncpg pool and PostgreSQL schema
 │   ├── gateway/          # JSON-RPC server and feature handlers
@@ -565,7 +565,7 @@ Agent-Harness/
 │   ├── security/         # secret backends and environment-file handling
 │   ├── observability/    # audit, diagnostics, metrics and optional tracing
 │   ├── research/         # offline evaluations, policy training and workflow trials
-│   └── cli/              # ah commands and terminal UI launcher
+│   └── cli/              # machina commands and terminal UI launcher
 ├── ui/src/               # TypeScript shell, transcript, widgets, features and themes
 ├── ui/test/              # node:test interaction and integration coverage
 ├── skills/               # bundled playbooks and curated ECC skill resources
@@ -585,13 +585,13 @@ Agent-Harness/
 
 | Symptom | What to check |
 | --- | --- |
-| `ah: command not found` after install | Restart the terminal or add `~/.local/bin` to PATH; manual installs need venv activation |
-| Installer finishes but chat cannot run | Read installer warnings, run `ah doctor`, configure the database and a provider/local model |
+| `machina: command not found` after install | Restart the terminal or add `~/.local/bin` to PATH; manual installs need venv activation |
+| Installer finishes but chat cannot run | Read installer warnings, run `machina doctor`, configure the database and a provider/local model |
 | TUI unavailable / Node version error | Install Node 22.19+ and npm, then run `npm ci --ignore-scripts --prefix ui` |
-| Backend wheel launches no TUI | Point `AH_UI_DIR` at a source checkout's `ui/` and install its Node dependencies |
-| Database unavailable | Verify `DATABASE_URL`, service reachability and credentials, then run `ah init` |
+| Backend wheel launches no TUI | Point `MACHINA_UI_DIR` at a source checkout's `ui/` and install its Node dependencies |
+| Database unavailable | Verify `DATABASE_URL`, service reachability and credentials, then run `machina init` |
 | pgvector or pg_trgm missing | Use the pgvector image or install matching extensions; schema creation requires appropriate privileges |
-| API returns missing-key / authentication error | Set `AGENT_HARNESS_API_KEY` server-side and send Bearer or `X-API-Key` credentials |
+| API returns missing-key / authentication error | Set `MACHINA_API_KEY` server-side and send Bearer or `X-API-Key` credentials |
 | Provider returns unauthorized / model unavailable | Use that provider's own key and a model it currently serves; check `/provider`, `/models` and `/keys` |
 | A session already has a running turn | Cancel/wait for completion before retrying; do not submit competing turns |
 | Response or tool times out | Inspect the recorded outcome; uncertain external side effects must be checked before retrying |
@@ -602,11 +602,11 @@ Agent-Harness/
 | MCP asks for approval in full mode | Untrusted remote calls still need exact consent; trusted reads require an explicit verified allowlist |
 | Persona appears unchanged in a conversation | Saved defaults apply through the profile/context; inspect `/persona` and `/growth`, and distinguish requested persona from trial revisions |
 | Semantic retrieval is absent | Configure embeddings and indexed content; lexical retrieval remains available |
-| Animation is distracting | Set `AH_UI_REDUCED_MOTION=1` |
+| Animation is distracting | Set `MACHINA_UI_REDUCED_MOTION=1` |
 | Database/UI tests skip | Configure the dedicated test DSN and real gateway prerequisites; skipped tests are not passing evidence |
 
-Start with `ah doctor` for setup and `ah status` for feature availability. Gateway
-logs live in `~/.agent-harness/logs/gateway.log`. Avoid pasting unredacted `.env`,
+Start with `machina doctor` for setup and `machina status` for feature availability. Gateway
+logs live in `~/.machina/logs/gateway.log`. Avoid pasting unredacted `.env`,
 credentials or private tool output into issue reports.
 
 ## Documentation

@@ -6,15 +6,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from ah.connectors.manager import ConnectorManager
-from ah.connectors.models import (
+from machina.connectors.manager import ConnectorManager
+from machina.connectors.models import (
     AuthRequired,
     ConfigError,
     ConnectionFailed,
     ConnectionState,
     ConnectorConfig,
 )
-from ah.connectors.registry import ConnectorRegistry
+from machina.connectors.registry import ConnectorRegistry
 
 
 class FakeClient:
@@ -77,7 +77,7 @@ def transient(message="temporary connection failure"):
 
 
 async def test_transient_retries_are_bounded_with_backoff(monkeypatch):
-    from ah.connectors import manager as module
+    from machina.connectors import manager as module
 
     manager, clients = setup_manager([transient(), transient(), None])
     delays = []
@@ -125,7 +125,7 @@ async def test_failed_connection_status_is_visible():
 
 
 async def test_transient_circuit_opens_then_recovers(monkeypatch):
-    from ah.connectors import manager as module
+    from machina.connectors import manager as module
 
     clock = [100.0]
     monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))

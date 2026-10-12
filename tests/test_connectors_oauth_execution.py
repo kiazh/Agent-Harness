@@ -7,20 +7,20 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.connectors.execution import connect_authorized, execute_call, prepare_connect
-from ah.connectors.models import ConnectorConfig
-from ah.connectors.oauth import OAuthCoordinator, OAuthOwner
-from ah.connectors.oauth_models import OAuthBinding
-from ah.connectors.oauth_store import OAuthCredentialStore
-from ah.connectors.registry import ConnectorRegistry
-from ah.connectors.service import ConnectorService
-from ah.permissions.broker import clear_execution_context, set_approval_handler
+from machina.connectors.execution import connect_authorized, execute_call, prepare_connect
+from machina.connectors.models import ConnectorConfig
+from machina.connectors.oauth import OAuthCoordinator, OAuthOwner
+from machina.connectors.oauth_models import OAuthBinding
+from machina.connectors.oauth_store import OAuthCredentialStore
+from machina.connectors.registry import ConnectorRegistry
+from machina.connectors.service import ConnectorService
+from machina.permissions.broker import clear_execution_context, set_approval_handler
 from tests.support.mcp_oauth_fixture import OAuthFixture
 from tests.test_connectors_oauth_flow import _drive_browser, _wait_state
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL"),
-    reason="AGENT_HARNESS_TEST_DATABASE_URL not set",
+    not os.environ.get("MACHINA_TEST_DATABASE_URL"),
+    reason="MACHINA_TEST_DATABASE_URL not set",
 )
 
 
@@ -58,9 +58,9 @@ async def _login(service, coordinator, fixture, owner):
 
 def _stamp(service, name, arguments, session_id, agent_id):
     """Stamp an approved active-session context for direct execute_call."""
-    from ah.connectors.execution import call_spec
-    from ah.permissions.broker import _execution_context
-    from ah.permissions.policy import build_request
+    from machina.connectors.execution import call_spec
+    from machina.permissions.broker import _execution_context
+    from machina.permissions.policy import build_request
 
     req = build_request(
         **call_spec(service, {"name": name, "arguments": arguments}),
@@ -76,7 +76,7 @@ def _stamp(service, name, arguments, session_id, agent_id):
 
 
 def _reset(token):
-    from ah.permissions.broker import _execution_context
+    from machina.permissions.broker import _execution_context
 
     _execution_context.reset(token)
 
@@ -84,15 +84,15 @@ def _reset(token):
 @pytest.mark.db
 async def test_reviewed_connect_and_echo_round_trip(db_pool, monkeypatch, tmp_path):
     pytest.importorskip("mcp")
-    from ah.core.session import session_manager
-    from ah.db.connection import db
+    from machina.core.session import session_manager
+    from machina.db.connection import db
 
     monkeypatch.setattr(db, "_pool", db_pool.pool)
-    from ah.core.runtime import runtime_services as _runtime_services
+    from machina.core.runtime import runtime_services as _runtime_services
 
     monkeypatch.setattr(_runtime_services, "_connector_service", None)
     monkeypatch.setattr(
-        "ah.core.execution_context.resolve_execution_context",
+        "machina.core.execution_context.resolve_execution_context",
         AsyncMock(return_value=AsyncMock(mode="ask", backend="host", workspace=tmp_path)),
     )
     fixture = OAuthFixture()
@@ -122,9 +122,9 @@ async def test_reviewed_connect_and_echo_round_trip(db_pool, monkeypatch, tmp_pa
             described = await service.tools_describe(names["echo"])
             assert described["remote_name"] == "echo"
             # Agent pipeline: full-mode pause/resume sends bearer, returns echo.
-            from ah.core.agent import BaseReActAgent
-            from ah.core.models import LLMResponse
-            from ah.permissions import store
+            from machina.core.agent import BaseReActAgent
+            from machina.core.models import LLMResponse
+            from machina.permissions import store
 
             response = LLMResponse(
                 content="",
@@ -180,16 +180,16 @@ async def test_reviewed_connect_and_echo_round_trip(db_pool, monkeypatch, tmp_pa
 async def test_mutation_auth_failure_never_replays(db_pool, monkeypatch, tmp_path, auth_status):
     """One counted effect, then transport 401/403: unknown, no replay."""
     pytest.importorskip("mcp")
-    from ah.connectors.models import ConnectorToolError
-    from ah.core.session import session_manager
-    from ah.db.connection import db
+    from machina.connectors.models import ConnectorToolError
+    from machina.core.session import session_manager
+    from machina.db.connection import db
 
     monkeypatch.setattr(db, "_pool", db_pool.pool)
-    from ah.core.runtime import runtime_services as _runtime_services
+    from machina.core.runtime import runtime_services as _runtime_services
 
     monkeypatch.setattr(_runtime_services, "_connector_service", None)
     monkeypatch.setattr(
-        "ah.core.execution_context.resolve_execution_context",
+        "machina.core.execution_context.resolve_execution_context",
         AsyncMock(return_value=AsyncMock(mode="ask", backend="host", workspace=tmp_path)),
     )
     fixture = OAuthFixture()
@@ -254,15 +254,15 @@ async def test_mutation_auth_failure_never_replays(db_pool, monkeypatch, tmp_pat
 @pytest.mark.db
 async def test_mutation_timeout_is_unknown_without_retry(db_pool, monkeypatch, tmp_path):
     pytest.importorskip("mcp")
-    from ah.core.session import session_manager
-    from ah.db.connection import db
+    from machina.core.session import session_manager
+    from machina.db.connection import db
 
     monkeypatch.setattr(db, "_pool", db_pool.pool)
-    from ah.core.runtime import runtime_services as _runtime_services
+    from machina.core.runtime import runtime_services as _runtime_services
 
     monkeypatch.setattr(_runtime_services, "_connector_service", None)
     monkeypatch.setattr(
-        "ah.core.execution_context.resolve_execution_context",
+        "machina.core.execution_context.resolve_execution_context",
         AsyncMock(return_value=AsyncMock(mode="ask", backend="host", workspace=tmp_path)),
     )
     fixture = OAuthFixture()
@@ -305,16 +305,16 @@ async def test_reauth_invalidates_pending_approval_and_predispatch_refuses(
     db_pool, monkeypatch, tmp_path
 ):
     pytest.importorskip("mcp")
-    from ah.connectors.models import ConnectorToolError
-    from ah.core.session import session_manager
-    from ah.db.connection import db
+    from machina.connectors.models import ConnectorToolError
+    from machina.core.session import session_manager
+    from machina.db.connection import db
 
     monkeypatch.setattr(db, "_pool", db_pool.pool)
-    from ah.core.runtime import runtime_services as _runtime_services
+    from machina.core.runtime import runtime_services as _runtime_services
 
     monkeypatch.setattr(_runtime_services, "_connector_service", None)
     monkeypatch.setattr(
-        "ah.core.execution_context.resolve_execution_context",
+        "machina.core.execution_context.resolve_execution_context",
         AsyncMock(return_value=AsyncMock(mode="ask", backend="host", workspace=tmp_path)),
     )
     fixture = OAuthFixture()
@@ -396,15 +396,15 @@ async def test_reauth_invalidates_pending_approval_and_predispatch_refuses(
 @pytest.mark.db
 async def test_adapter_yields_once_and_repeated_cycles_release(db_pool, monkeypatch, tmp_path):
     pytest.importorskip("mcp")
-    from ah.core.session import session_manager
-    from ah.db.connection import db
+    from machina.core.session import session_manager
+    from machina.db.connection import db
 
     monkeypatch.setattr(db, "_pool", db_pool.pool)
-    from ah.core.runtime import runtime_services as _runtime_services
+    from machina.core.runtime import runtime_services as _runtime_services
 
     monkeypatch.setattr(_runtime_services, "_connector_service", None)
     monkeypatch.setattr(
-        "ah.core.execution_context.resolve_execution_context",
+        "machina.core.execution_context.resolve_execution_context",
         AsyncMock(return_value=AsyncMock(mode="ask", backend="host", workspace=tmp_path)),
     )
     fixture = OAuthFixture()

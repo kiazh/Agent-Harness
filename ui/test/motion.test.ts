@@ -284,7 +284,7 @@ test("footer_keeps_right_edge_on_one_row", (t) => {
 		assert.match(stripTerminalSequences(lines[0]!), /[□▪■▣]$/);
 	}
 	footer.model = "codex-model";
-	footer.cwd = "/Users/dev/Agent-Harness1";
+	footer.cwd = "/Users/dev/Machina1";
 	footer.branch = "main";
 	footer.tokens = 12400;
 	footer.compact = true;

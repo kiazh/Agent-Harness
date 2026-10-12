@@ -3,7 +3,7 @@
 // Bare /keys runs a real flow: pick a key, then Set/Replace, Clear or Back.
 // Values are collected through a masked editor and never echoed, printed,
 // logged, or kept in history. `secrets.set` applies immediately and saves
-// to the git-ignored `.env` (persist:true). Run `ah setup` once for
+// to the git-ignored `.env` (persist:true). Run `machina setup` once for
 // first-launch configuration of the same file.
 
 import { table } from "../format.ts";
@@ -11,8 +11,8 @@ import type { SecretsListResult, SecretsSetResult } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
 import { confirm, options, type Command, type FeatureHost } from "./types.ts";
 
-// Mirrors PROVIDER_KEYS + MANAGED_ENV_KEYS in ah/security/env_file.py and
-// ah/gateway/features/secrets.py (used for completions when offline).
+// Mirrors PROVIDER_KEYS + MANAGED_ENV_KEYS in machina/security/env_file.py and
+// machina/gateway/features/secrets.py (used for completions when offline).
 const KNOWN_KEYS: Array<[string, string]> = [
 	["OPENROUTER_API_KEY", "OpenRouter (cloud models, default provider)"],
 	["OPENAI_API_KEY", "OpenAI (GPT models, embeddings)"],
@@ -26,7 +26,7 @@ const KNOWN_KEYS: Array<[string, string]> = [
 	["COHERE_API_KEY", "Cohere (reranking)"],
 	["DATABASE_URL", "PostgreSQL connection string"],
 	["SEARXNG_URL", "Self-hosted SearXNG for web search"],
-	["AGENT_HARNESS_MODEL", "Default model identifier"],
+	["MACHINA_MODEL", "Default model identifier"],
 ];
 
 function statusTable(secrets: SecretsListResult["secrets"]): string {

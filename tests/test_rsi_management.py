@@ -12,9 +12,9 @@ import pytest
 
 
 async def test_gateway_inspection_and_rollback_use_session_agent(db_pool, monkeypatch):
-    from ah.gateway.errors import RpcError
-    from ah.gateway.features import growth
-    from ah.memory.growth import GrowthStore
+    from machina.gateway.errors import RpcError
+    from machina.gateway.features import growth
+    from machina.memory.growth import GrowthStore
 
     store = GrowthStore(db_pool)
     owner = "rsi-rpc-" + uuid.uuid4().hex
@@ -46,7 +46,7 @@ async def test_gateway_inspection_and_rollback_use_session_agent(db_pool, monkey
 async def test_real_cli_can_inspect_and_restore_an_owned_revision(db_pool, tmp_path):
     owner = "rsi-cli-" + uuid.uuid4().hex
     sid = uuid.uuid4()
-    from ah.memory.growth import GrowthStore
+    from machina.memory.growth import GrowthStore
 
     store = GrowthStore(db_pool)
     await db_pool.execute("INSERT INTO sessions(id, agent_id) VALUES ($1, $2)", sid, owner)
@@ -55,9 +55,9 @@ async def test_real_cli_can_inspect_and_restore_an_owned_revision(db_pool, tmp_p
     env = dict(os.environ)
     env.update(
         {
-            "AH_ENV_FILE": str(tmp_path / "absent.env"),
+            "MACHINA_ENV_FILE": str(tmp_path / "absent.env"),
             "DATABASE_URL": db_pool.dsn,
-            "AGENT_HARNESS_DATABASE_URL": db_pool.dsn,
+            "MACHINA_DATABASE_URL": db_pool.dsn,
         }
     )
     try:
@@ -65,7 +65,7 @@ async def test_real_cli_can_inspect_and_restore_an_owned_revision(db_pool, tmp_p
 
         def invoke(*args):
             return subprocess.run(
-                [sys.executable, "-m", "ah", "growth", *args, "--session", str(sid)],
+                [sys.executable, "-m", "machina", "growth", *args, "--session", str(sid)],
                 env=env,
                 capture_output=True,
                 text=True,

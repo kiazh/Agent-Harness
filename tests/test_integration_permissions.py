@@ -2,7 +2,7 @@
 
 Covers handoff acceptance 1–32 where deterministic without live services.
 Disposable-DB integration (1001+ chunks, two-runner fencing, hung-job
-isolation) runs in the DB suite via AGENT_HARNESS_TEST_DATABASE_URL.
+isolation) runs in the DB suite via MACHINA_TEST_DATABASE_URL.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import pytest
 def test_runtime_startup_never_raises():
     import asyncio
 
-    from ah.core.runtime import RuntimeServices
+    from machina.core.runtime import RuntimeServices
 
     async def _go():
         svc = RuntimeServices()
@@ -29,8 +29,8 @@ def test_runtime_startup_never_raises():
 def test_factory_same_components_all_entries():
     import asyncio
 
-    from ah.core.agent_factory import build_agent_for_session
-    from ah.core.models import Session
+    from machina.core.agent_factory import build_agent_for_session
+    from machina.core.models import Session
 
     async def _go():
         s = Session(id=uuid.uuid4(), agent_id="harness")
@@ -49,26 +49,26 @@ def test_factory_same_components_all_entries():
 
 
 def test_memory_disabled_suppresses_retrieval_but_tools_available():
-    from ah.core.config import DEFAULTS
+    from machina.core.config import DEFAULTS
 
     assert DEFAULTS["memory_enabled"] is True
     assert DEFAULTS["memory_consolidation_enabled"] is True
     # Explicit tools remain registered regardless of the toggle.
-    from ah.tools.base import registry
+    from machina.tools.base import registry
 
     names = registry.list_tools()
     assert "remember" in names and "recall" in names
 
 
 def test_embedding_fallback_reported():
-    from ah.memory.embeddings import embedding_status
+    from machina.memory.embeddings import embedding_status
 
     st = embedding_status()
     assert st["mode"] in ("dense+sparse", "keyword-only")
 
 
 def test_rag_no_cache_empty_and_dims_recorded():
-    from ah.rag.pipeline import RAGPipeline
+    from machina.rag.pipeline import RAGPipeline
 
     p = RAGPipeline()
     assert p._search_cache == {}
@@ -78,7 +78,7 @@ def test_compaction_loop_guard_state_key():
     # maybe_auto_compact persists last_auto_compact_tokens; contract check.
     import inspect
 
-    from ah import services
+    from machina import services
 
     src = inspect.getsource(services.maybe_auto_compact)
     assert "last_auto_compact_tokens" in src
@@ -86,23 +86,23 @@ def test_compaction_loop_guard_state_key():
 
 
 def test_reranker_passthrough_labeled():
-    from ah.rag.reranker import IdentityReranker
+    from machina.rag.reranker import IdentityReranker
 
     assert "passthrough" in IdentityReranker.__doc__.lower() or True
-    from ah.services import status_summary  # noqa: F401
+    from machina.services import status_summary  # noqa: F401
 
 
 def test_background_bounded_single_flight():
     import inspect
 
-    from ah.core.agent import BaseReActAgent
+    from machina.core.agent import BaseReActAgent
 
     src = inspect.getsource(BaseReActAgent._schedule_memory_consolidation)
     assert "already running" in src or "done()" in src
 
 
 def test_skills_discovery_paths():
-    from ah.skills.registry import default_skills_dir
+    from machina.skills.registry import default_skills_dir
 
     assert str(default_skills_dir()).endswith("skills")
 
@@ -111,13 +111,13 @@ def test_skills_discovery_paths():
 
 
 def test_ask_default_and_full_requires_explicit():
-    from ah.core.config import DEFAULTS
+    from machina.core.config import DEFAULTS
 
     assert DEFAULTS["execution_mode"] == "ask"
 
 
 def test_approval_digest_invalidated_on_change():
-    from ah.permissions.policy import build_request
+    from machina.permissions.policy import build_request
 
     a = build_request(operation="file.write", targets=["/tmp/x"], content="one")
     b = build_request(operation="file.write", targets=["/tmp/x"], content="two")
@@ -126,7 +126,7 @@ def test_approval_digest_invalidated_on_change():
 
 def test_scoped_grant_no_cross_path():
 
-    from ah.permissions.policy import build_request, decide
+    from machina.permissions.policy import build_request, decide
 
     grant = {
         "digest": "other",
@@ -139,20 +139,20 @@ def test_scoped_grant_no_cross_path():
 
 
 def test_full_mode_still_asks_sensitive():
-    from ah.permissions.policy import build_request, decide
+    from machina.permissions.policy import build_request, decide
 
     req = build_request(operation="process.exec", argv=["cat", "~/.ssh/id_rsa"], mode="full")
     assert decide(req, []).verdict == "pending"
 
 
 def test_mode_activation_visible_and_revokable():
-    from ah.core.config import DEFAULTS
+    from machina.core.config import DEFAULTS
 
     assert "mode" in str(DEFAULTS) or "execution_mode" in DEFAULTS
 
 
 def test_child_authority_capped():
-    from ah.core.agent_factory import cap_child_authority
+    from machina.core.agent_factory import cap_child_authority
 
     assert cap_child_authority({"tools": ["read_file"]}, ["read_file", "write_file"]) == [
         "read_file"
@@ -165,9 +165,9 @@ def test_unresolvable_specialist_fails_closed():
     """5.4 failure fixture: lookup raise → controlled error, never all-tools."""
     import asyncio
 
-    from ah.core import agent_factory as fac
-    from ah.core.agent_def import agent_registry
-    from ah.core.models import Session
+    from machina.core import agent_factory as fac
+    from machina.core.agent_def import agent_registry
+    from machina.core.models import Session
 
     async def _boom(name):
         raise RuntimeError("db down")
@@ -186,9 +186,9 @@ def test_unresolvable_specialist_fails_closed():
 def test_unknown_specialist_is_not_general_agent():
     import asyncio
 
-    from ah.core import agent_factory as fac
-    from ah.core.agent_def import agent_registry
-    from ah.core.models import Session
+    from machina.core import agent_factory as fac
+    from machina.core.agent_def import agent_registry
+    from machina.core.models import Session
 
     async def _none(name):
         return None
@@ -209,9 +209,9 @@ def test_restricted_definition_denies_at_execution():
     import asyncio
     import json as _json
 
-    from ah.core.agent import BaseReActAgent
-    from ah.core.models import LLMResponse
-    from ah.tools.base import Tool, registry
+    from machina.core.agent import BaseReActAgent
+    from machina.core.models import LLMResponse
+    from machina.tools.base import Tool, registry
 
     ran = []
 
@@ -241,7 +241,7 @@ def test_restricted_definition_denies_at_execution():
             self.max_iterations = 1
 
     async def _go():
-        from ah.core import context as context_module
+        from machina.core import context as context_module
 
         orig = context_module.context_manager.add_chunk
 
@@ -287,14 +287,14 @@ def test_restricted_definition_denies_at_execution():
 def test_sandbox_never_silent_downgrade():
     import inspect
 
-    from ah.gateway.features import mode as modemod
+    from machina.gateway.features import mode as modemod
 
     assert "silent downgrade" in inspect.getsource(modemod.mode_set)
 
 
 def test_no_secret_values_in_approval_view():
-    from ah.permissions.broker import _approval_view
-    from ah.permissions.policy import build_request
+    from machina.permissions.broker import _approval_view
+    from machina.permissions.policy import build_request
 
     req = build_request(operation="process.exec", argv=["echo", "hi"], content="sk-secret")
     view = _approval_view(req, {"request_id": "r"})
@@ -302,7 +302,7 @@ def test_no_secret_values_in_approval_view():
 
 
 def test_windows_paths_supported():
-    from ah.permissions.policy import ActionRequest, normalize_request
+    from machina.permissions.policy import ActionRequest, normalize_request
 
     req = normalize_request(
         ActionRequest(operation="file.read", targets=["C:\\Users\\a\\b"], cwd="C:\\Users\\a")
@@ -311,7 +311,7 @@ def test_windows_paths_supported():
 
 
 def test_opaque_scripts_need_exec_grant():
-    from ah.permissions.policy import build_request
+    from machina.permissions.policy import build_request
 
     req = build_request(operation="process.exec", argv=["npm", "install"], mode="workspace")
     assert "opaque_execution" in req.capabilities
@@ -323,7 +323,7 @@ def test_opaque_scripts_need_exec_grant():
 def test_turn_conflict_contract():
     import inspect
 
-    from ah.core import turns
+    from machina.core import turns
 
     assert inspect.iscoroutinefunction(turns.try_begin_turn)
     assert inspect.iscoroutinefunction(turns.end_turn)
@@ -332,7 +332,7 @@ def test_turn_conflict_contract():
 def test_cancellation_records_preserved():
     import inspect
 
-    from ah.core.agent import BaseReActAgent
+    from machina.core.agent import BaseReActAgent
 
     assert "cancellation_safe" in inspect.getsource(BaseReActAgent._flush_pending_cancellation_safe)
 
@@ -348,7 +348,7 @@ def test_error_then_complete_single_cleanup():
 def test_job_pause_releases_lease():
     import inspect
 
-    from ah.core.scheduler import JobRunner
+    from machina.core.scheduler import JobRunner
 
     assert "needs_approval" in inspect.getsource(JobRunner._execute)
 
@@ -356,7 +356,7 @@ def test_job_pause_releases_lease():
 def test_stale_claimant_fenced():
     import inspect
 
-    from ah.core.scheduler import JobStore
+    from machina.core.scheduler import JobStore
 
     assert "claim_token" in inspect.getsource(JobStore.finish)
 
@@ -366,7 +366,7 @@ def test_scheduler_adverse_fencing_sequence():
     import asyncio
     import uuid as _uuid
 
-    from ah.core.scheduler import JobStore
+    from machina.core.scheduler import JobStore
 
     class _Conn:
         def __init__(self, db):
@@ -447,7 +447,7 @@ def test_scheduler_adverse_fencing_sequence():
 
             return datetime.datetime.now(datetime.UTC)
 
-    import ah.core.scheduler as sched
+    import machina.core.scheduler as sched
 
     store = JobStore()
     fake = _DB()
@@ -498,7 +498,7 @@ def test_scheduler_adverse_fencing_sequence():
 
 
 def test_tool_start_ids_stable():
-    from ah.core.models import StreamEvent
+    from machina.core.models import StreamEvent
 
     assert "tool_call_id" in StreamEvent.__dataclass_fields__
 
@@ -506,7 +506,7 @@ def test_tool_start_ids_stable():
 def test_owned_provider_close_once():
     import inspect
 
-    from ah.core.agent_factory import close_agent_provider
+    from machina.core.agent_factory import close_agent_provider
 
     assert "_owns_provider" in inspect.getsource(close_agent_provider)
 
@@ -518,7 +518,7 @@ def test_first_run_minimal_choices():
     with open("install.sh", encoding="utf-8") as f:
         src = f.read()
     assert "127.0.0.1" in src
-    assert "agentharness-db" in src
+    assert "machina-db" in src
 
 
 def test_loopback_and_reuse():
@@ -539,13 +539,13 @@ def test_no_docker_needed_for_host():
 
 
 def test_env_file_contract():
-    from ah.security.env_file import find_env_file
+    from machina.security.env_file import find_env_file
 
     assert callable(find_env_file)
 
 
 def test_workspace_consistent_roots():
-    from ah.permissions.policy import workspace_root
+    from machina.permissions.policy import workspace_root
 
     assert str(workspace_root())
 
@@ -554,7 +554,7 @@ def test_scope_windows_case_unc_and_symlink_lexical():
     """LP-04: case-insensitive drives, UNC shares, traversal, symlink text."""
     import os as _os
 
-    from ah.permissions.policy import _norm_path, _scope_allows
+    from machina.permissions.policy import _norm_path, _scope_allows
 
     if _os.name != "nt":
         pytest.skip("Windows path semantics")
@@ -590,13 +590,13 @@ def test_parent_caps_enforced_at_broker_despite_grants():
     """LP-08: restricted parent caps bind at execution, not just on the agent."""
     import asyncio
 
-    from ah.core.agent_factory import parent_authority_var
-    from ah.permissions.broker import ApprovalDenied, permission_broker
-    from ah.permissions.policy import build_request
+    from machina.core.agent_factory import parent_authority_var
+    from machina.permissions.broker import ApprovalDenied, permission_broker
+    from machina.permissions.policy import build_request
 
     async def _go():
 
-        from ah.permissions.policy import workspace_root
+        from machina.permissions.policy import workspace_root
 
         inside = str(workspace_root() / "a.txt")
         # Absent/None = unrestricted; [] = nothing permitted.
@@ -650,20 +650,20 @@ def test_parent_caps_enforced_at_broker_despite_grants():
 
 def test_selected_provider_key_honesty(monkeypatch):
     """LP-12: wrong-family keys report unavailable for the SELECTED route."""
-    from ah.core import runtime as rt
-    from ah.core.config import config
+    from machina.core import runtime as rt
+    from machina.core.config import config
 
     real_provider = config.get("provider")
     real_openrouter = config.openrouter_api_key
     real_openai = config.openai_api_key
     config.set("provider", "openrouter")
-    monkeypatch.setenv("AGENT_HARNESS_PROVIDER", "openrouter")
+    monkeypatch.setenv("MACHINA_PROVIDER", "openrouter")
     # Blank attribute AND environment fallbacks (get() consults legacy env).
     config.openrouter_api_key = ""
     config.openai_api_key = "sk-test-wrong-family"
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     try:
-        from ah.security import secrets as _secrets
+        from machina.security import secrets as _secrets
 
         monkeypatch.setattr(_secrets, "get_secret", lambda name, *, env_names=None: None)
     except Exception:
@@ -685,7 +685,7 @@ def test_sandbox_binary_vs_daemon(monkeypatch):
     """LP-12: docker binary without daemon is degraded, not ready."""
     import subprocess as _sp
 
-    from ah.core import runtime as rt
+    from machina.core import runtime as rt
 
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/docker")
     real_run = _sp.run
@@ -707,7 +707,7 @@ def test_runtime_startup_never_raises_without_db():
     """LP-12: startup degrades honestly; shutdown cleans tracked work."""
     import asyncio
 
-    from ah.core.runtime import RuntimeServices
+    from machina.core.runtime import RuntimeServices
 
     async def _go():
         svc = RuntimeServices()
@@ -730,9 +730,9 @@ def test_runtime_startup_never_raises_without_db():
 
 def test_command_parser_preserves_windows_paths_and_unicode():
     """Addendum check: exact execution representation (parser/shell agreement)."""
-    from ah.permissions import tools as toolmap
-    from ah.permissions.broker import _approval_view
-    from ah.permissions.policy import build_request
+    from machina.permissions import tools as toolmap
+    from machina.permissions.broker import _approval_view
+    from machina.permissions.policy import build_request
 
     cmd = 'git status -- "C:\\Users\\ki\\my projet\\fichier-\u00e9.txt"'
     spec = toolmap.action_for_tool("terminal", {"command": cmd, "workdir": "."})
@@ -776,7 +776,7 @@ def test_memory_backend_grant_lifecycle_and_durability():
     import asyncio
     from datetime import UTC, datetime, timedelta
 
-    from ah.permissions import store as st
+    from machina.permissions import store as st
 
     async def _go():
         st._last_durable = None
@@ -818,10 +818,10 @@ def test_memory_backend_grant_lifecycle_and_durability():
 
 def test_tool_effect_declarations_and_mutating_fallback():
     """Extensible side-effecting tools need explicit effects (addendum check)."""
-    import ah.tools  # noqa: F401 (register builtins)
-    from ah.permissions import tools as toolmap
-    from ah.permissions.policy import build_request, decide
-    from ah.tools.base import Tool, registry
+    import machina.tools  # noqa: F401 (register builtins)
+    from machina.permissions import tools as toolmap
+    from machina.permissions.policy import build_request, decide
+    from machina.tools.base import Tool, registry
 
     assert registry._tools["write_file"].effects == ("fs.write",)
     assert registry._tools["terminal"].effects == ("exec",)
@@ -866,7 +866,7 @@ def test_consolidation_single_flight_across_instances():
     """LP-14: concurrent agent instances must not re-extract the same range."""
     import asyncio
 
-    from ah.core import agent as agentmod
+    from machina.core import agent as agentmod
 
     calls = []
 
@@ -878,7 +878,7 @@ def test_consolidation_single_flight_across_instances():
 
     class _A:
         def __init__(self):
-            from ah.core import agent as _am
+            from machina.core import agent as _am
 
             self._tasks = set()
             self.memory_consolidator = _Cons()
@@ -913,8 +913,8 @@ def test_consolidation_budget_exhaustion_sends_no_paid_call():
     """LP-14: exhausted budgets block extraction before any provider call."""
     import asyncio
 
-    from ah.core.exceptions import UsageBudgetExceededError
-    from ah.memory.consolidator import MemoryConsolidator
+    from machina.core.exceptions import UsageBudgetExceededError
+    from machina.memory.consolidator import MemoryConsolidator
 
     sent = []
 
@@ -923,14 +923,14 @@ def test_consolidation_budget_exhaustion_sends_no_paid_call():
 
         async def complete(self, **kw):
             sent.append(kw)
-            from ah.core.models import LLMResponse
+            from machina.core.models import LLMResponse
 
             return LLMResponse(content="[]", model="m", usage={}, tool_calls=[])
 
     async def _reserve(*a, **k):
         raise UsageBudgetExceededError("session token budget exceeded (0/0)")
 
-    import ah.core.usage as usagemod
+    import machina.core.usage as usagemod
 
     real_complete = usagemod.usage_store.complete_call
 
@@ -955,7 +955,7 @@ def test_rag_cold_start_initializes_shared_pipeline():
     """LP-10: lazy service initializes on first use after a cold restart."""
     import asyncio
 
-    import ah.tools.rag as ragmod
+    import machina.tools.rag as ragmod
 
     real_global = ragmod._rag_pipeline
     ragmod._rag_pipeline = None
@@ -972,12 +972,12 @@ def test_rag_cold_start_initializes_shared_pipeline():
         async def close(self):
             pass
 
-    import ah.rag.pipeline as pipemod
+    import machina.rag.pipeline as pipemod
 
     real_embedder = pipemod.OpenAIEmbedder
     pipemod.OpenAIEmbedder = _FakeEmbedder  # type: ignore[assignment]
     try:
-        from ah.core import agent_factory as fac
+        from machina.core import agent_factory as fac
 
         # Cold global (None) + usable embedder → initialized, not None.
         assert asyncio.run(fac._shared_rag_pipeline()) is not None
@@ -992,9 +992,9 @@ def test_rag_cold_start_initializes_shared_pipeline():
 def test_rag_disabled_or_unavailable_stays_none():
     import asyncio
 
-    import ah.tools.rag as ragmod
-    from ah.core import agent_factory as fac
-    from ah.core.config import config
+    import machina.tools.rag as ragmod
+    from machina.core import agent_factory as fac
+    from machina.core.config import config
 
     real_global = ragmod._rag_pipeline
     ragmod._rag_pipeline = None
@@ -1015,24 +1015,24 @@ def _subprocess_env(tmp_path):
     import sys
 
     env = dict(os.environ)
-    dsn = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL", "")
+    dsn = os.environ.get("MACHINA_TEST_DATABASE_URL", "")
     if dsn:
         # Never touch the developer database from subprocess CLI tests.
         env["DATABASE_URL"] = dsn
-    env["AH_ENV_FILE"] = str(tmp_path / ".env")
+    env["MACHINA_ENV_FILE"] = str(tmp_path / ".env")
     env["PYTHONUTF8"] = "1"
-    # Isolate persistent config writes (ah mode X --save writes config.yaml).
+    # Isolate persistent config writes (machina mode X --save writes config.yaml).
     env["HOME"] = str(tmp_path)
     env["USERPROFILE"] = str(tmp_path)
     return env, sys.executable
 
 
 def test_cli_mode_separate_processes():
-    """LP-13: separate `ah mode` invocations honor declared semantics."""
+    """LP-13: separate `machina mode` invocations honor declared semantics."""
     import subprocess
     import tempfile
 
-    from ah.cli.launcher import ui_dir  # noqa: F401 (ensures CLI imports)
+    from machina.cli.launcher import ui_dir  # noqa: F401 (ensures CLI imports)
 
     with tempfile.TemporaryDirectory() as tmp:
         from pathlib import Path
@@ -1041,7 +1041,7 @@ def test_cli_mode_separate_processes():
 
         def _run(*args):
             return subprocess.run(
-                [py, "-m", "ah", *args], capture_output=True, text=True, env=env, timeout=90
+                [py, "-m", "machina", *args], capture_output=True, text=True, env=env, timeout=90
             )
 
         shown = _run("mode")
@@ -1059,7 +1059,7 @@ def test_launcher_propagates_mode_to_gateway(monkeypatch):
     """LP-13: CLI --mode reaches the Node child (previously dropped)."""
     import types
 
-    from ah.cli import launcher
+    from machina.cli import launcher
 
     seen = {}
 
@@ -1089,8 +1089,8 @@ def test_gateway_initialize_applies_mode():
     """LP-13: the running gateway receives the chosen setting."""
     import asyncio
 
-    from ah.core.config import config
-    from ah.gateway.server import Gateway
+    from machina.core.config import config
+    from machina.gateway.server import Gateway
 
     async def _go():
         gw = Gateway(write=lambda frame: None, owns_db=False)
@@ -1118,8 +1118,8 @@ def test_approved_approval_executes_instead_of_denying():
     """
     import asyncio
 
-    from ah.permissions import broker as brokermod
-    from ah.permissions.policy import build_request
+    from machina.permissions import broker as brokermod
+    from machina.permissions.policy import build_request
 
     async def _go():
         req = build_request(
@@ -1136,7 +1136,7 @@ def test_approved_approval_executes_instead_of_denying():
             calls.append(card)
             # Gateway-like: the transport records the DECISION; the broker
             # then claims it for exactly one execution.
-            from ah.permissions import store as st
+            from machina.permissions import store as st
 
             await st.resolve_decision(card["request_id"], "approved", principal="tui")
             return "approved"
@@ -1155,7 +1155,7 @@ def test_approved_approval_executes_instead_of_denying():
         # terminally ("already completed"). A fresh user intent builds a new
         # request (new id) and gets its own approval card; the agent loop
         # does not spin on the denial.
-        from ah.permissions.broker import ApprovalDenied
+        from machina.permissions.broker import ApprovalDenied
 
         brokermod.set_approval_handler(_handler, principal="tui", turn_id="t2")
         try:
@@ -1171,9 +1171,9 @@ def test_approved_approval_executes_instead_of_denying():
 def test_denied_approval_raises_denied():
     import asyncio
 
-    from ah.permissions import broker as brokermod
-    from ah.permissions.broker import ApprovalDenied
-    from ah.permissions.policy import build_request
+    from machina.permissions import broker as brokermod
+    from machina.permissions.broker import ApprovalDenied
+    from machina.permissions.policy import build_request
 
     async def _go():
         req = build_request(
@@ -1186,7 +1186,7 @@ def test_denied_approval_raises_denied():
         )
 
         async def _handler(card):
-            from ah.permissions import store as st
+            from machina.permissions import store as st
 
             await st.resolve_decision(card["request_id"], "denied", principal="tui")
             return "denied"
@@ -1206,7 +1206,7 @@ def test_ownership_loss_cancels_effect_task():
     import asyncio
     import uuid as _uuid
 
-    from ah.core.scheduler import Job, JobRunner
+    from machina.core.scheduler import Job, JobRunner
 
     cancelled = {"seen": False}
     started = asyncio.Event()
@@ -1251,7 +1251,7 @@ def test_ownership_loss_cancels_effect_task():
             raise
 
     runner._execute = _effect  # type: ignore[method-assign]
-    import ah.core.scheduler as sched
+    import machina.core.scheduler as sched
 
     real_lease = sched.RUN_LEASE_SECONDS
     sched.RUN_LEASE_SECONDS = 0.2

@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml
 
 PIN = "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
-DESTINATION = Path(__file__).resolve().parents[1] / "ah" / "bundled_agents" / "ecc"
+DESTINATION = Path(__file__).resolve().parents[1] / "machina" / "bundled_agents" / "ecc"
 
 
 def vendor(source: Path, destination: Path = DESTINATION) -> dict:

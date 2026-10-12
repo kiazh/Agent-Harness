@@ -2,8 +2,8 @@
 
 import pytest
 
-from ah.connectors.manager import ConnectorManager
-from ah.connectors.models import (
+from machina.connectors.manager import ConnectorManager
+from machina.connectors.models import (
     ConfigError,
     ConnectionFailed,
     ConnectionState,
@@ -11,8 +11,8 @@ from ah.connectors.models import (
     ConnectorToolError,
     DiscoveredTool,
 )
-from ah.connectors.registry import ConnectorRegistry
-from ah.connectors.service import ConnectorService
+from machina.connectors.registry import ConnectorRegistry
+from machina.connectors.service import ConnectorService
 
 
 class CatalogClient:

@@ -7,12 +7,12 @@ import uuid
 
 import pytest
 
-from ah.memory.identity import AgentBelief, IdentityGate
-from ah.memory.policy import GroupRelativeTrainer, MemoryPolicy
-from ah.memory.rl import MemoryAction, MemoryState
-from ah.research.identity_eval import evaluate_identity_scenarios, load_identity_scenarios
-from ah.research.identity_eval import main as identity_main
-from ah.research.locomo import (
+from machina.memory.identity import AgentBelief, IdentityGate
+from machina.memory.policy import GroupRelativeTrainer, MemoryPolicy
+from machina.memory.rl import MemoryAction, MemoryState
+from machina.research.identity_eval import evaluate_identity_scenarios, load_identity_scenarios
+from machina.research.identity_eval import main as identity_main
+from machina.research.locomo import (
     Conversation,
     DialogueTurn,
     Question,
@@ -21,9 +21,9 @@ from ah.research.locomo import (
     evaluate_session_recall,
     load_locomo,
 )
-from ah.research.train_memory_policy import load_scored_states, train_from_file
-from ah.soulspec.conformance import TestSoulSpecConformance
-from ah.soulspec.schema import SoulSpec
+from machina.research.train_memory_policy import load_scored_states, train_from_file
+from machina.soulspec.conformance import TestSoulSpecConformance
+from machina.soulspec.schema import SoulSpec
 
 
 def _state(task: str) -> MemoryState:
@@ -171,8 +171,8 @@ def test_locomo_evidence_metrics_and_invalid_ids(tmp_path):
 
 
 async def test_archive_backend_scores_and_cleans_up(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     dataset = [
         Conversation(
             turns=(DialogueTurn("D1:1", "Ada", "The telescope observed a nebula"),),
@@ -186,9 +186,9 @@ async def test_archive_backend_scores_and_cleans_up(db_pool, monkeypatch):
 
 
 async def test_session_recall_backend_scores_across_sessions_and_cleans_up(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     dataset = [
         Conversation(
             turns=(
@@ -206,9 +206,9 @@ async def test_session_recall_backend_scores_across_sessions_and_cleans_up(db_po
 
 
 async def test_session_recall_title_only_backend_returns_no_evidence(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.session_recall.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     dataset = [
         Conversation(
             turns=(
@@ -226,7 +226,7 @@ async def test_session_recall_title_only_backend_returns_no_evidence(db_pool, mo
 
 
 async def test_longitudinal_identity_transition_quarantines_causal_memory(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.memory.identity.db", db_pool)
+    monkeypatch.setattr("machina.memory.identity.db", db_pool)
     gate = IdentityGate()
     agent = f"identity-sequence-{uuid.uuid4()}"
     baseline = AgentBelief(agent, {"reliability": 1.0}, {}, {})
@@ -266,8 +266,8 @@ async def test_longitudinal_identity_transition_quarantines_causal_memory(db_poo
 async def test_labeled_identity_sequence_evaluation_cleans_up(db_pool, monkeypatch):
     from pathlib import Path
 
-    monkeypatch.setattr("ah.research.identity_eval.db", db_pool)
-    monkeypatch.setattr("ah.memory.identity.db", db_pool)
+    monkeypatch.setattr("machina.research.identity_eval.db", db_pool)
+    monkeypatch.setattr("machina.memory.identity.db", db_pool)
     dataset = Path(__file__).resolve().parents[1] / "research/identity_scenarios_example.json"
     before = await db_pool.fetchval("SELECT COUNT(*) FROM agent_belief_history")
     result = await evaluate_identity_scenarios(load_identity_scenarios(dataset))
@@ -279,14 +279,14 @@ async def test_labeled_identity_sequence_evaluation_cleans_up(db_pool, monkeypat
 
 
 def test_identity_evaluator_requires_explicit_database_selection(monkeypatch):
-    monkeypatch.setenv("AGENT_HARNESS_TEST_DATABASE_URL", "postgresql://test/benchmark")
+    monkeypatch.setenv("MACHINA_TEST_DATABASE_URL", "postgresql://test/benchmark")
     monkeypatch.setattr("sys.argv", ["identity_eval", "scenarios.json"])
 
     def unexpected_run(coro):
         coro.close()
         pytest.fail("benchmark accessed a database without an explicit selection")
 
-    monkeypatch.setattr("ah.research.identity_eval.asyncio.run", unexpected_run)
+    monkeypatch.setattr("machina.research.identity_eval.asyncio.run", unexpected_run)
     with pytest.raises(SystemExit) as exc:
         identity_main()
     assert exc.value.code == 2

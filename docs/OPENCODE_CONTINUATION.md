@@ -31,7 +31,7 @@ The old wheel figure is historical; current wheel and source archive were freshl
 
 Upstream pin remains `4eb71d92a39cab44ad40ac9d8a6a5ccb4029d6c2`. Retained upstream bytes were not edited. `tools/vendor_ecc.py` now has the explicit `CURATED_SKILLS` selection, and computes bounded static reference/import dependencies. It preserves notices and applicable common/Python/TypeScript rules instead of all other language rules.
 
-The current manifest hash, also set in `ah/skills/bundle.py`, is:
+The current manifest hash, also set in `machina/skills/bundle.py`, is:
 
 ```text
 01b3ca9e35a5e9d4b2cc9a80a0c27eae4d6d07d241312aa9015a26ff0e28ed36
@@ -65,7 +65,7 @@ The importer now:
 
 Real Git fixture tests cover selected/removed skills, transitive Markdown/Python/Node references, deterministic repeated import, refusal to delete local modifications, and preservation of unrelated local files. These tests failed against the old importer before implementation and now pass.
 
-The temporary upstream clone currently exists at `/private/tmp/ah-ecc-source`. Do not depend on its continued existence; clone upstream and check out the pin if needed. Reimport was run twice and produced byte-identical manifests:
+The temporary upstream clone currently exists at `/private/tmp/machina-ecc-source`. Do not depend on its continued existence; clone upstream and check out the pin if needed. Reimport was run twice and produced byte-identical manifests:
 
 ```bash
 .venv/bin/python tools/vendor_ecc.py /path/to/pinned/ECC
@@ -75,7 +75,7 @@ Updating selection requires regenerating the manifest and updating its hardcoded
 
 ### Small first-run bug fixed
 
-Outside-checkout wheel verification exposed a real existing bug: built-in skill telemetry failed when the configured local skills directory did not exist. `ah/skills/registry.py` now creates the telemetry parent directory before saving. A red/green regression in `tests/test_skill_registry_cache.py` verifies usage survives a fresh registry with a newly created local directory.
+Outside-checkout wheel verification exposed a real existing bug: built-in skill telemetry failed when the configured local skills directory did not exist. `machina/skills/registry.py` now creates the telemetry parent directory before saving. A red/green regression in `tests/test_skill_registry_cache.py` verifies usage survives a fresh registry with a newly created local directory.
 
 Generated orphan `.pyc` files from removed upstream directories were cleaned. `.gitignore` now re-excludes ECC bytecode caches after its vendor allowlist. The wheel inspection found no bytecode caches included. A final narrow pass also removed Claude-hook-specific `strategic-compact` and its suggested-compaction hook, plus three orphan license files belonging to removed platform content.
 
@@ -100,15 +100,15 @@ The full backend suite still has the same three documented baseline failures:
 - `tests/test_research_phase2.py::test_labeled_identity_sequence_evaluation_cleans_up`: missing gitignored `research/identity_scenarios_example.json` fixture.
 - `tests/test_schema_conformance.py::test_static_python_sql_compiles_against_schema`: `workflow_benchmark.py:69: UndefinedTableError` for a missing research table.
 
-Do not claim the full suite is green. An earlier sandboxed focused run also failed to open `~/.agent-harness/logs/gateway.log`; rerunning with the already authorized pytest escalation passed. This is the development sandbox, not a harness approval-policy regression.
+Do not claim the full suite is green. An earlier sandboxed focused run also failed to open `~/.machina/logs/gateway.log`; rerunning with the already authorized pytest escalation passed. This is the development sandbox, not a harness approval-policy regression.
 
 Useful repeat commands:
 
 ```bash
 .venv/bin/python -m pytest tests/test_vendor_ecc.py tests/test_skill_workflows.py tests/test_ecc_skills.py tests/test_skill_runtime.py tests/test_skill_registry_cache.py tests/test_permission_risk_policy.py -q --tb=short
 .venv/bin/python -m pytest -q --tb=short
-.venv/bin/ruff check tools/vendor_ecc.py tests/test_vendor_ecc.py ah/skills/bundle.py ah/skills/registry.py tests/test_ecc_skills.py tests/test_skill_workflows.py tests/test_skill_registry_cache.py
-.venv/bin/ruff format --check tools/vendor_ecc.py tests/test_vendor_ecc.py ah/skills/bundle.py ah/skills/registry.py tests/test_ecc_skills.py tests/test_skill_workflows.py tests/test_skill_registry_cache.py
+.venv/bin/ruff check tools/vendor_ecc.py tests/test_vendor_ecc.py machina/skills/bundle.py machina/skills/registry.py tests/test_ecc_skills.py tests/test_skill_workflows.py tests/test_skill_registry_cache.py
+.venv/bin/ruff format --check tools/vendor_ecc.py tests/test_vendor_ecc.py machina/skills/bundle.py machina/skills/registry.py tests/test_ecc_skills.py tests/test_skill_workflows.py tests/test_skill_registry_cache.py
 .venv/bin/python -m hatchling build -t wheel
 .venv/bin/python -m hatchling build -t sdist
 git diff --check
@@ -140,7 +140,7 @@ Broad deletion of native research, permission, growth, scheduling, provider, or 
 
 ## Working-tree context: preserve previous work
 
-Before debloat there were already changes to `ah/core/agent.py`, `ah/skills/runtime.py`, `ah/tools/base.py`, `ah/tools/skills.py`, `docs/ECC_SKILLS.md`, plus new `ah/skills/workflow.py`, `tests/test_skill_workflows.py`, and the handoff/review documents. They implement coherent automatic workflows and skill paging. Those were preserved. Some workflow tests were adapted from removed Rust/domain examples to retained Python/FastAPI/Docker examples while continuing to test stack switching/inheritance.
+Before debloat there were already changes to `machina/core/agent.py`, `machina/skills/runtime.py`, `machina/tools/base.py`, `machina/tools/skills.py`, `docs/ECC_SKILLS.md`, plus new `machina/skills/workflow.py`, `tests/test_skill_workflows.py`, and the handoff/review documents. They implement coherent automatic workflows and skill paging. Those were preserved. Some workflow tests were adapted from removed Rust/domain examples to retained Python/FastAPI/Docker examples while continuing to test stack switching/inheritance.
 
 This phase additionally changed the importer, bundle manifest/hash, registry telemetry, README, third-party notices, ECC docs, Git cache exclusions, and tests; it removed unselected vendor files. Do not assume all uncommitted changes originated in debloat. Inspect `git status` and `git diff`; do not reset or clean indiscriminately.
 

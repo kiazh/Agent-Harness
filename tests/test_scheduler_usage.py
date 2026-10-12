@@ -8,15 +8,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.models import AgentResponse
+from machina.core.models import AgentResponse
 
-TEST_DSN = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL", "")
-needs_db = pytest.mark.skipif(not TEST_DSN, reason="AGENT_HARNESS_TEST_DATABASE_URL not set")
+TEST_DSN = os.environ.get("MACHINA_TEST_DATABASE_URL", "")
+needs_db = pytest.mark.skipif(not TEST_DSN, reason="MACHINA_TEST_DATABASE_URL not set")
 
 
 @pytest.fixture
 async def connected_db():
-    from ah.db.connection import db
+    from machina.db.connection import db
 
     await db.connect()
     yield
@@ -41,7 +41,7 @@ class RecordingAgent:
 @pytest.mark.asyncio
 async def test_scheduler_execute_does_not_double_count(monkeypatch):
     """The scheduler does not charge a second request around an agent run."""
-    from ah.core.scheduler import JobRunner, job_store
+    from machina.core.scheduler import JobRunner, job_store
 
     RecordingAgent.runs = []
     sid = await _session()
@@ -52,14 +52,14 @@ async def test_scheduler_execute_does_not_double_count(monkeypatch):
         prompt="do the thing",
         interval_seconds=30,
     )
-    from ah.db.connection import db
+    from machina.db.connection import db
 
     await db.execute("UPDATE jobs SET next_run_at = now() WHERE id = $1", job.id)
 
     reserve = AsyncMock(return_value=uuid.uuid4())
     finish = AsyncMock()
-    monkeypatch.setattr("ah.core.usage.usage_store.reserve", reserve)
-    monkeypatch.setattr("ah.core.usage.usage_store.finish", finish)
+    monkeypatch.setattr("machina.core.usage.usage_store.reserve", reserve)
+    monkeypatch.setattr("machina.core.usage.usage_store.finish", finish)
 
     runner = JobRunner(agent_factory=RecordingAgent)
     await runner._execute(job)
@@ -73,13 +73,13 @@ async def test_scheduler_execute_does_not_double_count(monkeypatch):
 @pytest.mark.asyncio
 async def test_scheduler_failure_does_not_add_phantom_reservation(monkeypatch):
     """A failed job does not charge a wrapper request."""
-    from ah.core.scheduler import JobRunner, job_store
+    from machina.core.scheduler import JobRunner, job_store
 
     sid = await _session()
     job = await job_store.create(
         name="boom", kind="interval", session_id=sid, prompt="x", interval_seconds=30
     )
-    from ah.db.connection import db
+    from machina.db.connection import db
 
     await db.execute("UPDATE jobs SET next_run_at = now() WHERE id = $1", job.id)
 
@@ -92,8 +92,8 @@ async def test_scheduler_failure_does_not_add_phantom_reservation(monkeypatch):
 
     reserve = AsyncMock(return_value=uuid.uuid4())
     finish = AsyncMock()
-    monkeypatch.setattr("ah.core.usage.usage_store.reserve", reserve)
-    monkeypatch.setattr("ah.core.usage.usage_store.finish", finish)
+    monkeypatch.setattr("machina.core.usage.usage_store.reserve", reserve)
+    monkeypatch.setattr("machina.core.usage.usage_store.finish", finish)
 
     runner = JobRunner(agent_factory=Exploding)
     with pytest.raises(RuntimeError, match="kaboom"):
@@ -104,6 +104,6 @@ async def test_scheduler_failure_does_not_add_phantom_reservation(monkeypatch):
 
 
 async def _session() -> uuid.UUID:
-    from ah.core.session import session_manager
+    from machina.core.session import session_manager
 
     return (await session_manager.create(title="scheduler test")).id

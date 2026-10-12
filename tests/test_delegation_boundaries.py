@@ -8,13 +8,13 @@ from uuid import uuid4
 
 import pytest
 
-from ah.core.agent import ReActAgent
-from ah.core.agent_def import AgentDef
-from ah.core.agent_factory import parent_authority_var
-from ah.core.config import config
-from ah.core.execution_context import ExecutionContext
-from ah.core.models import AgentResponse, LLMResponse, Session, StreamEvent
-from ah.core.orchestrator import Orchestrator
+from machina.core.agent import ReActAgent
+from machina.core.agent_def import AgentDef
+from machina.core.agent_factory import parent_authority_var
+from machina.core.config import config
+from machina.core.execution_context import ExecutionContext
+from machina.core.models import AgentResponse, LLMResponse, Session, StreamEvent
+from machina.core.orchestrator import Orchestrator
 
 
 @pytest.mark.asyncio
@@ -23,7 +23,7 @@ from ah.core.orchestrator import Orchestrator
 async def test_child_uses_parent_mode_even_when_global_default_is_full(
     monkeypatch, mode, terminal_sandbox
 ):
-    from ah.core import orchestrator as module
+    from machina.core import orchestrator as module
 
     monkeypatch.setattr(config, "execution_mode", "full")
     monkeypatch.setattr(config, "terminal_sandbox", terminal_sandbox)
@@ -49,7 +49,7 @@ async def test_child_uses_parent_mode_even_when_global_default_is_full(
         AsyncMock(return_value=AgentDef(name="coder", tools=["read_file", "terminal"])),
     )
     monkeypatch.setattr(module.session_manager, "create", create)
-    monkeypatch.setattr("ah.core.session_mode.resolve_effective_mode", AsyncMock(return_value=mode))
+    monkeypatch.setattr("machina.core.session_mode.resolve_effective_mode", AsyncMock(return_value=mode))
     orch = Orchestrator(agent_factory=lambda _: Child())
     monkeypatch.setattr(orch, "_parent_context", AsyncMock(return_value=""))
     monkeypatch.setattr(orch, "_record_start", AsyncMock(return_value=uuid4()))
@@ -64,7 +64,7 @@ async def test_child_uses_parent_mode_even_when_global_default_is_full(
 
 @pytest.mark.asyncio
 async def test_orchestrator_returns_child_pause_and_stops_sequential_work(monkeypatch):
-    from ah.core import orchestrator as module
+    from machina.core import orchestrator as module
 
     card = {
         "request_id": "approval-child",
@@ -112,8 +112,8 @@ def _tool_response():
 
 @pytest.fixture
 async def bare_agent(monkeypatch):
-    from ah.core.agent import registry
-    from ah.permissions.broker import permission_broker
+    from machina.core.agent import registry
+    from machina.permissions.broker import permission_broker
 
     session = Session(id=uuid4())
     agent = ReActAgent(provider=SimpleNamespace(model="fake"), allowed_tools=["delegate"])
@@ -121,10 +121,10 @@ async def bare_agent(monkeypatch):
     monkeypatch.setattr(agent, "_flush_pending_chunks", AsyncMock())
     monkeypatch.setattr(agent, "_schedule_memory_consolidation", lambda *_: None)
     monkeypatch.setattr(agent, "_schedule_learning_review", lambda *_: None)
-    monkeypatch.setattr("ah.core.agent.session_manager.update_activity", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.session_manager.update_activity", AsyncMock())
     monkeypatch.setattr(permission_broker, "guard", AsyncMock())
     monkeypatch.setattr(
-        "ah.core.execution_context.resolve_execution_context",
+        "machina.core.execution_context.resolve_execution_context",
         AsyncMock(return_value=ExecutionContext("ask", "host", Path("/tmp"))),
     )
     monkeypatch.setattr(registry, "execute", AsyncMock(return_value="done"))
@@ -133,7 +133,7 @@ async def bare_agent(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cancelling_parent_waits_until_child_cleanup_finishes(bare_agent, monkeypatch):
-    from ah.core.agent import registry
+    from machina.core.agent import registry
 
     agent, session = bare_agent
     started, cleaning, release, cleaned = (asyncio.Event() for _ in range(4))
@@ -171,9 +171,9 @@ async def test_cancelling_parent_waits_until_child_cleanup_finishes(bare_agent, 
 async def test_child_pause_reaches_parent_without_another_provider_call(
     bare_agent, monkeypatch, streaming
 ):
-    from ah.core import orchestrator as module
-    from ah.core.agent import registry
-    from ah.tools.agents import delegate
+    from machina.core import orchestrator as module
+    from machina.core.agent import registry
+    from machina.tools.agents import delegate
 
     agent, session = bare_agent
     card = {
@@ -184,7 +184,7 @@ async def test_child_pause_reaches_parent_without_another_provider_call(
         "target": "a.txt",
         "status": "pending",
     }
-    monkeypatch.setattr("ah.tools.agents.db.fetchval", AsyncMock(return_value="harness"))
+    monkeypatch.setattr("machina.tools.agents.db.fetchval", AsyncMock(return_value="harness"))
     monkeypatch.setattr(
         module.orchestrator,
         "delegate",
@@ -233,12 +233,12 @@ async def test_child_pause_reaches_parent_without_another_provider_call(
 async def test_parent_accounts_child_spend_without_implicit_turn_cutoff(
     bare_agent, monkeypatch, streaming
 ):
-    from ah.core import orchestrator as module
-    from ah.core.agent import registry
-    from ah.tools.agents import delegate
+    from machina.core import orchestrator as module
+    from machina.core.agent import registry
+    from machina.tools.agents import delegate
 
     agent, session = bare_agent
-    monkeypatch.setattr("ah.tools.agents.db.fetchval", AsyncMock(return_value="harness"))
+    monkeypatch.setattr("machina.tools.agents.db.fetchval", AsyncMock(return_value="harness"))
     monkeypatch.setattr(
         module.orchestrator,
         "delegate",
@@ -283,10 +283,10 @@ async def test_parent_accounts_child_spend_without_implicit_turn_cutoff(
 
 @pytest.mark.asyncio
 async def test_estimated_provider_usage_keeps_reservation(monkeypatch):
-    from ah.core.usage import UsageStore
+    from machina.core.usage import UsageStore
 
     execute = AsyncMock(return_value="UPDATE 1")
-    monkeypatch.setattr("ah.core.usage.db.execute", execute)
+    monkeypatch.setattr("machina.core.usage.db.execute", execute)
     await UsageStore().finish(
         uuid4(), {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3, "estimated": True}
     )
@@ -306,12 +306,12 @@ async def test_estimated_provider_usage_keeps_reservation(monkeypatch):
     ],
 )
 async def test_child_calls_cannot_bypass_ancestor_budget(db_pool, monkeypatch, limit_key):
-    from ah.core.exceptions import UsageBudgetExceededError
-    from ah.core.session import session_manager
-    from ah.core.usage import UsageStore
+    from machina.core.exceptions import UsageBudgetExceededError
+    from machina.core.session import session_manager
+    from machina.core.usage import UsageStore
 
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.usage.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.usage.db", db_pool)
     for key in (
         "usage_session_request_limit",
         "usage_agent_request_limit",
@@ -349,12 +349,12 @@ async def test_child_calls_cannot_bypass_ancestor_budget(db_pool, monkeypatch, l
 @pytest.mark.db
 @pytest.mark.asyncio
 async def test_parallel_child_reservations_share_ancestor_request_budget(db_pool, monkeypatch):
-    from ah.core.exceptions import UsageBudgetExceededError
-    from ah.core.session import session_manager
-    from ah.core.usage import UsageStore
+    from machina.core.exceptions import UsageBudgetExceededError
+    from machina.core.session import session_manager
+    from machina.core.usage import UsageStore
 
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.usage.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.usage.db", db_pool)
     for key in (
         "usage_session_request_limit",
         "usage_agent_request_limit",
@@ -381,15 +381,15 @@ async def test_parallel_child_reservations_share_ancestor_request_budget(db_pool
 
 @pytest.mark.asyncio
 async def test_rebuilt_child_retains_durable_delegation_restrictions(monkeypatch):
-    from ah.core.agent_factory import build_agent_for_session
+    from machina.core.agent_factory import build_agent_for_session
 
     monkeypatch.setattr(config, "memory_enabled", False)
     monkeypatch.setattr(config, "rag_enabled", False)
     monkeypatch.setattr(
-        "ah.core.agent_def.agent_registry.get",
+        "machina.core.agent_def.agent_registry.get",
         AsyncMock(return_value=AgentDef(name="coder", tools=["read_file", "terminal"])),
     )
-    monkeypatch.setattr("ah.core.provider.get_provider", lambda **_: SimpleNamespace(model="fake"))
+    monkeypatch.setattr("machina.core.provider.get_provider", lambda **_: SimpleNamespace(model="fake"))
     session = SimpleNamespace(
         agent_id="coder",
         model="fake",
@@ -411,9 +411,9 @@ async def test_rebuilt_child_retains_durable_delegation_restrictions(monkeypatch
 @pytest.mark.asyncio
 @pytest.mark.parametrize("activated", [False, True])
 async def test_full_child_inherits_only_live_parent_full_grant(monkeypatch, activated):
-    from ah.core import orchestrator as module
-    from ah.permissions import store
-    from ah.permissions.policy import build_request, decide
+    from machina.core import orchestrator as module
+    from machina.permissions import store
+    from machina.permissions.policy import build_request, decide
 
     parent, child = (
         Session(id=uuid4(), execution_mode="full"),
@@ -425,7 +425,7 @@ async def test_full_child_inherits_only_live_parent_full_grant(monkeypatch, acti
         module.agent_registry, "get", AsyncMock(return_value=AgentDef(name="coder"))
     )
     monkeypatch.setattr(
-        "ah.core.session_mode.resolve_effective_mode", AsyncMock(return_value="full")
+        "machina.core.session_mode.resolve_effective_mode", AsyncMock(return_value="full")
     )
     monkeypatch.setattr(module.context_manager, "add_chunk", AsyncMock())
     if activated:
@@ -471,12 +471,12 @@ async def test_full_child_inherits_only_live_parent_full_grant(monkeypatch, acti
 async def test_resumed_descendant_keeps_budgets_after_ancestor_deletion(
     db_pool, monkeypatch, deleted
 ):
-    from ah.core.exceptions import UsageBudgetExceededError
-    from ah.core.session import session_manager
-    from ah.core.usage import UsageStore
+    from machina.core.exceptions import UsageBudgetExceededError
+    from machina.core.session import session_manager
+    from machina.core.usage import UsageStore
 
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.usage.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.usage.db", db_pool)
     for key in (
         "usage_session_request_limit",
         "usage_agent_request_limit",
@@ -502,10 +502,10 @@ async def test_resumed_descendant_keeps_budgets_after_ancestor_deletion(
 
 @pytest.mark.asyncio
 async def test_child_full_authority_stops_when_parent_grant_is_revoked(monkeypatch):
-    from ah.core import orchestrator as module
-    from ah.permissions import store
-    from ah.permissions.broker import ApprovalDenied, permission_broker
-    from ah.permissions.policy import build_request
+    from machina.core import orchestrator as module
+    from machina.permissions import store
+    from machina.permissions.broker import ApprovalDenied, permission_broker
+    from machina.permissions.policy import build_request
 
     parent = Session(id=uuid4(), execution_mode="full")
     child = Session(id=uuid4(), agent_id="coder", execution_mode="full")
@@ -521,7 +521,7 @@ async def test_child_full_authority_stops_when_parent_grant_is_revoked(monkeypat
         module.agent_registry, "get", AsyncMock(return_value=AgentDef(name="coder"))
     )
     monkeypatch.setattr(
-        "ah.core.session_mode.resolve_effective_mode", AsyncMock(return_value="full")
+        "machina.core.session_mode.resolve_effective_mode", AsyncMock(return_value="full")
     )
     monkeypatch.setattr(module.context_manager, "add_chunk", AsyncMock())
     await store.save_grant(
@@ -566,11 +566,11 @@ async def test_child_full_authority_stops_when_parent_grant_is_revoked(monkeypat
 @pytest.mark.db
 @pytest.mark.asyncio
 async def test_runtime_migration_backfills_historical_delegation_charges(db_pool, monkeypatch):
-    from ah.core.session import session_manager
-    from ah.core.usage import UsageStore
+    from machina.core.session import session_manager
+    from machina.core.usage import UsageStore
 
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.usage.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.usage.db", db_pool)
     root = await session_manager.create(agent_id=f"root-{uuid4()}")
     child = await session_manager.create(agent_id=f"child-{uuid4()}", parent_session_id=root.id)
     reservation = await UsageStore().reserve(child.id, child.agent_id, "fake", "fake", [], [], 1)
@@ -594,12 +594,12 @@ async def test_runtime_migration_backfills_historical_delegation_charges(db_pool
 @pytest.mark.db
 @pytest.mark.asyncio
 async def test_fork_keeps_ancestral_budgets_after_parent_deletion(db_pool, monkeypatch):
-    from ah.core.exceptions import UsageBudgetExceededError
-    from ah.core.session import session_manager
-    from ah.core.usage import UsageStore
+    from machina.core.exceptions import UsageBudgetExceededError
+    from machina.core.session import session_manager
+    from machina.core.usage import UsageStore
 
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.usage.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.usage.db", db_pool)
     root = await session_manager.create(agent_id=f"root-{uuid4()}")
     child = await session_manager.create(agent_id=f"child-{uuid4()}", parent_session_id=root.id)
     await UsageStore().reserve(root.id, root.agent_id, "fake", "fake", [], [], 1)

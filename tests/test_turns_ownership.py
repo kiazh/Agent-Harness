@@ -14,7 +14,7 @@ import pytest
 @pytest.fixture
 async def live_db():
     """Connect the shared DB and ensure 5.3 claim-column migrations exist."""
-    from ah.db.connection import db
+    from machina.db.connection import db
 
     await db.connect()
     await db.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS claim_owner TEXT")
@@ -31,14 +31,14 @@ async def live_db():
 
 
 async def _session():
-    from ah.core.session import session_manager
+    from machina.core.session import session_manager
 
     return await session_manager.create(title="turns-test")
 
 
 @pytest.mark.usefixtures("live_db")
 async def test_idle_claim_release_cycle():
-    from ah.core.turns import end_turn, try_begin_turn
+    from machina.core.turns import end_turn, try_begin_turn
 
     s = await _session()
     token = await try_begin_turn(s.id)
@@ -51,8 +51,8 @@ async def test_idle_claim_release_cycle():
 
 @pytest.mark.usefixtures("live_db")
 async def test_crash_expiry_recovery_and_stale_release():
-    from ah.core.turns import end_turn, try_begin_turn, turn_active
-    from ah.db.connection import db
+    from machina.core.turns import end_turn, try_begin_turn, turn_active
+    from machina.db.connection import db
 
     s = await _session()
     token_a = await try_begin_turn(s.id)
@@ -74,7 +74,7 @@ async def test_crash_expiry_recovery_and_stale_release():
 
 @pytest.mark.usefixtures("live_db")
 async def test_mutation_turn_mutual_exclusion():
-    from ah.core.turns import begin_mutation, end_mutation, end_turn, try_begin_turn
+    from machina.core.turns import begin_mutation, end_mutation, end_turn, try_begin_turn
 
     s = await _session()
     turn = await try_begin_turn(s.id)
@@ -89,7 +89,7 @@ async def test_mutation_turn_mutual_exclusion():
 
 @pytest.mark.usefixtures("live_db")
 async def test_two_sessions_independent():
-    from ah.core.turns import end_turn, try_begin_turn
+    from machina.core.turns import end_turn, try_begin_turn
 
     a, b = await _session(), await _session()
     ta = await try_begin_turn(a.id)
@@ -102,9 +102,9 @@ async def test_two_sessions_independent():
 @pytest.mark.usefixtures("live_db")
 async def test_nested_child_progress_during_parent_turn():
     """Child session claims + parent recording never touch the parent claim."""
-    from ah.core.context import context_manager
-    from ah.core.session import session_manager
-    from ah.core.turns import end_turn, try_begin_turn, turn_active
+    from machina.core.context import context_manager
+    from machina.core.session import session_manager
+    from machina.core.turns import end_turn, try_begin_turn, turn_active
 
     parent = await session_manager.create(title="parent")
     ptoken = await try_begin_turn(parent.id)
@@ -128,7 +128,7 @@ async def test_nested_child_progress_during_parent_turn():
 async def test_concurrent_begin_does_not_hang_and_cleans_up():
     import asyncio
 
-    from ah.core.turns import end_turn, try_begin_turn
+    from machina.core.turns import end_turn, try_begin_turn
 
     s = await _session()
     token = await try_begin_turn(s.id)
@@ -152,9 +152,9 @@ async def test_concurrent_begin_does_not_hang_and_cleans_up():
 @pytest.mark.usefixtures("live_db")
 async def test_idle_delete_and_compress_take_effect():
     """Real feature handlers on idle sessions perform real effects."""
-    from ah.core.context import context_manager
-    from ah.core.session import session_manager
-    from ah.gateway.features import sessions as feat
+    from machina.core.context import context_manager
+    from machina.core.session import session_manager
+    from machina.gateway.features import sessions as feat
 
     class _Gw:
         def require_db(self):
@@ -181,7 +181,7 @@ async def test_idle_delete_and_compress_take_effect():
         token_count=1,
     )
     # Compress idle: force truncation path (no live LLM spend).
-    import ah.core.provider as provmod
+    import machina.core.provider as provmod
 
     real_provider = provmod.get_provider
 
@@ -202,10 +202,10 @@ async def test_idle_delete_and_compress_take_effect():
 
 @pytest.mark.usefixtures("live_db")
 async def test_active_turn_rejects_mutation_handlers():
-    from ah.core.session import session_manager
-    from ah.core.turns import end_turn, try_begin_turn
-    from ah.gateway.errors import RpcError
-    from ah.gateway.features import sessions as feat
+    from machina.core.session import session_manager
+    from machina.core.turns import end_turn, try_begin_turn
+    from machina.gateway.errors import RpcError
+    from machina.gateway.features import sessions as feat
 
     class _Gw:
         def require_db(self):
@@ -241,10 +241,10 @@ async def test_gateway_submit_vs_rest_claim_fencing():
     """Cross-transport: a REST-path claim blocks gateway submit and vice versa."""
     import asyncio
 
-    from ah.core.session import session_manager
-    from ah.core.turns import end_turn, try_begin_turn
-    from ah.gateway.errors import RpcError
-    from ah.gateway.server import Gateway
+    from machina.core.session import session_manager
+    from machina.core.turns import end_turn, try_begin_turn
+    from machina.gateway.errors import RpcError
+    from machina.gateway.server import Gateway
 
     s = await session_manager.create(title="xport")
     try:
@@ -290,8 +290,8 @@ async def test_gateway_submit_vs_rest_claim_fencing():
 @pytest.mark.usefixtures("live_db")
 async def test_rag_cold_restart_and_keyword_fallback():
     """LP-10: indexed material survives restart; keyword fallback needs no key."""
-    from ah.rag.loaders import Document
-    from ah.rag.pipeline import RAGPipeline
+    from machina.rag.loaders import Document
+    from machina.rag.pipeline import RAGPipeline
 
     class _FakeEmbedder:
         model_name = "fake-1536"
@@ -318,7 +318,7 @@ async def test_rag_cold_restart_and_keyword_fallback():
         async def close(self):
             pass
 
-    from ah.core.session import session_manager
+    from machina.core.session import session_manager
 
     s = await session_manager.create(title="lp-test-rag")
     try:

@@ -10,9 +10,9 @@ import uuid
 
 import pytest
 
-from ah.core.session import SessionManager
-from ah.gateway.errors import RpcError
-from ah.gateway.features import sessions as session_feature
+from machina.core.session import SessionManager
+from machina.gateway.errors import RpcError
+from machina.gateway.features import sessions as session_feature
 
 
 class ModelGateway:
@@ -28,8 +28,8 @@ class ModelGateway:
 
 @pytest.fixture
 async def live_sessions(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.db.connection.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.db.connection.db", db_pool)
     sessions = SessionManager()
     created = []
 

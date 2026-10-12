@@ -7,20 +7,20 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.connectors.models import ConnectorConfig, DiscoveredTool
-from ah.connectors.service import ConnectorService
-from ah.permissions.policy import build_request, decide
+from machina.connectors.models import ConnectorConfig, DiscoveredTool
+from machina.connectors.service import ConnectorService
+from machina.permissions.policy import build_request, decide
 
 
 def test_native_mcp_tools_are_lazy_and_uncached():
-    from ah.tools.base import _UNCACHEABLE_TOOLS, registry
+    from machina.tools.base import _UNCACHEABLE_TOOLS, registry
 
     assert {"mcp_list", "mcp_describe", "mcp_call"} <= set(registry.list_tools())
     assert {"mcp_list", "mcp_describe", "mcp_call"} <= _UNCACHEABLE_TOOLS
 
 
 def test_untrusted_mcp_calls_require_exact_consent_even_full_mode():
-    from ah.connectors.execution import call_spec
+    from machina.connectors.execution import call_spec
 
     service = ConnectorService()
     service.registry.add(ConnectorConfig(id="fixture", command=sys.executable))
@@ -81,14 +81,14 @@ async def test_sdk_remote_call_runs_through_agent_approval_pipeline(
     db_pool, monkeypatch, tmp_path, remote, arguments, marker, expected
 ):
     pytest.importorskip("mcp")
-    from ah.connectors.execution import connect_authorized, prepare_connect
-    from ah.core.agent import BaseReActAgent
-    from ah.core.models import LLMResponse
-    from ah.core.runtime import runtime_services
-    from ah.core.session import session_manager
-    from ah.db.connection import db
-    from ah.permissions import store
-    from ah.permissions.broker import clear_execution_context, set_approval_handler
+    from machina.connectors.execution import connect_authorized, prepare_connect
+    from machina.core.agent import BaseReActAgent
+    from machina.core.models import LLMResponse
+    from machina.core.runtime import runtime_services
+    from machina.core.session import session_manager
+    from machina.db.connection import db
+    from machina.permissions import store
+    from machina.permissions.broker import clear_execution_context, set_approval_handler
 
     monkeypatch.setattr(db, "_pool", db_pool.pool)
     service = ConnectorService()
@@ -169,14 +169,14 @@ async def test_sdk_remote_call_runs_through_agent_approval_pipeline(
 async def test_connect_launches_reviewed_absolute_executable_and_effective_cwd(
     monkeypatch, tmp_path
 ):
-    from ah.connectors.execution import connect_authorized, prepare_connect
-    from ah.connectors.models import ConnectionState
-    from ah.core.execution_context import ExecutionContext
-    from ah.permissions import store
-    from ah.permissions.broker import clear_execution_context
+    from machina.connectors.execution import connect_authorized, prepare_connect
+    from machina.connectors.models import ConnectionState
+    from machina.core.execution_context import ExecutionContext
+    from machina.permissions import store
+    from machina.permissions.broker import clear_execution_context
 
     monkeypatch.setattr(
-        "ah.core.execution_context.resolve_execution_context",
+        "machina.core.execution_context.resolve_execution_context",
         AsyncMock(return_value=ExecutionContext("ask", "host", tmp_path)),
     )
     monkeypatch.setattr(store, "_db", AsyncMock(return_value=None))
@@ -198,7 +198,7 @@ async def test_connect_launches_reviewed_absolute_executable_and_effective_cwd(
         async def disconnect(self):
             self.state = ConnectionState.DISCONNECTED
 
-    from ah.connectors.manager import ConnectorManager
+    from machina.connectors.manager import ConnectorManager
 
     service = ConnectorService()
     service.manager = ConnectorManager(service.registry, client_factory=Fake)
@@ -216,7 +216,7 @@ async def test_http_transport_uses_explicit_client_without_redirects(monkeypatch
     pytest.importorskip("mcp")
     from contextlib import AsyncExitStack, asynccontextmanager
 
-    from ah.connectors.mcp_client import MCPConnection
+    from machina.connectors.mcp_client import MCPConnection
 
     seen = []
 
@@ -248,9 +248,9 @@ async def test_http_transport_uses_explicit_client_without_redirects(monkeypatch
 async def test_changed_call_refuses_dispatch_and_has_no_unbrokered_fallback(monkeypatch, change):
     from types import SimpleNamespace
 
-    from ah.connectors.execution import call_spec, execute_call
-    from ah.connectors.models import ConnectionState, ConnectorToolError
-    from ah.permissions.broker import _execution_context
+    from machina.connectors.execution import call_spec, execute_call
+    from machina.connectors.models import ConnectionState, ConnectorToolError
+    from machina.permissions.broker import _execution_context
 
     service = ConnectorService()
     service.registry.add(ConnectorConfig(id="fixture", command=sys.executable))
@@ -293,7 +293,7 @@ async def test_changed_call_refuses_dispatch_and_has_no_unbrokered_fallback(monk
 
 
 async def test_trusted_read_is_explicit_allowlist_only():
-    from ah.connectors.execution import call_spec
+    from machina.connectors.execution import call_spec
 
     service = ConnectorService()
     service.registry.add(
@@ -322,13 +322,13 @@ async def test_launch_keeps_approved_snapshot_if_other_worker_changes_config_dur
     tmp_path, monkeypatch
 ):
     """A concurrent durable edit cannot substitute an unreviewed launch."""
-    from ah.connectors.execution import connect_authorized, prepare_connect
-    from ah.connectors.manager import ConnectorManager
-    from ah.connectors.models import ConnectionState
-    from ah.connectors.registry import ConnectorRegistry
-    from ah.connectors.store import ConnectorStore
-    from ah.core.execution_context import ExecutionContext
-    from ah.permissions import broker
+    from machina.connectors.execution import connect_authorized, prepare_connect
+    from machina.connectors.manager import ConnectorManager
+    from machina.connectors.models import ConnectionState
+    from machina.connectors.registry import ConnectorRegistry
+    from machina.connectors.store import ConnectorStore
+    from machina.core.execution_context import ExecutionContext
+    from machina.permissions import broker
 
     store = ConnectorStore(tmp_path / "mcp.json")
     registry = ConnectorRegistry()
@@ -359,7 +359,7 @@ async def test_launch_keeps_approved_snapshot_if_other_worker_changes_config_dur
     }
     await service.configure(original)
     monkeypatch.setattr(
-        "ah.core.execution_context.resolve_execution_context",
+        "machina.core.execution_context.resolve_execution_context",
         AsyncMock(return_value=ExecutionContext("ask", "host", tmp_path)),
     )
     monkeypatch.setattr(broker.permission_broker, "guard", AsyncMock())
@@ -368,7 +368,7 @@ async def test_launch_keeps_approved_snapshot_if_other_worker_changes_config_dur
         ConnectorStore(store.path).configure({**original, "argv": ["unapproved.py"]})
         return "fixture-token"
 
-    monkeypatch.setattr("ah.security.secrets.get_secret", resolve_secret)
+    monkeypatch.setattr("machina.security.secrets.get_secret", resolve_secret)
     preview = await prepare_connect(service, "fixture", "session", "agent")
     result = await connect_authorized(service, "fixture", "session", "agent", preview["digest"])
     assert len(launched) == 1
@@ -383,9 +383,9 @@ async def test_configuration_wait_is_bounded_before_dispatch(monkeypatch):
     import asyncio
     from types import SimpleNamespace
 
-    from ah.connectors.execution import call_spec, execute_call
-    from ah.connectors.models import ConnectionState, ConnectorToolError
-    from ah.permissions.broker import _execution_context
+    from machina.connectors.execution import call_spec, execute_call
+    from machina.connectors.models import ConnectionState, ConnectorToolError
+    from machina.permissions.broker import _execution_context
 
     service = ConnectorService()
     service.registry.add(ConnectorConfig(id="fixture", command=sys.executable, call_timeout=0.03))
@@ -413,10 +413,10 @@ async def test_authenticated_gateway_configure_connect_discover_disconnect_resta
     db_pool, monkeypatch, tmp_path
 ):
     pytest.importorskip("mcp")
-    from ah.connectors.store import ConnectorStore
-    from ah.core.runtime import RuntimeServices
-    from ah.core.session import session_manager
-    from ah.db.connection import db
+    from machina.connectors.store import ConnectorStore
+    from machina.core.runtime import RuntimeServices
+    from machina.core.session import session_manager
+    from machina.db.connection import db
     from tests.test_gateway_connectors import WireHarness
 
     monkeypatch.setattr(db, "_pool", db_pool.pool)

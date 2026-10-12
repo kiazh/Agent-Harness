@@ -1,5 +1,5 @@
 // Wire types for the UI <-> gateway JSON-RPC protocol.
-// Spec: communications/ui-gateway-protocol.md (gateway side: ah/gateway/server.py).
+// Spec: communications/ui-gateway-protocol.md (gateway side: machina/gateway/server.py).
 
 export interface SessionInfo {
 	id: string;

@@ -7,28 +7,28 @@ import os
 import httpx
 import pytest
 
-from ah.connectors.models import ConnectorConfig
-from ah.connectors.oauth import OAuthCoordinator
-from ah.connectors.oauth_store import OAuthCredentialStore
-from ah.connectors.registry import ConnectorRegistry
-from ah.connectors.service import ConnectorService
-from ah.core.runtime import RuntimeServices
-from ah.core.session import session_manager
-from ah.db.connection import db
-from ah.gateway import features
-from ah.gateway.errors import METHOD_NOT_FOUND, UNAUTHORIZED
-from ah.gateway.server import Gateway
+from machina.connectors.models import ConnectorConfig
+from machina.connectors.oauth import OAuthCoordinator
+from machina.connectors.oauth_store import OAuthCredentialStore
+from machina.connectors.registry import ConnectorRegistry
+from machina.connectors.service import ConnectorService
+from machina.core.runtime import RuntimeServices
+from machina.core.session import session_manager
+from machina.db.connection import db
+from machina.gateway import features
+from machina.gateway.errors import METHOD_NOT_FOUND, UNAUTHORIZED
+from machina.gateway.server import Gateway
 from tests.support.mcp_oauth_fixture import OAuthFixture
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL"),
-    reason="AGENT_HARNESS_TEST_DATABASE_URL not set",
+    not os.environ.get("MACHINA_TEST_DATABASE_URL"),
+    reason="MACHINA_TEST_DATABASE_URL not set",
 )
 
 
 class Harness:
     def __init__(self, runtime):
-        os.environ["AH_GATEWAY_NO_SCHEDULER"] = "1"
+        os.environ["MACHINA_GATEWAY_NO_SCHEDULER"] = "1"
         self.frames: list[dict] = []
         self.gateway = Gateway(self.frames.append, owns_db=False, runtime=runtime)
         self.gateway._auth_token = None

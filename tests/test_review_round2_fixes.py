@@ -1,7 +1,7 @@
 """Tests for the second round of code-review fixes.
 
 Covers:
-1. CRITICAL: no hardcoded DB password in ah/db/connection.py
+1. CRITICAL: no hardcoded DB password in machina/db/connection.py
 2. MEDIUM: consistent token budget between run() and run_stream()
 3. MEDIUM: robust parsing of asyncpg command results (parse_command_count)
 4. MEDIUM: UUID validation in export/context/compress CLI commands
@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-AH = REPO_ROOT / "ah"
+AH = REPO_ROOT / "machina"
 
 
 # ===========================================================================
@@ -37,10 +37,10 @@ class TestNoHardcodedDatabasePassword:
 
     def test_no_password_in_default_dsn(self):
         """The DSN fallback must not contain a password."""
-        from ah.db.connection import Database
+        from machina.db.connection import Database
 
         with (
-            patch("ah.db.connection.config") as mock_config,
+            patch("machina.db.connection.config") as mock_config,
             patch.dict("os.environ", {}, clear=True),
         ):
             mock_config.get.return_value = ""
@@ -52,17 +52,17 @@ class TestNoHardcodedDatabasePassword:
 
     def test_dsn_from_config_still_works(self):
         """A configured DATABASE_URL is still honoured."""
-        from ah.db.connection import Database
+        from machina.db.connection import Database
 
-        with patch("ah.db.connection.config") as mock_config:
+        with patch("machina.db.connection.config") as mock_config:
             mock_config.get.return_value = "postgresql://u:p@host:5432/db"
             db = Database()
             assert db.dsn == "postgresql://u:p@host:5432/db"
 
     def test_explicit_dsn_overrides_config(self):
-        from ah.db.connection import Database
+        from machina.db.connection import Database
 
-        with patch("ah.db.connection.config") as mock_config:
+        with patch("machina.db.connection.config") as mock_config:
             mock_config.get.return_value = "postgresql://u:p@host/db"
             db = Database(dsn="postgresql://x:y@other/otherdb")
             assert db.dsn == "postgresql://x:y@other/otherdb"
@@ -70,9 +70,9 @@ class TestNoHardcodedDatabasePassword:
     @pytest.mark.asyncio
     async def test_connect_without_dsn_uses_default(self):
         """connect() with no DSN uses the default DSN rather than raising."""
-        from ah.db.connection import Database
+        from machina.db.connection import Database
 
-        with patch("ah.db.connection.config") as mock_config:
+        with patch("machina.db.connection.config") as mock_config:
             mock_config.get.return_value = ""
             db = Database()
             # With fallback DSN, connect() should NOT raise ValueError
@@ -90,9 +90,9 @@ class TestRequestContextCapacity:
     """Request capacity includes tool definitions and provider output reservation."""
 
     def test_tool_schema_counts_towards_context(self, monkeypatch):
-        from ah.core.agent import _request_context_tokens
-        from ah.core.config import config
-        from ah.core.models import ToolDefinition
+        from machina.core.agent import _request_context_tokens
+        from machina.core.config import config
+        from machina.core.models import ToolDefinition
 
         monkeypatch.setattr(config, "max_tokens", 8)
         messages = [{"role": "user", "content": "hello"}]
@@ -101,8 +101,8 @@ class TestRequestContextCapacity:
         assert _request_context_tokens(messages, [tool], object()) > without + 1000
 
     def test_requested_output_is_reserved(self, monkeypatch):
-        from ah.core.agent import _request_context_tokens
-        from ah.core.config import config
+        from machina.core.agent import _request_context_tokens
+        from machina.core.config import config
 
         monkeypatch.setattr(config, "max_tokens", 8)
         baseline = _request_context_tokens([], [], object())
@@ -110,8 +110,8 @@ class TestRequestContextCapacity:
         assert _request_context_tokens([], [], object()) - baseline == 8184
 
     def test_provider_reasoning_reservation_is_counted(self, monkeypatch):
-        from ah.core.agent import _request_context_tokens
-        from ah.core.config import config
+        from machina.core.agent import _request_context_tokens
+        from machina.core.config import config
 
         class ReasoningProvider:
             def reservation_max_tokens(self, tokens, reasoning_effort=None):
@@ -131,47 +131,47 @@ class TestParseCommandCount:
     """parse_command_count must handle asyncpg command tags safely."""
 
     def test_delete_tag(self):
-        from ah.db.connection import parse_command_count
+        from machina.db.connection import parse_command_count
 
         assert parse_command_count("DELETE 3") == 3
 
     def test_update_tag(self):
-        from ah.db.connection import parse_command_count
+        from machina.db.connection import parse_command_count
 
         assert parse_command_count("UPDATE 1") == 1
 
     def test_insert_tag(self):
-        from ah.db.connection import parse_command_count
+        from machina.db.connection import parse_command_count
 
         assert parse_command_count("INSERT 0 1") == 1
 
     def test_none_returns_zero(self):
-        from ah.db.connection import parse_command_count
+        from machina.db.connection import parse_command_count
 
         assert parse_command_count(None) == 0
 
     def test_empty_returns_zero(self):
-        from ah.db.connection import parse_command_count
+        from machina.db.connection import parse_command_count
 
         assert parse_command_count("") == 0
 
     def test_whitespace_returns_zero(self):
-        from ah.db.connection import parse_command_count
+        from machina.db.connection import parse_command_count
 
         assert parse_command_count("   ") == 0
 
     def test_malformed_returns_zero(self):
-        from ah.db.connection import parse_command_count
+        from machina.db.connection import parse_command_count
 
         assert parse_command_count("DELETE notanumber") == 0
 
     def test_non_numeric_single_token_returns_zero(self):
-        from ah.db.connection import parse_command_count
+        from machina.db.connection import parse_command_count
 
         assert parse_command_count("SOMETHING_WEIRD") == 0
 
     def test_does_not_raise_on_any_input(self):
-        from ah.db.connection import parse_command_count
+        from machina.db.connection import parse_command_count
 
         for bad in (None, "", " ", "x", "DELETE", "\n", "\t", "0"):
             result = parse_command_count(bad)  # must not raise
@@ -179,21 +179,21 @@ class TestParseCommandCount:
             assert result >= 0
 
     def test_context_delete_chunks_uses_helper(self):
-        from ah.core import context as ctx_mod
+        from machina.core import context as ctx_mod
 
         src = inspect.getsource(ctx_mod.ContextManager.delete_chunks)
         assert "parse_command_count" in src
         assert "split()[-1]" not in src
 
     def test_session_delete_uses_helper(self):
-        from ah.core import session as sess_mod
+        from machina.core import session as sess_mod
 
         src = inspect.getsource(sess_mod.SessionManager.delete)
         assert "parse_command_count" in src
         assert "split()[-1]" not in src
 
     def test_memory_store_uses_helper(self):
-        from ah.memory import store as store_mod
+        from machina.memory import store as store_mod
 
         src = inspect.getsource(store_mod)
         assert "split()[-1]" not in src
@@ -209,7 +209,7 @@ class TestCLIUUIDValidation:
     """export/context/compress must reject invalid UUIDs via _parse_uuid."""
 
     def _source(self, func_name: str) -> str:
-        import ah.cli as cli_mod
+        import machina.cli as cli_mod
 
         return inspect.getsource(getattr(cli_mod, func_name))
 
@@ -229,14 +229,14 @@ class TestCLIUUIDValidation:
         assert "_parse_uuid" in self._source("_resolve_session")
 
     def test_parse_uuid_rejects_garbage(self):
-        from ah.cli import _parse_uuid
+        from machina.cli import _parse_uuid
 
         assert _parse_uuid("not-a-uuid") is None
         assert _parse_uuid("") is None
         assert _parse_uuid("123") is None
 
     def test_parse_uuid_accepts_valid(self):
-        from ah.cli import _parse_uuid
+        from machina.cli import _parse_uuid
 
         u = uuid.uuid4()
         assert _parse_uuid(str(u)) == u
@@ -244,7 +244,7 @@ class TestCLIUUIDValidation:
     def test_export_command_invalid_uuid_exits_nonzero(self):
         from typer.testing import CliRunner
 
-        import ah.cli as cli_mod
+        import machina.cli as cli_mod
 
         runner = CliRunner()
         with (
@@ -258,7 +258,7 @@ class TestCLIUUIDValidation:
     def test_context_command_invalid_uuid_exits_nonzero(self):
         from typer.testing import CliRunner
 
-        import ah.cli as cli_mod
+        import machina.cli as cli_mod
 
         runner = CliRunner()
         with (
@@ -272,7 +272,7 @@ class TestCLIUUIDValidation:
     def test_compress_command_invalid_uuid_exits_nonzero(self):
         from typer.testing import CliRunner
 
-        import ah.cli as cli_mod
+        import machina.cli as cli_mod
 
         runner = CliRunner()
         with (
@@ -293,31 +293,31 @@ class TestSharedToolExecutionHelper:
     """run_stream() must delegate tool execution to a shared helper."""
 
     def test_helper_exists(self):
-        from ah.core.agent import BaseReActAgent
+        from machina.core.agent import BaseReActAgent
 
         assert hasattr(BaseReActAgent, "_execute_tool_calls_stream")
 
     def test_run_stream_delegates_to_helper(self):
-        from ah.core import agent as agent_mod
+        from machina.core import agent as agent_mod
 
         src = inspect.getsource(agent_mod.ReActAgent.run_stream)
         assert "_execute_tool_calls_stream" in src
 
     def test_run_stream_has_no_inline_registry_execute(self):
         """The duplicated inline registry.execute loop is gone from run_stream."""
-        from ah.core import agent as agent_mod
+        from machina.core import agent as agent_mod
 
         src = inspect.getsource(agent_mod.ReActAgent.run_stream)
         assert "registry.execute(" not in src, "run_stream must not inline tool execution"
 
     def test_helper_contains_registry_execute(self):
-        from ah.core import agent as agent_mod
+        from machina.core import agent as agent_mod
 
         src = inspect.getsource(agent_mod.BaseReActAgent._execute_tool_calls_stream)
         assert "registry.execute(" in src
 
     def test_both_paths_share_helpers(self):
-        from ah.core import agent as agent_mod
+        from machina.core import agent as agent_mod
 
         base = inspect.getsource(agent_mod.BaseReActAgent)
         assert "_execute_tool_calls" in base

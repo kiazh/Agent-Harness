@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ah.research.workflow_trial import GraphApprovalTrial
+from machina.research.workflow_trial import GraphApprovalTrial
 
 
 @pytest.mark.asyncio

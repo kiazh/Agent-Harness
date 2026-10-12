@@ -7,19 +7,19 @@ import uuid
 
 import pytest
 
-from ah.db.connection import Database
-from ah.memory.shared_bus import SharedMemoryBus
-from ah.memory.store import MemoryStore
-from ah.tools import registry
-from ah.tools.agents import current_agent_id, current_session_id
+from machina.db.connection import Database
+from machina.memory.shared_bus import SharedMemoryBus
+from machina.memory.store import MemoryStore
+from machina.tools import registry
+from machina.tools.agents import current_agent_id, current_session_id
 
 
 async def test_delivery_is_scoped_idempotent_and_rejects_tampering(db_pool, monkeypatch):
-    monkeypatch.setenv("AGENT_HARNESS_PROVENANCE_KEY", "test-only-provenance-key")
-    monkeypatch.setattr("ah.memory.store.db", db_pool)
-    monkeypatch.setattr("ah.memory.retriever.db", db_pool)
-    monkeypatch.setattr("ah.memory.identity.db", db_pool)
-    monkeypatch.setattr("ah.memory.shared_bus.db", db_pool)
+    monkeypatch.setenv("MACHINA_PROVENANCE_KEY", "test-only-provenance-key")
+    monkeypatch.setattr("machina.memory.store.db", db_pool)
+    monkeypatch.setattr("machina.memory.retriever.db", db_pool)
+    monkeypatch.setattr("machina.memory.identity.db", db_pool)
+    monkeypatch.setattr("machina.memory.shared_bus.db", db_pool)
     source_agent = f"source-{uuid.uuid4()}"
     target_agent = f"target-{uuid.uuid4()}"
     other_agent = f"other-{uuid.uuid4()}"
@@ -63,10 +63,10 @@ async def test_delivery_is_scoped_idempotent_and_rejects_tampering(db_pool, monk
 
 
 async def test_delivery_without_signing_key_is_rejected(db_pool, monkeypatch):
-    monkeypatch.delenv("AGENT_HARNESS_PROVENANCE_KEY", raising=False)
-    monkeypatch.setattr("ah.memory.store.db", db_pool)
-    monkeypatch.setattr("ah.memory.identity.db", db_pool)
-    monkeypatch.setattr("ah.memory.shared_bus.db", db_pool)
+    monkeypatch.delenv("MACHINA_PROVENANCE_KEY", raising=False)
+    monkeypatch.setattr("machina.memory.store.db", db_pool)
+    monkeypatch.setattr("machina.memory.identity.db", db_pool)
+    monkeypatch.setattr("machina.memory.shared_bus.db", db_pool)
     source_agent = f"source-{uuid.uuid4()}"
     target_agent = f"target-{uuid.uuid4()}"
     store = MemoryStore()
@@ -89,14 +89,14 @@ async def test_delivery_without_signing_key_is_rejected(db_pool, monkeypatch):
 
 
 async def test_delivery_works_with_a_single_database_connection(db_pool, monkeypatch):
-    monkeypatch.setenv("AGENT_HARNESS_PROVENANCE_KEY", "test-only-provenance-key")
-    monkeypatch.setenv("AGENT_HARNESS_DB_MIN_POOL", "1")
-    monkeypatch.setenv("AGENT_HARNESS_DB_MAX_POOL", "1")
+    monkeypatch.setenv("MACHINA_PROVENANCE_KEY", "test-only-provenance-key")
+    monkeypatch.setenv("MACHINA_DB_MIN_POOL", "1")
+    monkeypatch.setenv("MACHINA_DB_MAX_POOL", "1")
     single = Database(dsn=db_pool.dsn)
     await single.connect()
-    monkeypatch.setattr("ah.memory.store.db", single)
-    monkeypatch.setattr("ah.memory.identity.db", single)
-    monkeypatch.setattr("ah.memory.shared_bus.db", single)
+    monkeypatch.setattr("machina.memory.store.db", single)
+    monkeypatch.setattr("machina.memory.identity.db", single)
+    monkeypatch.setattr("machina.memory.shared_bus.db", single)
     source_agent = f"source-{uuid.uuid4()}"
     target_agent = f"target-{uuid.uuid4()}"
     try:
@@ -115,12 +115,12 @@ async def test_delivery_works_with_a_single_database_connection(db_pool, monkeyp
 
 
 async def test_memory_and_share_tools_use_the_running_agent_scope(db_pool, monkeypatch):
-    monkeypatch.setenv("AGENT_HARNESS_PROVENANCE_KEY", "test-only-provenance-key")
-    monkeypatch.setattr("ah.memory.store.db", db_pool)
-    monkeypatch.setattr("ah.memory.retriever.db", db_pool)
-    monkeypatch.setattr("ah.memory.identity.db", db_pool)
-    monkeypatch.setattr("ah.memory.shared_bus.db", db_pool)
-    monkeypatch.setattr("ah.tools.agents.db", db_pool)
+    monkeypatch.setenv("MACHINA_PROVENANCE_KEY", "test-only-provenance-key")
+    monkeypatch.setattr("machina.memory.store.db", db_pool)
+    monkeypatch.setattr("machina.memory.retriever.db", db_pool)
+    monkeypatch.setattr("machina.memory.identity.db", db_pool)
+    monkeypatch.setattr("machina.memory.shared_bus.db", db_pool)
+    monkeypatch.setattr("machina.tools.agents.db", db_pool)
     source_agent = f"source-{uuid.uuid4()}"
     target_agent = f"target-{uuid.uuid4()}"
     session_id = await db_pool.fetchval(

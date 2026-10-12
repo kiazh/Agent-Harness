@@ -7,7 +7,7 @@ import pytest
 import pytest_asyncio
 
 # Config keys that must never leak from the developer's real
-# ~/.agent-harness/config.yaml into tests (keeps tests hermetic and prevents
+# ~/.machina/config.yaml into tests (keeps tests hermetic and prevents
 # accidental real API calls with a personal key).
 _SECRET_CONFIG_KEYS = (
     "openrouter_api_key",
@@ -38,19 +38,19 @@ def isolate_config_secrets(monkeypatch):
     Individual tests can explicitly configure fake environment, file, or
     backend values using monkeypatch after this fixture runs.
     """
-    from ah.core.config import LEGACY_ENV_VARS, config
-    from ah.security import secrets
+    from machina.core.config import LEGACY_ENV_VARS, config
+    from machina.security import secrets
 
     known_values = set(secrets._redaction_values)
     secrets._redaction_values.clear()
 
     saved = {k: getattr(config, k) for k in _SECRET_CONFIG_KEYS}
-    monkeypatch.setenv("AGENT_HARNESS_SECRET_BACKEND", "")
+    monkeypatch.setenv("MACHINA_SECRET_BACKEND", "")
     for k in _SECRET_CONFIG_KEYS:
         setattr(config, k, "")
         # Config.get() falls back to dotenv-loaded environment values. Blank
         # those too so a fake-provider test cannot spend a developer's keys.
-        monkeypatch.setenv(f"AGENT_HARNESS_{k.upper()}", "")
+        monkeypatch.setenv(f"MACHINA_{k.upper()}", "")
         if k in LEGACY_ENV_VARS:
             monkeypatch.setenv(LEGACY_ENV_VARS[k], "")
             monkeypatch.setenv(f"{LEGACY_ENV_VARS[k]}_FILE", "")
@@ -64,10 +64,10 @@ def isolate_config_secrets(monkeypatch):
 @pytest.fixture(scope="session", autouse=True)
 def init_test_database():
     """Create the schema in the isolated test database once per session."""
-    dsn = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL")
+    dsn = os.environ.get("MACHINA_TEST_DATABASE_URL")
     if not dsn:
         return
-    from ah.db.connection import Database
+    from machina.db.connection import Database
 
     async def _init() -> None:
         test_db = Database(dsn=dsn)
@@ -87,52 +87,52 @@ def init_test_database():
 def reset_singletons(monkeypatch):
     """Reset mutable global singleton state before each test.
 
-    Modules import the singletons by name (``from ah.core.context import
+    Modules import the singletons by name (``from machina.core.context import
     context_manager``), so rebinding the module global would not affect them.
     Instead, clear their state in place.
     """
-    from ah.db.connection import db
+    from machina.db.connection import db
 
     db._pool = None
     # Never let tests touch the developer database: use the isolated test DB,
     # or no DSN at all (DB-backed tests then skip).
-    db.dsn = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL", "")
+    db.dsn = os.environ.get("MACHINA_TEST_DATABASE_URL", "")
 
-    from ah.core.context import context_manager
+    from machina.core.context import context_manager
 
     context_manager._pending.clear()
 
-    from ah.core.session import session_manager
+    from machina.core.session import session_manager
 
     session_manager._cache.clear()
 
-    from ah.tools.base import registry
+    from machina.tools.base import registry
 
     registry._result_cache.clear()
 
-    from ah.core import provider as provider_module
+    from machina.core import provider as provider_module
 
     provider_module._cache_clear()
 
     # In-memory config is process-global: one test's config.set would leak
     # into the next. Snapshot non-secret values and session overrides.
-    from ah.core.config import DEFAULTS, SECRET_KEYS, config
+    from machina.core.config import DEFAULTS, SECRET_KEYS, config
 
     saved_config = {key: getattr(config, key, None) for key in DEFAULTS if key not in SECRET_KEYS}
     saved_overrides = dict(getattr(config, "_session_overrides", {}) or {})
     # Test defaults must not depend on a developer's saved full-host mode,
     # workspace, persona, or live environment overrides. Individual tests
     # explicitly configure the behavior they exercise after this fixture.
-    from ah.core.config import LEGACY_ENV_VARS
+    from machina.core.config import LEGACY_ENV_VARS
 
     for key, value in DEFAULTS.items():
         if key not in SECRET_KEYS:
             setattr(config, key, value)
-            monkeypatch.delenv(f"AGENT_HARNESS_{key.upper()}", raising=False)
+            monkeypatch.delenv(f"MACHINA_{key.upper()}", raising=False)
             if key in LEGACY_ENV_VARS:
                 monkeypatch.delenv(LEGACY_ENV_VARS[key], raising=False)
     config._session_overrides.clear()
-    from ah.core.session_mode import reset_for_tests as reset_session_modes
+    from machina.core.session_mode import reset_for_tests as reset_session_modes
 
     reset_session_modes()
 
@@ -155,15 +155,15 @@ def event_loop():
 
 @pytest_asyncio.fixture
 async def db_pool():
-    """A real test database, configured via AGENT_HARNESS_TEST_DATABASE_URL.
+    """A real test database, configured via MACHINA_TEST_DATABASE_URL.
 
     Skips the test when no test database is configured. Never hardcode
     credentials here.
     """
-    dsn = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL")
+    dsn = os.environ.get("MACHINA_TEST_DATABASE_URL")
     if not dsn:
-        pytest.skip("AGENT_HARNESS_TEST_DATABASE_URL not set")
-    from ah.db.connection import Database
+        pytest.skip("MACHINA_TEST_DATABASE_URL not set")
+    from machina.db.connection import Database
 
     test_db = Database(dsn=dsn)
     await test_db.connect()

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.core.orchestrator import Orchestrator
+from machina.core.orchestrator import Orchestrator
 
 
 @pytest.fixture
@@ -38,11 +38,11 @@ class TestTokenEstimation:
         mock_agent_def.tools = None
 
         with (
-            patch("ah.core.orchestrator.agent_registry") as mock_registry,
-            patch("ah.core.orchestrator.session_manager") as mock_session_mgr,
-            patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr,
-            patch("ah.core.orchestrator.db") as mock_db,
-            patch("ah.core.orchestrator.get_token_count", return_value=42) as mock_get_tokens,
+            patch("machina.core.orchestrator.agent_registry") as mock_registry,
+            patch("machina.core.orchestrator.session_manager") as mock_session_mgr,
+            patch("machina.core.orchestrator.context_manager") as mock_ctx_mgr,
+            patch("machina.core.orchestrator.db") as mock_db,
+            patch("machina.core.orchestrator.get_token_count", return_value=42) as mock_get_tokens,
         ):
             mock_registry.get = AsyncMock(return_value=mock_agent_def)
             mock_session = MagicMock()
@@ -90,11 +90,11 @@ class TestTokenEstimation:
         mock_agent_def.tools = None
 
         with (
-            patch("ah.core.orchestrator.agent_registry") as mock_registry,
-            patch("ah.core.orchestrator.session_manager") as mock_session_mgr,
-            patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr,
-            patch("ah.core.orchestrator.db") as mock_db,
-            patch("ah.core.orchestrator.get_token_count", return_value=10) as mock_get_tokens,
+            patch("machina.core.orchestrator.agent_registry") as mock_registry,
+            patch("machina.core.orchestrator.session_manager") as mock_session_mgr,
+            patch("machina.core.orchestrator.context_manager") as mock_ctx_mgr,
+            patch("machina.core.orchestrator.db") as mock_db,
+            patch("machina.core.orchestrator.get_token_count", return_value=10) as mock_get_tokens,
         ):
             mock_registry.get = AsyncMock(return_value=mock_agent_def)
             mock_session = MagicMock()

@@ -15,8 +15,8 @@ import copy
 
 import pytest
 
-from ah.core.exceptions import RateLimitError
-from ah.core.provider import (
+from machina.core.exceptions import RateLimitError
+from machina.core.provider import (
     _FREE_FALLBACK_MODELS,
     OpenRouterProvider,
     _is_free_model,
@@ -186,7 +186,7 @@ async def test_per_minute_throttle_still_uses_fallback_chain():
 
 
 async def test_rate_limit_error_exposes_status_code_for_duck_typed_detection():
-    """ah.core.agent._is_rate_limit_error() duck-types on response.status_code."""
+    """machina.core.agent._is_rate_limit_error() duck-types on response.status_code."""
     err = RateLimitError("exhausted", status_code=429)
     assert getattr(getattr(err, "response", None), "status_code", None) == 429
 
@@ -215,7 +215,7 @@ async def test_http_200_with_error_body_raises_provider_error():
     ``raise_for_status()`` does not catch this, so the old
     ``data["choices"][0]`` crashed with an unhelpful KeyError.
     """
-    from ah.core.exceptions import ProviderError
+    from machina.core.exceptions import ProviderError
 
     error_body = {"error": {"message": "model is overloaded", "code": 503}}
     client = _FakeClient([_FakeResponse(200, {}, error_body)])
@@ -230,7 +230,7 @@ async def test_http_200_with_error_body_raises_provider_error():
 
 async def test_http_200_with_empty_choices_raises_provider_error():
     """An empty choices list must fail cleanly, not with IndexError."""
-    from ah.core.exceptions import ProviderError
+    from machina.core.exceptions import ProviderError
 
     client = _FakeClient([_FakeResponse(200, {}, {"choices": [], "model": "openrouter/free"})])
     provider = _provider(client)
@@ -241,7 +241,7 @@ async def test_http_200_with_empty_choices_raises_provider_error():
 
 async def test_http_200_with_null_choices_raises_provider_error():
     """``choices: null`` is also possible from a gateway — guard it too."""
-    from ah.core.exceptions import ProviderError
+    from machina.core.exceptions import ProviderError
 
     client = _FakeClient([_FakeResponse(200, {}, {"choices": None})])
     provider = _provider(client)

@@ -176,7 +176,7 @@ function makeApp() {
 
 test("image file drop renders a marker and submits actual bytes without exposing the path", async () => {
     const { app, tui, client } = makeApp();
-    const root = await mkdtemp(join(tmpdir(), "ah-ui-image-"));
+    const root = await mkdtemp(join(tmpdir(), "machina-ui-image-"));
     const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
     try {
         await app.start();
@@ -202,7 +202,7 @@ test("image file drop renders a marker and submits actual bytes without exposing
 
 test("image prompt re-edit retains original bytes and follow-up markers remain usable", async () => {
     const { app, tui, client } = makeApp();
-    const root = await mkdtemp(join(tmpdir(), "ah-ui-image-"));
+    const root = await mkdtemp(join(tmpdir(), "machina-ui-image-"));
     const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
     try {
         await app.start();
@@ -241,7 +241,7 @@ test("image prompt re-edit retains original bytes and follow-up markers remain u
 
 test("a failed image drop with immediate Enter preserves the user's instruction", async () => {
     const { app, tui, client } = makeApp();
-    const root = await mkdtemp(join(tmpdir(), "ah-ui-image-"));
+    const root = await mkdtemp(join(tmpdir(), "machina-ui-image-"));
     try {
         await app.start();
         const path = join(root, "bad.png");
@@ -258,7 +258,7 @@ test("a failed image drop with immediate Enter preserves the user's instruction"
 
 test("pending image drops are retired on session navigation", async () => {
     const { app, tui, client } = makeApp();
-    const root = await mkdtemp(join(tmpdir(), "ah-ui-image-"));
+    const root = await mkdtemp(join(tmpdir(), "machina-ui-image-"));
     try {
         await app.start();
         const path = join(root, "a.png");
@@ -274,7 +274,7 @@ test("pending image drops are retired on session navigation", async () => {
 
 test("a failed image submission cannot restore attachments into a different session", async () => {
     const { app, tui, client } = makeApp();
-    const root = await mkdtemp(join(tmpdir(), "ah-ui-image-"));
+    const root = await mkdtemp(join(tmpdir(), "machina-ui-image-"));
     try {
         await app.start();
         const path = join(root, "private.png");

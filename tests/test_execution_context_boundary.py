@@ -1,12 +1,12 @@
 """Authorization and backends share a frozen workspace, mode, and backend."""
 
-from ah.core.config import config
-from ah.permissions.broker import clear_execution_context, permission_broker
-from ah.permissions.policy import build_request
+from machina.core.config import config
+from machina.permissions.broker import clear_execution_context, permission_broker
+from machina.permissions.policy import build_request
 
 
 async def test_approved_file_root_cannot_change_before_execution(tmp_path, monkeypatch):
-    from ah.tools import file
+    from machina.tools import file
 
     first, second = tmp_path / "first", tmp_path / "second"
     first.mkdir()
@@ -47,8 +47,8 @@ def test_absolute_action_binds_workspace_identity(tmp_path, monkeypatch):
 
 
 def test_file_and_terminal_share_approved_mode(monkeypatch):
-    from ah.permissions.broker import _execution_context
-    from ah.tools import file, terminal
+    from machina.permissions.broker import _execution_context
+    from machina.tools import file, terminal
 
     token = _execution_context.set({"mode": "sandbox", "backend": "sandbox", "workspace_root": "."})
     try:

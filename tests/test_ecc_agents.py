@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.agent_def import BUILTIN_AGENTS, AgentRegistry
-from ah.core.models import Session
+from machina.core.agent_def import BUILTIN_AGENTS, AgentRegistry
+from machina.core.models import Session
 
 
 def test_importer_copies_only_agent_data_and_license_byte_for_byte(tmp_path):
@@ -47,7 +47,7 @@ def test_importer_rejects_a_different_revision_before_writing(tmp_path):
 
 
 def test_all_pinned_ecc_agents_and_only_agents_are_bundled():
-    bundle = files("ah").joinpath("bundled_agents", "ecc")
+    bundle = files("machina").joinpath("bundled_agents", "ecc")
     manifest = json.loads(bundle.joinpath("manifest.json").read_text())
     assert manifest["revision"] == "b92f181b3b748d1abbc2afd94af6aa7d8c8fca29"
     assert len(manifest["agents"]) == 71
@@ -68,14 +68,14 @@ def test_all_pinned_ecc_agents_and_only_agents_are_bundled():
 
 
 async def test_ecc_agents_are_in_registry_and_gateway_with_custom_directory(monkeypatch, tmp_path):
-    monkeypatch.setenv("AGENT_HARNESS_AGENTS_DIR", str(tmp_path))
-    monkeypatch.setattr("ah.core.agent_def.db.fetch", AsyncMock(return_value=[]))
-    monkeypatch.setattr("ah.core.agent_def.db.fetchrow", AsyncMock(return_value=None))
+    monkeypatch.setenv("MACHINA_AGENTS_DIR", str(tmp_path))
+    monkeypatch.setattr("machina.core.agent_def.db.fetch", AsyncMock(return_value=[]))
+    monkeypatch.setattr("machina.core.agent_def.db.fetchrow", AsyncMock(return_value=None))
     registry = AgentRegistry()
     agents = await registry.list()
     assert len([agent for agent in agents if agent.source == "ecc"]) == 71
     assert (await registry.get("planner")).source == "ecc"
-    from ah.gateway.features.agents import agents_list
+    from machina.gateway.features.agents import agents_list
 
     class Gateway:
         def require_db(self):
@@ -86,8 +86,8 @@ async def test_ecc_agents_are_in_registry_and_gateway_with_custom_directory(monk
 
 
 def test_upstream_tool_scopes_map_to_real_harness_tools_without_all_tool_fallback():
-    import ah.tools  # noqa: F401
-    from ah.tools.registry import registry
+    import machina.tools  # noqa: F401
+    from machina.tools.registry import registry
 
     known = {definition.name for definition in registry.get_tool_definitions()}
     agents = [agent for agent in BUILTIN_AGENTS.values() if agent.source == "ecc"]
@@ -104,9 +104,9 @@ def test_upstream_tool_scopes_map_to_real_harness_tools_without_all_tool_fallbac
 
 
 async def test_factory_builds_selected_ecc_role_on_session_model_and_parent_caps(monkeypatch):
-    from ah.core import agent_factory
+    from machina.core import agent_factory
 
-    monkeypatch.setattr("ah.core.agent_def.db.fetchrow", AsyncMock(return_value=None))
+    monkeypatch.setattr("machina.core.agent_def.db.fetchrow", AsyncMock(return_value=None))
     monkeypatch.setattr(agent_factory, "_memory_enabled", lambda: False)
     monkeypatch.setattr(agent_factory, "_shared_rag_pipeline", AsyncMock(return_value=None))
     selected = []
@@ -115,7 +115,7 @@ async def test_factory_builds_selected_ecc_role_on_session_model_and_parent_caps
         selected.append(kwargs)
         return object()
 
-    monkeypatch.setattr("ah.core.provider.get_provider", provider)
+    monkeypatch.setattr("machina.core.provider.get_provider", provider)
     agent = await agent_factory.build_agent_for_session(
         Session(id=uuid.uuid4(), agent_id="planner", model="chosen/model", provider="openrouter"),
         authority={"tools": ["read_file", "write_file"], "max_mode": "ask"},
@@ -128,14 +128,14 @@ async def test_factory_builds_selected_ecc_role_on_session_model_and_parent_caps
 
 
 async def test_ecc_agent_delegation_uses_existing_orchestrator(db_pool, monkeypatch):
-    from ah.core.agent import AgentResponse
-    from ah.core.orchestrator import Orchestrator
-    from ah.core.session import SessionManager
+    from machina.core.agent import AgentResponse
+    from machina.core.orchestrator import Orchestrator
+    from machina.core.session import SessionManager
 
-    monkeypatch.setattr("ah.core.agent_def.db", db_pool)
-    monkeypatch.setattr("ah.core.orchestrator.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.agent_def.db", db_pool)
+    monkeypatch.setattr("machina.core.orchestrator.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
     parent = await SessionManager().create(agent_id="harness", title="ECC delegation proof")
     definitions = []
 

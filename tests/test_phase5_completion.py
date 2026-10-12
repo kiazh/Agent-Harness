@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.agent_def import AgentDef, AgentRegistry
-from ah.core.models import AgentResponse, LLMResponse
-from ah.core.orchestrator import Orchestrator
+from machina.core.agent_def import AgentDef, AgentRegistry
+from machina.core.models import AgentResponse, LLMResponse
+from machina.core.orchestrator import Orchestrator
 
 
 @pytest.mark.asyncio
@@ -21,8 +21,8 @@ async def test_yaml_agents_load_and_database_takes_precedence(tmp_path, monkeypa
         encoding="utf-8",
     )
     (tmp_path / "invalid.yml").write_text("tools: wrong\n", encoding="utf-8")
-    monkeypatch.setenv("AGENT_HARNESS_AGENTS_DIR", str(tmp_path))
-    from ah.core import agent_def
+    monkeypatch.setenv("MACHINA_AGENTS_DIR", str(tmp_path))
+    from machina.core import agent_def
 
     monkeypatch.setattr(agent_def.db, "fetch", AsyncMock(return_value=[]))
     monkeypatch.setattr(agent_def.db, "fetchrow", AsyncMock(return_value=None))
@@ -55,7 +55,7 @@ async def test_yaml_agents_load_and_database_takes_precedence(tmp_path, monkeypa
 
 @pytest.mark.asyncio
 async def test_delegation_passes_parent_context_and_records_result(monkeypatch):
-    from ah.core import orchestrator as module
+    from machina.core import orchestrator as module
 
     parent_id = uuid.uuid4()
     child_id = uuid.uuid4()
@@ -107,8 +107,8 @@ async def test_delegation_passes_parent_context_and_records_result(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_delegate_tool_uses_isolated_session_context(monkeypatch):
-    from ah.core import orchestrator as module
-    from ah.tools.agents import current_agent_id, current_session_id, delegate
+    from machina.core import orchestrator as module
+    from machina.tools.agents import current_agent_id, current_session_id, delegate
 
     seen = []
 
@@ -124,7 +124,7 @@ async def test_delegate_tool_uses_isolated_session_context(monkeypatch):
     async def fake_owner(*args):
         return "harness"
 
-    monkeypatch.setattr("ah.tools.agents.db.fetchval", fake_owner)
+    monkeypatch.setattr("machina.tools.agents.db.fetchval", fake_owner)
 
     async def call(session_id):
         token = current_session_id.set(session_id)
@@ -147,9 +147,9 @@ async def test_delegate_tool_uses_isolated_session_context(monkeypatch):
     ["delegate", "remember", "recall", "share_memory", "session_recall", "session_recall_window"],
 )
 async def test_agent_tool_execution_sets_and_resets_session_context(monkeypatch, tool_name):
-    from ah.core import agent as agent_module
-    from ah.core.agent import ReActAgent
-    from ah.tools.agents import current_agent_id, current_session_id
+    from machina.core import agent as agent_module
+    from machina.core.agent import ReActAgent
+    from machina.tools.agents import current_agent_id, current_session_id
 
     session_id = uuid.uuid4()
     seen = []

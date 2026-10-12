@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core import turns
-from ah.core.models import AgentResponse, Session, StreamEvent
-from ah.db.connection import db
+from machina.core import turns
+from machina.core.models import AgentResponse, Session, StreamEvent
+from machina.db.connection import db
 
 
 @pytest.mark.parametrize("operation", [turns.end_turn, turns.end_mutation])
@@ -30,8 +30,8 @@ async def test_claim_read_failure_cannot_prove_claim_absent(monkeypatch):
 
 @pytest.mark.parametrize("transport", ["gateway", "http"])
 async def test_failed_release_emits_cleanup_pending_without_terminal(monkeypatch, transport):
-    from ah import services
-    from ah.core.session import session_manager
+    from machina import services
+    from machina.core.session import session_manager
 
     turns._local_reset_for_tests()
     session = Session(id=uuid.uuid4())
@@ -49,7 +49,7 @@ async def test_failed_release_emits_cleanup_pending_without_terminal(monkeypatch
     frames = []
     try:
         if transport == "gateway":
-            from ah.gateway.server import Gateway
+            from machina.gateway.server import Gateway
 
             gateway = Gateway(
                 lambda frame: frames.append(frame["params"]),
@@ -59,8 +59,8 @@ async def test_failed_release_emits_cleanup_pending_without_terminal(monkeypatch
             gateway._turn_tokens[str(session.id)] = owner
             await gateway._run_turn(session.id, "release-failure", "work")
         else:
-            import ah.core.agent_factory as factory
-            from ah.api import app as api
+            import machina.core.agent_factory as factory
+            from machina.api import app as api
 
             monkeypatch.setattr(factory, "build_agent_for_session", AsyncMock(return_value=Agent()))
             monkeypatch.setattr(turns, "try_begin_turn", AsyncMock(return_value=owner))

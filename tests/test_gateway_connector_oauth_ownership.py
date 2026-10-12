@@ -5,14 +5,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from ah.connectors.models import ConnectorConfig
-from ah.connectors.oauth import OAuthCoordinator, OAuthOwner
-from ah.connectors.oauth_store import OAuthCredentialStore
-from ah.connectors.registry import ConnectorRegistry
-from ah.connectors.service import ConnectorService
-from ah.connectors.store import ConnectorStore
-from ah.gateway.errors import NOT_FOUND, UNAUTHORIZED, RpcError
-from ah.gateway.features import connector_oauth
+from machina.connectors.models import ConnectorConfig
+from machina.connectors.oauth import OAuthCoordinator, OAuthOwner
+from machina.connectors.oauth_store import OAuthCredentialStore
+from machina.connectors.registry import ConnectorRegistry
+from machina.connectors.service import ConnectorService
+from machina.connectors.store import ConnectorStore
+from machina.gateway.errors import NOT_FOUND, UNAUTHORIZED, RpcError
+from machina.gateway.features import connector_oauth
 
 ROUTES = (
     (connector_oauth.mcp_oauth_preview, {}),

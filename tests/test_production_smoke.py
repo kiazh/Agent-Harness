@@ -7,22 +7,22 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from ah.api import app as api
-from ah.core.models import AgentResponse, StreamEvent
+from machina.api import app as api
+from machina.core.models import AgentResponse, StreamEvent
 
 pytestmark = [pytest.mark.integration, pytest.mark.db]
 
 
 @pytest.fixture
 async def smoke_client(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.db.connection.db", db_pool)
+    monkeypatch.setattr("machina.db.connection.db", db_pool)
     monkeypatch.setattr(api, "db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
-    monkeypatch.setattr("ah.core.usage.db", db_pool)
-    monkeypatch.setenv("AGENT_HARNESS_API_KEY", "local-smoke-token")
-    import ah.services as services
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
+    monkeypatch.setattr("machina.core.usage.db", db_pool)
+    monkeypatch.setenv("MACHINA_API_KEY", "local-smoke-token")
+    import machina.services as services
 
     monkeypatch.setattr(services, "maybe_auto_compact", AsyncMock())
     app = api.create_app()
@@ -33,7 +33,7 @@ async def smoke_client(db_pool, monkeypatch):
         headers={"Authorization": "Bearer local-smoke-token"},
     ) as client:
         yield client, created
-    from ah.core.session import session_manager
+    from machina.core.session import session_manager
 
     for sid in created:
         await session_manager.delete(uuid.UUID(sid))
@@ -52,7 +52,7 @@ async def test_health_readiness_metrics_and_auth(smoke_client):
     assert (await client.get("/health")).json()["status"] == "ok"
     assert (await client.get("/ready")).json()["status"] == "ready"
     response = await client.get("/metrics")
-    assert response.status_code == 200 and "ah_llm_usage_requests_total" in response.text
+    assert response.status_code == 200 and "machina_llm_usage_requests_total" in response.text
     assert "local-smoke-token" not in response.text
     assert (
         await client.get("/metrics", headers={"Authorization": "Bearer wrong"})
@@ -102,7 +102,7 @@ async def test_sse_completion_releases_claim_and_closes_owned_provider(smoke_cli
             yield StreamEvent(type="text", content="smoke answer")
             yield StreamEvent(type="done", response=AgentResponse(content="smoke answer"))
 
-    import ah.core.agent_factory as factory
+    import machina.core.agent_factory as factory
 
     monkeypatch.setattr(factory, "build_agent_for_session", AsyncMock(return_value=Agent()))
     response = await client.post(
@@ -114,13 +114,13 @@ async def test_sse_completion_releases_claim_and_closes_owned_provider(smoke_cli
         for line in response.text.splitlines()
         if line.startswith("data: ") and line != "data: [DONE]"
     ]
-    from ah.protocol import validate_event
+    from machina.protocol import validate_event
 
     for event in events:
         validate_event(event)
     assert events[-1]["type"] == "message.complete"
     assert events[-1]["text"] == "smoke answer" and closed == [True]
-    from ah.core import turns
+    from machina.core import turns
 
     token = await turns.try_begin_turn(uuid.UUID(sid))
     assert token

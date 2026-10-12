@@ -1,4 +1,4 @@
-"""Extended chaos engineering tests for AgentHarness (Gate 3).
+"""Extended chaos engineering tests for Machina (Gate 3).
 
 These tests go beyond tests/test_chaos.py to probe failure modes in:
 - LLM provider (malformed JSON, mid-stream failures, missing usage)
@@ -23,17 +23,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.core.agent import ReActAgent
-from ah.core.context import ContextManager
-from ah.core.models import LLMResponse, Session, StreamEvent
-from ah.core.orchestrator import Orchestrator
-from ah.core.provider import OpenRouterProvider
-from ah.core.usage import UsageStore
-from ah.memory.consolidator import MemoryConsolidator
-from ah.memory.models import MemoryEntry
-from ah.memory.retriever import MemoryRetriever
-from ah.memory.store import MemoryStore
-from ah.rag.embedder import OpenAIEmbedder
+from machina.core.agent import ReActAgent
+from machina.core.context import ContextManager
+from machina.core.models import LLMResponse, Session, StreamEvent
+from machina.core.orchestrator import Orchestrator
+from machina.core.provider import OpenRouterProvider
+from machina.core.usage import UsageStore
+from machina.memory.consolidator import MemoryConsolidator
+from machina.memory.models import MemoryEntry
+from machina.memory.retriever import MemoryRetriever
+from machina.memory.store import MemoryStore
+from machina.rag.embedder import OpenAIEmbedder
 
 # ===========================================================================
 # Fixtures
@@ -85,7 +85,7 @@ class TestProviderMalformedJSON:
 
     async def test_missing_choices_key_does_not_crash(self):
         """Provider response missing 'choices' key should raise ProviderError, not KeyError."""
-        from ah.core.exceptions import ProviderError
+        from machina.core.exceptions import ProviderError
 
         provider = self._make_provider({"model": "test-model"})  # no choices
         with pytest.raises(ProviderError):
@@ -95,7 +95,7 @@ class TestProviderMalformedJSON:
 
     async def test_choices_empty_list_raises(self):
         """Provider response with empty choices list should raise ProviderError, not IndexError."""
-        from ah.core.exceptions import ProviderError
+        from machina.core.exceptions import ProviderError
 
         provider = self._make_provider({"choices": [], "usage": {}})
         with pytest.raises(ProviderError):
@@ -263,8 +263,8 @@ class TestProviderMidStreamFailure:
         )
         reserve = AsyncMock(return_value=uuid.uuid4())
         finish = AsyncMock()
-        monkeypatch.setattr("ah.core.provider.usage_store.reserve", reserve)
-        monkeypatch.setattr("ah.core.provider.usage_store.finish", finish)
+        monkeypatch.setattr("machina.core.provider.usage_store.reserve", reserve)
+        monkeypatch.setattr("machina.core.provider.usage_store.finish", finish)
 
         session_id = uuid.uuid4()
         agent_id = "test-agent"
@@ -335,7 +335,7 @@ class TestProviderUsageMissing:
         store = UsageStore()
         call_id = uuid.uuid4()
         execute = AsyncMock()
-        monkeypatch.setattr("ah.core.usage.db", SimpleNamespace(execute=execute))
+        monkeypatch.setattr("machina.core.usage.db", SimpleNamespace(execute=execute))
 
         await store.finish(call_id, None, failed=False)
         # accounted_tokens should be None → COALESCE retains reserved_tokens
@@ -346,7 +346,7 @@ class TestProviderUsageMissing:
         store = UsageStore()
         call_id = uuid.uuid4()
         execute = AsyncMock()
-        monkeypatch.setattr("ah.core.usage.db", SimpleNamespace(execute=execute))
+        monkeypatch.setattr("machina.core.usage.db", SimpleNamespace(execute=execute))
 
         await store.finish(call_id, {}, failed=False)
         assert execute.await_args.args[5] is None
@@ -356,7 +356,7 @@ class TestProviderUsageMissing:
         store = UsageStore()
         call_id = uuid.uuid4()
         execute = AsyncMock()
-        monkeypatch.setattr("ah.core.usage.db", SimpleNamespace(execute=execute))
+        monkeypatch.setattr("machina.core.usage.db", SimpleNamespace(execute=execute))
 
         await store.finish(call_id, {"prompt_tokens": 10}, failed=False)
         # prompt=10, completion=None, total=None → known=False (completion missing)
@@ -368,7 +368,7 @@ class TestProviderUsageMissing:
         store = UsageStore()
         call_id = uuid.uuid4()
         execute = AsyncMock()
-        monkeypatch.setattr("ah.core.usage.db", SimpleNamespace(execute=execute))
+        monkeypatch.setattr("machina.core.usage.db", SimpleNamespace(execute=execute))
 
         await store.finish(
             call_id,
@@ -384,7 +384,7 @@ class TestProviderUsageMissing:
         store = UsageStore()
         call_id = uuid.uuid4()
         execute = AsyncMock()
-        monkeypatch.setattr("ah.core.usage.db", SimpleNamespace(execute=execute))
+        monkeypatch.setattr("machina.core.usage.db", SimpleNamespace(execute=execute))
 
         await store.finish(
             call_id,
@@ -525,10 +525,10 @@ class TestOrchestratorTimeout:
         mock_agent_def.tools = None
 
         with (
-            patch("ah.core.orchestrator.agent_registry") as mock_registry,
-            patch("ah.core.orchestrator.session_manager") as mock_session_mgr,
-            patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr,
-            patch("ah.core.orchestrator.db") as mock_db,
+            patch("machina.core.orchestrator.agent_registry") as mock_registry,
+            patch("machina.core.orchestrator.session_manager") as mock_session_mgr,
+            patch("machina.core.orchestrator.context_manager") as mock_ctx_mgr,
+            patch("machina.core.orchestrator.db") as mock_db,
         ):
             mock_registry.get = AsyncMock(return_value=mock_agent_def)
             mock_session = MagicMock()
@@ -579,10 +579,10 @@ class TestOrchestratorTimeout:
         mock_agent_def.tools = None
 
         with (
-            patch("ah.core.orchestrator.agent_registry") as mock_registry,
-            patch("ah.core.orchestrator.session_manager") as mock_session_mgr,
-            patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr,
-            patch("ah.core.orchestrator.db") as mock_db,
+            patch("machina.core.orchestrator.agent_registry") as mock_registry,
+            patch("machina.core.orchestrator.session_manager") as mock_session_mgr,
+            patch("machina.core.orchestrator.context_manager") as mock_ctx_mgr,
+            patch("machina.core.orchestrator.db") as mock_db,
         ):
             mock_registry.get = AsyncMock(return_value=mock_agent_def)
             mock_session = MagicMock()
@@ -622,7 +622,7 @@ class TestSchedulerWorkerCrash:
 
     async def test_worker_crash_marks_job_as_error(self):
         """When worker crashes, job should be marked as error with last_error set."""
-        from ah.core.scheduler import JobRunner, JobStore
+        from machina.core.scheduler import JobRunner, JobStore
 
         store = JobStore()
         runner = JobRunner(store=store, agent_factory=MagicMock())
@@ -682,10 +682,10 @@ class TestSchedulerWorkerCrash:
 
     async def test_lease_renewal_failure_does_not_crash_runner(self, monkeypatch):
         """When lease renewal fails, runner should continue (not crash)."""
-        from ah.core.scheduler import JobRunner, JobStore
+        from machina.core.scheduler import JobRunner, JobStore
 
         # Make lease renewal happen quickly so we can observe it
-        monkeypatch.setattr("ah.core.scheduler.RUN_LEASE_SECONDS", 0.01)
+        monkeypatch.setattr("machina.core.scheduler.RUN_LEASE_SECONDS", 0.01)
 
         store = JobStore()
         runner = JobRunner(store=store, agent_factory=MagicMock())
@@ -731,8 +731,8 @@ class TestSchedulerWorkerCrash:
 
     async def test_claim_due_with_no_due_jobs_returns_none(self, monkeypatch):
         """claim_due should return None when no jobs are due."""
-        from ah.core import scheduler as sched_mod
-        from ah.core.scheduler import JobStore
+        from machina.core import scheduler as sched_mod
+        from machina.core.scheduler import JobStore
 
         mock_db = MagicMock()
         mock_db.fetchrow = AsyncMock(return_value=None)  # no due job
@@ -753,7 +753,7 @@ class TestContextEvictionInterrupted:
 
     async def test_eviction_with_archive_failure_falls_back_to_individual(self, monkeypatch):
         """When batch archive fails, should retry individually."""
-        from ah.core import context as ctx_mod
+        from machina.core import context as ctx_mod
 
         session_id = uuid.uuid4()
         now = datetime.now(UTC)
@@ -800,7 +800,7 @@ class TestContextEvictionInterrupted:
 
     async def test_eviction_with_delete_failure_does_not_lose_chunks(self, monkeypatch):
         """When archive succeeds but delete fails, chunk should remain (not lost)."""
-        from ah.core import context as ctx_mod
+        from machina.core import context as ctx_mod
 
         session_id = uuid.uuid4()
         now = datetime.now(UTC)
@@ -840,7 +840,7 @@ class TestContextEvictionInterrupted:
 
     async def test_eviction_preserves_recent_ten_chunks(self, monkeypatch):
         """Eviction should always preserve the most recent 10 chunks."""
-        from ah.core import context as ctx_mod
+        from machina.core import context as ctx_mod
 
         session_id = uuid.uuid4()
         now = datetime.now(UTC)
@@ -877,7 +877,7 @@ class TestContextEvictionInterrupted:
 
     async def test_eviction_with_empty_session_returns_zero(self, monkeypatch):
         """Eviction on session with no chunks should return 0."""
-        from ah.core import context as ctx_mod
+        from machina.core import context as ctx_mod
 
         database = MagicMock()
         database.fetchrow = AsyncMock(return_value={"total_chunks": 0, "total_tokens": 0})
@@ -900,7 +900,7 @@ class TestConcurrentSessionWrites:
 
     async def test_concurrent_add_chunk_different_sessions_no_deadlock(self, monkeypatch):
         """Concurrent add_chunk calls for different sessions should not deadlock."""
-        from ah.core import context as ctx_mod
+        from machina.core import context as ctx_mod
 
         database = MagicMock()
         database.fetch = AsyncMock(return_value=[])
@@ -943,7 +943,7 @@ class TestConcurrentSessionWrites:
 
     async def test_concurrent_add_chunk_same_session_no_deadlock(self, monkeypatch):
         """Concurrent add_chunk calls for the same session should not deadlock."""
-        from ah.core import context as ctx_mod
+        from machina.core import context as ctx_mod
 
         database = MagicMock()
         database.fetch = AsyncMock(return_value=[])
@@ -985,7 +985,7 @@ class TestConcurrentSessionWrites:
 
     async def test_concurrent_get_recent_context_no_deadlock(self, monkeypatch):
         """Concurrent get_recent_context calls should not deadlock."""
-        from ah.core import context as ctx_mod
+        from machina.core import context as ctx_mod
 
         database = MagicMock()
         database.fetch = AsyncMock(return_value=[])
@@ -1017,7 +1017,7 @@ class TestMemoryStoreChaos:
         """MemoryStore.add should raise when DB fails."""
         store = MemoryStore()
         mock_db.fetchrow = AsyncMock(side_effect=Exception("DB connection lost"))
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             with pytest.raises(Exception, match="DB connection lost"):
                 await store.add(
                     session_id=uuid.uuid4(),
@@ -1030,7 +1030,7 @@ class TestMemoryStoreChaos:
         """MemoryStore.search should handle DB failure."""
         store = MemoryStore()
         mock_db.fetch = AsyncMock(side_effect=Exception("DB error"))
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             with pytest.raises(Exception, match="DB error"):
                 await store.search(agent_id="harness")
 
@@ -1038,7 +1038,7 @@ class TestMemoryStoreChaos:
         """Deleting a non-existent memory should return False."""
         store = MemoryStore()
         mock_db.execute = AsyncMock(return_value="DELETE 0")
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             result = await store.delete(uuid.uuid4())
             assert result is False
 
@@ -1046,7 +1046,7 @@ class TestMemoryStoreChaos:
         """Getting a non-existent memory should return None."""
         store = MemoryStore()
         mock_db.fetchrow = AsyncMock(return_value=None)
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             result = await store.get(uuid.uuid4())
             assert result is None
 
@@ -1068,7 +1068,7 @@ class TestMemoryRetrieverChaos:
         attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
 
-        with patch("ah.memory.retriever.db", mock_db):
+        with patch("machina.memory.retriever.db", mock_db):
             results = await retriever.retrieve("test query")
         assert results == []
 
@@ -1097,7 +1097,7 @@ class TestMemoryRetrieverChaos:
         attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
 
-        with patch("ah.memory.retriever.db", mock_db):
+        with patch("machina.memory.retriever.db", mock_db):
             results = await retriever.retrieve("test")
         # Should return results (fallback to score-based)
         assert isinstance(results, list)
@@ -1133,7 +1133,7 @@ class TestMemoryRetrieverChaos:
         attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
 
-        with patch("ah.memory.retriever.db", mock_db):
+        with patch("machina.memory.retriever.db", mock_db):
             results = await retriever.retrieve("test")
         assert isinstance(results, list)
 
@@ -1168,7 +1168,7 @@ class TestMemoryRetrieverChaos:
         attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
 
-        with patch("ah.memory.retriever.db", mock_db):
+        with patch("machina.memory.retriever.db", mock_db):
             results = await retriever.retrieve("test")
         assert isinstance(results, list)
 
@@ -1188,7 +1188,7 @@ class TestMemoryConsolidatorChaos:
         mock_store.add = AsyncMock()
         consolidator.store = mock_store
 
-        with patch("ah.memory.consolidator.context_manager") as mock_cm:
+        with patch("machina.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[])
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
         # Typed empty (AH-AUDIT-037): no input, nothing processed.
@@ -1231,7 +1231,7 @@ class TestMemoryConsolidatorChaos:
         consolidator.store = mock_store
 
         # Create a mock chunk for the consolidator to process
-        from ah.core.models import ContextChunk
+        from machina.core.models import ContextChunk
 
         mock_chunk = ContextChunk(
             id=uuid.uuid4(),
@@ -1242,7 +1242,7 @@ class TestMemoryConsolidatorChaos:
             token_count=10,
         )
 
-        with patch("ah.memory.consolidator.context_manager") as mock_cm:
+        with patch("machina.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[mock_chunk])
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
         # Should have 1 result (second memory succeeded); partial writes
@@ -1267,7 +1267,7 @@ class TestMemoryConsolidatorChaos:
         mock_store = AsyncMock()
         consolidator.store = mock_store
 
-        with patch("ah.memory.consolidator.context_manager") as mock_cm:
+        with patch("machina.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[])
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
         assert results.status == "empty" and results.entries == []
@@ -1287,7 +1287,7 @@ class TestMemoryConsolidatorChaos:
         mock_store = AsyncMock()
         consolidator.store = mock_store
 
-        with patch("ah.memory.consolidator.context_manager") as mock_cm:
+        with patch("machina.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[])
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
         assert results.status == "empty" and results.entries == []
@@ -1326,7 +1326,7 @@ class TestMemoryConsolidatorChaos:
         )
         consolidator.store = mock_store
 
-        with patch("ah.memory.consolidator.context_manager") as mock_cm:
+        with patch("machina.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[MagicMock()])
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
         # Should have 1 result (invalid item skipped)
@@ -1352,11 +1352,11 @@ class TestAgentStreamInterruption:
 
         provider.stream_complete = failing_stream
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -1392,11 +1392,11 @@ class TestAgentStreamInterruption:
 
         provider.stream_complete = malformed_stream
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -1431,11 +1431,11 @@ class TestAgentProviderEdgeCases:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -1460,11 +1460,11 @@ class TestAgentProviderEdgeCases:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -1495,11 +1495,11 @@ class TestAgentProviderEdgeCases:
             )
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -1522,7 +1522,7 @@ class TestUsageStoreConcurrent:
 
     async def test_concurrent_reserve_same_session_no_deadlock(self, monkeypatch):
         """Concurrent reserve calls for the same session should not deadlock."""
-        from ah.core.usage import UsageStore
+        from machina.core.usage import UsageStore
 
         store = UsageStore()
         session_id = uuid.uuid4()
@@ -1574,7 +1574,7 @@ class TestUsageStoreConcurrent:
         mock_db.connected = True
         mock_db.acquire = MagicMock(side_effect=lambda: _Acquire(conn))
 
-        monkeypatch.setattr("ah.core.usage.db", mock_db)
+        monkeypatch.setattr("machina.core.usage.db", mock_db)
 
         # Should not deadlock
         results = await asyncio.wait_for(
@@ -1593,8 +1593,8 @@ class TestUsageStoreConcurrent:
     async def test_reserve_with_db_failure_propagates_and_complete_call_wraps(self, monkeypatch):
         """A DB failure inside reserve() propagates from reserve() itself, and
         complete_call() (the production entry point) wraps it in DatabaseError."""
-        from ah.core.exceptions import DatabaseError
-        from ah.core.usage import UsageStore
+        from machina.core.exceptions import DatabaseError
+        from machina.core.usage import UsageStore
 
         store = UsageStore()
         mock_db = MagicMock()
@@ -1603,7 +1603,7 @@ class TestUsageStoreConcurrent:
         mock_db.acquire.return_value.__aenter__.side_effect = Exception("DB down")
         mock_db.acquire.return_value.__aexit__.return_value = None
 
-        monkeypatch.setattr("ah.core.usage.db", mock_db)
+        monkeypatch.setattr("machina.core.usage.db", mock_db)
 
         # reserve() is the low-level primitive: it lets the real error through.
         with pytest.raises(Exception, match="DB down"):
@@ -1636,15 +1636,15 @@ class TestUsageStoreConcurrent:
     async def test_finish_with_db_failure_propagates_and_complete_call_wraps(self, monkeypatch):
         """A DB failure inside finish() propagates from finish(), and
         complete_call() wraps it in DatabaseError."""
-        from ah.core.exceptions import DatabaseError
-        from ah.core.usage import UsageStore
+        from machina.core.exceptions import DatabaseError
+        from machina.core.usage import UsageStore
 
         store = UsageStore()
         mock_db = MagicMock()
         mock_db.connected = True
         mock_db.execute = AsyncMock(side_effect=Exception("DB down"))
 
-        monkeypatch.setattr("ah.core.usage.db", mock_db)
+        monkeypatch.setattr("machina.core.usage.db", mock_db)
 
         # finish() is the low-level primitive: it lets the real error through.
         with pytest.raises(Exception, match="DB down"):
@@ -1779,7 +1779,7 @@ class TestSchedulerMultipleRunners:
 
     async def test_two_runners_cannot_claim_same_job(self):
         """Two runners should not be able to claim the same job."""
-        from ah.core.scheduler import JobStore
+        from machina.core.scheduler import JobStore
 
         store = JobStore()
         mock_job = MagicMock()
@@ -1860,7 +1860,7 @@ class TestMemoryConsolidatorDedup:
         mock_store.update_access = AsyncMock()
         consolidator.store = mock_store
 
-        with patch("ah.memory.consolidator.context_manager") as mock_cm:
+        with patch("machina.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[])
             await consolidator.consolidate_session(uuid.uuid4(), "harness")
         # Duplicate should not be written
@@ -1908,7 +1908,7 @@ class TestMemoryConsolidatorDedup:
         consolidator.store = mock_store
 
         # Create a mock chunk for the consolidator to process
-        from ah.core.models import ContextChunk
+        from machina.core.models import ContextChunk
 
         mock_chunk = ContextChunk(
             id=uuid.uuid4(),
@@ -1921,7 +1921,7 @@ class TestMemoryConsolidatorDedup:
 
         # Force the extracted candidate to carry an embedding so the vector
         # dedup path (search_by_embedding) is the one exercised.
-        from ah.memory.models import MemoryEntry as _ME
+        from machina.memory.models import MemoryEntry as _ME
 
         async def _extract(*args, **kwargs):
             return [
@@ -1938,7 +1938,7 @@ class TestMemoryConsolidatorDedup:
 
         consolidator._extract_memories = _extract
 
-        with patch("ah.memory.consolidator.context_manager") as mock_cm:
+        with patch("machina.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[mock_chunk])
             await consolidator.consolidate_session(uuid.uuid4(), "harness")
         # Should not write duplicate

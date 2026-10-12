@@ -17,8 +17,8 @@ import pytest
 
 pytest.importorskip("mcp")
 
-from ah.connectors.mcp_client import MCPConnection
-from ah.connectors.models import (
+from machina.connectors.mcp_client import MCPConnection
+from machina.connectors.models import (
     AuthRequired,
     ConfigError,
     ConnectionFailed,
@@ -183,7 +183,7 @@ async def test_server_tool_error_is_a_known_failure(tmp_path):
 
 
 async def test_server_elicitation_is_rejected_without_model_callback(tmp_path, monkeypatch):
-    from ah.core.provider import DirectProvider
+    from machina.core.provider import DirectProvider
 
     async def forbidden_model(*_args, **_kwargs):
         pytest.fail("an MCP elicitation reached a model")
@@ -344,7 +344,7 @@ async def test_dropped_stdio_call_reports_unknown_outcome(tmp_path, monkeypatch)
 
 
 def test_dns_alias_cannot_allow_cloud_metadata_even_with_local_consent(monkeypatch):
-    from ah.connectors.mcp_client import _classify_host
+    from machina.connectors.mcp_client import _classify_host
 
     monkeypatch.setattr(
         socket,
@@ -433,7 +433,7 @@ async def test_rotated_bearer_token_is_registered_before_request_and_never_repla
     import httpx2
     import mcp.types
 
-    from ah.connectors.models import ConnectorConfig
+    from machina.connectors.models import ConnectorConfig
 
     connection = MCPConnection(
         ConnectorConfig(
@@ -478,7 +478,7 @@ async def test_discovery_rejects_secret_echoes_in_dispatch_contract(field):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from ah.connectors.models import ConnectionFailed, ConnectorConfig
+    from machina.connectors.models import ConnectionFailed, ConnectorConfig
 
     token = "synthetic-catalog-token"
     connection = MCPConnection(

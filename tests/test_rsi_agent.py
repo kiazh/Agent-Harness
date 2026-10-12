@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.skills.registry import Skill
-from ah.skills.runtime import SkillIndex
+from machina.skills.registry import Skill
+from machina.skills.runtime import SkillIndex
 
 
 def test_learned_skill_weights_only_reorder_relevant_candidates():
@@ -28,7 +28,7 @@ def test_learned_skill_weights_only_reorder_relevant_candidates():
 
 
 def test_informational_questions_do_not_invent_an_action_strategy():
-    from ah.memory.rsi import strategy_context, task_domain
+    from machina.memory.rsi import strategy_context, task_domain
 
     assert task_domain("What is Python?") == "general"
     assert strategy_context({"domain": task_domain("What is Python?"), "strategy": "verify"}) == ""
@@ -38,17 +38,17 @@ def test_informational_questions_do_not_invent_an_action_strategy():
 async def test_paused_and_cancelled_turns_do_not_record_rsi_success(
     db_pool, monkeypatch, streaming
 ):
-    from ah.core.agent import BaseReActAgent, _growth_episode, instrument_run, instrument_stream
-    from ah.core.models import AgentResponse, StreamEvent
-    from ah.memory.growth import GrowthStore
+    from machina.core.agent import BaseReActAgent, _growth_episode, instrument_run, instrument_stream
+    from machina.core.models import AgentResponse, StreamEvent
+    from machina.memory.growth import GrowthStore
 
     store = GrowthStore(db_pool)
     owner = "rsi-paused-" + uuid.uuid4().hex
-    from ah.core.session import session_manager
-    from ah.db.connection import db
+    from machina.core.session import session_manager
+    from machina.db.connection import db
 
     monkeypatch.setattr(db, "_pool", db_pool.pool)
-    monkeypatch.setattr("ah.memory.growth.growth_store", store)
+    monkeypatch.setattr("machina.memory.growth.growth_store", store)
     session = await session_manager.create(agent_id=owner)
 
     class PausedAgent(BaseReActAgent):
@@ -105,12 +105,12 @@ async def test_paused_and_cancelled_turns_do_not_record_rsi_success(
 async def test_agent_records_evidence_and_reuses_routing_after_restart(
     db_pool, monkeypatch, tmp_path, streaming, scenario
 ):
-    from ah.core.agent import ReActAgent
-    from ah.core.config import config
-    from ah.core.models import LLMResponse, StreamEvent
-    from ah.core.session import session_manager
-    from ah.db.connection import db
-    from ah.memory.growth import GrowthStore
+    from machina.core.agent import ReActAgent
+    from machina.core.config import config
+    from machina.core.models import LLMResponse, StreamEvent
+    from machina.core.session import session_manager
+    from machina.db.connection import db
+    from machina.memory.growth import GrowthStore
 
     monkeypatch.setattr(db, "_pool", db_pool.pool)
     for flag, value in {
@@ -122,12 +122,12 @@ async def test_agent_records_evidence_and_reuses_routing_after_restart(
         "memory_consolidation_enabled": False,
     }.items():
         monkeypatch.setattr(config, flag, value)
-    monkeypatch.setattr("ah.tools.file._BASE_DIR", tmp_path)
-    monkeypatch.setattr("ah.memory.embeddings.embed_query", AsyncMock(return_value=None))
+    monkeypatch.setattr("machina.tools.file._BASE_DIR", tmp_path)
+    monkeypatch.setattr("machina.memory.embeddings.embed_query", AsyncMock(return_value=None))
     owner = "rsi-agent-" + uuid.uuid4().hex
     sessions = []
     if scenario == "concurrent_persona":
-        from ah.memory.growth import growth_store
+        from machina.memory.growth import growth_store
 
         await growth_store.teach(owner, "style", "tone", "Snapshot tone")
         original_prompt = growth_store.prompt
@@ -144,17 +144,17 @@ async def test_agent_records_evidence_and_reuses_routing_after_restart(
     tool = "skill_read" if scenario == "manual_skill" else "list_files"
     if scenario == "manual_skill":
         # This test must attribute the manual read, independently of auto-loading.
-        monkeypatch.setattr("ah.skills.runtime.automatic_skill_context", lambda *args, **kwargs: "")
+        monkeypatch.setattr("machina.skills.runtime.automatic_skill_context", lambda *args, **kwargs: "")
     if scenario == "failed_command":
         import sys
 
-        from ah.tools.terminal import _run_bounded
+        from machina.tools.terminal import _run_bounded
 
         actual_failure = _run_bounded(
             [sys.executable, "-c", "raise SystemExit(1)"], 3, str(tmp_path)
         )
         monkeypatch.setattr(
-            "ah.core.agent.registry.execute", AsyncMock(return_value=actual_failure)
+            "machina.core.agent.registry.execute", AsyncMock(return_value=actual_failure)
         )
 
     class Provider:
@@ -188,7 +188,7 @@ async def test_agent_records_evidence_and_reuses_routing_after_restart(
                     ],
                 )
             if self.use_tool and scenario == "budget":
-                from ah.core.exceptions import UsageBudgetExceededError
+                from machina.core.exceptions import UsageBudgetExceededError
 
                 raise UsageBudgetExceededError("session request budget exceeded (1/1)")
             if self.use_tool and scenario == "cancelled":
@@ -273,7 +273,7 @@ async def test_agent_records_evidence_and_reuses_routing_after_restart(
 
 
 async def test_task_local_tool_weights_do_not_widen_allowlists_or_leak_between_tasks():
-    from ah.core.agent import ReActAgent, _rsi_choice
+    from machina.core.agent import ReActAgent, _rsi_choice
 
     agent = ReActAgent(provider=object(), allowed_tools=["read_file", "list_files"])
 

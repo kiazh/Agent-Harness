@@ -17,7 +17,7 @@ version: 1.0.0
 
 | Skill | Practice |
 |---|---|
-| Docker | Containerize AgentHarness + PostgreSQL |
+| Docker | Containerize Machina + PostgreSQL |
 | CI/CD | GitHub Actions: lint → test → build → deploy |
 | Monitoring | Prometheus metrics + Grafana dashboards |
 | Logging | Structured logging with correlation IDs |
@@ -30,4 +30,4 @@ version: 1.0.0
 - [Grafana](https://grafana.com/)
 
 ## Practice Project
-Dockerize AgentHarness: docker compose up starts PostgreSQL + pgvector + AgentHarness. Add health check endpoint.
+Dockerize Machina: docker compose up starts PostgreSQL + pgvector + Machina. Add health check endpoint.

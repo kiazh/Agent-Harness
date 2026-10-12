@@ -7,11 +7,11 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from ah.core.scheduler import JobStore
+from machina.core.scheduler import JobStore
 
 
 async def test_finish_uses_database_clock_for_cron(monkeypatch):
-    from ah.core import scheduler
+    from machina.core import scheduler
 
     clock = datetime(2035, 1, 1, 12, 0, tzinfo=UTC)
     db = SimpleNamespace(fetchval=AsyncMock(return_value=clock), execute=AsyncMock())
@@ -25,7 +25,7 @@ async def test_finish_uses_database_clock_for_cron(monkeypatch):
 
 
 async def test_create_uses_database_clock_for_interval(monkeypatch):
-    from ah.core import scheduler
+    from machina.core import scheduler
 
     clock = datetime(2035, 1, 1, 12, 0, tzinfo=UTC)
     db = SimpleNamespace(

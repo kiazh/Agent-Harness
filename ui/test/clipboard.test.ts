@@ -7,7 +7,7 @@ import { join } from "node:path";
 test("clipboard transfer sends the complete value on stdin without shell evaluation", async (t) => {
 	if (process.platform === "win32") { t.skip("POSIX executable fixture"); return; }
 	const { copyText } = await import("../src/clipboard.ts");
-	const directory = await mkdtemp(join(tmpdir(), "ah-copy-"));
+	const directory = await mkdtemp(join(tmpdir(), "machina-copy-"));
 	const output = join(directory, "copied.txt");
 	const originalPath = process.env.PATH;
 	try {
@@ -27,7 +27,7 @@ test("clipboard transfer sends the complete value on stdin without shell evaluat
 test("unavailable clipboard commands return a recoverable failure", async (t) => {
 	if (process.platform === "win32") { t.skip("POSIX executable fixture"); return; }
 	const { copyText } = await import("../src/clipboard.ts");
-	const directory = await mkdtemp(join(tmpdir(), "ah-copy-"));
+	const directory = await mkdtemp(join(tmpdir(), "machina-copy-"));
 	const originalPath = process.env.PATH;
 	try {
 		process.env.PATH = directory;

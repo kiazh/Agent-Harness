@@ -2,13 +2,13 @@
 
 import asyncio
 
-from ah.connectors import execution
-from ah.connectors.manager import ConnectorManager
-from ah.connectors.models import CallOutcome, ConnectionState, ConnectorConfig, DiscoveredTool
-from ah.connectors.registry import ConnectorRegistry
-from ah.connectors.service import ConnectorService
-from ah.permissions.broker import _execution_context
-from ah.permissions.policy import build_request
+from machina.connectors import execution
+from machina.connectors.manager import ConnectorManager
+from machina.connectors.models import CallOutcome, ConnectionState, ConnectorConfig, DiscoveredTool
+from machina.connectors.registry import ConnectorRegistry
+from machina.connectors.service import ConnectorService
+from machina.permissions.broker import _execution_context
+from machina.permissions.policy import build_request
 
 
 async def test_refresh_time_is_deducted_from_remote_call_deadline(monkeypatch):

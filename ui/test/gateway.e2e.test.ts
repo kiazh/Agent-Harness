@@ -1,5 +1,5 @@
-// End-to-end: GatewayClient <-> real `python -m ah.gateway` <-> test database.
-// Runs only when AH_TEST_PYTHON and AGENT_HARNESS_TEST_DATABASE_URL are set.
+// End-to-end: GatewayClient <-> real `python -m machina.gateway` <-> test database.
+// Runs only when MACHINA_TEST_PYTHON and MACHINA_TEST_DATABASE_URL are set.
 
 import assert from "node:assert/strict";
 import { mkdtemp, readFile } from "node:fs/promises";
@@ -12,16 +12,16 @@ import { type FeatureHost, type NoticeKind, runCommand } from "../src/features/i
 import { GatewayClient } from "../src/gateway.ts";
 import type { HistoryEntry, InitializeResult, SessionInfo, SessionListResult, SessionResult } from "../src/protocol.ts";
 
-const python = process.env.AH_TEST_PYTHON;
-const dsn = process.env.AGENT_HARNESS_TEST_DATABASE_URL;
-const skip = !python || !dsn ? "AH_TEST_PYTHON / AGENT_HARNESS_TEST_DATABASE_URL not set" : false;
+const python = process.env.MACHINA_TEST_PYTHON;
+const dsn = process.env.MACHINA_TEST_DATABASE_URL;
+const skip = !python || !dsn ? "MACHINA_TEST_PYTHON / MACHINA_TEST_DATABASE_URL not set" : false;
 
 function startClient(extraEnv: NodeJS.ProcessEnv = {}) {
 	const token = `ui-e2e-${Math.random().toString(36).slice(2)}`;
 	const client = new GatewayClient({
 		python: python!,
 		token,
-		env: { DATABASE_URL: dsn!, AH_GATEWAY_NO_SCHEDULER: "1", AH_GATEWAY_TOKEN: token, ...extraEnv },
+		env: { DATABASE_URL: dsn!, MACHINA_GATEWAY_NO_SCHEDULER: "1", MACHINA_GATEWAY_TOKEN: token, ...extraEnv },
 	});
 	let crashed = false;
 	client.onExit = () => {
@@ -32,8 +32,8 @@ function startClient(extraEnv: NodeJS.ProcessEnv = {}) {
 }
 
 test("persona menu persists its default across a gateway restart", { skip, timeout: 60_000 }, async () => {
-	const home = await mkdtemp(join(tmpdir(), "ah-persona-e2e-"));
-	const env = { HOME: home, AH_ENV_FILE: join(home, ".env"), AGENT_HARNESS_PERSONA_DESCRIPTION: undefined };
+	const home = await mkdtemp(join(tmpdir(), "machina-persona-e2e-"));
+	const env = { HOME: home, MACHINA_ENV_FILE: join(home, ".env"), MACHINA_PERSONA_DESCRIPTION: undefined };
 	const first = startClient(env).client;
 	const printed: Array<{ text: string; kind: NoticeKind }> = [];
 	const persona = "Give concise answers with practical examples.";
@@ -53,7 +53,7 @@ test("persona menu persists its default across a gateway restart", { skip, timeo
 		await first.request("initialize", {}, 30_000);
 		await runCommand(parseCommand("/persona")!, host);
 		assert.equal(printed.some((notice) => notice.kind === "error"), false);
-		assert.match(await readFile(join(home, ".agent-harness", "config.yaml"), "utf8"), /Give concise answers/);
+		assert.match(await readFile(join(home, ".machina", "config.yaml"), "utf8"), /Give concise answers/);
 	} finally {
 		await first.stop();
 	}
@@ -135,7 +135,7 @@ test("readline interfaces are closed after stop()", { skip, timeout: 90_000 }, a
 
 test("slash commands work against the real gateway and database", { skip, timeout: 120_000 }, async () => {
 	const { client, crashed } = startClient();
-	const dir = await mkdtemp(join(tmpdir(), "ah-ui-e2e-"));
+	const dir = await mkdtemp(join(tmpdir(), "machina-ui-e2e-"));
 	const printed: Array<{ text: string; kind: NoticeKind }> = [];
 	let current: SessionInfo | undefined;
 

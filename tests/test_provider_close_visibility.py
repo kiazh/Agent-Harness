@@ -5,14 +5,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from ah.core.agent_factory import close_agent_provider
-from ah.core.metrics import MetricsCollector
+from machina.core.agent_factory import close_agent_provider
+from machina.core.metrics import MetricsCollector
 
 
 @pytest.fixture
 def collector(monkeypatch):
     value = MetricsCollector()
-    monkeypatch.setattr("ah.core.metrics.metrics", value)
+    monkeypatch.setattr("machina.core.metrics.metrics", value)
     return value
 
 
@@ -66,7 +66,7 @@ async def test_close_timeout_quarantines_resistant_task_and_records_late_error(c
     await asyncio.wait_for(close_agent_provider(agent(close), timeout=0.01), timeout=0.5)
     assert started.is_set()
     assert collector._counters["provider.close.timeout"] == 1
-    from ah.core.cleanup import _cleanup_tasks as _provider_cleanup_tasks
+    from machina.core.cleanup import _cleanup_tasks as _provider_cleanup_tasks
 
     pending = set(_provider_cleanup_tasks)
     assert pending and all(not task.done() for task in pending)

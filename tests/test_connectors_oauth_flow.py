@@ -8,11 +8,11 @@ import uuid
 import httpx
 import pytest
 
-from ah.connectors.models import ConnectorConfig
-from ah.connectors.oauth import OAuthCoordinator, OAuthOwner
-from ah.connectors.oauth_store import OAuthCredentialStore
-from ah.connectors.registry import ConnectorRegistry
-from ah.connectors.service import ConnectorService
+from machina.connectors.models import ConnectorConfig
+from machina.connectors.oauth import OAuthCoordinator, OAuthOwner
+from machina.connectors.oauth_store import OAuthCredentialStore
+from machina.connectors.registry import ConnectorRegistry
+from machina.connectors.service import ConnectorService
 from tests.support.mcp_oauth_fixture import OAuthFixture
 
 
@@ -341,7 +341,7 @@ def test_advertised_response_issuer_is_required_before_exchange(tmp_path):
 
 def test_metadata_document_requires_server_advertisement(tmp_path):
     async def run():
-        from ah.connectors.oauth import OAuthError
+        from machina.connectors.oauth import OAuthError
 
         fixture = OAuthFixture()
         await fixture.start()
@@ -370,7 +370,7 @@ def test_metadata_document_requires_server_advertisement(tmp_path):
 
 def test_reauthorization_after_provider_edit_selects_current_grant(tmp_path):
     async def run():
-        from ah.connectors.oauth_store import credential_key_for
+        from machina.connectors.oauth_store import credential_key_for
 
         old_provider = OAuthFixture()
         new_provider = OAuthFixture()
@@ -446,8 +446,8 @@ def test_initial_exchange_preserves_explicit_empty_granted_scope(tmp_path):
     async def run():
         from dataclasses import replace
 
-        from ah.connectors.oauth_models import OAuthBinding
-        from ah.connectors.oauth_network import OAuthNetworkClient
+        from machina.connectors.oauth_models import OAuthBinding
+        from machina.connectors.oauth_network import OAuthNetworkClient
 
         class ReadOnlyNetwork(OAuthNetworkClient):
             async def discover(self, *args, **kwargs):

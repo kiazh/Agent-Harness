@@ -28,7 +28,7 @@ def check_source(archive_path: Path) -> None:
             "docker-compose.yml",
             "ui/package-lock.json",
             "ui/src/main.ts",
-            "ah/connectors/execution.py",
+            "machina/connectors/execution.py",
         }
         if missing := required - names:
             raise ValueError(f"Missing source resources: {sorted(missing)}")
@@ -52,15 +52,15 @@ def check(wheel: Path) -> None:
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
         required = {
-            "ah/db/schema.sql",
-            "ah/bundled_agents/ecc/LICENSE",
-            "ah/bundled_agents/ecc/manifest.json",
+            "machina/db/schema.sql",
+            "machina/bundled_agents/ecc/LICENSE",
+            "machina/bundled_agents/ecc/manifest.json",
             "skills/ecc/LICENSE",
         }
         missing = required - names
         if missing:
             raise ValueError(f"Missing packaged resources: {sorted(missing)}")
-        manifest = json.loads(archive.read("ah/bundled_agents/ecc/manifest.json"))
+        manifest = json.loads(archive.read("machina/bundled_agents/ecc/manifest.json"))
         if len(manifest["agents"]) != 71:
             raise ValueError("Expected all 71 ECC subagents")
         skills = json.loads(archive.read("skills/ecc/manifest.json"))
@@ -68,7 +68,7 @@ def check(wheel: Path) -> None:
             if hashlib.sha256(archive.read(f"skills/ecc/{name}")).hexdigest() != digest:
                 raise ValueError(f"Bundled skill resource hash mismatch: {name}")
         for name, entry in manifest["agents"].items():
-            data = archive.read(f"ah/bundled_agents/ecc/{name}.md")
+            data = archive.read(f"machina/bundled_agents/ecc/{name}.md")
             if hashlib.sha256(data).hexdigest() != entry["sha256"]:
                 raise ValueError(f"Bundled agent hash mismatch: {name}")
         forbidden = [
@@ -81,7 +81,7 @@ def check(wheel: Path) -> None:
         ]
         if forbidden:
             raise ValueError(f"Unexpected local artifacts: {forbidden}")
-        with tempfile.TemporaryDirectory(prefix="ah-release-wheel-") as directory:
+        with tempfile.TemporaryDirectory(prefix="machina-release-wheel-") as directory:
             root = Path(directory).resolve()
             for member in archive.infolist():
                 target = (root / member.filename).resolve()
@@ -96,9 +96,9 @@ def check(wheel: Path) -> None:
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-import ah
-from ah.core.agent_def import BUILTIN_AGENTS
-assert Path(ah.__file__).is_relative_to(Path(sys.argv[1]))
+import machina
+from machina.core.agent_def import BUILTIN_AGENTS
+assert Path(machina.__file__).is_relative_to(Path(sys.argv[1]))
 assert len([a for a in BUILTIN_AGENTS.values() if a.source == 'ecc']) == 71
 assert len(BUILTIN_AGENTS) == 74
 print('Isolated wheel imports, 71 ECC agents, resource hashes: OK')
@@ -110,16 +110,16 @@ print('Isolated wheel imports, 71 ECC agents, resource hashes: OK')
                 and key
                 not in {
                     "DATABASE_URL",
-                    "AGENT_HARNESS_DATABASE_URL",
-                    "AGENT_HARNESS_TEST_DATABASE_URL",
-                    "AGENT_HARNESS_SECRET_BACKEND",
+                    "MACHINA_DATABASE_URL",
+                    "MACHINA_TEST_DATABASE_URL",
+                    "MACHINA_SECRET_BACKEND",
                 }
             }
             environment.update(
                 {
                     "HOME": directory,
-                    "AH_ENV_FILE": str(root / "empty.env"),
-                    "AGENT_HARNESS_SECRET_BACKEND": "",
+                    "MACHINA_ENV_FILE": str(root / "empty.env"),
+                    "MACHINA_SECRET_BACKEND": "",
                 }
             )
             subprocess.run(

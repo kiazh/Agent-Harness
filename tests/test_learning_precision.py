@@ -1,6 +1,6 @@
 """Post-turn skill-learning proposals are measured for precision, not just staged.
 
-The reviewer in ``ah.skills.learning`` stages proposals into ``learning_reviews``
+The reviewer in ``machina.skills.learning`` stages proposals into ``learning_reviews``
 with one of six statuses. This module measures how much of what it proposes is
 actually useful:
 
@@ -19,13 +19,13 @@ import uuid
 
 import pytest
 
-from ah.core.session import SessionManager
-from ah.skills.learning import (
+from machina.core.session import SessionManager
+from machina.skills.learning import (
     LearningReviewer,
     compute_accepted_usage_rate,
     compute_learning_precision,
 )
-from ah.skills.registry import SkillRegistry
+from machina.skills.registry import SkillRegistry
 
 # ─── Pure metric over statuses (no DB) ─────────────────────────────────────
 
@@ -106,8 +106,8 @@ def test_usage_rate_over_accepted_skills():
 
 
 async def test_precision_reads_real_proposal_records_from_db(db_pool, monkeypatch, tmp_path):
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"precision-{uuid.uuid4()}"
     session = await SessionManager().create(title="precision", agent_id=agent_id)
     reviewer = LearningReviewer(registry=SkillRegistry(tmp_path / "skills"))
@@ -138,8 +138,8 @@ async def test_precision_reads_real_proposal_records_from_db(db_pool, monkeypatc
 
 
 async def test_precision_reports_usage_rate_of_accepted_skills(db_pool, monkeypatch, tmp_path):
-    monkeypatch.setattr("ah.skills.learning.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"precision-{uuid.uuid4()}"
     session = await SessionManager().create(title="precision usage", agent_id=agent_id)
     registry = SkillRegistry(tmp_path / "skills")

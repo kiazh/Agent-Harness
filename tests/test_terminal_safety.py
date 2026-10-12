@@ -7,12 +7,12 @@ import sys
 
 import pytest
 
-from ah.tools import terminal as terminal_module
+from machina.tools import terminal as terminal_module
 
 
 @pytest.mark.asyncio
 async def test_terminal_stops_capturing_after_output_limit(monkeypatch):
-    monkeypatch.setenv("AGENT_HARNESS_TERMINAL_SANDBOX", "local")
+    monkeypatch.setenv("MACHINA_TERMINAL_SANDBOX", "local")
     monkeypatch.setattr(terminal_module, "MAX_OUTPUT_CHARS", 8, raising=False)
 
     output = await terminal_module.terminal("git --version")

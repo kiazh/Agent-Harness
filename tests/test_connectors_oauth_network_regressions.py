@@ -6,8 +6,8 @@ import base64
 import httpx
 import pytest
 
-from ah.connectors.oauth_models import OAuthCredentialRecord, OAuthReviewSnapshot
-from ah.connectors.oauth_network import OAuthNetworkClient, OAuthNetworkError
+from machina.connectors.oauth_models import OAuthCredentialRecord, OAuthReviewSnapshot
+from machina.connectors.oauth_network import OAuthNetworkClient, OAuthNetworkError
 
 
 class ResponseChunks(httpx.AsyncByteStream):

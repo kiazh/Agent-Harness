@@ -1,0 +1,501 @@
+"""Multi-agent orchestration (Phase 5).
+
+Builds a :class:`~machina.core.agent.ReActAgent` from an :class:`AgentDef` and runs a
+delegated task against a fresh child session, recording the exchange in
+``agent_messages``. Supports running several delegations sequentially (each sees
+the previous results) or in parallel.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import uuid
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+
+from machina.core.agent import ReActAgent
+from machina.core.agent_def import AgentDef, agent_registry
+from machina.core.assembler import PromptAssembler, get_token_count, truncate_to_tokens
+from machina.core.config import config
+from machina.core.context import context_manager
+from machina.core.session import session_manager
+from machina.db.connection import db
+from machina.observability.diagnostics import record_failure
+
+__all__ = ["DelegationResult", "Orchestrator", "AgentNotFoundError"]
+
+logger = logging.getLogger(__name__)
+delegation_depth: ContextVar[int] = ContextVar("delegation_depth", default=0)
+delegation_deadline: ContextVar[float | None] = ContextVar("delegation_deadline", default=None)
+
+
+class AgentNotFoundError(Exception):
+    """Raised when a delegation names an agent that does not exist."""
+
+
+@dataclass
+class DelegationResult:
+    agent: str
+    task: str
+    response: str
+    session_id: uuid.UUID
+    tokens: int
+    iterations: int
+    status: str  # "complete", "waiting_approval", or "error"
+    needs_approval: list[dict] = field(default_factory=list)
+
+
+class Orchestrator:
+    """Runs tasks on named agents and records them in ``agent_messages``."""
+
+    MAX_HOP_COUNT = 10  # Maximum delegation depth to prevent circular delegation
+    DELEGATION_TIMEOUT_SECONDS = 120.0
+    PROMPT_VERSION = "1.0.0"  # Version of the delegation prompt template
+
+    @staticmethod
+    def _build_delegation_prompt(agent_name: str, task: str, context: str) -> str:
+        """Build a deterministic, versioned delegation prompt.
+
+        Args:
+            agent_name: Name of the agent being delegated to.
+            task: The task description.
+            context: Parent session context (may be empty).
+
+        Returns:
+            A versioned prompt string.
+        """
+        parts = [
+            "## Task",
+            f"{task}",
+            "",
+            f"# Delegation Prompt v{Orchestrator.PROMPT_VERSION}",
+            "",
+            "## Agent",
+            f"{agent_name}",
+        ]
+        if context:
+            parts.extend(
+                [
+                    "",
+                    "## Parent Session Context",
+                    f"{context}",
+                ]
+            )
+        return "\n".join(parts)
+
+    def __init__(self, agent_factory=None) -> None:
+        # Injectable so tests can supply a fake agent without an API key.
+        # AH-023: only the default factory creates owned providers that this
+        # scope must close; injected factories manage their own lifecycle.
+        # Phase 4.5/6: default path uses the shared definition-aware factory
+        # (same pipeline, permission broker, accounting, cancellation).
+        self._owns_factory_agents = agent_factory is None
+        self._agent_factory = agent_factory
+
+    async def _default_agent(self, definition: AgentDef, authority: dict | None = None):
+        from machina.core.agent_factory import build_agent_for_session, cap_child_authority
+        from machina.core.models import Session as _Session
+
+        tools = cap_child_authority(authority or {}, definition.tools or None)
+        # Build through the shared factory for identical dependency wiring;
+        # synthesize a session view carrying the child identity.
+        import uuid as _uuid
+
+        view = _Session(
+            id=_uuid.uuid4(),
+            agent_id=definition.name,
+            model=definition.model,
+            provider=definition.provider,
+        )
+        agent = await build_agent_for_session(view, authority=authority)
+        # Enforce the capped tool list (definition ∩ parent caps).
+        if tools is not None:
+            agent.allowed_tools = tools
+        return agent
+
+    def _build_agent(self, definition: AgentDef) -> ReActAgent:
+        from machina.core.provider import get_provider
+
+        provider_name = definition.provider or config.get("provider")
+        model = definition.model or config.get("model")
+        return ReActAgent(
+            provider=get_provider(provider=provider_name, model=model),
+            max_iterations=definition.max_iterations,
+            agent_id=definition.name,
+            system_prompt=definition.system_prompt or None,
+            allowed_tools=definition.tools or None,
+        )
+
+    async def delegate(
+        self,
+        agent_name: str,
+        task: str,
+        *,
+        from_agent: str = "orchestrator",
+        parent_session_id: uuid.UUID | None = None,
+        _hop_count: int = 0,
+        authority: dict | None = None,
+    ) -> DelegationResult:
+        """Run *task* on *agent_name* in a fresh child session.
+
+        Args:
+            agent_name: Name of the agent to delegate to.
+            task: The task description.
+            from_agent: The agent making this delegation.
+            parent_session_id: Optional parent session for context.
+            _hop_count: Internal hop counter to prevent circular delegation.
+            authority: Explicit parent authority caps. When omitted, the
+                ambient delegation authority (LP-08) applies.
+
+        Raises:
+            ValueError: If hop count exceeds MAX_HOP_COUNT (deadlock guard).
+        """
+        if _hop_count > self.MAX_HOP_COUNT or _hop_count < 0:
+            raise ValueError(
+                f"Invalid hop count {_hop_count} — must be between 0 and {self.MAX_HOP_COUNT}"
+            )
+        try:
+            definition = await agent_registry.get(agent_name)
+        except Exception as e:
+            # Fail closed like the shared factory: an unresolvable specialist
+            # is a controlled error, never an unrestricted agent.
+            from machina.core.agent_factory import AgentDefinitionError
+
+            raise AgentDefinitionError(f"agent definition {agent_name!r} unavailable: {e}") from e
+        if definition is None:
+            from machina.core.agent_def import BUILTIN_AGENTS
+
+            if agent_name not in BUILTIN_AGENTS:
+                raise AgentNotFoundError(f"no agent named {agent_name!r}")
+            definition = BUILTIN_AGENTS[agent_name]
+
+        handoff = await self._parent_context(parent_session_id) if parent_session_id else ""
+
+        from machina.core.agent_factory import cap_child_authority, check_mode_cap, parent_authority_var
+        from machina.core.session_mode import resolve_effective_mode
+
+        parent = dict(parent_authority_var.get() or {})
+        inherited_full_sources = list(parent.get("full_grant_sources") or [])
+        if authority:
+            # An explicit restriction cannot erase an ambient restriction.
+            parent["tools"] = cap_child_authority(parent, authority.get("tools"))
+            if authority.get("max_mode") is not None:
+                check_mode_cap(parent, authority["max_mode"])
+            parent.update({k: v for k, v in authority.items() if k != "tools"})
+        parent["full_grant_sources"] = inherited_full_sources + [
+            source
+            for source in parent.get("full_grant_sources", [])
+            if source not in inherited_full_sources
+        ]
+        parent_mode = await resolve_effective_mode(
+            str(parent_session_id) if parent_session_id else None
+        )
+        # A cap can restrict an otherwise broader durable mode. Never switch a
+        # sandbox parent to a host mode merely because the global default changed.
+        try:
+            check_mode_cap(parent, parent_mode)
+        except Exception:
+            parent_mode = str(parent.get("max_mode") or "ask")
+        child_authority = dict(parent)
+        child_authority["max_mode"] = parent_mode
+        child_authority["tools"] = cap_child_authority(parent, definition.tools or None)
+        if parent_mode == "sandbox" or config.get("terminal_sandbox") == "docker":
+            child_authority["terminal_backend"] = "sandbox"
+
+        inherited_grant = None
+        if parent_mode == "full" and parent_session_id is not None:
+            from machina.permissions import store as permission_store
+
+            parent_session = await session_manager.get_fresh(parent_session_id)
+            for grant in await permission_store.list_grants(str(parent_session_id)):
+                if (
+                    parent_session is not None
+                    and grant.get("agent_id") == parent_session.agent_id
+                    and grant.get("mode") == "full"
+                    and grant.get("capability") == "session"
+                    and grant.get("digest") == "full-mode-session"
+                ):
+                    inherited_grant = grant
+                    child_authority["full_grant_sources"].append(
+                        {
+                            "session_id": str(parent_session_id),
+                            "agent_id": parent_session.agent_id,
+                            "grant_id": str(grant["id"]),
+                        }
+                    )
+                    break
+
+        child = await session_manager.create(
+            title=f"{agent_name}: {task[:50]}",
+            agent_id=agent_name,
+            model=definition.model or config.get("model"),
+            provider=definition.provider or config.get("provider"),
+            context_budget=config.get("context_budget"),
+            execution_mode=parent_mode,
+            parent_session_id=parent_session_id,
+            delegation_authority=child_authority,
+        )
+        if inherited_grant is not None:
+            await permission_store.save_grant(
+                {
+                    "session_id": str(child.id),
+                    "agent_id": agent_name,
+                    "mode": "full",
+                    "capability": "session",
+                    "scope_path": None,
+                    "scope_type": "file",
+                    "grant_kind": "session",
+                    "digest": "full-mode-session",
+                    "expires_at": inherited_grant.get("expires_at"),
+                }
+            )
+        message_id = await self._record_start(parent_session_id, from_agent, agent_name, task)
+
+        # Phase 4.5/6 + LP-08: same factory/accounting/cancellation pipeline
+        # as normal turns. Child authority = definition ∩ parent caps, and the
+        # broker enforces it at execution (not just on the stored agent).
+        agent = None
+        if self._agent_factory is not None:
+            agent = self._agent_factory(definition)
+        else:
+            agent = await self._default_agent(definition, authority=child_authority)
+        depth_token = delegation_depth.set(_hop_count)
+        loop = asyncio.get_running_loop()
+        deadline_token = delegation_deadline.set(
+            delegation_deadline.get() or loop.time() + self.DELEGATION_TIMEOUT_SECONDS
+        )
+        authority_token = parent_authority_var.set(child_authority)
+        try:
+            child_task = self._build_delegation_prompt(agent_name, task, handoff)
+            response = await asyncio.wait_for(
+                agent.run(child.id, child_task, verbose=False),
+                timeout=max(0, delegation_deadline.get() - loop.time()),
+            )
+        except asyncio.CancelledError:
+            try:
+                tokens = await self._charged_child_tokens(child.id, agent_name)
+                await self._record_end(
+                    message_id, status="cancelled", response="cancelled", tokens=tokens
+                )
+            except Exception as accounting_error:
+                # Accounting failures must not swallow the parent's cancellation.
+                record_failure("orchestrator.delegate", accounting_error)
+            raise
+        except Exception as e:
+            logger.exception("Delegation to %s failed", agent_name)
+            detail = "delegation timed out" if isinstance(e, TimeoutError) else str(e)
+            tokens = await self._charged_child_tokens(child.id, agent_name)
+            await self._record_end(
+                message_id, status="error", response=f"{type(e).__name__}: {detail}", tokens=tokens
+            )
+            return DelegationResult(
+                agent_name, task, f"Error: {detail}", child.id, tokens, 0, "error"
+            )
+        finally:
+            delegation_depth.reset(depth_token)
+            delegation_deadline.reset(deadline_token)
+            try:
+                from machina.core.agent_factory import parent_authority_var as _pav
+
+                _pav.reset(authority_token)
+            except Exception as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("orchestrator.delegate", _boundary_error)
+            # AH-AUDIT-026: shared owner-aware cleanup contract (bounded;
+            # custom test factories inject shared agents that stay open).
+            if getattr(self, "_owns_factory_agents", False) and agent is not None:
+                try:
+                    from machina.core.agent_factory import close_agent_provider
+
+                    await close_agent_provider(agent)
+                except Exception as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("orchestrator.delegate", _boundary_error)
+
+        tokens = await self._charged_child_tokens(child.id, agent_name, response.tokens_used)
+        pauses = getattr(response, "needs_approval", None)
+        pauses = (
+            [dict(pause) for pause in pauses if isinstance(pause, dict)]
+            if isinstance(pauses, list)
+            else []
+        )
+        for pause in pauses:
+            pause.setdefault("session_id", str(child.id))
+            pause.setdefault("agent_id", agent_name)
+        status = "waiting_approval" if pauses else "complete"
+        await self._record_end(message_id, status=status, response=response.content, tokens=tokens)
+        if parent_session_id is not None:
+            await context_manager.add_chunk(
+                session_id=parent_session_id,
+                agent_id=from_agent,
+                chunk_type="result",
+                payload={"agent": agent_name, "content": f"[{agent_name}] {response.content}"},
+                token_count=get_token_count(response.content),
+            )
+        return DelegationResult(
+            agent=agent_name,
+            task=task,
+            response=response.content,
+            session_id=child.id,
+            tokens=tokens,
+            iterations=response.iterations,
+            status=status,
+            needs_approval=pauses,
+        )
+
+    async def _charged_child_tokens(
+        self, session_id: uuid.UUID, agent_name: str, known_tokens: int = 0
+    ) -> int:
+        """Read spend for this fresh child, including descendant reservations.
+
+        Reading the ledger adds no wrapper charge. The returned response may
+        already include descendants, so take the maximum rather than adding it.
+        """
+        from machina.core.exceptions import DelegationAccountingError
+        from machina.core.usage import db as usage_db
+        from machina.core.usage import usage_store
+
+        try:
+            summary = await usage_store.summary(session_id, agent_name)
+            return max(known_tokens, int(summary["session"]["chargedTokens"]))
+        except Exception as error:
+            if usage_db.connected:
+                raise DelegationAccountingError(
+                    "delegation usage accounting unavailable"
+                ) from error
+            # Explicitly DB-less runs have no durable ledger; retain any known
+            # successful response usage supplied by the injected child agent.
+            return known_tokens
+
+    async def _parent_context(self, session_id: uuid.UUID) -> str:
+        """Pass a bounded summary of recent parent activity to a child agent."""
+        # AH-AUDIT-019: delegation reads current durable parent state.
+        parent = await session_manager.get_fresh(session_id)
+        if parent is None:
+            raise ValueError(f"parent session {session_id} not found")
+        recent = await context_manager.get_recent_context(session_id, limit=10)
+        assembler = PromptAssembler()
+        parts = []
+        if parent.goal:
+            parts.append(f"Goal: {parent.goal}")
+        for chunk in reversed(recent):
+            if chunk["type"] in {"user_message", "assistant_message"} or (
+                chunk["type"] == "result" and "agent" in chunk["payload"]
+            ):
+                parts.append(assembler._compress_chunk(chunk))
+        return truncate_to_tokens("\n".join(parts), 1200)
+
+    async def run_sequential(
+        self,
+        steps: list[tuple[str, str]],
+        *,
+        parent_session_id: uuid.UUID | None = None,
+        _hop_count: int = 0,
+    ) -> list[DelegationResult]:
+        """Run (agent, task) steps in order; each task is prefixed with prior results."""
+        results: list[DelegationResult] = []
+        for agent_name, task in steps:
+            prompt = task
+            if results:
+                prior = "\n\n".join(f"### {r.agent} said:\n{r.response}" for r in results)
+                prompt = f"{task}\n\n## Results so far\n{prior}"
+            results.append(
+                await self.delegate(
+                    agent_name,
+                    prompt,
+                    from_agent="orchestrator",
+                    parent_session_id=parent_session_id,
+                    _hop_count=_hop_count + 1,
+                )
+            )
+            if results[-1].needs_approval:
+                break
+        return results
+
+    async def run_parallel(
+        self,
+        tasks: list[tuple[str, str]],
+        *,
+        parent_session_id: uuid.UUID | None = None,
+        _hop_count: int = 0,
+    ) -> list[DelegationResult | Exception]:
+        """Run (agent, task) delegations concurrently.
+
+        Children inherit ``_hop_count + 1`` so circular delegation is still
+        bounded. Individual failures are returned as exceptions in place
+        (return_exceptions=True) so callers never lose results.
+        """
+        raw = await asyncio.gather(
+            *(
+                self.delegate(
+                    agent_name,
+                    task,
+                    from_agent="orchestrator",
+                    parent_session_id=parent_session_id,
+                    _hop_count=_hop_count + 1,
+                )
+                for agent_name, task in tasks
+            ),
+            return_exceptions=True,
+        )
+        return list(raw)
+
+    # ─── persistence ──────────────────────────────────────────────────────
+    async def _record_start(
+        self, session_id: uuid.UUID | None, from_agent: str, to_agent: str, task: str
+    ) -> uuid.UUID:
+        message_id = uuid.uuid4()
+        await db.execute(
+            """
+            INSERT INTO agent_messages (id, session_id, from_agent, to_agent, task, status)
+            VALUES ($1, $2, $3, $4, $5, 'pending')
+            """,
+            message_id,
+            session_id,
+            from_agent,
+            to_agent,
+            task,
+        )
+        return message_id
+
+    async def _record_end(
+        self, message_id: uuid.UUID, *, status: str, response: str, tokens: int
+    ) -> None:
+        await db.execute(
+            """
+            UPDATE agent_messages
+            SET status = $2, response = $3, tokens_used = $4, completed_at = now()
+            WHERE id = $1
+            """,
+            message_id,
+            status,
+            response,
+            tokens,
+        )
+
+    async def history(self, session_id: uuid.UUID, limit: int = 50) -> list[dict]:
+        rows = await db.fetch(
+            """
+            SELECT id, from_agent, to_agent, task, response, status, tokens_used, created_at, completed_at
+            FROM agent_messages WHERE session_id = $1 ORDER BY created_at ASC LIMIT $2
+            """,
+            session_id,
+            limit,
+        )
+        return [
+            {
+                "id": str(r["id"]),
+                "fromAgent": r["from_agent"],
+                "toAgent": r["to_agent"],
+                "task": r["task"],
+                "response": r["response"],
+                "status": r["status"],
+                "tokens": r["tokens_used"],
+                "createdAt": r["created_at"].isoformat() if r["created_at"] else None,
+            }
+            for r in rows
+        ]
+
+
+orchestrator = Orchestrator()

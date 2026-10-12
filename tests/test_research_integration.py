@@ -8,26 +8,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.core.context import ContextManager
-from ah.core.exceptions import ToolError, ValidationError
-from ah.core.serialization import payload_to_msgpack
-from ah.core.session import SessionManager
-from ah.memory.approval import MemoryApprovalGate
-from ah.memory.identity import AgentBelief, IdentityGate
-from ah.memory.persona import PersonaMemoryStore
-from ah.memory.retriever import MemoryRetriever
-from ah.memory.store import MemoryStore
-from ah.memory.user_profile import UserProfileStore
-from ah.rag.loaders import FileLoader
-from ah.soulspec.schema import SoulSpec
-from ah.tools import file as file_tools
-from ah.tools.terminal import terminal
+from machina.core.context import ContextManager
+from machina.core.exceptions import ToolError, ValidationError
+from machina.core.serialization import payload_to_msgpack
+from machina.core.session import SessionManager
+from machina.memory.approval import MemoryApprovalGate
+from machina.memory.identity import AgentBelief, IdentityGate
+from machina.memory.persona import PersonaMemoryStore
+from machina.memory.retriever import MemoryRetriever
+from machina.memory.store import MemoryStore
+from machina.memory.user_profile import UserProfileStore
+from machina.rag.loaders import FileLoader
+from machina.soulspec.schema import SoulSpec
+from machina.tools import file as file_tools
+from machina.tools.terminal import terminal
 
 
 async def test_bulk_approval_is_atomic_and_idempotent(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.memory.approval.db", db_pool)
-    monkeypatch.setattr("ah.memory.store.db", db_pool)
-    monkeypatch.setattr("ah.memory.identity.db", db_pool)
+    monkeypatch.setattr("machina.memory.approval.db", db_pool)
+    monkeypatch.setattr("machina.memory.store.db", db_pool)
+    monkeypatch.setattr("machina.memory.identity.db", db_pool)
     agent = f"approval-{uuid.uuid4()}"
     gate = MemoryApprovalGate(enabled=True)
     pending = await gate.submit("A durable fact", "fact", agent_id=agent)
@@ -47,7 +47,7 @@ async def test_bulk_approval_is_atomic_and_idempotent(db_pool, monkeypatch):
 
 
 async def test_profile_topic_update_uses_jsonb_comparison(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.memory.user_profile.db", db_pool)
+    monkeypatch.setattr("machina.memory.user_profile.db", db_pool)
     store = UserProfileStore()
     user_id = f"profile-{uuid.uuid4()}"
     profile = await store.create(user_id)
@@ -61,7 +61,7 @@ async def test_profile_topic_update_uses_jsonb_comparison(db_pool, monkeypatch):
 
 
 async def test_quarantine_excludes_search_results(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.memory.store.db", db_pool)
+    monkeypatch.setattr("machina.memory.store.db", db_pool)
     agent = f"quarantine-{uuid.uuid4()}"
     await db_pool.execute(
         "INSERT INTO memories (agent_id, content, category, quarantined) "
@@ -76,9 +76,9 @@ async def test_quarantine_excludes_search_results(db_pool, monkeypatch):
 
 
 async def test_belief_jsonb_and_keyed_provenance(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.memory.identity.db", db_pool)
-    monkeypatch.setattr("ah.memory.store.db", db_pool)
-    monkeypatch.setenv("AGENT_HARNESS_PROVENANCE_KEY", "integration-only-key")
+    monkeypatch.setattr("machina.memory.identity.db", db_pool)
+    monkeypatch.setattr("machina.memory.store.db", db_pool)
+    monkeypatch.setenv("MACHINA_PROVENANCE_KEY", "integration-only-key")
     agent = f"belief-{uuid.uuid4()}"
     gate = IdentityGate()
     await gate.save_beliefs(
@@ -102,9 +102,9 @@ async def test_belief_jsonb_and_keyed_provenance(db_pool, monkeypatch):
 
 
 async def test_unsigned_shared_memory_is_quarantined(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.memory.identity.db", db_pool)
-    monkeypatch.setattr("ah.memory.store.db", db_pool)
-    monkeypatch.delenv("AGENT_HARNESS_PROVENANCE_KEY", raising=False)
+    monkeypatch.setattr("machina.memory.identity.db", db_pool)
+    monkeypatch.setattr("machina.memory.store.db", db_pool)
+    monkeypatch.delenv("MACHINA_PROVENANCE_KEY", raising=False)
     target = f"target-{uuid.uuid4()}"
     entry = await MemoryStore().add(
         None, target, "Unverified shared claim", "fact", source_agent="other-agent"
@@ -117,11 +117,11 @@ async def test_unsigned_shared_memory_is_quarantined(db_pool, monkeypatch):
 
 
 async def test_persona_interpretation_reaches_retrieval(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.memory.identity.db", db_pool)
-    monkeypatch.setattr("ah.memory.store.db", db_pool)
-    monkeypatch.setattr("ah.memory.retriever.db", db_pool)
-    monkeypatch.setattr("ah.memory.persona.db", db_pool)
-    monkeypatch.delenv("AGENT_HARNESS_PROVENANCE_KEY", raising=False)
+    monkeypatch.setattr("machina.memory.identity.db", db_pool)
+    monkeypatch.setattr("machina.memory.store.db", db_pool)
+    monkeypatch.setattr("machina.memory.retriever.db", db_pool)
+    monkeypatch.setattr("machina.memory.persona.db", db_pool)
+    monkeypatch.delenv("MACHINA_PROVENANCE_KEY", raising=False)
     agent = f"persona-{uuid.uuid4()}"
     store = MemoryStore()
     fact = await store.add(None, agent, "Python is useful", "fact")
@@ -143,7 +143,7 @@ async def test_persona_interpretation_reaches_retrieval(db_pool, monkeypatch):
 
 
 async def test_archived_conversation_recalls_without_embedding(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
     session_id = await db_pool.fetchval(
         "INSERT INTO sessions (agent_id) VALUES ('harness') RETURNING id"
     )
@@ -185,7 +185,7 @@ async def test_archived_conversation_recalls_without_embedding(db_pool, monkeypa
         matches = await manager.search_archive_text(session_id, "nebula telescope")
         assert matches[0][0].id == first.id
     finally:
-        monkeypatch.setattr("ah.core.session.db", db_pool)
+        monkeypatch.setattr("machina.core.session.db", db_pool)
         await SessionManager().delete(session_id)
         assert (
             await db_pool.fetchval(
@@ -218,7 +218,7 @@ async def test_eviction_keeps_source_when_archive_fails(monkeypatch):
     fake_db.acquire = MagicMock()
     fake_db.acquire.return_value.__aenter__.return_value = connection
     with (
-        patch("ah.core.context.db", fake_db),
+        patch("machina.core.context.db", fake_db),
         patch.object(manager, "archive_chunk", AsyncMock(side_effect=RuntimeError("archive down"))),
     ):
         assert await manager.evict_old_chunks(session_id, max_chunks=10) == 0
@@ -226,7 +226,7 @@ async def test_eviction_keeps_source_when_archive_fails(monkeypatch):
 
 
 def test_soulspec_package_round_trip_and_registry(tmp_path, monkeypatch):
-    from ah.core.agent_def import AgentRegistry
+    from machina.core.agent_def import AgentRegistry
 
     spec = SoulSpec(
         name="research-helper",
@@ -243,7 +243,7 @@ def test_soulspec_package_round_trip_and_registry(tmp_path, monkeypatch):
     assert manifest["specVersion"] == "0.5"
     restored = SoulSpec.from_package(directory)
     assert restored.persona.system_prompt == spec.persona.system_prompt
-    monkeypatch.setenv("AGENT_HARNESS_AGENTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_AGENTS_DIR", str(tmp_path))
     definition = AgentRegistry()._file_definitions()["research-helper"]
     assert definition.source == "soulspec"
     assert "Verify sources" in definition.system_prompt
@@ -260,9 +260,9 @@ async def test_terminal_requires_explicit_sandbox(monkeypatch):
     # downgrade to host execution). Plain disabled-sandbox host execution
     # proceeds once broker-authorized — the old hard-reject is gone by
     # design (Phase D broker); this test pins the enforced contract.
-    from ah.core.config import config as _cfg
+    from machina.core.config import config as _cfg
 
-    monkeypatch.delenv("AGENT_HARNESS_TERMINAL_SANDBOX", raising=False)
+    monkeypatch.delenv("MACHINA_TERMINAL_SANDBOX", raising=False)
     saved = _cfg.get("execution_mode")
     _cfg.set("execution_mode", "sandbox")
     try:

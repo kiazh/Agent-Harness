@@ -21,7 +21,7 @@ Date: 2026-10-10. Reviewed OpenCode commits `e7fe0e6`, `e9cd169`, and `639e833`,
 
 ## Runtime upgrade
 
-Gateway initialization, CLI chat, and shared runtime startup apply required additive migrations to existing native databases. The migration is transactional, serialized across concurrent startup, and idempotent; regression coverage preserves existing session data and historical usage. Startup reports an unavailable database if required migration fails. Fresh database setup still uses `ah db init` and the full schema loader.
+Gateway initialization, CLI chat, and shared runtime startup apply required additive migrations to existing native databases. The migration is transactional, serialized across concurrent startup, and idempotent; regression coverage preserves existing session data and historical usage. Startup reports an unavailable database if required migration fails. Fresh database setup still uses `machina db init` and the full schema loader.
 
 ## Verification
 

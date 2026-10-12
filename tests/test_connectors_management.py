@@ -5,12 +5,12 @@ import stat
 
 import pytest
 
-from ah.connectors.models import ConfigError
-from ah.connectors.service import ConnectorService
+from machina.connectors.models import ConfigError
+from machina.connectors.service import ConnectorService
 
 
 def test_store_survives_restart_and_preserves_revisions(tmp_path):
-    from ah.connectors.store import ConnectorStore
+    from machina.connectors.store import ConnectorStore
 
     path = tmp_path / "mcp.json"
     store = ConnectorStore(path)
@@ -32,7 +32,7 @@ def test_store_survives_restart_and_preserves_revisions(tmp_path):
     [{"env": {"TOKEN": "secret"}}, {"owner": "other"}, {"revision": 99}, {"unknown": True}],
 )
 def test_store_rejects_secret_values_and_authority_widening(tmp_path, fields):
-    from ah.connectors.store import ConnectorStore
+    from machina.connectors.store import ConnectorStore
 
     store = ConnectorStore(tmp_path / "mcp.json")
     with pytest.raises(ConfigError):
@@ -41,8 +41,8 @@ def test_store_rejects_secret_values_and_authority_widening(tmp_path, fields):
 
 
 async def test_workers_reload_without_launching_and_drop_stale_catalog(tmp_path):
-    from ah.connectors.models import DiscoveredTool
-    from ah.connectors.store import ConnectorStore
+    from machina.connectors.models import DiscoveredTool
+    from machina.connectors.store import ConnectorStore
 
     path = tmp_path / "mcp.json"
     a = ConnectorService(store=ConnectorStore(path))
@@ -59,7 +59,7 @@ async def test_workers_reload_without_launching_and_drop_stale_catalog(tmp_path)
 
 async def test_management_methods_registered(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    from ah.gateway.features import METHODS
+    from machina.gateway.features import METHODS
 
     assert {
         "mcp.configure",
@@ -71,7 +71,7 @@ async def test_management_methods_registered(tmp_path, monkeypatch):
 
 
 def test_removed_connector_revision_cannot_be_reused(tmp_path):
-    from ah.connectors.store import ConnectorStore
+    from machina.connectors.store import ConnectorStore
 
     store = ConnectorStore(tmp_path / "mcp.json")
     assert store.configure({"id": "fixture", "command": "fixture"}).revision == 1
@@ -80,10 +80,10 @@ def test_removed_connector_revision_cannot_be_reused(tmp_path):
 
 
 async def test_replacement_and_removal_retire_connection_first(tmp_path):
-    from ah.connectors.manager import ConnectorManager
-    from ah.connectors.models import ConnectionState
-    from ah.connectors.registry import ConnectorRegistry
-    from ah.connectors.store import ConnectorStore
+    from machina.connectors.manager import ConnectorManager
+    from machina.connectors.models import ConnectionState
+    from machina.connectors.registry import ConnectorRegistry
+    from machina.connectors.store import ConnectorStore
 
     store = ConnectorStore(tmp_path / "mcp.json")
     registry = ConnectorRegistry()
@@ -117,9 +117,9 @@ async def test_replacement_and_removal_retire_connection_first(tmp_path):
 async def test_gateway_config_validation_does_not_persist(tmp_path):
     from types import SimpleNamespace
 
-    from ah.connectors.store import ConnectorStore
-    from ah.gateway.errors import INVALID_PARAMS, RpcError
-    from ah.gateway.features.connectors import mcp_configure
+    from machina.connectors.store import ConnectorStore
+    from machina.gateway.errors import INVALID_PARAMS, RpcError
+    from machina.gateway.features.connectors import mcp_configure
 
     store = ConnectorStore(tmp_path / "mcp.json")
     service = ConnectorService(store=store)
@@ -137,7 +137,7 @@ async def test_gateway_config_validation_does_not_persist(tmp_path):
     ["null", "[]", '{"version":1,"generation":1,"configs":[],"revisions":{"fixture":true}}'],
 )
 def test_corrupt_inventory_fails_closed(tmp_path, payload):
-    from ah.connectors.store import ConnectorStore
+    from machina.connectors.store import ConnectorStore
 
     store = ConnectorStore(tmp_path / "mcp.json")
     store.path.write_text(payload)
@@ -148,7 +148,7 @@ def test_corrupt_inventory_fails_closed(tmp_path, payload):
 def test_parallel_workers_do_not_lose_inventory_updates(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
 
-    from ah.connectors.store import ConnectorStore
+    from machina.connectors.store import ConnectorStore
 
     path = tmp_path / "mcp.json"
 
@@ -166,7 +166,7 @@ def test_windows_lock_covers_fixed_byte_and_releases_on_error(tmp_path, monkeypa
     import os
     from types import SimpleNamespace
 
-    import ah.connectors.store as store_module
+    import machina.connectors.store as store_module
 
     operations = []
 
@@ -190,7 +190,7 @@ def test_windows_lock_covers_fixed_byte_and_releases_on_error(tmp_path, monkeypa
 def test_windows_persistence_skips_directory_fsync(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    import ah.connectors.store as store_module
+    import machina.connectors.store as store_module
 
     monkeypatch.setattr(store_module, "_WINDOWS", True)
     monkeypatch.setattr(
@@ -210,9 +210,9 @@ def test_windows_persistence_skips_directory_fsync(tmp_path, monkeypatch):
 
 
 async def test_restart_loads_inventory_without_constructing_client(tmp_path):
-    from ah.connectors.manager import ConnectorManager
-    from ah.connectors.registry import ConnectorRegistry
-    from ah.connectors.store import ConnectorStore
+    from machina.connectors.manager import ConnectorManager
+    from machina.connectors.registry import ConnectorRegistry
+    from machina.connectors.store import ConnectorStore
 
     store = ConnectorStore(tmp_path / "mcp.json")
     store.configure({"id": "fixture", "command": "fixture"})
@@ -229,10 +229,10 @@ async def test_restart_loads_inventory_without_constructing_client(tmp_path):
 
 @pytest.mark.parametrize("operation", ["configure", "remove"])
 async def test_failed_retirement_refuses_mutation_and_keeps_client_tracked(tmp_path, operation):
-    from ah.connectors.manager import ConnectorManager
-    from ah.connectors.models import ConnectionFailed, ConnectionState
-    from ah.connectors.registry import ConnectorRegistry
-    from ah.connectors.store import ConnectorStore
+    from machina.connectors.manager import ConnectorManager
+    from machina.connectors.models import ConnectionFailed, ConnectionState
+    from machina.connectors.registry import ConnectorRegistry
+    from machina.connectors.store import ConnectorStore
 
     class RetiringClient:
         def __init__(self, config):

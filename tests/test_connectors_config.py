@@ -2,8 +2,8 @@
 
 import pytest
 
-from ah.connectors.models import ConfigError, ConnectorConfig, Trust
-from ah.connectors.registry import ConnectorRegistry, namespaced_tool_name
+from machina.connectors.models import ConfigError, ConnectorConfig, Trust
+from machina.connectors.registry import ConnectorRegistry, namespaced_tool_name
 
 
 def _stdio(**fields):
@@ -131,7 +131,7 @@ def test_registry_crud_and_revisions():
 
 
 def test_registry_tool_catalog_bounds_and_isolation():
-    from ah.connectors.models import DiscoveredTool
+    from machina.connectors.models import DiscoveredTool
 
     registry = ConnectorRegistry()
     registry.add(_stdio(id="a"))
@@ -181,7 +181,7 @@ def test_configuration_refuses_invalid_runtime_types(field, value):
 
 
 def test_catalog_name_collision_is_rejected_without_losing_previous_catalog():
-    from ah.connectors.models import DiscoveredTool
+    from machina.connectors.models import DiscoveredTool
 
     registry = ConnectorRegistry()
     registry.add(_stdio())

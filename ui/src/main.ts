@@ -1,5 +1,5 @@
 // Entry point: `node ui/src/main.ts [--model M] [--provider P] [--session ID] [--mode MODE]`.
-// Normally started by `ah` (ah/cli/launcher.py), which sets AH_PYTHON.
+// Normally started by `machina` (machina/cli/launcher.py), which sets MACHINA_PYTHON.
 
 import { parseArgs } from "node:util";
 import * as path from "node:path";
@@ -10,10 +10,10 @@ import { ThemedTerminal } from "./design/terminal.ts";
 import { App } from "./app.ts";
 import { GatewayClient } from "./gateway.ts";
 
-const USAGE = `Usage: ah [--model MODEL] [--provider PROVIDER] [--session ID] [--mode MODE] [--no-clear]
+const USAGE = `Usage: machina [--model MODEL] [--provider PROVIDER] [--session ID] [--mode MODE] [--no-clear]
 
-Interactive AgentHarness terminal UI. Set AH_PYTHON to the Python interpreter
-that has AgentHarness installed (the \`ah\` command does this for you).
+Interactive Machina terminal UI. Set MACHINA_PYTHON to the Python interpreter
+that has Machina installed (the \`machina\` command does this for you).
 The terminal is cleared on startup so the app owns the screen; pass
 --no-clear to keep existing scrollback.`;
 
@@ -36,9 +36,9 @@ if (values.help) {
 }
 
 function detectPython(): string {
-	if (process.env.AH_PYTHON) return process.env.AH_PYTHON;
+	if (process.env.MACHINA_PYTHON) return process.env.MACHINA_PYTHON;
 	if (process.platform === "win32") {
-		// Prefer the project venv over system python (which lacks ah).
+		// Prefer the project venv over system python (which lacks machina).
 		const venv = path.resolve(import.meta.dirname, "..", "..", ".venv", "Scripts", "python.exe");
 		try {
 			if (fs.statSync(venv).isFile()) return venv;
@@ -52,7 +52,7 @@ const gatewayToken = crypto.randomBytes(32).toString("hex");
 // Fullscreen alternate buffer, Codex style: the app owns the display and the
 // composer docks to the bottom (see App's layout root). Restored on exit.
 const tui = new TuiAltScreen(new ThemedTerminal());
-const client = new GatewayClient({ python, token: gatewayToken, env: { AH_GATEWAY_TOKEN: gatewayToken } });
+const client = new GatewayClient({ python, token: gatewayToken, env: { MACHINA_GATEWAY_TOKEN: gatewayToken } });
 const app = new App(tui, client, { model: values.model, provider: values.provider, sessionId: values.session, mode: values.mode });
 
 // Never leave the terminal in raw mode, whatever happens.

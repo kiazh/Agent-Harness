@@ -10,17 +10,17 @@ import asyncpg
 
 
 async def main():
-    from ah.core import turns
-    from ah.core.scheduler import job_store
-    from ah.core.session_mode import resolve_effective_mode, set_session_mode
-    from ah.db.connection import db
-    from ah.permissions.store import claim_execution
+    from machina.core import turns
+    from machina.core.scheduler import job_store
+    from machina.core.session_mode import resolve_effective_mode, set_session_mode
+    from machina.db.connection import db
+    from machina.permissions.store import claim_execution
 
     db._pool = await asyncpg.create_pool(
-        dsn=os.environ["AGENT_HARNESS_TEST_DATABASE_URL"],
+        dsn=os.environ["MACHINA_TEST_DATABASE_URL"],
         min_size=1,
         max_size=3,
-        server_settings={"search_path": os.environ["AH_FENCING_TEST_SCHEMA"] + ",public"},
+        server_settings={"search_path": os.environ["MACHINA_FENCING_TEST_SCHEMA"] + ",public"},
     )
     active = []
     entered = asyncio.Event()
@@ -31,7 +31,7 @@ async def main():
             await asyncio.Event().wait()
             yield  # Keep this an async generator; never produces effects.
 
-    from ah.gateway.server import Gateway
+    from machina.gateway.server import Gateway
 
     gateway = Gateway(lambda frame: None, agent_factory=lambda *args: HeldAgent(), owns_db=False)
     gateway._db_ready = True
@@ -42,7 +42,7 @@ async def main():
         if op in {"gateway", "http", "turn", "mutation"}:
             entered.clear()
             if op == "gateway":
-                from ah.gateway.errors import RpcError
+                from machina.gateway.errors import RpcError
 
                 try:
                     await gateway._prompt_submit({"sessionId": str(sid), "text": "held test turn"})
@@ -53,8 +53,8 @@ async def main():
             elif op == "http":
                 from fastapi import HTTPException
 
-                import ah.core.agent_factory as factory
-                from ah.api import app as api
+                import machina.core.agent_factory as factory
+                from machina.api import app as api
 
                 async def fake_factory(*args, **kwargs):
                     return HeldAgent()

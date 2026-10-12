@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.memory.user_profile import UserProfileStore
+from machina.memory.user_profile import UserProfileStore
 
 
 @pytest.fixture
@@ -43,7 +43,7 @@ class TestRecordInteractionAtomic:
                 "updated_at": MagicMock(),
             }
         )
-        with patch("ah.memory.user_profile.db", mock_db):
+        with patch("machina.memory.user_profile.db", mock_db):
             result = await store.record_interaction(uuid.uuid4(), topic="python")
         assert result is not None
         # Should NOT have a separate SELECT — the atomic version uses a single query
@@ -65,7 +65,7 @@ class TestRecordInteractionAtomic:
                 "updated_at": MagicMock(),
             }
         )
-        with patch("ah.memory.user_profile.db", mock_db):
+        with patch("machina.memory.user_profile.db", mock_db):
             result = await store.record_interaction(uuid.uuid4())
         assert result is not None
         assert mock_db.fetchrow.call_count == 1
@@ -73,6 +73,6 @@ class TestRecordInteractionAtomic:
     async def test_record_interaction_returns_none_for_missing_profile(self, store, mock_db):
         """record_interaction returns None when profile doesn't exist."""
         mock_db.fetchrow = AsyncMock(return_value=None)
-        with patch("ah.memory.user_profile.db", mock_db):
+        with patch("machina.memory.user_profile.db", mock_db):
             result = await store.record_interaction(uuid.uuid4(), topic="python")
         assert result is None

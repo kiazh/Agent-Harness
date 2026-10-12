@@ -267,7 +267,7 @@ test("assistant output renders a square response frame and respects width", asyn
 	assert.match(rendered, /│ hello world/);
 	assert.match(rendered, /└─/);
 	const banner = plain(header("0.1.0"), 80);
-	assert.match(banner, />_ AgentHarness/);
+	assert.match(banner, />_ Machina/);
 	assert.doesNotMatch(banner, /─/);
 });
 
@@ -513,7 +513,7 @@ test("light theme composer placeholder uses readable muted ink", async () => {
 test("session header is a minimal codex-style brand line", async () => {
 	const { header } = await import("../src/components.ts");
 	const out = plain(header("0.1.0", { model: "gpt-x", provider: "acme", cwd: "/repo", branch: "main" }), 80);
-	assert.match(out, />_ AgentHarness/);
+	assert.match(out, />_ Machina/);
 	assert.match(out, /\/repo · main/);
 	assert.doesNotMatch(out, /─/);
 });

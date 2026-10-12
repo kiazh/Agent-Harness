@@ -6,16 +6,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.models import AgentResponse, Session, StreamEvent
-from ah.gateway import server
-from ah.permissions.broker import _approval_handler
+from machina.core.models import AgentResponse, Session, StreamEvent
+from machina.gateway import server
+from machina.permissions.broker import _approval_handler
 
 
 @pytest.mark.parametrize("outcome", ["approve", "cancel", "loss"])
 async def test_approval_wait_renews_and_stops_owned_work(monkeypatch, outcome):
-    from ah import services
-    from ah.core import turns
-    from ah.core.session import session_manager
+    from machina import services
+    from machina.core import turns
+    from machina.core.session import session_manager
 
     frames, effects, renewals = [], [], []
     pending, twice = asyncio.Event(), asyncio.Event()

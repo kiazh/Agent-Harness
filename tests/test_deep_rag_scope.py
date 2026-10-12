@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 import msgpack
 import pytest
 
-from ah.rag.embedder import Embedder
-from ah.rag.pipeline import RAGConfig, RAGPipeline
+from machina.rag.embedder import Embedder
+from machina.rag.pipeline import RAGConfig, RAGPipeline
 
 DEFAULT_MODEL = "text-embedding-3-small"
 OTHER_MODEL = "text-embedding-ada-002"
@@ -114,7 +114,7 @@ class ChunkRows:
 @pytest.fixture
 def rows(monkeypatch):
     boundary = ChunkRows()
-    monkeypatch.setattr("ah.rag.pipeline.db", boundary)
+    monkeypatch.setattr("machina.rag.pipeline.db", boundary)
     return boundary
 
 

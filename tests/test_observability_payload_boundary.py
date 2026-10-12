@@ -5,14 +5,14 @@ import uuid
 
 import pytest
 
-from ah.core.provider import audit_log
-from ah.gateway.server import Gateway
+from machina.core.provider import audit_log
+from machina.gateway.server import Gateway
 
 
 def test_audit_removes_prompt_completion_and_raw_tool_payload(caplog, monkeypatch):
     entries = []
-    monkeypatch.setattr("ah.observability.audit.audit_persistence.submit", entries.append)
-    with caplog.at_level("INFO", logger="ah.audit"):
+    monkeypatch.setattr("machina.observability.audit.audit_persistence.submit", entries.append)
+    with caplog.at_level("INFO", logger="machina.audit"):
         audit_log(
             "boundary",
             prompt="private-prompt",
@@ -44,7 +44,7 @@ async def test_invalid_gateway_request_does_not_log_its_payload(caplog):
 
 
 def test_config_corruption_does_not_log_parser_source(tmp_path, caplog):
-    from ah.core.config import Config
+    from machina.core.config import Config
 
     path = tmp_path / "config.yaml"
     path.write_text("model: [private-prompt", encoding="utf-8")
@@ -55,8 +55,8 @@ def test_config_corruption_does_not_log_parser_source(tmp_path, caplog):
 async def test_audit_writer_failure_has_metric_and_no_error_payload(monkeypatch, caplog):
     import asyncio
 
-    from ah.core.metrics import metrics
-    from ah.observability import audit
+    from machina.core.metrics import metrics
+    from machina.observability import audit
 
     started = asyncio.Event()
 
@@ -82,8 +82,8 @@ async def test_audit_writer_failure_has_metric_and_no_error_payload(monkeypatch,
 def test_opaque_configured_secret_redacted_after_resolution(monkeypatch, tmp_path, caplog, source):
     import logging
 
-    from ah.memory.redaction import StreamingSecretRedactor, redact_secrets
-    from ah.security import secrets
+    from machina.memory.redaction import StreamingSecretRedactor, redact_secrets
+    from machina.security import secrets
 
     value = "opaquecredentialwithoutstandardprefix"
     if source == "environment":
@@ -93,7 +93,7 @@ def test_opaque_configured_secret_redacted_after_resolution(monkeypatch, tmp_pat
         path.write_text(value, encoding="utf-8")
         monkeypatch.setenv("SMOKE_API_KEY_FILE", str(path))
     else:
-        monkeypatch.setenv("AGENT_HARNESS_SECRET_BACKEND", "vault")
+        monkeypatch.setenv("MACHINA_SECRET_BACKEND", "vault")
         monkeypatch.setattr(secrets, "_external_secret", lambda *args: value)
         monkeypatch.setattr(secrets, "_cache", {})
     assert secrets.get_secret("SMOKE_API_KEY") == value
@@ -101,21 +101,21 @@ def test_opaque_configured_secret_redacted_after_resolution(monkeypatch, tmp_pat
     stream = StreamingSecretRedactor()
     output = "".join(stream.feed(char) for char in "echo " + value + " suffix") + stream.flush()
     assert value not in output and "[REDACTED" in output
-    logging.getLogger("ah.smoke").warning("provider echoed %s", value)
+    logging.getLogger("machina.smoke").warning("provider echoed %s", value)
     assert value not in caplog.text
 
 
 async def test_gateway_redacts_tool_arguments_and_results(monkeypatch):
     from unittest.mock import AsyncMock
 
-    from ah.core import turns
-    from ah.core.models import AgentResponse, Session, StreamEvent
-    from ah.core.session import session_manager
+    from machina.core import turns
+    from machina.core.models import AgentResponse, Session, StreamEvent
+    from machina.core.session import session_manager
 
     value = "sk-" + "a" * 30
     session = Session(id=uuid.uuid4())
     monkeypatch.setattr(session_manager, "get_fresh", AsyncMock(return_value=session))
-    monkeypatch.setattr("ah.services.maybe_auto_compact", AsyncMock())
+    monkeypatch.setattr("machina.services.maybe_auto_compact", AsyncMock())
 
     class Agent:
         async def run_stream(self, *args, **kwargs):

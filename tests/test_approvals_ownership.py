@@ -1,6 +1,6 @@
 """Approval ownership + grant semantics against an isolated database (LP-01..07).
 
-Uses AGENT_HARNESS_TEST_DATABASE_URL when set, else skips (never touches
+Uses MACHINA_TEST_DATABASE_URL when set, else skips (never touches
 production). Each module's `db` handle is patched to the isolated database.
 """
 
@@ -12,26 +12,26 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-TEST_DSN = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL", "")
-needs_test_db = pytest.mark.skipif(not TEST_DSN, reason="AGENT_HARNESS_TEST_DATABASE_URL not set")
+TEST_DSN = os.environ.get("MACHINA_TEST_DATABASE_URL", "")
+needs_test_db = pytest.mark.skipif(not TEST_DSN, reason="MACHINA_TEST_DATABASE_URL not set")
 _MODULES_WITH_DB = [
-    "ah.db.connection",
-    "ah.core.session",
-    "ah.core.context",
-    "ah.core.scheduler",
-    "ah.core.orchestrator",
-    "ah.core.agent_def",
-    "ah.core.usage",
-    "ah.gateway.server",
-    "ah.rag.pipeline",
-    "ah.tools.agents",
-    "ah.memory.store",
+    "machina.db.connection",
+    "machina.core.session",
+    "machina.core.context",
+    "machina.core.scheduler",
+    "machina.core.orchestrator",
+    "machina.core.agent_def",
+    "machina.core.usage",
+    "machina.gateway.server",
+    "machina.rag.pipeline",
+    "machina.tools.agents",
+    "machina.memory.store",
 ]
 
 
 @pytest.fixture
 async def isolated_db(monkeypatch):
-    from ah.db.connection import Database
+    from machina.db.connection import Database
 
     tdb = Database(dsn=TEST_DSN)
     await tdb.connect()
@@ -47,13 +47,13 @@ async def isolated_db(monkeypatch):
 
 
 async def _session(title="lp-test"):
-    from ah.core.session import session_manager
+    from machina.core.session import session_manager
 
     return await session_manager.create(title=title)
 
 
 def _req(**kw):
-    from ah.permissions.policy import build_request
+    from machina.permissions.policy import build_request
 
     base = dict(
         operation="file.write",
@@ -71,7 +71,7 @@ async def test_two_workers_one_execution_claim(isolated_db):
     """LP-06/acceptance-10: concurrent resolve/consume → exactly one owner."""
     import asyncio
 
-    from ah.permissions import store as st
+    from machina.permissions import store as st
 
     s = await _session()
     req = _req(session_id=str(s.id))
@@ -88,7 +88,7 @@ async def test_two_workers_one_execution_claim(isolated_db):
 
 @needs_test_db
 async def test_crash_after_decision_then_retry(isolated_db):
-    from ah.permissions import store as st
+    from machina.permissions import store as st
 
     s = await _session()
     req = _req(session_id=str(s.id))
@@ -104,9 +104,9 @@ async def test_crash_after_decision_then_retry(isolated_db):
 @needs_test_db
 async def test_headless_pause_approve_resume_once(isolated_db):
     """LP-02/acceptance-5: pause → HTTP approve → restart → fresh claim → one effect."""
-    from ah.permissions import broker as brokermod
-    from ah.permissions import store as st
-    from ah.permissions.broker import NeedsApproval
+    from machina.permissions import broker as brokermod
+    from machina.permissions import store as st
+    from machina.permissions.broker import NeedsApproval
 
     s = await _session()
     req = _req(session_id=str(s.id))
@@ -131,9 +131,9 @@ async def test_headless_pause_approve_resume_once(isolated_db):
 @needs_test_db
 async def test_once_does_not_authorize_repeat_or_change(isolated_db):
     """LP-03: once-only approval authorizes one exact execution, nothing reusable."""
-    from ah.permissions import broker as brokermod
-    from ah.permissions import store as st
-    from ah.permissions.broker import NeedsApproval
+    from machina.permissions import broker as brokermod
+    from machina.permissions import store as st
+    from machina.permissions.broker import NeedsApproval
 
     s = await _session()
     req = _req(session_id=str(s.id))
@@ -161,9 +161,9 @@ async def test_once_does_not_authorize_repeat_or_change(isolated_db):
 @needs_test_db
 async def test_session_grant_allows_repeat_not_sibling_or_change(isolated_db):
     """LP-03/acceptance-6: explicit session grant covers repeats, nothing else."""
-    from ah.permissions import broker as brokermod
-    from ah.permissions import store as st
-    from ah.permissions.broker import NeedsApproval
+    from machina.permissions import broker as brokermod
+    from machina.permissions import store as st
+    from machina.permissions.broker import NeedsApproval
 
     s = await _session()
     req = _req(session_id=str(s.id))
@@ -206,7 +206,7 @@ async def test_session_grant_allows_repeat_not_sibling_or_change(isolated_db):
 @needs_test_db
 async def test_scope_identity_and_directory_containment(isolated_db):
     """LP-04: exact file identity vs component-wise directory scope."""
-    from ah.permissions.policy import build_request, decide
+    from machina.permissions.policy import build_request, decide
 
     def _grant(**kw):
         base = {
@@ -250,7 +250,7 @@ async def test_scope_identity_and_directory_containment(isolated_db):
 async def test_grant_expiry_revocation_binding(isolated_db):
     """LP-05: expired/future/revoked/foreign grants never authorize."""
 
-    from ah.permissions.policy import build_request, decide
+    from machina.permissions.policy import build_request, decide
 
     now = datetime.now(UTC)
 
@@ -294,8 +294,8 @@ async def test_grant_expiry_revocation_binding(isolated_db):
 @needs_test_db
 async def test_full_mode_session_isolation_and_revoke(isolated_db):
     """LP-07/acceptance-8: A full does not elevate B; revoke ends authority."""
-    from ah.permissions import broker as brokermod
-    from ah.permissions import store as st
+    from machina.permissions import broker as brokermod
+    from machina.permissions import store as st
 
     a = await _session(title="lp-test-a")
     b = await _session(title="lp-test-b")
@@ -310,7 +310,7 @@ async def test_full_mode_session_isolation_and_revoke(isolated_db):
             "digest": "full-mode-session",
         }
     )
-    from ah.permissions.policy import build_request, decide
+    from machina.permissions.policy import build_request, decide
 
     async def _verdict(sid):
         req = build_request(
@@ -336,7 +336,7 @@ async def test_approval_partition_across_sessions(isolated_db):
     """Acceptance-9: finishing A's turn never cancels B's approval wait."""
     import asyncio
 
-    from ah.gateway.server import Gateway
+    from machina.gateway.server import Gateway
 
     gw = Gateway(write=lambda frame: None, owns_db=False)
     gw._db_ready = True
@@ -355,8 +355,8 @@ async def test_approval_partition_across_sessions(isolated_db):
 async def test_expired_db_grant_never_authorizes(isolated_db):
     """LP-05 DB backend: expired rows are filtered before decisions."""
 
-    from ah.permissions import store as st
-    from ah.permissions.policy import build_request, decide
+    from machina.permissions import store as st
+    from machina.permissions.policy import build_request, decide
 
     s = await _session()
     now = datetime.now(UTC)

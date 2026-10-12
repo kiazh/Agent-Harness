@@ -6,18 +6,18 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.config import config
-from ah.core.exceptions import ValidationError
-from ah.permissions import store
-from ah.permissions.broker import (
+from machina.core.config import config
+from machina.core.exceptions import ValidationError
+from machina.permissions import store
+from machina.permissions.broker import (
     NeedsApproval,
     clear_execution_context,
     permission_broker,
     set_approval_handler,
 )
-from ah.permissions.policy import build_request, decide
-from ah.permissions.tools import action_for_tool
-from ah.tools.terminal import terminal
+from machina.permissions.policy import build_request, decide
+from machina.permissions.tools import action_for_tool
+from machina.tools.terminal import terminal
 
 
 @pytest.fixture

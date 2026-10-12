@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.agent_def import AgentDef
-from ah.core.orchestrator import Orchestrator
-from ah.gateway.errors import INVALID_PARAMS, RpcError
-from ah.gateway.features.agents import _steps
+from machina.core.agent_def import AgentDef
+from machina.core.orchestrator import Orchestrator
+from machina.gateway.errors import INVALID_PARAMS, RpcError
+from machina.gateway.features.agents import _steps
 
 
 def test_agents_run_rejects_excessive_steps():
@@ -22,7 +22,7 @@ def test_agents_run_rejects_excessive_steps():
 
 
 async def test_delegation_deadline_marks_message_error(monkeypatch):
-    from ah.core import orchestrator as module
+    from machina.core import orchestrator as module
 
     class HangingAgent:
         async def run(self, *_args, **_kwargs):
@@ -45,7 +45,7 @@ async def test_delegation_deadline_marks_message_error(monkeypatch):
 
 
 async def test_nested_delegation_inherits_the_root_deadline(monkeypatch):
-    from ah.core import orchestrator as module
+    from machina.core import orchestrator as module
 
     class HangingAgent:
         async def run(self, *_args, **_kwargs):
@@ -69,8 +69,8 @@ async def test_nested_delegation_inherits_the_root_deadline(monkeypatch):
 
 
 async def test_delegate_tool_passes_nested_depth(monkeypatch):
-    from ah.core import orchestrator as module
-    from ah.tools.agents import delegate
+    from machina.core import orchestrator as module
+    from machina.tools.agents import delegate
 
     fake_result = SimpleNamespace(status="complete", response="ok")
     call = AsyncMock(return_value=fake_result)

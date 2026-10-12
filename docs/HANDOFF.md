@@ -1,11 +1,11 @@
-# AgentHarness succession handoff
+# Machina succession handoff
 
 > Status note (2026-10-12, HEAD `8c96fe3`): this file is a historical
 > running log; snapshots below (from `167cfbb` era) are superseded by newer
 > evidence docs. The code default execution mode is still `ask`; the
 > ask→full entry below records a local user config change only.
 
-**Update 2026-10-11: TUI full overhaul implemented (T0–T8).** Presentation rebuilt over the intact Python gateway/JSON-RPC transport: semantic design tokens + one animation coordinator + compact borderless transcript (user/assistant/tool/diff/notice widgets) + responsive docked shell + searchable menus/durable forms/masked secrets + exact approval review + live theme preview. Session/turn-bound event model with honest outcomes (unknown/interrupted/historical, no guessed success), once-only final text/usage reconciliation, retained-output inspection (`/output`, 8×128 KiB/1 MiB), Deny-default session-bound approvals with `sessionId` in `approvals.resolve`, 26 skins with `codex` fresh default (explicit saved themes respected). Verified: `npm --prefix ui run check` **228 passed / 5 env-skipped** (233 total), typecheck + eslint clean; isolated real-gateway wrapper 1 passed; direct gateway e2e 5 passed / 0 skipped (incl. `/theme` persist round-trip); full backend suite **2093 passed / 5 skipped** on rerun (first run: 2 load-timing delegation flakes, green in isolation and on rerun); Ruff clean on changed Python (`ah/core/config.py` theme default only + 1 precedence test). Implementation map, gates and deferred items: `docs/archive/plans/TUI_OVERHAUL_PROGRESS.md`; design contract: `docs/design/TUI_DESIGN.md`. Remaining: T9 docs polish is in this entry + README; T10 bounded visual review still open. No commits/pushes; MCP backend integration stays deferred (no connector RPCs invented).
+**Update 2026-10-11: TUI full overhaul implemented (T0–T8).** Presentation rebuilt over the intact Python gateway/JSON-RPC transport: semantic design tokens + one animation coordinator + compact borderless transcript (user/assistant/tool/diff/notice widgets) + responsive docked shell + searchable menus/durable forms/masked secrets + exact approval review + live theme preview. Session/turn-bound event model with honest outcomes (unknown/interrupted/historical, no guessed success), once-only final text/usage reconciliation, retained-output inspection (`/output`, 8×128 KiB/1 MiB), Deny-default session-bound approvals with `sessionId` in `approvals.resolve`, 26 skins with `codex` fresh default (explicit saved themes respected). Verified: `npm --prefix ui run check` **228 passed / 5 env-skipped** (233 total), typecheck + eslint clean; isolated real-gateway wrapper 1 passed; direct gateway e2e 5 passed / 0 skipped (incl. `/theme` persist round-trip); full backend suite **2093 passed / 5 skipped** on rerun (first run: 2 load-timing delegation flakes, green in isolation and on rerun); Ruff clean on changed Python (`machina/core/config.py` theme default only + 1 precedence test). Implementation map, gates and deferred items: `docs/archive/plans/TUI_OVERHAUL_PROGRESS.md`; design contract: `docs/design/TUI_DESIGN.md`. Remaining: T9 docs polish is in this entry + README; T10 bounded visual review still open. No commits/pushes; MCP backend integration stays deferred (no connector RPCs invented).
 
 **Latest bug-fix audit:** Read [Post-OpenCode audit](BUGFIX_AUDIT.md) for current fixes and verification. The older measurements and remaining-failure lists below are historical snapshots, superseded by that audit.
 
@@ -23,13 +23,13 @@ Written: **2026-10-10**. Repository snapshot: **`167cfbb` — `skill overhaul an
 
 **Update 2026-10-10: chrome gap.** `createLayout` now uses a one-row `VStack` gap, so the last response box no longer touches the composer and the input block stands off the footer (the exact flush-corner case in the screenshot). Updated the two `ui/test/layout.test.ts` row assertions and added gap-row checks. Verified: `npm run typecheck` passed, `npm test` 111 passed / 4 skipped, `npm run lint` passed, `git diff --check` clean.
 
-**Update 2026-10-10: skill-paging guard, per-model turn budget, stream usage fix.** (1) The model paged all 42 skills on `hello!` because the Automatic-skills header invited `skill_list` search with no task-gating; the header now says to answer greetings directly and to page only while results stay relevant, and the `skill_list` description says never to enumerate the catalog (`ah/skills/runtime.py`, `ah/tools/skills.py`, tests in `tests/test_ecc_skills.py`). (2) New `ah/core/context_windows.py` maps model ids to documented windows (longest-match; unknown keeps legacy behavior exactly); both agent loops derive the turn budget as window/4 floored at 8000, explicit `context_budget` still wins, absolute 50k ceiling unchanged (`ah/core/agent.py`, `tests/test_context_windows.py` — e.g. deepseek-chat now 16k, gemini capped at 50k). (3) `DirectProvider.stream_complete` never requested or parsed usage, so direct-vendor streamed turns reported 0 tokens: openai/deepseek specs now send `stream_options.include_usage` with chunk parsing, other vendors get an estimate instead of zero (`ah/core/provider.py`, tests in `tests/test_providers_direct.py`). ECC bundle untouched (42/88). Verified: ruff check/format clean, `git diff --check` clean; focused suites pass — `test_context_windows` 7, `test_providers_direct`/`test_ecc_skills`/`test_skill_workflows`/`test_skill_runtime`/`test_basic`/`test_gateway`/`test_provider_usage`/`test_orchestrator_usage` green. Pre-existing failures unchanged (4 DB-backed `test_usage`, 1 provider-effort, both reproduce on clean HEAD).
+**Update 2026-10-10: skill-paging guard, per-model turn budget, stream usage fix.** (1) The model paged all 42 skills on `hello!` because the Automatic-skills header invited `skill_list` search with no task-gating; the header now says to answer greetings directly and to page only while results stay relevant, and the `skill_list` description says never to enumerate the catalog (`machina/skills/runtime.py`, `machina/tools/skills.py`, tests in `tests/test_ecc_skills.py`). (2) New `machina/core/context_windows.py` maps model ids to documented windows (longest-match; unknown keeps legacy behavior exactly); both agent loops derive the turn budget as window/4 floored at 8000, explicit `context_budget` still wins, absolute 50k ceiling unchanged (`machina/core/agent.py`, `tests/test_context_windows.py` — e.g. deepseek-chat now 16k, gemini capped at 50k). (3) `DirectProvider.stream_complete` never requested or parsed usage, so direct-vendor streamed turns reported 0 tokens: openai/deepseek specs now send `stream_options.include_usage` with chunk parsing, other vendors get an estimate instead of zero (`machina/core/provider.py`, tests in `tests/test_providers_direct.py`). ECC bundle untouched (42/88). Verified: ruff check/format clean, `git diff --check` clean; focused suites pass — `test_context_windows` 7, `test_providers_direct`/`test_ecc_skills`/`test_skill_workflows`/`test_skill_runtime`/`test_basic`/`test_gateway`/`test_provider_usage`/`test_orchestrator_usage` green. Pre-existing failures unchanged (4 DB-backed `test_usage`, 1 provider-effort, both reproduce on clean HEAD).
 
-**Update 2026-10-10: pipeline optimization pass.** (1) `SYSTEM_PROMPT` now carries general-agent conduct (no tools without a task, never enumerate catalogs/directories unprompted) — fixed cost, no per-turn growth. (2) `automatic_skill_context` returns `""` when nothing matched, removing ~116 tokens of boilerplate from every skill-less turn (greetings now inject zero skill context). (3) Both agent loops condense stale tool rounds to head+tail previews before each LLM call (`_condense_history`; latest round stays full, positionally addressed skill pages exempt so offsets keep resolving, full records stay in DB). Measured on a synthetic 5-round turn: stale tool text 5000→4168 chars (~17% off re-sent history; the larger savings remain behavioral — fewer wasted rounds). New `tests/test_history_condensation.py` (6 tests incl. a two-round loop test proving earliest condenses, latest stays full). Changed `ah/core/agent.py`, `ah/skills/runtime.py`; prior audit note stands: per-result 1k/9k append caps already existed, parallel tool calls already existed. ECC bundle untouched (42/88). Verified: ruff check/format clean, `git diff --check` clean; 131 passed across history/skill/basic/gateway/context/personality/provider suites (1 failure = the known pre-existing provider-effort test).
+**Update 2026-10-10: pipeline optimization pass.** (1) `SYSTEM_PROMPT` now carries general-agent conduct (no tools without a task, never enumerate catalogs/directories unprompted) — fixed cost, no per-turn growth. (2) `automatic_skill_context` returns `""` when nothing matched, removing ~116 tokens of boilerplate from every skill-less turn (greetings now inject zero skill context). (3) Both agent loops condense stale tool rounds to head+tail previews before each LLM call (`_condense_history`; latest round stays full, positionally addressed skill pages exempt so offsets keep resolving, full records stay in DB). Measured on a synthetic 5-round turn: stale tool text 5000→4168 chars (~17% off re-sent history; the larger savings remain behavioral — fewer wasted rounds). New `tests/test_history_condensation.py` (6 tests incl. a two-round loop test proving earliest condenses, latest stays full). Changed `machina/core/agent.py`, `machina/skills/runtime.py`; prior audit note stands: per-result 1k/9k append caps already existed, parallel tool calls already existed. ECC bundle untouched (42/88). Verified: ruff check/format clean, `git diff --check` clean; 131 passed across history/skill/basic/gateway/context/personality/provider suites (1 failure = the known pre-existing provider-effort test).
 
 **Update 2026-10-10: growth indicator + profiles that own their learning.** Growth verified live on the test DB (teach persists across reloads; episode→complete→feedback moves policy weights, counters advance). New `growth.status` protocol event (consolidation_done/review_done) emitted by the gateway via per-turn agent listeners; the TUI renders a dim "Growth updated…" notice exempt from turn tracking, current session only. Profiles: `/profile` bare opens View/New/Switch (slug ids, New via editor, current marked in `/profiles`), App holds the active profile (default = OS user, ensured at startup), and non-default profiles scope new chats to a synthesized `harness-<slug>` agent definition — so RL episodes, growth notes, and memories (all agent-id-keyed) follow the profile with no schema change; unknown agents still fail closed and profile scopes stay out of delegation lists. Default model/persona stay global installation settings by design. Verified: full backend suite **1935 passed, 0 failed** (test DB connected), UI 132/0, protocol conformance green, ruff/format/diff clean.
 
-**Update 2026-10-10: README rewritten.** Root `README.md` replaced: 37 commands (was 32), 21 skins with the correct list (was 24 with names that don't exist), current test snapshot (1844/9 backend, 124/5 UI, dated), per-model turn budget, gated skill routing, subagent fan-out, `/persona`+`/growth` rows, `AGENT_HARNESS_EXECUTION_MODE`/`CONTEXT_BUDGET` config rows, full-mode troubleshooting notes. Install/architecture/API/research sections preserved.
+**Update 2026-10-10: README rewritten.** Root `README.md` replaced: 37 commands (was 32), 21 skins with the correct list (was 24 with names that don't exist), current test snapshot (1844/9 backend, 124/5 UI, dated), per-model turn budget, gated skill routing, subagent fan-out, `/persona`+`/growth` rows, `MACHINA_EXECUTION_MODE`/`CONTEXT_BUDGET` config rows, full-mode troubleshooting notes. Install/architecture/API/research sections preserved.
 
 **Update 2026-10-10: theme switch keeps the chat.** `/theme` called `host.banner()`, which clears the whole transcript to redraw the header. Skin changes now call a new `host.restyle()` path (`Transcript.restyle()` + `requestRender`) that keeps every block; `Notice`/`UserMessage` store raw text and re-resolve theme colors via `refreshSkin()` (other widgets already render live from lazy theme functions). Tests: `/theme` asserts zero clears, re-skin keeps text with idempotent styling, restyle drops nothing. Verified: typecheck passed, 124 UI tests pass / 5 skipped, lint clean.
 
@@ -37,9 +37,9 @@ Written: **2026-10-10**. Repository snapshot: **`167cfbb` — `skill overhaul an
 
 **Update 2026-10-10: subagent auto-delegation.** Finding: ECC ships no deployable subagent roster (zero `agents/*.yaml` in the 42-skill bundle — only docs/rules text), so there is nothing to "implement" there; the roster is the 3 native types (`harness` general, `researcher` read-only, `coder` edits/tests) plus user-saved customs, via the existing `delegate`/`list_agents` tools (parallel fan-out through the concurrent executor, depth-capped, authority-inheriting). The gap was guidance: nothing told the model to fan out (the only mention was buried in skill context). `SYSTEM_PROMPT` now teaches task-based delegation — one `delegate` call per independent subtask in a single block (max three), type picked via `list_agents`, standalone task each, no approval evasion — and the `delegate` description advertises parallel fan-out. New tests in `tests/test_delegate_scope.py` incl. a loop test proving 3 parallel delegates all run and synthesize. Verified: delegate suite 5 passed, ruff/format/diff clean, `test_comprehensive` shows only its 5 pre-existing HEAD failures.
 
-**Update 2026-10-10: default execution mode → full (user-requested).** `execution_mode` in `~/.agent-harness/config.yaml` changed `ask`→`full` via the validated `config.set(..., persist=True)` path (one key, no other file/config change; no env override present). Effect: subsequently created sessions inherit full and auto-grant at creation, so ordinary host operations proceed without approval cards. Verified floor intact in code and at runtime: `credential_access`/`privilege_escalation`/`security_settings`/`destructive_system` still require exact digest-bound grants in every mode (`ah/permissions/policy.py` CONFLICTING_CAPABILITIES + AH-AUDIT-007; live `decide()` check returns `pending` for a credential read in full mode), and global-full never elevates existing sessions (LP-07). Fresh-session effective mode resolves `full`; permission/gateway/precedence suites 102 passed. Revert with `/mode revoke`, `config.set execution_mode ask --persist`, or deleting the key.
+**Update 2026-10-10: default execution mode → full (user-requested).** `execution_mode` in `~/.machina/config.yaml` changed `ask`→`full` via the validated `config.set(..., persist=True)` path (one key, no other file/config change; no env override present). Effect: subsequently created sessions inherit full and auto-grant at creation, so ordinary host operations proceed without approval cards. Verified floor intact in code and at runtime: `credential_access`/`privilege_escalation`/`security_settings`/`destructive_system` still require exact digest-bound grants in every mode (`machina/permissions/policy.py` CONFLICTING_CAPABILITIES + AH-AUDIT-007; live `decide()` check returns `pending` for a credential read in full mode), and global-full never elevates existing sessions (LP-07). Fresh-session effective mode resolves `full`; permission/gateway/precedence suites 102 passed. Revert with `/mode revoke`, `config.set execution_mode ask --persist`, or deleting the key.
 
-**Update 2026-10-10: general agent, specialist workflows gated.** The agent latched onto `ecc-architecture-decision-records` from the single shared word "why" in "why dont you finihs?", then followed its "inspect existing work first" instruction around the home directory and dead-ended instead of acting as a generalist. `plan_workflow` now requires strong evidence (`_strong_match`: named skill, whole-word trigger, shared name word, or 2+ shared content words) before attaching domain/specialist skills; vague queries yield no specialists. Explicit coding/research tasks still get the generic pipeline (search-first/tdd/verify/deep-research) even with no domain skill, so uncovered languages keep engineering discipline without fake specialization. The injected header/render framing changed from imperative ("Apply… Follow this sequence… Inspect existing work first") to conditional references with "without an actionable task, just answer / do not go looking for work" (`ah/skills/workflow.py`, `ah/skills/runtime.py`, 4 new tests in `tests/test_skill_workflows.py`). Verified: skill suites 49 passed, `test_basic`/`test_gateway`/`test_personality_growth` 48 passed, ruff check/format clean, `git diff --check` clean.
+**Update 2026-10-10: general agent, specialist workflows gated.** The agent latched onto `ecc-architecture-decision-records` from the single shared word "why" in "why dont you finihs?", then followed its "inspect existing work first" instruction around the home directory and dead-ended instead of acting as a generalist. `plan_workflow` now requires strong evidence (`_strong_match`: named skill, whole-word trigger, shared name word, or 2+ shared content words) before attaching domain/specialist skills; vague queries yield no specialists. Explicit coding/research tasks still get the generic pipeline (search-first/tdd/verify/deep-research) even with no domain skill, so uncovered languages keep engineering discipline without fake specialization. The injected header/render framing changed from imperative ("Apply… Follow this sequence… Inspect existing work first") to conditional references with "without an actionable task, just answer / do not go looking for work" (`machina/skills/workflow.py`, `machina/skills/runtime.py`, 4 new tests in `tests/test_skill_workflows.py`). Verified: skill suites 49 passed, `test_basic`/`test_gateway`/`test_personality_growth` 48 passed, ruff check/format clean, `git diff --check` clean.
 
 This document is intended to let the next maintainer continue without the chat history. It records what exists, what was verified, what remains uncertain, and the next implementation plan. It is a snapshot, not a claim that every feature or external service is production verified. Recheck Git status and the referenced code before acting.
 
@@ -98,20 +98,20 @@ The permission, personality, persona, and ECC bundle foundation is in the commit
 
 | File | What to preserve |
 | --- | --- |
-| `ah/core/agent.py` | Context-aware workflow injection and bounded skill output handling |
-| `ah/skills/runtime.py` | Routing, technology/specialty filtering, targeted selection refinements |
-| `ah/tools/base.py` | Skill-resource cache exclusion needed for integrity checks |
-| `ah/tools/skills.py` | Ranked discovery, targeted instruction reads, resource paging |
+| `machina/core/agent.py` | Context-aware workflow injection and bounded skill output handling |
+| `machina/skills/runtime.py` | Routing, technology/specialty filtering, targeted selection refinements |
+| `machina/tools/base.py` | Skill-resource cache exclusion needed for integrity checks |
+| `machina/tools/skills.py` | Ranked discovery, targeted instruction reads, resource paging |
 | `docs/ECC_SKILLS.md` | Documentation of the cohesive default behavior |
-| `ah/skills/workflow.py` — new | Native workflow composition and short-follow-up stack inheritance |
+| `machina/skills/workflow.py` — new | Native workflow composition and short-follow-up stack inheritance |
 | `tests/test_skill_workflows.py` — new | Workflow selection and actual tool-pipeline regression coverage |
 
 Run `git diff` and read the two new files before integrating. Some implementation plans live under gitignored `docs/superpowers/plans/`; do not rely on those surviving a clean checkout. This document preserves the important intent and next plan.
 
 ### Explicitly not implemented
 
-- No MCP client/server manager in `ah/` or `ui/`.
-- No native `ah/tools/mcp.py` bridge or MCP configuration/runtime lifecycle.
+- No MCP client/server manager in `machina/` or `ui/`.
+- No native `machina/tools/mcp.py` bridge or MCP configuration/runtime lifecycle.
 - No MCP server management UI.
 - No new UI redesign from this handoff request.
 - No automatic underlying-model weight training.
@@ -121,21 +121,21 @@ Run `git diff` and read the two new files before integrating. Some implementatio
 
 | Area | Primary files | Responsibility |
 | --- | --- | --- |
-| Shared runtime | `ah/core/runtime.py` | One service graph, startup, capability reporting, refresh, lifecycle |
-| Agent loop | `ah/core/agent.py` | Context preparation, normal/streaming execution, tools, instrumentation |
-| Configuration | `ah/core/config.py` | Defaults, validation, persona and feature configuration |
-| Permission enforcement | `ah/permissions/policy.py`, `commands.py`, `broker.py`, `tools.py`, `store.py` | Risk classification, tool effects, exact proposals, grants, enforcement |
-| Turn ownership | `ah/core/turns.py`, `execution_context.py`, `session_mode.py`, `approval_resume.py` | Session/turn context, cancellation, ownership, resume |
-| Tool registration | `ah/tools/base.py`, `ah/tools/__init__.py` | Tool metadata, global registration, execution/cache behavior |
-| Personality/memory | `ah/memory/growth.py`, `ah/memory/policy.py`, `ah/tools/memory.py` | Durable notes, retrieval policy, agent memory tools |
-| Database | `ah/db/connection.py`, `ah/db/growth_schema.sql` | Schema initialization and additive growth migration |
-| Skill bundle | `ah/skills/bundle.py`, `ah/skills/registry.py` | Pinned default bundle, provenance, registry lifecycle |
-| Skill routing | `ah/skills/runtime.py`, `ah/skills/workflow.py` | Metadata ranking, bounded context, coherent task workflow |
-| Skill tools | `ah/tools/skills.py` | Discovery, paged instruction/resource access |
-| Gateway | `ah/gateway/server.py`, `ah/gateway/features/` | JSON-RPC, session-owned feature methods, turn events |
-| HTTP API | `ah/api/app.py` | Authenticated HTTP/SSE using the shared runtime |
-| Secret resolution | `ah/security/secrets.py`, `ah/gateway/features/secrets.py` | Existing secret resolution and UI key handling |
-| Protocol source | `ah/protocol/events.json` | Canonical event contract |
+| Shared runtime | `machina/core/runtime.py` | One service graph, startup, capability reporting, refresh, lifecycle |
+| Agent loop | `machina/core/agent.py` | Context preparation, normal/streaming execution, tools, instrumentation |
+| Configuration | `machina/core/config.py` | Defaults, validation, persona and feature configuration |
+| Permission enforcement | `machina/permissions/policy.py`, `commands.py`, `broker.py`, `tools.py`, `store.py` | Risk classification, tool effects, exact proposals, grants, enforcement |
+| Turn ownership | `machina/core/turns.py`, `execution_context.py`, `session_mode.py`, `approval_resume.py` | Session/turn context, cancellation, ownership, resume |
+| Tool registration | `machina/tools/base.py`, `machina/tools/__init__.py` | Tool metadata, global registration, execution/cache behavior |
+| Personality/memory | `machina/memory/growth.py`, `machina/memory/policy.py`, `machina/tools/memory.py` | Durable notes, retrieval policy, agent memory tools |
+| Database | `machina/db/connection.py`, `machina/db/growth_schema.sql` | Schema initialization and additive growth migration |
+| Skill bundle | `machina/skills/bundle.py`, `machina/skills/registry.py` | Pinned default bundle, provenance, registry lifecycle |
+| Skill routing | `machina/skills/runtime.py`, `machina/skills/workflow.py` | Metadata ranking, bounded context, coherent task workflow |
+| Skill tools | `machina/tools/skills.py` | Discovery, paged instruction/resource access |
+| Gateway | `machina/gateway/server.py`, `machina/gateway/features/` | JSON-RPC, session-owned feature methods, turn events |
+| HTTP API | `machina/api/app.py` | Authenticated HTTP/SSE using the shared runtime |
+| Secret resolution | `machina/security/secrets.py`, `machina/gateway/features/secrets.py` | Existing secret resolution and UI key handling |
+| Protocol source | `machina/protocol/events.json` | Canonical event contract |
 | TUI entry/coordinator | `ui/src/main.ts`, `ui/src/app.ts` | Startup, application state, transcript, editor, overlays |
 | TUI layout/rendering | `ui/src/components.ts`, `transcript.ts`, `theme.ts` | Composer/footer, pickers, transcript/tool cards, theme roles |
 | TUI features | `ui/src/features/` | Sessions, models, settings, skills, growth, keys, agents, jobs, etc. |
@@ -185,7 +185,7 @@ Existing user surfaces include:
 /growth forget style:verbosity   remove a note
 ```
 
-The backend exposes session-owned growth methods and `ah growth` CLI commands for inspection, teaching, feedback, forgetting, and policy import/export. See the personality document for exact syntax and config names.
+The backend exposes session-owned growth methods and `machina growth` CLI commands for inspection, teaching, feedback, forgetting, and policy import/export. See the personality document for exact syntax and config names.
 
 The live RL feature is a contextual bandit over **retrieve / noop**. It masks the broader six-action research format down to supported live actions. Cold-start behavior is biased toward retrieval, approximately 92%. Human feedback in `[-1, 1]` updates policy weights with delayed importance correction clipped to 1.2; weights must remain finite and bounded to ±20.
 
@@ -207,7 +207,7 @@ The repository vendors the complete tracked upstream snapshot under `skills/ecc/
 
 Retain `skills/ecc/LICENSE`, the per-file notices, and [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md). The root license is MIT, copyright 2026 Affaan Mustafa. Updating the bundle requires checking the new snapshot and its notices rather than assuming the current counts/license inventory remain true.
 
-`tools/vendor_ecc.py` imports a clean local upstream clone at an exact revision. It does not run upstream scripts. `ah/skills/bundle.py` checks the revision and pinned manifest hash:
+`tools/vendor_ecc.py` imports a clean local upstream clone at an exact revision. It does not run upstream scripts. `machina/skills/bundle.py` checks the revision and pinned manifest hash:
 
 ```text
 4fa532a994618223cedda3d8ef965b776902944ae968c7754c2eb2100e8f0fe0
@@ -250,12 +250,12 @@ Upstream slash commands, hooks, and agent prompts are references. Workflows use 
 
 The UI has a flexible transcript above a bottom-docked composer/footer. `ui/src/app.ts` coordinates overlays, editor completion, feature dispatch, per-session tokens, in-flight state, and the gateway. The current in-flight timeout is 300 seconds, aligned with the backend turn timeout. Do not unlock the composer early while the server still owns an active turn.
 
-`ui/src/gateway.ts` owns a transport-neutral JSON-RPC channel with request IDs, pending waiters, request timeouts, event dispatch, and close cleanup. The normal TUI gateway spawns `python -m ah.gateway` over stdio. Server stderr is not protocol JSON.
+`ui/src/gateway.ts` owns a transport-neutral JSON-RPC channel with request IDs, pending waiters, request timeouts, event dispatch, and close cleanup. The normal TUI gateway spawns `python -m machina.gateway` over stdio. Server stderr is not protocol JSON.
 
-`ah/protocol/events.json` is the canonical version-2 event source. `ui/src/events.ts` is generated; do not hand-edit it independently. Regeneration:
+`machina/protocol/events.json` is the canonical version-2 event source. `ui/src/events.ts` is generated; do not hand-edit it independently. Regeneration:
 
 ```bash
-.venv/bin/python -c "from pathlib import Path; from ah.protocol import typescript_source; Path('ui/src/events.ts').write_text(typescript_source(), encoding='utf-8')"
+.venv/bin/python -c "from pathlib import Path; from machina.protocol import typescript_source; Path('ui/src/events.ts').write_text(typescript_source(), encoding='utf-8')"
 ```
 
 `tests/test_protocol_conformance.py` verifies exact generated-source conformity. Update protocol documentation and both consumers when the contract changes.
@@ -290,7 +290,7 @@ These are prior execution results, not tests rerun for this documentation change
 | Focused workflow/ECC/runtime/cache/permission suite | **122 passed** | Latest focused result after final routing refinements |
 | Expanded gateway/phase-6 coverage | **142 passed** | Earlier snapshot, before the newest context regression test |
 | Full backend suite | **1,824 passed, 3 failed, 5 skipped** | Earlier full snapshot, about 162 seconds; known failures below |
-| Backend Ruff check | Passed | `ah` and the workflow test file |
+| Backend Ruff check | Passed | `machina` and the workflow test file |
 | Formatting/diff checks | Passed | Changed implementation files and whitespace |
 | UI feature tests | **47 passed** | Earlier feature verification |
 | UI typecheck/lint | Passed | Earlier UI verification |
@@ -337,15 +337,15 @@ The actual prerequisites are Python 3.11+, Node 22.19+, and PostgreSQL 16+ with 
 python -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
 npm install --ignore-scripts --prefix ui
-# Configure .env using .env.example or ah setup; never commit credentials.
-.venv/bin/ah doctor
-.venv/bin/ah init
-.venv/bin/ah
+# Configure .env using .env.example or machina setup; never commit credentials.
+.venv/bin/machina doctor
+.venv/bin/machina init
+.venv/bin/machina
 ```
 
 For this existing checkout, inspect the current environment first rather than recreating it. A stale `.venv/bin/pip` shebang previously pointed to the old checkout path. Prefer `.venv/bin/python -m pip`.
 
-The wheel was built with `.venv/bin/python -m hatchling build -t wheel`; the historical artifact is `dist/agentharness-0.2.0-py3-none-any.whl`. `pyproject.toml` force-includes skills for wheel/sdist. Dockerfiles copy the skills into the image. Preserve offline bundle availability when changing packaging.
+The wheel was built with `.venv/bin/python -m hatchling build -t wheel`; the historical artifact is `dist/machina-0.2.0-py3-none-any.whl`. `pyproject.toml` force-includes skills for wheel/sdist. Dockerfiles copy the skills into the image. Preserve offline bundle availability when changing packaging.
 
 Pytest collects `tests/`, not vendored upstream test trees. Ruff excludes `skills/ecc`. Git ignore rules explicitly preserve the vendored snapshot, while generated `skills/telemetry.json` is ignored. Do not apply the harness formatter or test runner to upstream source indiscriminately.
 
@@ -528,11 +528,11 @@ Proposed responsibilities, with final module names chosen during implementation:
 
 | Proposed unit | Responsibility |
 | --- | --- |
-| `ah/mcp/config.py` | Validated server definitions, secret references, migration/serialization |
-| `ah/mcp/client.py` | SDK adapter, transport setup, bounded calls, cancellation |
-| `ah/mcp/manager.py` | Runtime-owned connection lifecycle, status, reconnect, shutdown |
-| `ah/mcp/catalog.py` | Namespaced discovery, schema validation, ranking/cache invalidation |
-| `ah/tools/mcp.py` | Native registry bridge and effect metadata; broker remains authoritative |
+| `machina/mcp/config.py` | Validated server definitions, secret references, migration/serialization |
+| `machina/mcp/client.py` | SDK adapter, transport setup, bounded calls, cancellation |
+| `machina/mcp/manager.py` | Runtime-owned connection lifecycle, status, reconnect, shutdown |
+| `machina/mcp/catalog.py` | Namespaced discovery, schema validation, ranking/cache invalidation |
+| `machina/tools/mcp.py` | Native registry bridge and effect metadata; broker remains authoritative |
 | Gateway MCP feature | Authenticated configuration/status/discovery methods |
 | UI MCP feature | Server setup, health, tool discovery, actionable errors |
 
@@ -702,34 +702,34 @@ earlier `docs/superpowers` working copies are ignored by the repository.
 
 RSI defaults on through `rsi_enabled`, alongside existing memory/growth flags.
 No extra model/classifier request, dependency, service or training worker is
-needed. Normal startup and `ah init` run the shared additive growth migration;
+needed. Normal startup and `machina init` run the shared additive growth migration;
 the CLI applies it before management operations. No production DB was migrated.
 The core persona description remains the user's configured tone/character,
 while per-agent notes, retrieval policy and routing evidence persist in Postgres.
 
 Implementation map:
 
-- `ah/memory/rsi.py`: bounded operational evidence, domain strategy selection,
+- `machina/memory/rsi.py`: bounded operational evidence, domain strategy selection,
   capability weights, persona checkpoints/trials, inspection and snapshot policy
-  provenance. `ah/memory/growth.py` owns all per-agent transactional writes.
-- `ah/db/growth_schema.sql`: profiles, revisions and episode metadata, with
+  provenance. `machina/memory/growth.py` owns all per-agent transactional writes.
+- `machina/db/growth_schema.sql`: profiles, revisions and episode metadata, with
   additive column upgrades for existing installations. Growth-episode deletion
   cascades to RSI evidence; retention stays 500 episodes and 50 revisions.
-- `ah/core/agent.py`: shared preparation/completion hooks cover CLI, gateway,
+- `machina/core/agent.py`: shared preparation/completion hooks cover CLI, gateway,
   HTTP, jobs and delegated agents; ContextVars keep metadata task-local. Notes
   are captured in the same transaction as the attributed revision. Only terminal
   unpaused turns learn; cancellation does not invent a completed episode.
-- `ah/core/models.py` and `ah/tools/terminal.py`: typed terminal failure and
+- `machina/core/models.py` and `machina/tools/terminal.py`: typed terminal failure and
   actual subprocess exit/truncation status prevent failed execution receiving
   positive evidence. String-compatible shell output preserves existing callers.
-- `ah/skills/runtime.py` / `workflow.py`: weights only reorder relevant skills,
+- `machina/skills/runtime.py` / `workflow.py`: weights only reorder relevant skills,
   explicit requests retain precedence, and budgets stay bounded. Automatic and
   successful manual reads are attributed. Allowed-tool ordering never adds tools.
-- `ah/tools/memory.py`: agent-written notes become persona trials. Three human
+- `machina/tools/memory.py`: agent-written notes become persona trials. Three human
   ratings of that exact revision retain it or restore the stable baseline.
 - Gateway, CLI and TUI growth modules share status/history and restoration.
   Bare `/growth` immediately opens an action menu; Restore/Forget offer explicit
-  decisions. `growth.rollback` and `ah growth rollback` accept baseline 0 as
+  decisions. `growth.rollback` and `machina growth rollback` accept baseline 0 as
   well as later retained revisions. The protocol document covers the new fields.
 
 Do not remove the review-driven protections. Human choices supersede trials
@@ -776,7 +776,7 @@ with a tiny square at the bottom-right. It pulses for 800 ms, at most once every
 30 seconds; additional events do not queue or restart it. It adds no transcript
 message, shifts no composer/chat rows, and renders only for the current session.
 Timers stop on app exit, gateway disconnect and visible-session changes.
-`AH_UI_REDUCED_MOTION=1` (or `true`) uses a brief static acknowledgment.
+`MACHINA_UI_REDUCED_MOTION=1` (or `true`) uses a brief static acknowledgment.
 Detailed progress remains available in `/growth show`.
 
 `?` on an empty composer opens keyboard shortcuts. F1 also opens them while
@@ -807,7 +807,7 @@ test passed here (**1 passed**) and in a temporary clean-HEAD worktree at
 patch. The temporary worktree was removed. Full-suite rerun result follows.
 The sequential rerun passed **2092 tests / 5 skipped in 102.22 s**, including
 the real gateway restart checks. Command:
-`AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`.
+`MACHINA_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/machina_test .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`.
 `git diff --check` passed. No unrelated deadline setting or production code
 was changed to suppress the initial timing failure. This patch remains
 uncommitted on `main`; no commit, push, deploy or production DB access occurred.
@@ -836,7 +836,7 @@ Fresh bound continuation IDs are recognized before routing; cleanup freezes acti
 without releasing ownership; watchdog replacement/exit clears retained timers.
 
 MCP wiring: `ui/src/features/mcp.ts` + registry/help/protocol -> authenticated
-`ah/gateway/features/connectors.py` -> lazy `RuntimeServices.get_connector_service()`.
+`machina/gateway/features/connectors.py` -> lazy `RuntimeServices.get_connector_service()`.
 `mcp.list {}` returns `{servers:[...]}`; `mcp.status {id}` returns `{server:{...}}`.
 Both read the same worker inventory without DB/SDK startup or launches/discovery.
 Runtime/owning gateway closes connections; borrowing HTTP adapters do not. Tests
@@ -850,14 +850,14 @@ mock “connected” rows or expose unbrokered remote execution to make it look 
 Independent review reproduced five issues and each was fixed with a failing test
 then verified green. Re-review found no remaining Important issue within its scope.
 Native captures are reproducible via
-`node ui/test/support/capture-reference.ts /tmp/ah-reference-review`; they use real
+`node ui/test/support/capture-reference.ts /tmp/machina-reference-review`; they use real
 renderer components with synthetic events, not a live installer change or provider.
 Standalone UI check: 252 total, 247 pass, 5 env-gated skips, no failures, typecheck and
 lint clean. Isolated real-gateway wrapper verifies zero skipped UI tests. Clean HEAD
 comparison of initial failing checks: 5 passed at `0ea164e`; corrected checkout: 5
 passed. Full backend/final commands are recorded in the visual/release review.
 
-All Python verification isolates home lookup/env and uses only `agentharness_test`.
+All Python verification isolates home lookup/env and uses only `machina_test`.
 No commit, push, deployment, git config change, production DB, live key, shell-startup
 edit, or operator-terminal interaction was performed. Native visual review is bounded
 headless evidence; real-PTY validation and approval reopen-on-return remain explicit
@@ -866,7 +866,7 @@ limits rather than implied completion.
 Final sequential verification after the review fixes: **2106 passed / 5 skipped /
 0 failed in 115.43 s**, including the real gateway restart wrapper (all **252 UI
 tests**, zero skipped UI tests). Command:
-`AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`,
+`MACHINA_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/machina_test .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`,
 with a disposable home/env bootstrap supplied through PYTHONPATH as described in
 the visual review. Standalone UI check: 247 passed / 5 optional skips / 0 failures;
 typecheck and eslint passed. No unresolved failure remains in the recorded checks.
@@ -888,8 +888,8 @@ Approval/ready/stopping/cleanup/offline retire working demand, and switching/exi
 clear subscriptions. Learning retains 800 ms/30 s bounds and immediate first render.
 Reduced motion retains static feedback without a recurring frame timer. Seven
 assertions failed before fixes; bounded independent review found no Critical or
-Important remaining defect. The ah launcher points at this checkout (read only);
-no operator configuration or live terminal was changed. Restart ah to reload.
+Important remaining defect. The machina launcher points at this checkout (read only);
+no operator configuration or live terminal was changed. Restart machina to reload.
 
 Files for this correction: ui/src/components/Footer.ts, ui/src/design/{motion,tokens}.ts,
 shortcut copy in ui/src/app.ts; ui/test/{motion,ui,panels}.test.ts and native capture
@@ -922,8 +922,8 @@ messages, wrap fidelity and existing calm motion. Native preview PNG/GIF and
 design/progress docs reflect the new spacing. Do not restore a separate
 hardcoded indent in ToolPanel or make every assistant response a card.
 
-Model context: `ah/core/self_knowledge.py` shares implementation facts between
-the always-on brief and `ah/tools/harness.py`. Agent preparation injects it in
+Model context: `machina/core/self_knowledge.py` shares implementation facts between
+the always-on brief and `machina/tools/harness.py`. Agent preparation injects it in
 both ordinary and streaming paths, with custom prompts, empty/disabled growth
 and failed preparation. It explains tone separately from persona-conditioned
 fact recall and persistent growth, describes actual runtime RSI, and marks MCP
@@ -956,23 +956,23 @@ Focused verification after the review fix: **15 passed**, including the two
 checks that failed in the first full run. That first run had **2113 passed,
 5 skipped, 2 failed**: the corrected legacy-session compatibility bug and an
 unchanged Hypothesis timing-only deadline. Clean HEAD `1d80ba0` in managed
-worktree `/home/user/.codex/worktrees/38df/Agent-Harness1` passed lifecycle
+worktree `/home/user/.codex/worktrees/38df/Machina1` passed lifecycle
 and reproduced the timing failure (576 ms vs 200 ms; **1 passed, 1 failed**).
 No budget assertion failed and no deadline was relaxed. Final full-run evidence
 is recorded in `docs/verification/TUI_OVERHAUL_REVIEW.md` and below.
 
 All Python checks use disposable home lookup/env isolation and only the dedicated
-`agentharness_test` DB. No live credentials, production DB, shell startup files,
+`machina_test` DB. No live credentials, production DB, shell startup files,
 operator config or terminal was used. Fixture evidence does not guarantee a live
 model's wording or prove measured learning gains. Permission expansion, model-
 weight training, application-code self-rewriting, durable MCP configuration,
-OAuth and agent-loop remote dispatch are not part of this fix. Restart `ah`
+OAuth and agent-loop remote dispatch are not part of this fix. Restart `machina`
 after applying changes so the worker and TUI load the new code.
 
 Final full backend verification after the fixes: **2119 passed / 5 skipped /
 0 failed in 168.11 s**, including the real gateway UI wrapper (all **256 UI
 tests**, zero UI skips). Actual command used the disposable bootstrap through
-`PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/home/user/Agent-Harness1`
+`PYTHONPATH=/tmp/machina-ui-reference-runtime:/home/user/Machina1`
 and the dedicated test DSN, with `.venv/bin/python -m pytest -q --tb=short
 -p no:cacheprovider`. Standalone UI: 251 passed/5 gated skips, typecheck/eslint
 clean. Ruff check/format passed on seven touched Python files; Bandit on the
@@ -1018,8 +1018,8 @@ tests/test_personality_growth.py::test_ui_checks_with_real_gateway_restart
 -q --tb=short -p no:cacheprovider` passed (1 test in 10.84s); that wrapper runs
 the entire UI check with all 277 UI tests and no skips, including the real
 gateway/database checkbox-deletion path. Isolation used
-`PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/home/user/Agent-Harness1`
-and only `agentharness_test`. Scoped Impeccable detection returned `[]` and
+`PYTHONPATH=/tmp/machina-ui-reference-runtime:/home/user/Machina1`
+and only `machina_test`. Scoped Impeccable detection returned `[]` and
 `git diff --check` passed. No backend code changed for this feature. Previous
 uncommitted delegation and background fixes remain in the working tree.
 
@@ -1029,12 +1029,12 @@ Added the 71 root `agents/*.md` specialists from ECC, pinned at
 `b92f181b3b748d1abbc2afd94af6aa7d8c8fca29`. The upstream catalog identifies
 this directory as the canonical 71 subagents; platform mirrors, translated
 copies, skills and their helper definitions are outside this import.
-`ah/bundled_agents/ecc/` holds original Markdown (476,384 bytes total), the MIT
+`machina/bundled_agents/ecc/` holds original Markdown (476,384 bytes total), the MIT
 license and a provenance/checksum manifest. No upstream code, hooks, installer,
 commands or MCP settings are executed or added. The existing 42-skill bundle
 and its separate pin are unchanged.
 
-`ah/core/agent_def.py` registers these as source `ecc` in `BUILTIN_AGENTS` (74
+`machina/core/agent_def.py` registers these as source `ecc` in `BUILTIN_AGENTS` (74
 default agents total). They appear through the existing registry, gateway,
 `list_agents` tool and Delegate menu; no optional feature flag or database seed
 is required. The ordinary factory injects only the selected role's prompt.
@@ -1054,13 +1054,13 @@ Evidence: initial new regressions failed; focused registry/factory/orchestrator,
 existing multi-agent, delegation-boundary and built-in-save checks passed (49
 tests before adding the two importer regressions). Final isolated full backend
 suite: **2201 passed, 5 skipped in 112.50s**. Command used only the dedicated
-`agentharness_test` DSN with the disposable-home bootstrap in PYTHONPATH and
+`machina_test` DSN with the disposable-home bootstrap in PYTHONPATH and
 `.venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`.
 Standalone `npm --prefix ui run check`: typecheck/ESLint passed, 272 UI tests
 passed and 5 gated tests skipped. The full backend suite includes the wrapper
 that runs all 277 UI tests with real gateway/test DB and no UI skips.
 
-`.venv/bin/python -m hatchling build -t wheel -d /tmp/ah-ecc-agents-wheel`
+`.venv/bin/python -m hatchling build -t wheel -d /tmp/machina-ecc-agents-wheel`
 succeeded; wheel inventory contains exactly 71 agent Markdown files plus
 manifest/license. Extracted-wheel import from `/tmp`, without checkout on
 PYTHONPATH, discovered all 74 defaults and verified planner's read-only scope.
@@ -1075,7 +1075,7 @@ requests were used for verification. No unresolved test failures.
 
 MCP is now usable through `/mcp`: add a stdio or HTTP server, review its launch,
 connect, inspect tools, disconnect or remove. Configurations persist in the
-installation's `~/.agent-harness/mcp.json`; inventory does not start servers.
+installation's `~/.machina/mcp.json`; inventory does not start servers.
 The default installation includes the MCP SDK. Native `mcp_list`, `mcp_describe`
 and `mcp_call` tools use the runtime connector service and existing approval
 broker. Untrusted external calls require approval even in full mode; explicitly
@@ -1096,7 +1096,7 @@ typecheck/lint passed. The backend's real gateway wrapper runs all **295 UI
 tests with no UI skips**. Ruff check/format passed; Bandit reports **0 medium,
 0 high, 67 low** findings. Lockfile freshness and diff whitespace checks passed.
 Wheel/source builds pass isolated imports, bundled resource hashes and source
-archive cleanliness checks. Only the dedicated `agentharness_test` database
+archive cleanliness checks. Only the dedicated `machina_test` database
 was used, with disposable HOME/config and cleared live credentials.
 
 Release cleanup preserves the 71 pinned ECC roles and 42 curated skills, adds

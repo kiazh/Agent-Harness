@@ -16,7 +16,7 @@ test("Finder drops support quoted paths, escaped spaces and file URLs", () => {
 });
 
 test("dropped image content is detected from bytes and only live markers are submitted", async () => {
-    const root = await mkdtemp(join(tmpdir(), "ah-image-test-"));
+    const root = await mkdtemp(join(tmpdir(), "machina-image-test-"));
     try {
         const path = join(root, "a picture.jpeg");
         await writeFile(path, PNG);
@@ -41,7 +41,7 @@ test("dropped image content is detected from bytes and only live markers are sub
 });
 
 test("arbitrary data, directories and oversize files are refused", async () => {
-    const root = await mkdtemp(join(tmpdir(), "ah-image-test-"));
+    const root = await mkdtemp(join(tmpdir(), "machina-image-test-"));
     try {
         const path = join(root, "bad.png");
         await writeFile(path, "not an image");

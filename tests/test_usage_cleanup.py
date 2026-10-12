@@ -8,13 +8,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-TEST_DSN = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL", "")
-needs_db = pytest.mark.skipif(not TEST_DSN, reason="AGENT_HARNESS_TEST_DATABASE_URL not set")
+TEST_DSN = os.environ.get("MACHINA_TEST_DATABASE_URL", "")
+needs_db = pytest.mark.skipif(not TEST_DSN, reason="MACHINA_TEST_DATABASE_URL not set")
 
 
 @pytest.fixture
 async def connected_db():
-    from ah.db.connection import db
+    from machina.db.connection import db
 
     await db.connect()
     yield
@@ -26,7 +26,7 @@ async def connected_db():
 @pytest.mark.asyncio
 async def test_cleanup_orphaned_reservations_marks_them_failed(db_pool):
     """cleanup_orphaned_reservations() should mark all 'reserved' rows as 'error'."""
-    from ah.core.usage import UsageStore
+    from machina.core.usage import UsageStore
 
     store = UsageStore()
     session_id = uuid.uuid4()
@@ -69,7 +69,7 @@ async def test_cleanup_orphaned_reservations_marks_them_failed(db_pool):
 @pytest.mark.asyncio
 async def test_cleanup_orphaned_reservations_returns_zero_when_none(db_pool):
     """cleanup_orphaned_reservations() should return 0 when no reserved rows exist."""
-    from ah.core.usage import UsageStore
+    from machina.core.usage import UsageStore
 
     store = UsageStore()
     # Drain any leftovers from other tests first for isolation.
@@ -81,19 +81,19 @@ async def test_cleanup_orphaned_reservations_returns_zero_when_none(db_pool):
 @pytest.mark.asyncio
 async def test_gateway_startup_calls_cleanup(monkeypatch):
     """Gateway._initialize() should call cleanup_orphaned_reservations() on startup."""
-    from ah.gateway.server import Gateway
+    from machina.gateway.server import Gateway
 
     mock_cleanup = AsyncMock(return_value=0)
-    monkeypatch.setattr("ah.core.usage.usage_store.cleanup_orphaned_reservations", mock_cleanup)
+    monkeypatch.setattr("machina.core.usage.usage_store.cleanup_orphaned_reservations", mock_cleanup)
     migration = AsyncMock()
-    monkeypatch.setattr("ah.db.connection.db.initialize_runtime_schema", migration)
+    monkeypatch.setattr("machina.db.connection.db.initialize_runtime_schema", migration)
 
     frames = []
     gateway = Gateway(frames.append, owns_db=False)
     gateway._db_ready = False  # Force the DB path
 
     # Mock db.connect to avoid real DB
-    import ah.db.connection as db_mod
+    import machina.db.connection as db_mod
 
     original_connect = db_mod.db.connect
     db_mod.db.connect = AsyncMock()

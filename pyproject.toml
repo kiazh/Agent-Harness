@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "AgentHarness"
+name = "Machina"
 version = "0.2.0"
 description = "Self-hosted multi-agent AI orchestration framework with PostgreSQL-backed context"
 readme = "README.md"
@@ -42,16 +42,16 @@ dev = [
 ]
 
 [project.scripts]
-ah = "ah.cli:app"
+machina = "machina.cli:app"
 
 [tool.hatch.build]
 exclude = ["**/node_modules/**", "**/__pycache__/**", ".venv*", ".env", ".env.local", ".coverage", "coverage.xml"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["ah"]
+packages = ["machina"]
 
 # AH-030: ship built-in skills inside the wheel so non-editable installs
-# still discover SKILL.md content. Falls back to AGENT_HARNESS_SKILLS_DIR
+# still discover SKILL.md content. Falls back to MACHINA_SKILLS_DIR
 # at runtime when overridden.
 [tool.hatch.build.targets.wheel.force-include]
 "skills" = "skills"
@@ -62,7 +62,7 @@ packages = ["ah"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["skills/ecc", "ah/bundled_agents/ecc"]
+extend-exclude = ["skills/ecc", "machina/bundled_agents/ecc"]
 
 [tool.ruff.lint]
 # Explicit so results don't change with the ruff version:
@@ -81,8 +81,8 @@ markers = [
 
 
 [tool.coverage.run]
-source = ["ah"]
-omit = ["tests/*", "ah/cli/*"]
+source = ["machina"]
+omit = ["tests/*", "machina/cli/*"]
 
 [tool.coverage.report]
 fail_under = 60

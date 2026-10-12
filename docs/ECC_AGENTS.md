@@ -1,6 +1,6 @@
 # Bundled ECC subagents
 
-AgentHarness ships all **71 canonical subagents** from
+Machina ships all **71 canonical subagents** from
 [ECC's agents directory](https://github.com/affaan-m/ECC/tree/b92f181b3b748d1abbc2afd94af6aa7d8c8fca29/agents),
 pinned at `b92f181b3b748d1abbc2afd94af6aa7d8c8fca29`, alongside the three core
 agents (`harness`, `researcher`, `coder`). This import contains agent definitions
@@ -17,18 +17,18 @@ into normal turns. Only the selected role's prompt goes into its agent session.
 
 Definitions are built-in defaults with source `ecc`; they need no database
 seeding, startup download, optional extra or installation step. They also remain
-available when `AGENT_HARNESS_AGENTS_DIR` points to custom YAML agents. As with
+available when `MACHINA_AGENTS_DIR` points to custom YAML agents. As with
 the core agents, gateway save/delete operations cannot replace or remove these
 built-in names. Existing database lookup precedence is unchanged.
 
 ## Harness adaptation
 
 Original Markdown files are preserved byte-for-byte under
-`ah/bundled_agents/ecc/`. `manifest.json` records the upstream revision, file
+`machina/bundled_agents/ecc/`. `manifest.json` records the upstream revision, file
 checksums, original model preferences and tool names. The original MIT notice
 is included in `LICENSE` in that directory.
 
-The adapter in `ah/core/agent_def.py` maps tool names to registered harness
+The adapter in `machina/core/agent_def.py` maps tool names to registered harness
 tools and prepends a short integration note to each selected role's prompt:
 
 | ECC tool | Harness tool |

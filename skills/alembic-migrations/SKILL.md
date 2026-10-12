@@ -27,4 +27,4 @@ version: 1.0.0
 - [Alembic tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html)
 
 ## Practice Project
-Set up Alembic for AgentHarness schema. Create migrations for: adding a new table, adding a column, creating an index. Test upgrade and downgrade.
+Set up Alembic for Machina schema. Create migrations for: adding a new table, adding a column, creating an index. Test upgrade and downgrade.

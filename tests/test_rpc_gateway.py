@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from ah.api.app import _RpcGateway, create_app
+from machina.api.app import _RpcGateway, create_app
 
 
 class TestRpcDispatchReuse:
@@ -15,7 +15,7 @@ class TestRpcDispatchReuse:
         """rpc_dispatch must use the _RpcGateway from app.state, not create new ones."""
         app = create_app()
 
-        with patch("ah.api.app.Gateway") as mock_gateway_cls:
+        with patch("machina.api.app.Gateway") as mock_gateway_cls:
             mock_gw_instance = MagicMock()
             mock_gw_instance._db_ready = False
             mock_gw_instance.close = AsyncMock()
@@ -54,7 +54,7 @@ class TestRpcDispatchReuse:
 
     async def test_rpc_dispatch_creates_new_gateway_per_call_bug(self):
         """Document the current bug: rpc_dispatch creates new _RpcGateway per call."""
-        with patch("ah.api.app.Gateway") as mock_gateway_cls:
+        with patch("machina.api.app.Gateway") as mock_gateway_cls:
             mock_gw_instance = MagicMock()
             mock_gw_instance._db_ready = False
             mock_gw_instance.close = AsyncMock()

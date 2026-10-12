@@ -13,23 +13,23 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from ah.api.app import create_app
-from ah.core.cron import next_cron_time
-from ah.core.metrics import MetricsCollector
-from ah.observability.audit import AuditPersistence
-from ah.observability.metrics import prometheus_text
-from ah.plugins.registry import PluginRegistry
-from ah.security.secrets import get_secret
+from machina.api.app import create_app
+from machina.core.cron import next_cron_time
+from machina.core.metrics import MetricsCollector
+from machina.observability.audit import AuditPersistence
+from machina.observability.metrics import prometheus_text
+from machina.plugins.registry import PluginRegistry
+from machina.security.secrets import get_secret
 
 
 @pytest.mark.asyncio
 async def test_database_passes_full_dsn_and_does_not_replace_a_live_pool(monkeypatch):
-    from ah.db.connection import Database
+    from machina.db.connection import Database
 
     dsn = "postgresql://user:p%40ss@localhost/example?sslmode=require"
     pool = AsyncMock()
     create_pool = AsyncMock(return_value=pool)
-    monkeypatch.setattr("ah.db.connection.asyncpg.create_pool", create_pool)
+    monkeypatch.setattr("machina.db.connection.asyncpg.create_pool", create_pool)
     database = Database(dsn=dsn)
     await database.connect()
     await database.connect()
@@ -61,14 +61,14 @@ def test_prometheus_export_uses_cumulative_totals():
     collector.record_tokens("private-session-a", 4, 3)
     collector.record_tokens("private-session-b", 2, 1)
     output = prometheus_text(collector)
-    assert 'ah_operations_total{operation="agent.run.calls"} 2' in output
-    assert 'ah_duration_milliseconds_sum{operation="agent.run"} 20.0' in output
-    assert 'ah_tokens_total{kind="total_tokens"} 10' in output
+    assert 'machina_operations_total{operation="agent.run.calls"} 2' in output
+    assert 'machina_duration_milliseconds_sum{operation="agent.run"} 20.0' in output
+    assert 'machina_tokens_total{kind="total_tokens"} 10' in output
     assert "private-session-a" not in output and "private-session-b" not in output
 
 
 def test_audit_sanitizes_sensitive_field_names():
-    from ah.core.provider import _sanitize_value
+    from machina.core.provider import _sanitize_value
 
     payload = {
         "apiKey": "unusual-secret-value",
@@ -89,12 +89,12 @@ def test_mounted_secret_and_vault_lookup(monkeypatch, tmp_path):
     monkeypatch.setenv(f"{name}_FILE", str(file_path))
     assert get_secret(name) == "mounted-key"
     monkeypatch.delenv(f"{name}_FILE")
-    monkeypatch.setenv("AGENT_HARNESS_SECRET_BACKEND", "vault")
-    monkeypatch.setenv("AGENT_HARNESS_VAULT_ADDR", "https://vault.example")
-    monkeypatch.setenv("AGENT_HARNESS_VAULT_PATH", "secret/data/phase6")
-    monkeypatch.setenv("AGENT_HARNESS_VAULT_TOKEN", "token")
+    monkeypatch.setenv("MACHINA_SECRET_BACKEND", "vault")
+    monkeypatch.setenv("MACHINA_VAULT_ADDR", "https://vault.example")
+    monkeypatch.setenv("MACHINA_VAULT_PATH", "secret/data/phase6")
+    monkeypatch.setenv("MACHINA_VAULT_TOKEN", "token")
 
-    from ah.security import secrets
+    from machina.security import secrets
 
     class Client:
         def __init__(self, **kwargs):
@@ -119,8 +119,8 @@ def test_mounted_secret_and_vault_lookup(monkeypatch, tmp_path):
 
 def test_aws_secret_lookup_uses_named_field(monkeypatch):
     name = "PHASE6_AWS_SECRET_TEST"
-    monkeypatch.setenv("AGENT_HARNESS_SECRET_BACKEND", "aws")
-    monkeypatch.setenv("AGENT_HARNESS_AWS_SECRET_ID", "phase6-id")
+    monkeypatch.setenv("MACHINA_SECRET_BACKEND", "aws")
+    monkeypatch.setenv("MACHINA_AWS_SECRET_ID", "phase6-id")
 
     def client(service):
         assert service == "secretsmanager"
@@ -184,10 +184,10 @@ async def test_slow_plugin_does_not_block_other_hooks():
 
 @pytest.mark.asyncio
 async def test_agent_lifecycle_and_tool_hooks(monkeypatch):
-    from ah.core import agent as agent_module
-    from ah.core.agent import ReActAgent
-    from ah.core.models import LLMResponse
-    from ah.plugins.registry import plugin_registry
+    from machina.core import agent as agent_module
+    from machina.core.agent import ReActAgent
+    from machina.core.models import LLMResponse
+    from machina.plugins.registry import plugin_registry
 
     session_id = uuid.uuid4()
     session = SimpleNamespace(id=session_id, agent_id="harness", context_budget=8000, goal=None)
@@ -250,10 +250,10 @@ async def test_agent_lifecycle_and_tool_hooks(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_api_lifespan_starts_and_stops_scheduler(monkeypatch):
-    from ah.api.app import lifespan
-    from ah.core import scheduler
-    from ah.db.connection import db
-    from ah.observability.audit import audit_persistence
+    from machina.api.app import lifespan
+    from machina.core import scheduler
+    from machina.db.connection import db
+    from machina.observability.audit import audit_persistence
 
     events = []
 
@@ -290,7 +290,7 @@ async def test_api_lifespan_starts_and_stops_scheduler(monkeypatch):
 
 
 def test_plugin_loader_requires_named_entry_points(monkeypatch):
-    from ah.plugins import loader
+    from machina.plugins import loader
 
     called = []
 
@@ -311,7 +311,7 @@ def test_plugin_loader_requires_named_entry_points(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_audit_events_are_flushed_before_shutdown(monkeypatch):
-    from ah.observability import audit
+    from machina.observability import audit
 
     execute = AsyncMock()
     monkeypatch.setattr(audit.db, "execute", execute)
@@ -325,8 +325,8 @@ async def test_audit_events_are_flushed_before_shutdown(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_versioned_api_metrics_rate_limit_and_health(monkeypatch):
-    monkeypatch.setenv("AGENT_HARNESS_API_KEY", "phase6-test")
-    monkeypatch.setenv("AGENT_HARNESS_HTTP_RATE_LIMIT", "2")
+    monkeypatch.setenv("MACHINA_API_KEY", "phase6-test")
+    monkeypatch.setenv("MACHINA_HTTP_RATE_LIMIT", "2")
     app = create_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         assert (await client.get("/health")).status_code == 200
@@ -335,14 +335,14 @@ async def test_versioned_api_metrics_rate_limit_and_health(monkeypatch):
         headers = {"Authorization": "Bearer phase6-test"}
         first = await client.get("/metrics", headers=headers)
         assert first.status_code == 200
-        assert "ah_operations_total" in first.text
+        assert "machina_operations_total" in first.text
         assert (await client.get("/api/v1/sessions", headers=headers)).status_code == 429
         assert (await client.get("/health")).status_code == 200
 
 
 @pytest.mark.asyncio
 async def test_readiness_requires_initialized_schema(monkeypatch):
-    from ah.db.connection import db
+    from machina.db.connection import db
 
     monkeypatch.setattr(type(db), "connected", property(lambda _self: True))
     fetchval = AsyncMock(return_value=False)
@@ -356,12 +356,12 @@ async def test_readiness_requires_initialized_schema(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_versioned_memory_and_document_routes(monkeypatch):
-    from ah.core.session import session_manager
-    from ah.memory.store import memory_store
-    from ah.tools import rag
+    from machina.core.session import session_manager
+    from machina.memory.store import memory_store
+    from machina.tools import rag
 
-    monkeypatch.setenv("AGENT_HARNESS_API_KEY", "phase6-test")
-    monkeypatch.setenv("AGENT_HARNESS_HTTP_RATE_LIMIT", "100")
+    monkeypatch.setenv("MACHINA_API_KEY", "phase6-test")
+    monkeypatch.setenv("MACHINA_HTTP_RATE_LIMIT", "100")
     session_id = uuid.uuid4()
     monkeypatch.setattr(
         session_manager,
@@ -395,10 +395,10 @@ async def test_versioned_memory_and_document_routes(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_versioned_session_update_and_delete(monkeypatch):
-    from ah.core.session import session_manager
+    from machina.core.session import session_manager
 
-    monkeypatch.setenv("AGENT_HARNESS_API_KEY", "phase6-test")
-    monkeypatch.setenv("AGENT_HARNESS_HTTP_RATE_LIMIT", "100")
+    monkeypatch.setenv("MACHINA_API_KEY", "phase6-test")
+    monkeypatch.setenv("MACHINA_HTTP_RATE_LIMIT", "100")
     session_id = uuid.uuid4()
     session = SimpleNamespace(
         id=session_id,
@@ -429,13 +429,13 @@ async def test_versioned_session_update_and_delete(monkeypatch):
 
 
 @pytest.mark.skipif(
-    not os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL"), reason="test database not configured"
+    not os.environ.get("MACHINA_TEST_DATABASE_URL"), reason="test database not configured"
 )
 @pytest.mark.asyncio
 async def test_cron_job_persists_and_reschedules():
-    from ah.core.scheduler import job_store
-    from ah.core.session import session_manager
-    from ah.db.connection import db
+    from machina.core.scheduler import job_store
+    from machina.core.session import session_manager
+    from machina.db.connection import db
 
     await db.connect()
     try:
@@ -461,8 +461,8 @@ async def test_cron_job_persists_and_reschedules():
 
 @pytest.mark.asyncio
 async def test_docker_terminal_isolated_command_and_path_check(monkeypatch, tmp_path):
-    from ah.tools import terminal as terminal_module
-    from ah.tools.terminal import _validate_workdir
+    from machina.tools import terminal as terminal_module
+    from machina.tools.terminal import _validate_workdir
 
     workdir = tmp_path / "workspace"
     workdir.mkdir()
@@ -472,7 +472,7 @@ async def test_docker_terminal_isolated_command_and_path_check(monkeypatch, tmp_
     with pytest.raises(ValueError, match="not within allowed"):
         _validate_workdir(str(sibling))
 
-    monkeypatch.setenv("AGENT_HARNESS_TERMINAL_SANDBOX", "docker")
+    monkeypatch.setenv("MACHINA_TERMINAL_SANDBOX", "docker")
     seen = []
 
     def fake_run(args, timeout, cwd, **kwargs):

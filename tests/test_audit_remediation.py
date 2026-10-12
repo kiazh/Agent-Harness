@@ -14,14 +14,14 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _clean_remediation_state():
-    from ah.core import session_mode as _sm
+    from machina.core import session_mode as _sm
 
     _sm.reset_for_tests()
-    from ah.permissions import store as _store
+    from machina.permissions import store as _store
 
     _store._mem.grants.clear()
     _store._mem.approvals.clear()
-    from ah.permissions.broker import clear_execution_context
+    from machina.permissions.broker import clear_execution_context
 
     clear_execution_context()
     yield
@@ -32,7 +32,7 @@ def _clean_remediation_state():
 
 
 def _req(**kw):
-    from ah.permissions.policy import build_request
+    from machina.permissions.policy import build_request
 
     base = {
         "operation": "file.read",
@@ -51,16 +51,16 @@ def _req(**kw):
 def test_001_session_full_does_not_leak_to_future_sessions(monkeypatch):
     # Pins the repo `ask` default: the test asserts session-locality against
     # a non-full global, regardless of the developer's live config.
-    monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
+    monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
 
-    from ah.core import session_mode as sm
-    from ah.core.config import config
-    from ah.permissions import store as st
+    from machina.core import session_mode as sm
+    from machina.core.config import config
+    from machina.permissions import store as st
 
     async def _scenario():
         from types import SimpleNamespace
 
-        from ah.gateway.features import mode as modefeat
+        from machina.gateway.features import mode as modefeat
 
         class Gw:
             def require_db(self):
@@ -82,7 +82,7 @@ def test_001_session_full_does_not_leak_to_future_sessions(monkeypatch):
             assert not [g for g in grants_b if g.get("digest") == "full-mode-session"]
             # Explicit persistent default only affects subsequently created sessions.
             # Drop the ask pin so the global set below is observable.
-            monkeypatch.delenv("AGENT_HARNESS_EXECUTION_MODE", raising=False)
+            monkeypatch.delenv("MACHINA_EXECUTION_MODE", raising=False)
             await modefeat.mode_set(gw, {"mode": "full", "scope": "global"})
             assert config.get("execution_mode") == "full"
             assert sm.get_effective_mode(b) == "full"
@@ -97,15 +97,15 @@ def test_001_session_full_does_not_leak_to_future_sessions(monkeypatch):
 
 def test_001_grant_failure_leaves_no_elevation(monkeypatch):
     # Pins ask-mode behavior regardless of the developer's live config.
-    monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
+    monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
 
-    from ah.core import session_mode as sm
-    from ah.permissions import store as st
+    from machina.core import session_mode as sm
+    from machina.permissions import store as st
 
     async def _scenario():
         from types import SimpleNamespace
 
-        from ah.gateway.features import mode as modefeat
+        from machina.gateway.features import mode as modefeat
 
         class Gw:
             def require_db(self):
@@ -137,7 +137,7 @@ def test_001_grant_failure_leaves_no_elevation(monkeypatch):
 
 
 def test_007_partial_sensitive_grant_denied_full_set_allowed():
-    from ah.permissions.policy import build_request, decide
+    from machina.permissions.policy import build_request, decide
 
     req = build_request(
         operation="file.read",
@@ -167,7 +167,7 @@ def test_007_partial_sensitive_grant_denied_full_set_allowed():
 
 
 def test_008_digest_preserves_boundaries_and_material_fields():
-    from ah.permissions.policy import build_request
+    from machina.permissions.policy import build_request
 
     a = build_request(operation="process.exec", argv=["echo", "a|b"], session_id="s", mode="ask")
     b = build_request(operation="process.exec", argv=["echo", "a", "b"], session_id="s", mode="ask")
@@ -199,7 +199,7 @@ def test_008_digest_preserves_boundaries_and_material_fields():
 
 
 def test_006_env_and_destructive_tripwires():
-    from ah.permissions.policy import _sensitive_capabilities, build_request
+    from machina.permissions.policy import _sensitive_capabilities, build_request
 
     env_req = build_request(operation="file.read", targets=["/proj/.env"], session_id="s")
     assert "credential_access" in _sensitive_capabilities(env_req)
@@ -214,19 +214,19 @@ def test_006_env_and_destructive_tripwires():
 
 def test_002_backend_snapshot_survives_global_change():
 
-    from ah.permissions.broker import clear_execution_context, permission_broker
-    from ah.permissions.policy import build_request
-    from ah.tools import terminal as tmod
+    from machina.permissions.broker import clear_execution_context, permission_broker
+    from machina.permissions.policy import build_request
+    from machina.tools import terminal as tmod
 
     async def _scenario():
         req = build_request(operation="context.read", session_id="s9", mode="ask")
         await permission_broker.guard(req)
-        from ah.permissions.broker import get_execution_context
+        from machina.permissions.broker import get_execution_context
 
         snap = get_execution_context()
         assert snap and snap["mode"] == "ask" and snap["digest"] == req.digest
         # A concurrent global change cannot alter the approved snapshot.
-        from ah.core.config import config
+        from machina.core.config import config
 
         saved = config.get("execution_mode")
         config.set("execution_mode", "full")
@@ -244,8 +244,8 @@ def test_002_backend_snapshot_survives_global_change():
 
 
 def test_003_004_card_carries_command_and_diff():
-    from ah.permissions.broker import _approval_view
-    from ah.permissions.policy import build_request
+    from machina.permissions.broker import _approval_view
+    from machina.permissions.policy import build_request
 
     req = build_request(
         operation="process.exec",
@@ -278,8 +278,8 @@ def test_003_004_card_carries_command_and_diff():
 
 def test_005_legacy_approval_never_resumes():
 
-    from ah.permissions import store as st
-    from ah.permissions.policy import build_request
+    from machina.permissions import store as st
+    from machina.permissions.policy import build_request
 
     async def _scenario():
         req = build_request(
@@ -305,24 +305,24 @@ def test_005_legacy_approval_never_resumes():
 
 
 def test_010_child_env_strips_secrets_keeps_platform(monkeypatch):
-    from ah.tools.terminal import _sanitized_env
+    from machina.tools.terminal import _sanitized_env
 
     # monkeypatch.setenv restores prior values (or absence) afterwards —
     # never delete process env outright; other suites rely on it.
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret")
-    monkeypatch.setenv("AGENT_HARNESS_API_KEY", "gw-test-secret")
+    monkeypatch.setenv("MACHINA_API_KEY", "gw-test-secret")
     env = _sanitized_env()
     assert "OPENAI_API_KEY" not in env
-    assert "AGENT_HARNESS_API_KEY" not in env
+    assert "MACHINA_API_KEY" not in env
     assert env.get("PATH")
-    monkeypatch.setenv("AGENT_HARNESS_TERMINAL_EXTRA_ENV", "OPENAI_API_KEY")
+    monkeypatch.setenv("MACHINA_TERMINAL_EXTRA_ENV", "OPENAI_API_KEY")
     assert _sanitized_env()["OPENAI_API_KEY"] == "sk-test-secret"
 
 
 def test_010_child_env_requires_explicit_passthrough_for_unlisted_credentials(monkeypatch):
-    from ah.tools.terminal import _sanitized_env
+    from machina.tools.terminal import _sanitized_env
 
-    monkeypatch.delenv("AGENT_HARNESS_TERMINAL_EXTRA_ENV", raising=False)
+    monkeypatch.delenv("MACHINA_TERMINAL_EXTRA_ENV", raising=False)
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE00000000")
     monkeypatch.setenv("ACME_AUTH_TOKEN", "synthetic-token")
     env = _sanitized_env()
@@ -330,13 +330,13 @@ def test_010_child_env_requires_explicit_passthrough_for_unlisted_credentials(mo
     assert "ACME_AUTH_TOKEN" not in env
     assert env.get("PATH")
 
-    monkeypatch.setenv("AGENT_HARNESS_TERMINAL_EXTRA_ENV", "AWS_ACCESS_KEY_ID")
+    monkeypatch.setenv("MACHINA_TERMINAL_EXTRA_ENV", "AWS_ACCESS_KEY_ID")
     assert _sanitized_env()["AWS_ACCESS_KEY_ID"] == "AKIAEXAMPLE00000000"
 
 
 def test_010_terminal_runs_without_inheriting_secrets(monkeypatch):
 
-    from ah.tools import terminal as tmod
+    from machina.tools import terminal as tmod
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-should-not-leak")
 
@@ -351,9 +351,9 @@ def test_010_terminal_runs_without_inheriting_secrets(monkeypatch):
 
 
 def test_011_approval_and_backend_agree(tmp_path, monkeypatch):
-    import ah.permissions.policy as policymod
-    from ah.permissions.policy import ActionRequest, normalize_request
-    from ah.tools import file as fmod
+    import machina.permissions.policy as policymod
+    from machina.permissions.policy import ActionRequest, normalize_request
+    from machina.tools import file as fmod
 
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -361,7 +361,7 @@ def test_011_approval_and_backend_agree(tmp_path, monkeypatch):
     other = tmp_path / "other"
     other.mkdir()
     monkeypatch.chdir(other)
-    from ah.core.config import config
+    from machina.core.config import config
 
     monkeypatch.setattr(config, "workspace_root", str(ws))
     req = normalize_request(ActionRequest(operation="file.read", targets=["a.txt"], cwd="."))
@@ -376,8 +376,8 @@ def test_011_approval_and_backend_agree(tmp_path, monkeypatch):
 def test_012_export_redacts_title_goal_and_content(monkeypatch):
     from types import SimpleNamespace
 
-    from ah import services as svc
-    from ah.core import context as ctxmod
+    from machina import services as svc
+    from machina.core import context as ctxmod
 
     async def _no_chunks(*a, **k):
         return []
@@ -403,7 +403,7 @@ def test_012_export_redacts_title_goal_and_content(monkeypatch):
 
 
 def test_012_metadata_redacted_and_reserved_fields_win():
-    from ah.rag.pipeline import _redact_metadata
+    from machina.rag.pipeline import _redact_metadata
 
     meta = _redact_metadata({"note": "token sk-or-abcdefghij1234567890", "embedding_model": "evil"})
     assert "sk-or-abcdefghij1234567890" not in meta["note"]
@@ -416,7 +416,7 @@ def test_012_metadata_redacted_and_reserved_fields_win():
 def test_016_db_less_turn_blocks_mutation_and_vice_versa():
     import uuid
 
-    from ah.core import turns as t
+    from machina.core import turns as t
 
     async def _scenario():
         sid = uuid.uuid4()
@@ -438,7 +438,7 @@ def test_016_db_less_turn_blocks_mutation_and_vice_versa():
 def test_013_db_less_renewal_and_ownership():
     import uuid
 
-    from ah.core import turns as t
+    from machina.core import turns as t
 
     async def _scenario():
         sid = uuid.uuid4()
@@ -457,7 +457,7 @@ def test_013_db_less_renewal_and_ownership():
 def test_013_turn_ownership_renewal_lifecycle():
     import uuid
 
-    from ah.core import turns as t
+    from machina.core import turns as t
 
     async def _scenario():
         sid = uuid.uuid4()
@@ -481,7 +481,7 @@ def test_013_turn_ownership_renewal_lifecycle():
 
 
 def test_022_typed_pause_not_prose():
-    from ah.core.models import AgentResponse
+    from machina.core.models import AgentResponse
 
     discussing = AgentResponse(
         content="This needs_approval flow is documented. Needs approval processes rock.",
@@ -508,7 +508,7 @@ def test_022_typed_pause_not_prose():
 
 
 def test_021_pause_request_id_extraction():
-    from ah.core.scheduler import _pause_request_id
+    from machina.core.scheduler import _pause_request_id
 
     err = PermissionError("needs_approval: job paused; request abcdef1234567890 (x)")
     assert _pause_request_id(err) == "abcdef1234567890"
@@ -523,8 +523,8 @@ def test_021_pause_request_id_extraction():
 def test_020_no_leaked_tasks_after_run():
     import uuid
 
-    from ah.core.models import AgentResponse
-    from ah.core.scheduler import JobRunner
+    from machina.core.models import AgentResponse
+    from machina.core.scheduler import JobRunner
 
     class Agent:
         async def run(self, *a, **k):
@@ -579,7 +579,7 @@ def test_023_kill_tree_stops_resistant_child():
     import sys
     import time
 
-    from ah.tools.terminal import _kill_tree
+    from machina.tools.terminal import _kill_tree
 
     proc = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -602,7 +602,7 @@ def test_023_kill_tree_stops_resistant_child():
 
 def test_023_terminal_cancel_signals_stop():
 
-    from ah.tools import terminal as tmod
+    from machina.tools import terminal as tmod
 
     async def _scenario():
         real = tmod._run_bounded
@@ -639,7 +639,7 @@ def test_023_terminal_cancel_signals_stop():
 def test_024_shutdown_quarantines_resistant_tasks():
     import time
 
-    from ah.core.runtime import RuntimeServices
+    from machina.core.runtime import RuntimeServices
 
     async def _scenario():
         rt = RuntimeServices()
@@ -669,8 +669,8 @@ def test_024_shutdown_quarantines_resistant_tasks():
 
 
 def test_030_sse_pause_is_typed_not_error():
-    from ah.api.app import _serialize_event
-    from ah.core.models import AgentResponse, StreamEvent
+    from machina.api.app import _serialize_event
+    from machina.core.models import AgentResponse, StreamEvent
 
     resp = AgentResponse(
         content="paused",
@@ -705,11 +705,11 @@ def test_030_sse_pause_is_typed_not_error():
 def test_032_pipeline_without_keys_is_keyword_only(monkeypatch):
     for var in ("OPENAI_API_KEY", "OPENROUTER_API_KEY"):
         monkeypatch.delenv(var, raising=False)
-    from ah.core.config import config
+    from machina.core.config import config
 
     monkeypatch.setattr(config, "openai_api_key", "")
     monkeypatch.setattr(config, "openrouter_api_key", "")
-    from ah.rag.pipeline import RAGPipeline
+    from machina.rag.pipeline import RAGPipeline
 
     pipe = RAGPipeline()
     assert pipe._embedder is None
@@ -719,8 +719,8 @@ def test_032_pipeline_without_keys_is_keyword_only(monkeypatch):
 
 
 def test_036_reranker_identity_matches_component():
-    from ah.rag.pipeline import RAGPipeline
-    from ah.rag.reranker import IdentityReranker
+    from machina.rag.pipeline import RAGPipeline
+    from machina.rag.reranker import IdentityReranker
 
     pipe = RAGPipeline(reranker=IdentityReranker())
     assert pipe.reranker_identity()["reranker"] == "passthrough"
@@ -730,7 +730,7 @@ def test_036_reranker_identity_matches_component():
 
 
 def _chunk(cid, created):
-    from ah.core.models import ContextChunk
+    from machina.core.models import ContextChunk
 
     return ContextChunk(
         id=cid,
@@ -746,8 +746,8 @@ def test_037_failed_extraction_advances_nothing(monkeypatch):
     import uuid
     from datetime import UTC, datetime
 
-    from ah.core import context as ctxmod
-    from ah.memory.consolidator import MemoryConsolidator
+    from machina.core import context as ctxmod
+    from machina.memory.consolidator import MemoryConsolidator
 
     async def _scenario():
         cons = MemoryConsolidator(store=_FakeMemStore())
@@ -803,9 +803,9 @@ def test_037_empty_extraction_checkpoint_valid_partial_not(monkeypatch):
     import uuid
     from datetime import UTC, datetime
 
-    from ah.core import context as ctxmod
-    from ah.memory.consolidator import MemoryConsolidator
-    from ah.memory.models import MemoryEntry
+    from machina.core import context as ctxmod
+    from machina.memory.consolidator import MemoryConsolidator
+    from machina.memory.models import MemoryEntry
 
     async def _scenario():
         now = datetime.now(UTC)
@@ -849,11 +849,11 @@ def test_037_empty_extraction_checkpoint_valid_partial_not(monkeypatch):
 
 
 async def test_014_015_fenced_replace_aborts_stale(db_pool, monkeypatch):
-    from ah.core import context as ctxmod
-    from ah.core import session as sessmod
-    from ah.core.context import context_manager
-    from ah.core.exceptions import StaleOwnershipError, StaleSnapshotError
-    from ah.core.session import session_manager
+    from machina.core import context as ctxmod
+    from machina.core import session as sessmod
+    from machina.core.context import context_manager
+    from machina.core.exceptions import StaleOwnershipError, StaleSnapshotError
+    from machina.core.session import session_manager
 
     monkeypatch.setattr(ctxmod, "db", db_pool)
     monkeypatch.setattr(sessmod, "db", db_pool)
@@ -861,8 +861,8 @@ async def test_014_015_fenced_replace_aborts_stale(db_pool, monkeypatch):
     try:
         # turns.py binds db lazily per call: point the shared handle at the
         # test database for this test (reverted afterwards).
-        import ah.db.connection as _connmod
-        from ah.core.turns import begin_mutation, end_mutation
+        import machina.db.connection as _connmod
+        from machina.core.turns import begin_mutation, end_mutation
 
         monkeypatch.setattr(_connmod, "db", db_pool)
         token = await begin_mutation(session.id)
@@ -922,12 +922,12 @@ async def test_014_015_fenced_replace_aborts_stale(db_pool, monkeypatch):
 
 
 async def test_021_paused_job_not_due_until_resume(db_pool, monkeypatch):
-    from ah.core import session as sessmod
-    from ah.core.scheduler import JobStore
-    from ah.core.session import session_manager
+    from machina.core import session as sessmod
+    from machina.core.scheduler import JobStore
+    from machina.core.session import session_manager
 
     monkeypatch.setattr(sessmod, "db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
     session = await session_manager.create(title="pause", agent_id="h")
     try:
         store = JobStore()
@@ -985,9 +985,9 @@ async def test_021_paused_job_not_due_until_resume(db_pool, monkeypatch):
 
 
 def test_042_invalid_values_rejected_without_mutation():
-    from ah.core.config import config, validate_value
-    from ah.gateway.errors import RpcError
-    from ah.gateway.features._common import coerce_config_value
+    from machina.core.config import config, validate_value
+    from machina.gateway.errors import RpcError
+    from machina.gateway.features._common import coerce_config_value
 
     saved = config.get("turn_timeout")
     with pytest.raises(ValueError):
@@ -1027,7 +1027,7 @@ class _FakeSock:
 def test_043_endless_headers_rejected():
     import time
 
-    from ah.security.fetch import FetchError, _read_response
+    from machina.security.fetch import FetchError, _read_response
 
     blob = b"HTTP/1.1 200 OK\r\n" + b"X-Pad: abcdefgh\r\n" * 5000
     with pytest.raises(FetchError):
@@ -1037,7 +1037,7 @@ def test_043_endless_headers_rejected():
 def test_043_oversized_body_rejected():
     import time
 
-    from ah.security.fetch import FetchError, _read_response
+    from machina.security.fetch import FetchError, _read_response
 
     blob = b"HTTP/1.1 200 OK\r\nContent-Length: 999999999\r\n\r\n"
     with pytest.raises(FetchError):
@@ -1047,7 +1047,7 @@ def test_043_oversized_body_rejected():
 def test_043_malformed_chunk_rejected():
     import time
 
-    from ah.security.fetch import FetchError, _read_response
+    from machina.security.fetch import FetchError, _read_response
 
     blob = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZZZ\r\n"
     with pytest.raises(FetchError):

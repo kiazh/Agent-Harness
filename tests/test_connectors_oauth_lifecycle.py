@@ -4,12 +4,12 @@ import asyncio
 
 import pytest
 
-from ah.connectors.models import ConnectorConfig
-from ah.connectors.oauth import OAuthCoordinator
-from ah.connectors.oauth_models import OAuthBinding
-from ah.connectors.oauth_store import OAuthCredentialStore
-from ah.connectors.registry import ConnectorRegistry
-from ah.connectors.service import ConnectorService
+from machina.connectors.models import ConnectorConfig
+from machina.connectors.oauth import OAuthCoordinator
+from machina.connectors.oauth_models import OAuthBinding
+from machina.connectors.oauth_store import OAuthCredentialStore
+from machina.connectors.registry import ConnectorRegistry
+from machina.connectors.service import ConnectorService
 from tests.support.mcp_oauth_fixture import OAuthFixture
 from tests.test_connectors_oauth_flow import _drive_browser, _full_login, _owner, _wait_state
 
@@ -189,7 +189,7 @@ def test_existing_handles_revalidate_actual_connector_authority(tmp_path, action
     async def run():
         from types import SimpleNamespace
 
-        from ah.connectors.oauth import OAuthError
+        from machina.connectors.oauth import OAuthError
 
         owner = _owner()
         config = ConnectorConfig(
@@ -258,7 +258,7 @@ def test_handle_cannot_masquerade_as_supplied_connector(tmp_path, action):
     async def run():
         from types import SimpleNamespace
 
-        from ah.connectors.oauth import OAuthError
+        from machina.connectors.oauth import OAuthError
 
         owner = _owner()
         config = ConnectorConfig(

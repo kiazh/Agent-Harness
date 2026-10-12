@@ -7,13 +7,13 @@ import uuid
 
 import pytest
 
-TEST_DSN = os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL", "")
-needs_db = pytest.mark.skipif(not TEST_DSN, reason="AGENT_HARNESS_TEST_DATABASE_URL not set")
+TEST_DSN = os.environ.get("MACHINA_TEST_DATABASE_URL", "")
+needs_db = pytest.mark.skipif(not TEST_DSN, reason="MACHINA_TEST_DATABASE_URL not set")
 
 
 @pytest.fixture
 async def connected_db():
-    from ah.db.connection import db
+    from machina.db.connection import db
 
     await db.connect()
     yield
@@ -25,7 +25,7 @@ async def connected_db():
 @pytest.mark.asyncio
 async def test_summary_excludes_reserved_rows(db_pool):
     """summary() should only count rows with status='complete', not 'reserved' or 'error'."""
-    from ah.core.usage import UsageStore
+    from machina.core.usage import UsageStore
 
     store = UsageStore()
     session_id = uuid.uuid4()
@@ -65,7 +65,7 @@ async def test_summary_excludes_reserved_rows(db_pool):
 @pytest.mark.asyncio
 async def test_summary_counts_only_complete_rows(db_pool):
     """summary() should count only complete rows, not reserved or error rows."""
-    from ah.core.usage import UsageStore
+    from machina.core.usage import UsageStore
 
     store = UsageStore()
     session_id = uuid.uuid4()

@@ -2,7 +2,7 @@
 
 import pytest
 
-from ah.security.secrets import _read_file
+from machina.security.secrets import _read_file
 
 
 def test_secret_reader_rejects_directory(tmp_path):

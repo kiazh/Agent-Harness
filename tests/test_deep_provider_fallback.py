@@ -8,10 +8,10 @@ import uuid
 import httpx
 import pytest
 
-from ah.core import provider as provider_module
-from ah.core.exceptions import RateLimitError
-from ah.core.models import ToolDefinition
-from ah.core.provider import AsyncTokenBucket, OpenRouterProvider
+from machina.core import provider as provider_module
+from machina.core.exceptions import RateLimitError
+from machina.core.models import ToolDefinition
+from machina.core.provider import AsyncTokenBucket, OpenRouterProvider
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 TOOLS = [ToolDefinition("clock", "Read the time", {"type": "object", "properties": {}})]

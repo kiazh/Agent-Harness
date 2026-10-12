@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.config import Config, config, validate_value
+from machina.core.config import Config, config, validate_value
 
 
 def test_persona_description_validation():
@@ -18,7 +18,7 @@ def test_persona_description_validation():
 
 
 def test_persona_description_environment_and_redaction(monkeypatch):
-    monkeypatch.setenv("AGENT_HARNESS_PERSONA_DESCRIPTION", "A playful tutor")
+    monkeypatch.setenv("MACHINA_PERSONA_DESCRIPTION", "A playful tutor")
     assert (
         Config(persona_description="A formal assistant").get("persona_description")
         == "A playful tutor"
@@ -30,9 +30,9 @@ def test_persona_description_environment_and_redaction(monkeypatch):
 def test_persona_description_survives_config_reload(tmp_path, monkeypatch):
     import importlib
 
-    module = importlib.import_module("ah.core.config")
+    module = importlib.import_module("machina.core.config")
 
-    monkeypatch.delenv("AGENT_HARNESS_PERSONA_DESCRIPTION", raising=False)
+    monkeypatch.delenv("MACHINA_PERSONA_DESCRIPTION", raising=False)
     monkeypatch.setattr(module, "DEFAULT_CONFIG_PATH", tmp_path / "config.yaml")
     original = Config()
     original.set("persona_description", "A patient mentor with dry humor", persist=True)
@@ -46,24 +46,24 @@ def test_persona_description_survives_config_reload(tmp_path, monkeypatch):
 async def test_persona_applies_live_without_growth_and_clears(monkeypatch):
     from types import SimpleNamespace
 
-    from ah.core.agent import BaseReActAgent
-    from ah.core.models import Session
+    from machina.core.agent import BaseReActAgent
+    from machina.core.models import Session
 
     session = Session(id=uuid.uuid4())
-    monkeypatch.delenv("AGENT_HARNESS_PERSONA_DESCRIPTION", raising=False)
+    monkeypatch.delenv("MACHINA_PERSONA_DESCRIPTION", raising=False)
     monkeypatch.setattr(config, "personality_growth_enabled", False)
     monkeypatch.setattr(config, "memory_enabled", False)
     monkeypatch.setattr(config, "rag_enabled", False)
     monkeypatch.setattr(config, "persona_description", "A patient mentor with dry humor")
-    monkeypatch.setattr("ah.core.agent.session_manager.get", AsyncMock(return_value=session))
+    monkeypatch.setattr("machina.core.agent.session_manager.get", AsyncMock(return_value=session))
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.get_recent_context", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.get_recent_context", AsyncMock(return_value=[])
     )
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
     )
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.search_archive_text", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.search_archive_text", AsyncMock(return_value=[])
     )
     agent = BaseReActAgent(
         provider=SimpleNamespace(), system_prompt="CORE IDENTITY", allowed_tools=[]

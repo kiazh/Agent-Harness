@@ -34,4 +34,4 @@ version: 1.0.0
 - [ChatDev](https://github.com/OpenBMB/ChatDev)
 
 ## Practice Project
-Build a multi-agent bridge: AgentHarness dispatches task to OpenCode, OpenCode writes result to external_context, AgentHarness reads and reviews.
+Build a multi-agent bridge: Machina dispatches task to OpenCode, OpenCode writes result to external_context, Machina reads and reviews.

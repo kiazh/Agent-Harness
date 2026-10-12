@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock
 import asyncpg
 import pytest
 
-from ah.rag.search import HybridSearch
-from ah.tools.terminal import ALLOWED_COMMANDS, terminal
+from machina.rag.search import HybridSearch
+from machina.tools.terminal import ALLOWED_COMMANDS, terminal
 
 # ===========================================================================
 # Bug 12: ILIKE fallback produces hex from payload_msgpack::text
@@ -142,22 +142,22 @@ class TestBug13CdNotInAllowlist:
     async def test_cd_command_rejected(self, monkeypatch):
         """Attempting to run 'cd' should raise ValidationError (ask-mode allowlist)."""
         # Full mode deliberately permits host commands; pin ask behavior here.
-        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
-        from ah.core.exceptions import ValidationError
+        monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
+        from machina.core.exceptions import ValidationError
 
         with pytest.raises(ValidationError, match="not in the allowlist"):
             await terminal("cd /tmp")
 
     async def test_cd_with_path_rejected(self, monkeypatch):
         """'cd' with any path should be rejected (ask-mode allowlist)."""
-        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
-        from ah.core.exceptions import ValidationError
+        monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
+        from machina.core.exceptions import ValidationError
 
         with pytest.raises(ValidationError, match="not in the allowlist"):
             await terminal("cd ..")
 
     async def test_other_commands_not_affected(self, monkeypatch):
         """Removing 'cd' should not affect other allowed commands."""
-        monkeypatch.setenv("AGENT_HARNESS_TERMINAL_SANDBOX", "local")
+        monkeypatch.setenv("MACHINA_TERMINAL_SANDBOX", "local")
         result = await terminal("git --version")
         assert isinstance(result, str)

@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies
 COPY pyproject.toml README.md ./
-COPY ah ./ah
+COPY machina ./machina
 COPY skills ./skills
 
 RUN pip install --no-cache-dir --upgrade pip \
@@ -26,7 +26,7 @@ WORKDIR /app
 # Create non-root user + seed the writable application home so a named
 # volume mounted there (AH-AUDIT-039a) inherits correct ownership.
 RUN groupadd -r appuser && useradd -r -g appuser appuser \
-    && mkdir -p /home/appuser/.agent-harness \
+    && mkdir -p /home/appuser/.machina \
     && chown -R appuser:appuser /home/appuser
 
 # Copy installed packages from builder
@@ -34,7 +34,7 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
-COPY --chown=appuser:appuser ah ./ah
+COPY --chown=appuser:appuser machina ./machina
 COPY --chown=appuser:appuser skills ./skills
 COPY --chown=appuser:appuser pyproject.toml README.md ./
 
@@ -42,8 +42,8 @@ COPY --chown=appuser:appuser pyproject.toml README.md ./
 USER appuser
 
 # Catch missing runtime dependencies during the image build.
-RUN ah --help > /dev/null && python -c "from ah.api.app import create_app; create_app()"
+RUN machina --help > /dev/null && python -c "from machina.api.app import create_app; create_app()"
 
 # Default command
-ENTRYPOINT ["ah"]
+ENTRYPOINT ["machina"]
 CMD ["--help"]

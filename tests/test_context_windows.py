@@ -1,6 +1,6 @@
 """Per-model context windows and the derived per-turn token budget."""
 
-from ah.core.context_windows import (
+from machina.core.context_windows import (
     DEFAULT_CONTEXT_WINDOW,
     LEGACY_DEFAULT_BUDGET,
     context_window_for,
@@ -9,7 +9,7 @@ from ah.core.context_windows import (
 
 
 def test_legacy_default_matches_config_default():
-    from ah.core.config import DEFAULTS
+    from machina.core.config import DEFAULTS
 
     assert LEGACY_DEFAULT_BUDGET == DEFAULTS["context_budget"]
 
@@ -57,8 +57,8 @@ def test_legacy_spend_configuration_does_not_cap_model_capacity():
 def test_effective_turn_budget_prefers_session_then_provider_then_config():
     import uuid
 
-    from ah.core.agent import _effective_turn_budget, _turn_model
-    from ah.core.models import Session
+    from machina.core.agent import _effective_turn_budget, _turn_model
+    from machina.core.models import Session
 
     session = Session(id=uuid.uuid4(), context_budget=8000, model="deepseek-chat")
 
@@ -69,7 +69,7 @@ def test_effective_turn_budget_prefers_session_then_provider_then_config():
     assert (
         _turn_model(Session(id=uuid.uuid4(), context_budget=8000), StubProvider()) == "gpt-4o-mini"
     )
-    from ah.core.config import config as _global_config
+    from machina.core.config import config as _global_config
 
     assert _turn_model(Session(id=uuid.uuid4(), context_budget=8000), object()) == (
         _global_config.get("model") or None

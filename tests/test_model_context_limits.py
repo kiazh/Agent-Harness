@@ -5,17 +5,17 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.agent import ReActAgent, _effective_turn_budget
-from ah.core.config import config
-from ah.core.models import LLMResponse, Session, StreamEvent
+from machina.core.agent import ReActAgent, _effective_turn_budget
+from machina.core.config import config
+from machina.core.models import LLMResponse, Session, StreamEvent
 
 
 async def test_provider_metadata_supplies_window_and_is_cached(monkeypatch):
     import httpx
     from cachetools import TTLCache
 
-    from ah.core import context_windows
-    from ah.core.provider import OpenRouterProvider
+    from machina.core import context_windows
+    from machina.core.provider import OpenRouterProvider
 
     monkeypatch.setattr(
         context_windows, "_provider_windows", TTLCache(maxsize=4096, ttl=300), raising=False
@@ -50,8 +50,8 @@ async def test_offline_metadata_uses_known_window_without_turn_cap(monkeypatch):
     import httpx
     from cachetools import TTLCache
 
-    from ah.core import context_windows
-    from ah.core.provider import OpenRouterProvider
+    from machina.core import context_windows
+    from machina.core.provider import OpenRouterProvider
 
     monkeypatch.setattr(
         context_windows, "_provider_windows", TTLCache(maxsize=4096, ttl=300), raising=False
@@ -96,8 +96,8 @@ async def test_cumulative_usage_does_not_stop_a_small_current_request(monkeypatc
         ),
     )
     monkeypatch.setattr(agent, "_flush_pending_chunks", AsyncMock())
-    monkeypatch.setattr("ah.core.agent.session_manager.update_activity", AsyncMock())
-    monkeypatch.setattr("ah.core.agent.session_manager.get", AsyncMock(return_value=session))
+    monkeypatch.setattr("machina.core.agent.session_manager.update_activity", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.session_manager.get", AsyncMock(return_value=session))
     monkeypatch.setattr(agent, "_schedule_memory_consolidation", lambda *_: None)
     monkeypatch.setattr(agent, "_schedule_learning_review", lambda *_: None)
     calls = []
@@ -147,8 +147,8 @@ async def test_true_request_overflow_stops_before_provider_call(monkeypatch, str
         ),
     )
     monkeypatch.setattr(agent, "_flush_pending_chunks", AsyncMock())
-    monkeypatch.setattr("ah.core.agent.session_manager.update_activity", AsyncMock())
-    monkeypatch.setattr("ah.core.agent.session_manager.get", AsyncMock(return_value=session))
+    monkeypatch.setattr("machina.core.agent.session_manager.update_activity", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.session_manager.get", AsyncMock(return_value=session))
     monkeypatch.setattr(agent, "_schedule_memory_consolidation", lambda *_: None)
     call = AsyncMock(return_value=LLMResponse(content="wrong", model="codellama"))
     monkeypatch.setattr(agent, "_call_llm_with_retry", call)
@@ -170,9 +170,9 @@ async def test_true_request_overflow_stops_before_provider_call(monkeypatch, str
 async def test_real_loop_preserves_long_context_and_executes_reported_chain(
     tmp_path, monkeypatch, streaming
 ):
-    from ah.core import context as context_module
-    from ah.core.usage import usage_store
-    from ah.permissions import store
+    from machina.core import context as context_module
+    from machina.core.usage import usage_store
+    from machina.permissions import store
 
     session = Session(id=uuid.uuid4(), model="fixture/million")
     monkeypatch.setattr(config, "workspace_root", str(tmp_path))
@@ -186,8 +186,8 @@ async def test_real_loop_preserves_long_context_and_executes_reported_chain(
         "compression_enabled",
     ):
         monkeypatch.setattr(config, field, False)
-    monkeypatch.setattr("ah.core.agent.session_manager.get", AsyncMock(return_value=session))
-    monkeypatch.setattr("ah.core.agent.session_manager.update_activity", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.session_manager.get", AsyncMock(return_value=session))
+    monkeypatch.setattr("machina.core.agent.session_manager.update_activity", AsyncMock())
     for method in ("add_chunk", "add_chunks_batch", "search_archive_text", "get_latest_images"):
         monkeypatch.setattr(context_module.context_manager, method, AsyncMock(return_value=[]))
     monkeypatch.setattr(

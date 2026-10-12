@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: agentharness
+      POSTGRES_DB: machina
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -21,12 +21,12 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/agentharness
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/machina
       # AH-AUDIT-039b: provider selection + per-provider keys forwarded
       # explicitly from host configuration (empty default = unset; secrets
       # never baked into image layers — .env stays excluded via .dockerignore).
-      AGENT_HARNESS_PROVIDER: ${AGENT_HARNESS_PROVIDER:-openrouter}
-      AGENT_HARNESS_MODEL: ${AGENT_HARNESS_MODEL:-openrouter/free}
+      MACHINA_PROVIDER: ${MACHINA_PROVIDER:-openrouter}
+      MACHINA_MODEL: ${MACHINA_MODEL:-openrouter/free}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -37,14 +37,14 @@ services:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       XAI_API_KEY: ${XAI_API_KEY:-}
       COHERE_API_KEY: ${COHERE_API_KEY:-}
-      AGENT_HARNESS_API_KEY: ${AGENT_HARNESS_API_KEY:?Set AGENT_HARNESS_API_KEY in .env}
-      AGENT_HARNESS_PROVENANCE_KEY: ${AGENT_HARNESS_PROVENANCE_KEY:-}
-      AGENT_HARNESS_HOME: /home/appuser/.agent-harness
-      AGENT_HARNESS_SCRIPTS_DIR: /app/scripts
-      AGENT_HARNESS_USAGE_SESSION_TOKEN_LIMIT: ${AGENT_HARNESS_USAGE_SESSION_TOKEN_LIMIT:-0}
-      AGENT_HARNESS_USAGE_SESSION_REQUEST_LIMIT: ${AGENT_HARNESS_USAGE_SESSION_REQUEST_LIMIT:-0}
-      AGENT_HARNESS_USAGE_AGENT_TOKEN_LIMIT: ${AGENT_HARNESS_USAGE_AGENT_TOKEN_LIMIT:-0}
-      AGENT_HARNESS_USAGE_AGENT_REQUEST_LIMIT: ${AGENT_HARNESS_USAGE_AGENT_REQUEST_LIMIT:-0}
+      MACHINA_API_KEY: ${MACHINA_API_KEY:?Set MACHINA_API_KEY in .env}
+      MACHINA_PROVENANCE_KEY: ${MACHINA_PROVENANCE_KEY:-}
+      MACHINA_HOME: /home/appuser/.machina
+      MACHINA_SCRIPTS_DIR: /app/scripts
+      MACHINA_USAGE_SESSION_TOKEN_LIMIT: ${MACHINA_USAGE_SESSION_TOKEN_LIMIT:-0}
+      MACHINA_USAGE_SESSION_REQUEST_LIMIT: ${MACHINA_USAGE_SESSION_REQUEST_LIMIT:-0}
+      MACHINA_USAGE_AGENT_TOKEN_LIMIT: ${MACHINA_USAGE_AGENT_TOKEN_LIMIT:-0}
+      MACHINA_USAGE_AGENT_REQUEST_LIMIT: ${MACHINA_USAGE_AGENT_REQUEST_LIMIT:-0}
       PYTHONDONTWRITEBYTECODE: "1"
     read_only: true
     cap_drop: ["ALL"]
@@ -55,15 +55,15 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
-      - ./ah:/app/ah:ro
+      - ./machina:/app/machina:ro
       - ./scripts:/app/scripts:ro
       # AH-AUDIT-039a: explicit writable application home/state path with
       # correct non-root ownership (seeded from the image dir, see
       # Dockerfile) while code/root stay read-only. Persistent config and
       # learned state survive restart/recreate; the DB volume is untouched.
-      - ahhome:/home/appuser/.agent-harness:rw
+      - ahhome:/home/appuser/.machina:rw
     entrypoint: ["/bin/sh", "-c"]
-    command: ["ah init && exec ah serve --host 0.0.0.0 --port 8000"]
+    command: ["machina init && exec machina serve --host 0.0.0.0 --port 8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2).read()"]
       interval: 10s

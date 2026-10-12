@@ -16,9 +16,9 @@ import uuid
 
 import pytest
 
-from ah.core.agent import _MAX_PARALLEL_TOOLS, BaseReActAgent
-from ah.core.models import LLMResponse
-from ah.tools.base import registry
+from machina.core.agent import _MAX_PARALLEL_TOOLS, BaseReActAgent
+from machina.core.models import LLMResponse
+from machina.tools.base import registry
 
 
 def _tool_call(name: str, args: dict, idx: int) -> dict:
@@ -41,7 +41,7 @@ class _StubAgent(BaseReActAgent):
 @pytest.fixture(autouse=True)
 def _stub_context_writes(monkeypatch):
     """Keep these tests DB-free: add_chunk normally writes to PostgreSQL."""
-    from ah.core import context as context_module
+    from machina.core import context as context_module
 
     async def _noop(*args, **kwargs):
         return None
@@ -65,7 +65,7 @@ def slow_tool(monkeypatch):
             state["active"] -= 1
         return f"done-{tag}"
 
-    from ah.tools.base import Tool
+    from machina.tools.base import Tool
 
     monkeypatch.setitem(
         registry._tools,

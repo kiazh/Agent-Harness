@@ -1,4 +1,4 @@
-"""Tests for the `ah serve` CLI command."""
+"""Tests for the `machina serve` CLI command."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from ah.cli import app
+from machina.cli import app
 
 runner = CliRunner()
 
@@ -29,7 +29,7 @@ class TestServeCommand:
         assert "--reload" in result.output
 
     @patch("uvicorn.run")
-    @patch("ah.api.app.create_app")
+    @patch("machina.api.app.create_app")
     def test_serve_defaults(self, mock_create_app, mock_uvicorn_run):
         """Serve with default arguments calls uvicorn correctly."""
         mock_create_app.return_value = MagicMock()
@@ -39,7 +39,7 @@ class TestServeCommand:
         assert result.exit_code == 0
         mock_create_app.assert_called_once()
         mock_uvicorn_run.assert_called_once_with(
-            "ah.api.app:create_app",
+            "machina.api.app:create_app",
             host="127.0.0.1",
             port=8000,
             reload=False,
@@ -48,7 +48,7 @@ class TestServeCommand:
         assert "http://127.0.0.1:8000" in result.output
 
     @patch("uvicorn.run")
-    @patch("ah.api.app.create_app")
+    @patch("machina.api.app.create_app")
     def test_serve_custom_host_port(self, mock_create_app, mock_uvicorn_run):
         """Serve with custom host and port."""
         mock_create_app.return_value = MagicMock()
@@ -57,7 +57,7 @@ class TestServeCommand:
 
         assert result.exit_code == 0
         mock_uvicorn_run.assert_called_once_with(
-            "ah.api.app:create_app",
+            "machina.api.app:create_app",
             host="0.0.0.0",
             port=9000,
             reload=False,
@@ -66,7 +66,7 @@ class TestServeCommand:
         assert "http://0.0.0.0:9000" in result.output
 
     @patch("uvicorn.run")
-    @patch("ah.api.app.create_app")
+    @patch("machina.api.app.create_app")
     def test_serve_with_reload(self, mock_create_app, mock_uvicorn_run):
         """Serve with --reload flag."""
         mock_create_app.return_value = MagicMock()
@@ -75,7 +75,7 @@ class TestServeCommand:
 
         assert result.exit_code == 0
         mock_uvicorn_run.assert_called_once_with(
-            "ah.api.app:create_app",
+            "machina.api.app:create_app",
             host="127.0.0.1",
             port=8000,
             reload=True,
@@ -83,7 +83,7 @@ class TestServeCommand:
         )
 
     @patch("uvicorn.run")
-    @patch("ah.api.app.create_app")
+    @patch("machina.api.app.create_app")
     def test_serve_short_flags(self, mock_create_app, mock_uvicorn_run):
         """Serve with short flags -h and -p."""
         mock_create_app.return_value = MagicMock()
@@ -92,7 +92,7 @@ class TestServeCommand:
 
         assert result.exit_code == 0
         mock_uvicorn_run.assert_called_once_with(
-            "ah.api.app:create_app",
+            "machina.api.app:create_app",
             host="0.0.0.0",
             port=5000,
             reload=False,
@@ -100,7 +100,7 @@ class TestServeCommand:
         )
 
     @patch("uvicorn.run")
-    @patch("ah.api.app.create_app")
+    @patch("machina.api.app.create_app")
     def test_serve_create_app_failure(self, mock_create_app, mock_uvicorn_run):
         """Serve exits with error when create_app fails."""
         mock_create_app.side_effect = RuntimeError("DB connection failed")
@@ -112,7 +112,7 @@ class TestServeCommand:
         mock_uvicorn_run.assert_not_called()
 
     @patch("uvicorn.run")
-    @patch("ah.api.app.create_app")
+    @patch("machina.api.app.create_app")
     def test_serve_keyboard_interrupt(self, mock_create_app, mock_uvicorn_run):
         """Serve handles KeyboardInterrupt gracefully."""
         mock_create_app.return_value = MagicMock()
@@ -124,7 +124,7 @@ class TestServeCommand:
         assert "Server stopped" in result.output
 
     @patch("uvicorn.run")
-    @patch("ah.api.app.create_app")
+    @patch("machina.api.app.create_app")
     def test_serve_shows_config(self, mock_create_app, mock_uvicorn_run):
         """Serve displays configuration before starting."""
         mock_create_app.return_value = MagicMock()
@@ -137,7 +137,7 @@ class TestServeCommand:
         assert "disabled" in result.output
 
     @patch("uvicorn.run")
-    @patch("ah.api.app.create_app")
+    @patch("machina.api.app.create_app")
     def test_serve_shows_reload_enabled(self, mock_create_app, mock_uvicorn_run):
         """Serve shows reload status correctly."""
         mock_create_app.return_value = MagicMock()

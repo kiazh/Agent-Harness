@@ -9,7 +9,7 @@ from datetime import datetime
 
 
 async def test_orchestrator_default_factory_raise_preserves_original():
-    from ah.core.orchestrator import Orchestrator
+    from machina.core.orchestrator import Orchestrator
 
     orch = Orchestrator()
     orig = RuntimeError("provider boom")
@@ -22,13 +22,13 @@ async def test_orchestrator_default_factory_raise_preserves_original():
     # Instead test the guard directly: agent=None init + guarded close.
     import pathlib
 
-    src = pathlib.Path("ah/core/orchestrator.py").read_text()
+    src = pathlib.Path("machina/core/orchestrator.py").read_text()
     assert "agent = None" in src
     assert "agent is not None" in src
 
 
 async def test_orchestrator_injected_factory_raise_no_close():
-    from ah.core.orchestrator import Orchestrator
+    from machina.core.orchestrator import Orchestrator
 
     calls = []
 
@@ -40,7 +40,7 @@ async def test_orchestrator_injected_factory_raise_no_close():
     # Guard exists so close is never called for unconstructed agent
     import pathlib
 
-    src = pathlib.Path("ah/core/orchestrator.py").read_text()
+    src = pathlib.Path("machina/core/orchestrator.py").read_text()
     assert "agent is not None" in src
     assert calls == []
 
@@ -49,35 +49,35 @@ async def test_orchestrator_injected_factory_raise_no_close():
 
 
 def test_empty_model_env_falls_back(monkeypatch):
-    from ah.core.config import DEFAULTS, Config
+    from machina.core.config import DEFAULTS, Config
 
     c = Config()
-    monkeypatch.setenv("AGENT_HARNESS_MODEL", "")
-    monkeypatch.delenv("AGENT_HARNESS_PROVIDER", raising=False)
+    monkeypatch.setenv("MACHINA_MODEL", "")
+    monkeypatch.delenv("MACHINA_PROVIDER", raising=False)
     assert c.get("model") == DEFAULTS["model"]
 
 
 def test_empty_provider_env_falls_back(monkeypatch):
-    from ah.core.config import DEFAULTS, Config
+    from machina.core.config import DEFAULTS, Config
 
     c = Config()
-    monkeypatch.setenv("AGENT_HARNESS_PROVIDER", "")
+    monkeypatch.setenv("MACHINA_PROVIDER", "")
     assert c.get("provider") == DEFAULTS["provider"]
 
 
 def test_reasoning_effort_empty_preserved(monkeypatch):
-    from ah.core.config import Config
+    from machina.core.config import Config
 
     c = Config()
-    monkeypatch.setenv("AGENT_HARNESS_REASONING_EFFORT", "")
+    monkeypatch.setenv("MACHINA_REASONING_EFFORT", "")
     assert c.get("reasoning_effort") == ""
 
 
 def test_nonempty_env_overrides(monkeypatch):
-    from ah.core.config import Config
+    from machina.core.config import Config
 
     c = Config()
-    monkeypatch.setenv("AGENT_HARNESS_MODEL", "custom-model")
+    monkeypatch.setenv("MACHINA_MODEL", "custom-model")
     assert c.get("model") == "custom-model"
 
 
@@ -85,7 +85,7 @@ def test_nonempty_env_overrides(monkeypatch):
 
 
 def test_unknown_config_key_rejected():
-    from ah.core.config import Config
+    from machina.core.config import Config
 
     c = Config()
     try:
@@ -98,7 +98,7 @@ def test_unknown_config_key_rejected():
 
 
 def test_valid_key_still_works():
-    from ah.core.config import Config
+    from machina.core.config import Config
 
     c = Config()
     c.set("model", "openrouter/free")
@@ -109,7 +109,7 @@ def test_valid_key_still_works():
 
 
 async def test_maybe_auto_compact_records_failure(monkeypatch):
-    import ah.services as svc
+    import machina.services as svc
 
     recorded = []
     monkeypatch.setattr(svc, "record_failure", lambda op, e: recorded.append((op, e)))
@@ -118,9 +118,9 @@ async def test_maybe_auto_compact_records_failure(monkeypatch):
     async def boom(sid):
         raise RuntimeError("compact boom")
 
-    monkeypatch.setattr("ah.core.turns.begin_mutation", boom)
+    monkeypatch.setattr("machina.core.turns.begin_mutation", boom)
     # Ensure guards pass
-    from ah.core.config import config
+    from machina.core.config import config
 
     monkeypatch.setattr(config, "auto_compaction_enabled", True)
     monkeypatch.setattr(config, "compression_enabled", True)
@@ -133,11 +133,11 @@ async def test_maybe_auto_compact_records_failure(monkeypatch):
 
 
 async def test_estimate_survives_session_lookup_failure(monkeypatch):
-    import ah.services as svc
+    import machina.services as svc
 
     # Force session lookup to raise at the outer import level? Simulate by
     # making session_manager.get raise and registry raise.
-    from ah.core import session as sessmod
+    from machina.core import session as sessmod
 
     async def boom_get(sid):
         raise RuntimeError("session boom")
@@ -145,7 +145,7 @@ async def test_estimate_survives_session_lookup_failure(monkeypatch):
     monkeypatch.setattr(sessmod.session_manager, "get", boom_get)
     # Registry path also raises
     try:
-        from ah.core import agent_def as admod
+        from machina.core import agent_def as admod
 
         async def boom_reg(name):
             raise RuntimeError("registry boom")
@@ -161,10 +161,10 @@ async def test_estimate_survives_session_lookup_failure(monkeypatch):
 
 
 async def test_status_fallback_never_ready(monkeypatch):
-    import ah.services as svc
+    import machina.services as svc
 
     # Realistic: every config lookup used by the guarded block fails.
-    from ah.core.config import config as cfg
+    from machina.core.config import config as cfg
 
     def boom_get(key=None):
         raise RuntimeError("config boom")
@@ -189,8 +189,8 @@ async def test_status_fallback_never_ready(monkeypatch):
 
 async def test_status_never_raises_on_partial_config_failure(monkeypatch):
     """Each individual status-detection failure keeps the response structured."""
-    import ah.services as svc
-    from ah.core.config import config as cfg
+    import machina.services as svc
+    from machina.core.config import config as cfg
 
     real_get = cfg.get
 
@@ -198,7 +198,7 @@ async def test_status_never_raises_on_partial_config_failure(monkeypatch):
         if key in (
             "execution_mode",
             "workspace_root",
-            "agent_harness_home",
+            "machina_home",
             "auto_compaction_enabled",
             "compression_enabled",
             "memory_consolidation_enabled",
@@ -226,8 +226,8 @@ async def test_status_never_raises_on_partial_config_failure(monkeypatch):
 
 
 def test_truncate_compress_none_timestamps():
-    from ah.core.compression import CompressionConfig, ContextCompressor
-    from ah.core.models import ContextChunk
+    from machina.core.compression import CompressionConfig, ContextCompressor
+    from machina.core.models import ContextChunk
 
     sid = uuid.uuid4()
     chunks = [
@@ -255,7 +255,7 @@ def test_truncate_compress_none_timestamps():
 
 
 async def test_resume_action_stream_missing_preview():
-    from ah.core.approval_resume import resume_action_stream
+    from machina.core.approval_resume import resume_action_stream
 
     class FakeAgent:
         async def _execute_tool_calls_stream(self, response, hist, made, sid):
@@ -280,7 +280,7 @@ def test_retryable_does_not_mask_without_httpx2(monkeypatch):
     # Simulate missing httpx2
     import builtins
 
-    from ah.connectors import mcp_client as mc
+    from machina.connectors import mcp_client as mc
 
     real_import = builtins.__import__
 
@@ -320,7 +320,7 @@ async def test_tools_list_structured():
 def test_recent_context_ordering_sql():
     import pathlib
 
-    src = pathlib.Path("ah/core/context.py").read_text()
+    src = pathlib.Path("machina/core/context.py").read_text()
     assert "ORDER BY created_at DESC, id DESC" in src
 
 
@@ -329,7 +329,7 @@ def test_recent_context_ordering_sql():
 
 async def test_status_doc_count_query_uses_document_source(monkeypatch):
     """status_summary must count document identity, not serialized payloads."""
-    import ah.services as svc
+    import machina.services as svc
 
     seen_queries: list[str] = []
 
@@ -350,25 +350,25 @@ async def test_status_doc_count_query_uses_document_source(monkeypatch):
 
 
 async def test_document_count_distinct_sources(db_pool, monkeypatch):
-    import ah.core.context as ctxmod
-    import ah.core.session as sessmod
+    import machina.core.context as ctxmod
+    import machina.core.session as sessmod
 
     monkeypatch.setattr(ctxmod, "db", db_pool)
     monkeypatch.setattr(sessmod, "db", db_pool)
-    monkeypatch.setattr("ah.services.db", db_pool)
-    from ah.core.context import context_manager
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.services.db", db_pool)
+    from machina.core.context import context_manager
+    from machina.core.session import SessionManager
 
     # Bind manager's db too (imported reference)
     monkeypatch.setattr(context_manager, "_pending", [])
     sm = SessionManager()
     # SessionManager uses global db; patch its module
-    import ah.core.session as smmod
+    import machina.core.session as smmod
 
     monkeypatch.setattr(smmod, "db", db_pool)
     # Rebind context_manager db reference (it uses imported db object)
     # db_pool is a Database; context_manager uses `db` global imported earlier — patch it
-    monkeypatch.setattr("ah.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
     sess = await sm.create(title="doc-count", agent_id="harness")
     try:
         payload = {"text": "same text", "source": "x", "metadata": {}}
@@ -377,7 +377,7 @@ async def test_document_count_distinct_sources(db_pool, monkeypatch):
             "INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source) VALUES ($1,$2,'document',$3,5,NULL,$4,$5)",
             sess.id,
             "harness",
-            __import__("ah.core.serialization", fromlist=["payload_to_msgpack"]).payload_to_msgpack(
+            __import__("machina.core.serialization", fromlist=["payload_to_msgpack"]).payload_to_msgpack(
                 payload
             ),
             "same text",
@@ -387,7 +387,7 @@ async def test_document_count_distinct_sources(db_pool, monkeypatch):
             "INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source) VALUES ($1,$2,'document',$3,5,NULL,$4,$5)",
             sess.id,
             "harness",
-            __import__("ah.core.serialization", fromlist=["payload_to_msgpack"]).payload_to_msgpack(
+            __import__("machina.core.serialization", fromlist=["payload_to_msgpack"]).payload_to_msgpack(
                 payload
             ),
             "same text",
@@ -398,7 +398,7 @@ async def test_document_count_distinct_sources(db_pool, monkeypatch):
             "INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source) VALUES ($1,$2,'document',$3,5,NULL,$4,$5)",
             sess.id,
             "harness",
-            __import__("ah.core.serialization", fromlist=["payload_to_msgpack"]).payload_to_msgpack(
+            __import__("machina.core.serialization", fromlist=["payload_to_msgpack"]).payload_to_msgpack(
                 payload
             ),
             "same text",
@@ -417,13 +417,13 @@ async def test_document_count_distinct_sources(db_pool, monkeypatch):
 
 
 async def test_compress_outcome_statuses(db_pool, monkeypatch):
-    import ah.services as svc
+    import machina.services as svc
 
-    monkeypatch.setattr("ah.services.db", db_pool)
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    import ah.core.session as smmod
-    from ah.core.session import SessionManager
+    monkeypatch.setattr("machina.services.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    import machina.core.session as smmod
+    from machina.core.session import SessionManager
 
     monkeypatch.setattr(smmod, "db", db_pool)
     sm = SessionManager()
@@ -433,8 +433,8 @@ async def test_compress_outcome_statuses(db_pool, monkeypatch):
         out = await svc.compress_session_with_status(sess)
         assert out.status == "no_op"
         # stale ownership: create chunks then use bad token
-        import ah.core.context as cmod
-        from ah.core.context import context_manager
+        import machina.core.context as cmod
+        from machina.core.context import context_manager
 
         monkeypatch.setattr(cmod, "db", db_pool)
         for i in range(5):

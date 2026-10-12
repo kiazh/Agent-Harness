@@ -1,0 +1,232 @@
+"""Memory tools — remember() and recall() for agent tool use."""
+
+from __future__ import annotations
+
+import logging
+import uuid
+
+from machina.core.exceptions import ToolError, ValidationError
+from machina.core.provider import audit_log
+from machina.memory.retriever import MemoryRetriever
+from machina.memory.store import memory_store
+from machina.tools.agents import active_agent_scope, current_agent_id, current_session_id
+from machina.tools.base import registry
+
+logger = logging.getLogger(__name__)
+
+
+@registry.register(
+    name="remember",
+    description="Store a memory for future reference. Use when the user says 'remember this' or when you learn a durable fact, preference, or decision.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "content": {
+                "type": "string",
+                "description": "The memory content to store",
+            },
+            "category": {
+                "type": "string",
+                "description": "Memory category",
+                "enum": ["preference", "decision", "fact", "event", "transient"],
+                "default": "fact",
+            },
+            "importance": {
+                "type": "number",
+                "description": "Importance score 0-1 (default 0.5)",
+                "default": 0.5,
+            },
+        },
+        "required": ["content"],
+    },
+)
+async def remember(
+    content: str,
+    category: str = "fact",
+    importance: float = 0.5,
+    agent_id: str = "harness",
+    session_id: str | None = None,
+) -> str:
+    """Store a memory for future reference.
+
+    Args:
+        content: The memory content to store.
+        category: One of 'preference', 'decision', 'fact', 'event', 'transient'.
+        importance: Importance score from 0.0 to 1.0.
+        agent_id: The agent ID (defaults to 'harness').
+        session_id: Optional session ID to associate with.
+
+    Returns:
+        Confirmation string with memory ID.
+    """
+    try:
+        # Validate category
+        valid_categories = {"preference", "decision", "fact", "event", "transient"}
+        if category not in valid_categories:
+            raise ValidationError(
+                f"Invalid category '{category}'. Must be one of: {valid_categories}"
+            )
+
+        # Clamp importance
+        importance = max(0.0, min(1.0, importance))
+
+        # Agent tool calls are bound to the running agent and owned session.
+        # Direct Python callers retain the explicit agent/session arguments.
+        if current_agent_id.get() is not None or current_session_id.get() is not None:
+            agent_id, sid = await active_agent_scope()
+        else:
+            sid = None
+            if session_id:
+                try:
+                    sid = uuid.UUID(session_id)
+                except ValueError:
+                    raise ValidationError(f"Invalid session_id '{session_id}'") from None
+
+        # Create and store memory
+        entry = await memory_store.add(
+            session_id=sid,
+            agent_id=agent_id,
+            content=content,
+            category=category,
+            importance=importance,
+            explicitly_important=True,
+        )
+
+        audit_log(
+            "memory_remember",
+            memory_id=str(entry.id),
+            agent_id=agent_id,
+            category=category,
+            importance=importance,
+        )
+
+        return (
+            f"Memory stored: [{entry.id}] ({category}, importance={importance:.2f}) {content[:100]}"
+        )
+
+    except Exception as e:
+        logger.error("Failed to store memory: %s", e)
+        raise ToolError(f"Error storing memory: {e}") from e
+
+
+@registry.register(
+    name="recall",
+    description="Retrieve relevant memories. Use when you need past context, user preferences, or previous decisions. Persona interpretations are included by default.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query to find relevant memories",
+            },
+            "category": {
+                "type": "string",
+                "description": "Filter by category",
+                "enum": ["preference", "decision", "fact", "event", "transient"],
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of memories to return (default 5)",
+                "default": 5,
+            },
+            "emotion": {
+                "type": "string",
+                "description": "Optional emotional state override (joy, sadness, anger, fear, trust, disgust, anticipation, surprise). Defaults to configured persona_default_emotion.",
+            },
+        },
+        "required": ["query"],
+    },
+)
+async def recall(
+    query: str,
+    category: str | None = None,
+    limit: int = 5,
+    agent_id: str = "harness",
+    emotion: str | None = None,
+) -> str:
+    """Retrieve relevant memories for a query (persona-conditioned by default).
+
+    Args:
+        query: Search query to find relevant memories.
+        category: Optional category filter.
+        limit: Maximum number of memories to return.
+        agent_id: The agent ID (defaults to 'harness').
+        emotion: Optional emotion override. When None, the configured default
+            emotion is used for persona weighting.
+
+    Returns:
+        Formatted string with retrieved memories.
+    """
+    try:
+        if current_agent_id.get() is not None or current_session_id.get() is not None:
+            agent_id, _ = await active_agent_scope()
+        retriever = MemoryRetriever(store=memory_store, top_k=limit)
+        results = await retriever.retrieve(
+            query=query,
+            agent_id=agent_id,
+            category=category,
+            emotion=emotion,
+        )
+
+        if not results:
+            return f"No memories found for query: '{query}'"
+
+        lines = [f"Retrieved {len(results)} memories for '{query}':"]
+        for i, rm in enumerate(results, 1):
+            m = rm.memory
+            lines.append(
+                f"\n  [{i}] id={m.id} ({m.category}, importance={m.importance:.2f}, "
+                f"score={rm.score:.3f}, source={rm.source})"
+            )
+            lines.append(f"      {m.content[:200]}")
+            if rm.persona_interpretation:
+                lines.append(f"      [persona] {rm.persona_interpretation[:200]}")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        logger.error("Failed to recall memories: %s", e)
+        raise ToolError(f"Error recalling memories: {e}") from e
+
+
+registry.declare_effects(
+    {
+        "remember": ("memory",),
+        "recall": ("memory",),
+    }
+)
+
+
+@registry.register(
+    name="learn_personality",
+    description=(
+        "Persist an evidenced user preference, requested conversational style, or verified "
+        "reusable lesson across sessions. Use proactively when you learn something durable. "
+        "Keep notes short, avoid secrets and transient tasks. Reuse a key to correct a note. "
+        "Core identity and permission rules cannot be changed."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": ["preference", "style", "lesson"]},
+            "key": {"type": "string", "description": "Stable short name, e.g. verbosity"},
+            "content": {"type": "string", "description": "Durable note, at most 500 characters"},
+        },
+        "required": ["kind", "key", "content"],
+    },
+)
+async def learn_personality(kind: str, key: str, content: str) -> str:
+    from machina.core.config import config
+    from machina.memory.growth import growth_store
+
+    if not config.get("personality_growth_enabled") or not config.get("memory_enabled"):
+        raise ToolError("Personality growth is disabled")
+    agent_id, _ = await active_agent_scope()
+    try:
+        await growth_store.teach(agent_id, kind, key, content, origin="agent")
+    except ValueError as exc:
+        raise ToolError(str(exc)) from None
+    return f"Learned {kind}:{key}; available in future conversations."
+
+
+registry.declare_effects({"learn_personality": ("memory",)})

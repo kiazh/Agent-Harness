@@ -10,7 +10,7 @@ import uuid
 
 import pytest
 
-from ah.gateway.errors import INVALID_PARAMS, RpcError
+from machina.gateway.errors import INVALID_PARAMS, RpcError
 
 # ─── Bug 7: agents_save built-in name protection ──────────────────────────────
 
@@ -25,8 +25,8 @@ class _MockGateway:
 @pytest.mark.asyncio
 async def test_agents_save_rejects_all_builtin_names():
     """agents_save must reject every name in BUILTIN_AGENTS."""
-    from ah.core.agent_def import BUILTIN_AGENTS
-    from ah.gateway.features import agents_save
+    from machina.core.agent_def import BUILTIN_AGENTS
+    from machina.gateway.features import agents_save
 
     gw = _MockGateway()
     for name in BUILTIN_AGENTS:
@@ -40,7 +40,7 @@ async def test_agents_save_rejects_all_builtin_names():
 @pytest.mark.asyncio
 async def test_agents_save_allows_non_builtin_names():
     """agents_save must allow names that are not in BUILTIN_AGENTS."""
-    from ah.gateway.features import agents_save
+    from machina.gateway.features import agents_save
 
     gw = _MockGateway()
     # "orchestrator" and "delegate-tool" are NOT in BUILTIN_AGENTS,
@@ -48,7 +48,7 @@ async def test_agents_save_allows_non_builtin_names():
     # is not available here — but the name check itself must not reject them).
     # We verify this by checking that the error is NOT INVALID_PARAMS from
     # the name check. Since there's no DB, we expect a DatabaseError.
-    from ah.core.exceptions import DatabaseError
+    from machina.core.exceptions import DatabaseError
 
     for name in ("orchestrator", "delegate-tool"):
         with pytest.raises(DatabaseError):
@@ -61,10 +61,10 @@ async def test_agents_save_allows_non_builtin_names():
 @pytest.mark.asyncio
 async def test_run_parallel_returns_results_despite_failure(monkeypatch):
     """One failing delegation must not lose the other results."""
-    from ah.core import orchestrator as orch_mod
-    from ah.core.agent_def import AgentDef
-    from ah.core.models import AgentResponse
-    from ah.core.orchestrator import Orchestrator
+    from machina.core import orchestrator as orch_mod
+    from machina.core.agent_def import AgentDef
+    from machina.core.models import AgentResponse
+    from machina.core.orchestrator import Orchestrator
 
     # Mock agent_registry.get — no DB needed
     async def mock_get(name: str) -> AgentDef:

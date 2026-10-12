@@ -5,8 +5,8 @@ import uuid
 
 import pytest
 
-from ah.core.models import AgentResponse
-from ah.core.scheduler import JobRunner
+from machina.core.models import AgentResponse
+from machina.core.scheduler import JobRunner
 from tests.test_deep_scheduler import _job
 
 
@@ -81,10 +81,10 @@ class JobBoundary:
 def boundary(monkeypatch, request):
     state = JobBoundary(request.param)
     monkeypatch.setattr(
-        "ah.core.scheduler.RUN_LEASE_SECONDS", 0.1 if request.param == "ownership_loss" else 0.01
+        "machina.core.scheduler.RUN_LEASE_SECONDS", 0.1 if request.param == "ownership_loss" else 0.01
     )
-    monkeypatch.setattr("ah.core.turns.try_begin_turn", state.begin_turn)
-    monkeypatch.setattr("ah.core.turns.end_turn", state.end_turn)
+    monkeypatch.setattr("machina.core.turns.try_begin_turn", state.begin_turn)
+    monkeypatch.setattr("machina.core.turns.end_turn", state.end_turn)
     return state
 
 

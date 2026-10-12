@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.rag import (
+from machina.rag import (
     Chunk,
     CohereReranker,
     Embedder,
@@ -20,8 +20,8 @@ from ah.rag import (
     Reranker,
     SearchResult,
 )
-from ah.rag.loaders import Document
-from ah.rag.reranker import IdentityReranker, RerankResult
+from machina.rag.loaders import Document
+from machina.rag.reranker import IdentityReranker, RerankResult
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -346,7 +346,7 @@ class TestRAGPipeline:
         # Patch the loader's base_dir to allow loading from tmp_path
         pipeline._loader._base_dir = tmp_path
 
-        with patch("ah.rag.pipeline.db", mock_db):
+        with patch("machina.rag.pipeline.db", mock_db):
             chunks = await pipeline.index_document(
                 str(test_file),
                 session_id=uuid.uuid4(),
@@ -362,14 +362,14 @@ class TestRAGPipeline:
         )
         pipeline._search.search = AsyncMock(return_value=[mock_result])
 
-        with patch("ah.rag.pipeline.db.fetch", AsyncMock(return_value=[])):
+        with patch("machina.rag.pipeline.db.fetch", AsyncMock(return_value=[])):
             results = await pipeline.search("test query", session_id=uuid.uuid4())
         assert isinstance(results, list)
 
     async def test_search_with_top_k(self, pipeline):
         """Test searching with top_k parameter."""
         pipeline._search.search = AsyncMock(return_value=[])
-        with patch("ah.rag.pipeline.db.fetch", AsyncMock(return_value=[])):
+        with patch("machina.rag.pipeline.db.fetch", AsyncMock(return_value=[])):
             results = await pipeline.search("test", session_id=uuid.uuid4(), top_k=5)
         assert isinstance(results, list)
 
@@ -379,7 +379,7 @@ class TestRAGPipeline:
         mock_db.fetch = AsyncMock(return_value=[])
         mock_db.fetchval = AsyncMock(return_value=0)
 
-        with patch("ah.rag.pipeline.db", mock_db):
+        with patch("machina.rag.pipeline.db", mock_db):
             result = await pipeline.index_session_context(uuid.uuid4())
             assert isinstance(result, list)
 
@@ -437,7 +437,7 @@ class TestHybridSearch:
 
     async def test_rrf_fusion(self, searcher):
         """Test RRF fusion of results."""
-        from ah.core.models import ContextChunk
+        from machina.core.models import ContextChunk
 
         chunk1 = ContextChunk(
             id=uuid.uuid4(),
@@ -470,7 +470,7 @@ class TestHybridSearch:
 
     async def test_rrf_fuse_single_source(self, searcher):
         """Test RRF fusion with only dense results."""
-        from ah.core.models import ContextChunk
+        from machina.core.models import ContextChunk
 
         chunk = ContextChunk(
             id=uuid.uuid4(),
@@ -674,7 +674,7 @@ class TestRAGIntegration:
 
     async def test_full_rag_pipeline(self, tmp_path):
         """Test the full RAG pipeline: load → chunk → embed → index → search."""
-        from ah.rag import FileLoader, RecursiveCharacterTextSplitter
+        from machina.rag import FileLoader, RecursiveCharacterTextSplitter
 
         # Create a test document
         test_file = tmp_path / "test.txt"
@@ -698,7 +698,7 @@ class TestRAGIntegration:
 
     async def test_hybrid_search_integration(self):
         """Test hybrid search with real components."""
-        from ah.rag import HybridSearch
+        from machina.rag import HybridSearch
 
         searcher = HybridSearch()
         mock_db = AsyncMock()

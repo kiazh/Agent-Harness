@@ -9,17 +9,17 @@ from uuid import uuid4
 
 import pytest
 
-from ah.core.agent import ReActAgent
-from ah.core.agent_def import AgentDef
-from ah.core.execution_context import ExecutionContext
-from ah.core.models import AgentResponse, LLMResponse, Session, StreamEvent
-from ah.core.orchestrator import Orchestrator
+from machina.core.agent import ReActAgent
+from machina.core.agent_def import AgentDef
+from machina.core.execution_context import ExecutionContext
+from machina.core.models import AgentResponse, LLMResponse, Session, StreamEvent
+from machina.core.orchestrator import Orchestrator
 
 
 @pytest.fixture
 def delegation(monkeypatch):
-    from ah.core import orchestrator as module
-    from ah.core.usage import usage_store
+    from machina.core import orchestrator as module
+    from machina.core.usage import usage_store
 
     child = Session(id=uuid4(), agent_id="coder")
     charges = {}
@@ -42,7 +42,7 @@ def delegation(monkeypatch):
     )
     monkeypatch.setattr(module.session_manager, "create", AsyncMock(return_value=child))
     monkeypatch.setattr(
-        "ah.core.session_mode.resolve_effective_mode", AsyncMock(return_value="ask")
+        "machina.core.session_mode.resolve_effective_mode", AsyncMock(return_value="ask")
     )
     monkeypatch.setattr(module.context_manager, "add_chunk", AsyncMock())
     monkeypatch.setattr(usage_store, "summary", summary)
@@ -98,8 +98,8 @@ async def test_success_uses_maximum_of_durable_and_response_usage(
 
 
 async def test_success_keeps_known_usage_without_database(delegation, monkeypatch):
-    from ah.core.exceptions import DatabaseError
-    from ah.core.usage import usage_store
+    from machina.core.exceptions import DatabaseError
+    from machina.core.usage import usage_store
 
     monkeypatch.setattr(
         usage_store, "summary", AsyncMock(side_effect=DatabaseError("not connected"))
@@ -117,8 +117,8 @@ async def test_success_keeps_known_usage_without_database(delegation, monkeypatc
 async def test_unavailable_production_accounting_never_reports_zero(
     delegation, monkeypatch, outcome
 ):
-    from ah.core.exceptions import DatabaseError
-    from ah.core.usage import db, usage_store
+    from machina.core.exceptions import DatabaseError
+    from machina.core.usage import db, usage_store
 
     monkeypatch.setattr(db, "_pool", object())
     monkeypatch.setattr(
@@ -138,8 +138,8 @@ async def test_unavailable_production_accounting_never_reports_zero(
 
 
 async def test_tool_timeout_returns_accounting_receipt(delegation, monkeypatch):
-    from ah.core import orchestrator as module
-    from ah.tools.agents import DelegationToolResult, delegate
+    from machina.core import orchestrator as module
+    from machina.tools.agents import DelegationToolResult, delegate
 
     orch = delegation.build(spending_child(delegation, "timeout"))
     monkeypatch.setattr(module, "orchestrator", orch)
@@ -196,25 +196,25 @@ async def test_parent_cancellation_drains_child_and_records_spend(delegation):
 async def test_failed_child_spend_is_accounted_without_implicit_turn_cutoff(
     delegation, monkeypatch, streaming, outcome
 ):
-    from ah.core import orchestrator as module
-    from ah.core.agent import registry
-    from ah.permissions.broker import permission_broker
-    from ah.tools.agents import delegate
+    from machina.core import orchestrator as module
+    from machina.core.agent import registry
+    from machina.permissions.broker import permission_broker
+    from machina.tools.agents import delegate
 
     parent = Session(id=uuid4())
     agent = ReActAgent(provider=SimpleNamespace(model="fake"), allowed_tools=["delegate"])
     orch = delegation.build(spending_child(delegation, outcome))
     monkeypatch.setattr(orch, "DELEGATION_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(module, "orchestrator", orch)
-    monkeypatch.setattr("ah.tools.agents.db.fetchval", AsyncMock(return_value="harness"))
+    monkeypatch.setattr("machina.tools.agents.db.fetchval", AsyncMock(return_value="harness"))
     monkeypatch.setattr(agent, "_prepare_context", AsyncMock(return_value=(parent, [])))
     monkeypatch.setattr(agent, "_flush_pending_chunks", AsyncMock())
-    monkeypatch.setattr("ah.core.agent.session_manager.update_activity", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.session_manager.update_activity", AsyncMock())
     monkeypatch.setattr(agent, "_schedule_memory_consolidation", lambda *_: None)
     monkeypatch.setattr(agent, "_schedule_learning_review", lambda *_: None)
     monkeypatch.setattr(permission_broker, "guard", AsyncMock())
     monkeypatch.setattr(
-        "ah.core.execution_context.resolve_execution_context",
+        "machina.core.execution_context.resolve_execution_context",
         AsyncMock(return_value=ExecutionContext("ask", "host", Path("/tmp"))),
     )
 
@@ -224,8 +224,8 @@ async def test_failed_child_spend_is_accounted_without_implicit_turn_cutoff(
 
     monkeypatch.setattr(registry, "execute", execute)
     if outcome == "ledger_unavailable":
-        from ah.core.exceptions import DatabaseError
-        from ah.core.usage import db, usage_store
+        from machina.core.exceptions import DatabaseError
+        from machina.core.usage import db, usage_store
 
         monkeypatch.setattr(db, "_pool", object())
         monkeypatch.setattr(

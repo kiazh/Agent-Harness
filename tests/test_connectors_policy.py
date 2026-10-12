@@ -2,8 +2,8 @@
 
 import pytest
 
-from ah.connectors.models import ConnectorConfig, ConnectorToolError, DiscoveredTool
-from ah.connectors.policy import approval_binding, classify_tool, validate_arguments
+from machina.connectors.models import ConnectorConfig, ConnectorToolError, DiscoveredTool
+from machina.connectors.policy import approval_binding, classify_tool, validate_arguments
 
 
 def _config(**fields):

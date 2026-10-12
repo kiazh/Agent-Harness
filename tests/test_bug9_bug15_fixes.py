@@ -10,15 +10,15 @@ import pytest
 
 
 def _get_config_module():
-    """Return the actual ah.core.config module object (not the Config instance).
+    """Return the actual machina.core.config module object (not the Config instance).
 
-    ``import ah.core.config as m`` binds to the Config instance because
-    ``ah/core/__init__.py`` does ``from ah.core.config import config`` and
+    ``import machina.core.config as m`` binds to the Config instance because
+    ``machina/core/__init__.py`` does ``from machina.core.config import config`` and
     the module's ``__getattr__`` returns it.  Use ``sys.modules`` instead.
     """
-    import ah.core.config  # noqa: F401 — ensure it's imported
+    import machina.core.config  # noqa: F401 — ensure it's imported
 
-    return sys.modules["ah.core.config"]
+    return sys.modules["machina.core.config"]
 
 
 # ---------------------------------------------------------------------------
@@ -32,9 +32,9 @@ class TestMemoryConsolidationTaskReference:
 
     @pytest.fixture(autouse=True)
     def memory_boundaries(self, monkeypatch):
-        from ah.core.agent import context_manager, session_manager
-        from ah.core.config import config
-        from ah.core.models import Session
+        from machina.core.agent import context_manager, session_manager
+        from machina.core.config import config
+        from machina.core.models import Session
 
         states = {}
 
@@ -53,7 +53,7 @@ class TestMemoryConsolidationTaskReference:
     @pytest.mark.asyncio
     async def test_task_is_stored_in_consolidation_tasks(self):
         """The scheduled task must appear in _consolidation_tasks."""
-        from ah.core.agent import BaseReActAgent
+        from machina.core.agent import BaseReActAgent
 
         consolidator = MagicMock()
         consolidator.consolidate_session = AsyncMock(return_value=[])
@@ -71,7 +71,7 @@ class TestMemoryConsolidationTaskReference:
     @pytest.mark.asyncio
     async def test_task_is_removed_after_completion(self):
         """Once the task finishes it must be discarded from the set."""
-        from ah.core.agent import BaseReActAgent
+        from machina.core.agent import BaseReActAgent
 
         consolidator = MagicMock()
         consolidator.consolidate_session = AsyncMock(return_value=[])
@@ -91,8 +91,8 @@ class TestMemoryConsolidationTaskReference:
     @pytest.mark.asyncio
     async def test_task_actually_completes(self, memory_boundaries):
         """The consolidation coroutine must run to completion (not be GC'd)."""
-        from ah.core.agent import BaseReActAgent
-        from ah.memory.consolidator import ConsolidationResult
+        from machina.core.agent import BaseReActAgent
+        from machina.memory.consolidator import ConsolidationResult
 
         checkpoint = {"id": str(uuid.uuid4()), "at": "2026-01-01T00:00:00+00:00"}
         consolidator = MagicMock()
@@ -117,7 +117,7 @@ class TestMemoryConsolidationTaskReference:
     @pytest.mark.asyncio
     async def test_no_task_when_no_consolidator(self):
         """No task should be created when memory_consolidator is None."""
-        from ah.core.agent import BaseReActAgent
+        from machina.core.agent import BaseReActAgent
 
         agent = BaseReActAgent(provider=object(), memory_consolidator=None)
         session_id = uuid.uuid4()
@@ -129,7 +129,7 @@ class TestMemoryConsolidationTaskReference:
     @pytest.mark.asyncio
     async def test_multiple_tasks_tracked_independently(self):
         """Multiple scheduled tasks must all be tracked."""
-        from ah.core.agent import BaseReActAgent
+        from machina.core.agent import BaseReActAgent
 
         session_ids = {uuid.uuid4() for _ in range(3)}
         started = set()
@@ -162,7 +162,7 @@ class TestMemoryConsolidationTaskReference:
 
     @pytest.mark.asyncio
     async def test_same_session_consolidation_is_shared_across_agents(self):
-        from ah.core.agent import BaseReActAgent
+        from machina.core.agent import BaseReActAgent
 
         session_id = uuid.uuid4()
         started = asyncio.Event()
@@ -224,7 +224,7 @@ class TestLazyConfigLoading:
         assert cfg1 is cfg2
 
     def test_module_getattr_returns_config(self):
-        """`from ah.core.config import config` must still work via __getattr__."""
+        """`from machina.core.config import config` must still work via __getattr__."""
         cfg = self._config_module.config
         assert isinstance(cfg, self._config_module.Config)
 

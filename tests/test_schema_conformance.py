@@ -75,8 +75,8 @@ async def test_legacy_session_upgrade_is_idempotent_and_preserves_data(db_pool):
 async def test_fresh_schema_fks_indexes_and_projections(db_pool):
     async with isolated_schema(db_pool) as (schema, database):
         await database.initialize_schema()
-        from ah.core.scheduler import _COLUMNS as job_columns
-        from ah.permissions.store import GRANT_COLUMNS
+        from machina.core.scheduler import _COLUMNS as job_columns
+        from machina.permissions.store import GRANT_COLUMNS
 
         for table, columns in (("jobs", job_columns), ("permission_grants", GRANT_COLUMNS)):
             assert await database.fetch(f"SELECT {columns} FROM {table} LIMIT 0") == []
@@ -125,7 +125,7 @@ async def test_fresh_schema_fks_indexes_and_projections(db_pool):
 
 def static_queries():
     """Complete literal SQL passed to the database, excluding dynamic builders."""
-    root = Path(__file__).resolve().parents[1] / "ah"
+    root = Path(__file__).resolve().parents[1] / "machina"
     for path in root.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         constants = {}

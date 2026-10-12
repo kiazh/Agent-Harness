@@ -1,4 +1,4 @@
-"""Integration tests for AgentHarness using FakeProvider + real tools + real DB.
+"""Integration tests for Machina using FakeProvider + real tools + real DB.
 
 These tests verify component interactions with real dependencies where feasible:
 - Agent loop + real tools (mocked LLM)
@@ -19,17 +19,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.core.agent import ReActAgent
-from ah.core.context import context_manager
-from ah.core.models import LLMResponse, Session, StreamEvent
-from ah.core.provider import LLMProvider
-from ah.core.session import session_manager
-from ah.tools import (
+from machina.core.agent import ReActAgent
+from machina.core.context import context_manager
+from machina.core.models import LLMResponse, Session, StreamEvent
+from machina.core.provider import LLMProvider
+from machina.core.session import session_manager
+from machina.tools import (
     builtins,  # noqa: F401
     file,  # noqa: F401
     terminal,  # noqa: F401
 )
-from ah.tools.base import ToolRegistry
+from machina.tools.base import ToolRegistry
 
 # ===========================================================================
 # FakeProvider — Deterministic provider for testing
@@ -159,11 +159,11 @@ class TestAgentWithRealTools:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -183,11 +183,11 @@ class TestAgentWithRealTools:
     async def test_agent_executes_real_file_write(self, mock_session, temp_dir, monkeypatch):
         """Test that agent actually executes write_file tool."""
         test_file = temp_dir / "output.txt"
-        from ah.core.config import config
+        from machina.core.config import config
 
         monkeypatch.setattr(config, "execution_mode", "workspace")
         monkeypatch.setattr(config, "workspace_root", str(temp_dir))
-        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "workspace")
+        monkeypatch.setenv("MACHINA_EXECUTION_MODE", "workspace")
 
         provider = FakeProvider(
             [
@@ -216,18 +216,18 @@ class TestAgentWithRealTools:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 # Patch _BASE_DIR to allow writing to temp_dir
-                with patch("ah.tools.file._BASE_DIR", temp_dir):
+                with patch("machina.tools.file._BASE_DIR", temp_dir):
                     agent = ReActAgent(provider=provider, max_iterations=5)
                     response = await agent.run(
                         mock_session.id,
@@ -267,11 +267,11 @@ class TestAgentWithRealTools:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -309,11 +309,11 @@ class TestAgentWithRealTools:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -332,10 +332,10 @@ class TestAgentWithRealTools:
 
     async def test_agent_multiple_tool_calls(self, mock_session, temp_dir, monkeypatch):
         """Test agent executing multiple tools in sequence."""
-        from ah.core.config import config
+        from machina.core.config import config
 
         monkeypatch.setattr(config, "workspace_root", str(temp_dir))
-        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
+        monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
         test_file = temp_dir / "multi.txt"
 
         provider = FakeProvider(
@@ -380,11 +380,11 @@ class TestAgentWithRealTools:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -419,11 +419,11 @@ class TestAgentWithMockedDB:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -443,11 +443,11 @@ class TestAgentWithMockedDB:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -470,11 +470,11 @@ class TestAgentWithMockedDB:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -531,7 +531,7 @@ class TestSessionContextIntegration:
         )
         mock_db.execute = AsyncMock(return_value="UPDATE 1")
 
-        with patch("ah.core.session.db", mock_db):
+        with patch("machina.core.session.db", mock_db):
             # Create
             session = await session_manager.create(title="Test Session")
             assert session.title == "Test Session"
@@ -592,7 +592,7 @@ class TestSessionContextIntegration:
         mock_db.fetchval = AsyncMock(return_value=150)
         mock_db.execute = AsyncMock(return_value="DELETE 5")
 
-        with patch("ah.core.context.db", mock_db):
+        with patch("machina.core.context.db", mock_db):
             # Add chunk
             chunk = await context_manager.add_chunk(
                 session_id=session_id,
@@ -644,7 +644,7 @@ class TestSessionContextIntegration:
             ]
         )
 
-        with patch("ah.core.context.db", mock_db):
+        with patch("machina.core.context.db", mock_db):
             chunks = [
                 {
                     "session_id": session_id,
@@ -669,7 +669,7 @@ class TestProviderHTTPIntegration:
 
     async def test_openrouter_full_request_response(self):
         """Test OpenRouter provider with mocked HTTP transport."""
-        from ah.core.provider import OpenRouterProvider
+        from machina.core.provider import OpenRouterProvider
 
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
             provider = OpenRouterProvider(api_key="test-key", model="test-model")
@@ -705,7 +705,7 @@ class TestProviderHTTPIntegration:
 
     async def test_ollama_full_request_response(self):
         """Test Ollama provider with mocked HTTP transport."""
-        from ah.core.provider import OllamaProvider
+        from machina.core.provider import OllamaProvider
 
         provider = OllamaProvider(model="llama3.1", base_url="http://localhost:11434")
 
@@ -733,7 +733,7 @@ class TestProviderHTTPIntegration:
 
     async def test_openrouter_streaming(self):
         """Test OpenRouter streaming with mocked HTTP."""
-        from ah.core.provider import OpenRouterProvider
+        from machina.core.provider import OpenRouterProvider
 
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
             provider = OpenRouterProvider(api_key="test-key", model="test-model")
@@ -776,10 +776,10 @@ class TestFullFlowIntegration:
 
     async def test_full_agent_flow_with_mocked_db(self, mock_session, temp_dir, monkeypatch):
         """Test the complete agent flow with mocked database."""
-        from ah.core.config import config
+        from machina.core.config import config
 
         monkeypatch.setattr(config, "workspace_root", str(temp_dir))
-        monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
+        monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
         test_file = temp_dir / "flow_test.txt"
         test_file.write_text("integration test content", encoding="utf-8")
 
@@ -807,11 +807,11 @@ class TestFullFlowIntegration:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -842,11 +842,11 @@ class TestFullFlowIntegration:
         ]
         provider = FakeProvider(responses)
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -877,11 +877,11 @@ class TestFullFlowIntegration:
             ]
         )
 
-        with patch("ah.core.agent.session_manager") as mock_sm:
+        with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
             mock_sm.update_activity = AsyncMock()
 
-            with patch("ah.core.agent.context_manager") as mock_cm:
+            with patch("machina.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
@@ -999,7 +999,7 @@ class TestContainerIntegration:
 
     async def test_container_testing_mode(self):
         """Test container in testing mode."""
-        from ah.core.container import Container
+        from machina.core.container import Container
 
         container = Container.testing()
         assert container._provider is None
@@ -1007,7 +1007,7 @@ class TestContainerIntegration:
 
     async def test_container_production_mode(self):
         """Test container in production mode."""
-        from ah.core.container import Container
+        from machina.core.container import Container
 
         container = Container.production()
         assert container._db is not None
@@ -1028,7 +1028,7 @@ class TestRealDatabase:
 
     async def test_real_session_crud(self):
         """Test session CRUD with real database."""
-        from ah.db.connection import db
+        from machina.db.connection import db
 
         try:
             await db.connect()
@@ -1065,7 +1065,7 @@ class TestRealDatabase:
 
     async def test_real_context_crud(self):
         """Test context chunk CRUD with real database."""
-        from ah.db.connection import db
+        from machina.db.connection import db
 
         try:
             await db.connect()
@@ -1108,7 +1108,7 @@ class TestRealDatabase:
 
     async def test_real_agent_flow(self):
         """Test full agent flow with real database."""
-        from ah.db.connection import db
+        from machina.db.connection import db
 
         try:
             await db.connect()

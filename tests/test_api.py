@@ -1,4 +1,4 @@
-"""Tests for the FastAPI HTTP API (ah.api)."""
+"""Tests for the FastAPI HTTP API (machina.api)."""
 
 from __future__ import annotations
 
@@ -12,10 +12,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 # Set a test API key before importing the app
-os.environ["AGENT_HARNESS_API_KEY"] = "test-key-123"
+os.environ["MACHINA_API_KEY"] = "test-key-123"
 
-from ah.api.app import PromptRequest, create_app
-from ah.core.models import AgentResponse, Session, StreamEvent
+from machina.api.app import PromptRequest, create_app
+from machina.core.models import AgentResponse, Session, StreamEvent
 
 TEST_API_KEY = "test-key-123"
 
@@ -36,8 +36,8 @@ def make_session(**kwargs) -> Session:
 
 @pytest.fixture
 async def client():
-    with patch("ah.api.app.db.connect", new_callable=AsyncMock):
-        with patch("ah.api.app.db.close", new_callable=AsyncMock):
+    with patch("machina.api.app.db.connect", new_callable=AsyncMock):
+        with patch("machina.api.app.db.close", new_callable=AsyncMock):
             app = create_app()
             # Set up mock RPC gateway for tests that need it
             mock_gw = AsyncMock()
@@ -80,7 +80,7 @@ class TestAuth:
 
     async def test_auth_acceptance_with_key(self, client, auth_headers):
         # Mock the DB call so we only test auth passes (not 401)
-        with patch("ah.api.app.session_manager.list_sessions", new_callable=AsyncMock) as mock_list:
+        with patch("machina.api.app.session_manager.list_sessions", new_callable=AsyncMock) as mock_list:
             mock_list.return_value = []
             resp = await client.get("/sessions", headers=auth_headers)
             assert resp.status_code != 401
@@ -93,7 +93,7 @@ class TestSessions:
     async def test_create_session(self, client, auth_headers):
         mock_session = make_session(title="New Test")
 
-        with patch("ah.api.app.session_manager.create", new_callable=AsyncMock) as mock_create:
+        with patch("machina.api.app.session_manager.create", new_callable=AsyncMock) as mock_create:
             mock_create.return_value = mock_session
             resp = await client.post("/sessions", headers=auth_headers, json={"title": "New Test"})
             assert resp.status_code == 200
@@ -104,7 +104,7 @@ class TestSessions:
     async def test_list_sessions(self, client, auth_headers):
         mock_sessions = [make_session(title="Session 1"), make_session(title="Session 2")]
 
-        with patch("ah.api.app.session_manager.list_sessions", new_callable=AsyncMock) as mock_list:
+        with patch("machina.api.app.session_manager.list_sessions", new_callable=AsyncMock) as mock_list:
             mock_list.return_value = mock_sessions
             resp = await client.get("/sessions", headers=auth_headers)
             assert resp.status_code == 200
@@ -115,10 +115,10 @@ class TestSessions:
     async def test_get_session(self, client, auth_headers):
         mock_session = make_session()
 
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_session
             with patch(
-                "ah.api.app.context_manager.get_chunks", new_callable=AsyncMock
+                "machina.api.app.context_manager.get_chunks", new_callable=AsyncMock
             ) as mock_chunks:
                 mock_chunks.return_value = []
                 resp = await client.get(f"/sessions/{mock_session.id}", headers=auth_headers)
@@ -128,7 +128,7 @@ class TestSessions:
                 assert "history" in data
 
     async def test_get_session_not_found(self, client, auth_headers):
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = None
             resp = await client.get(f"/sessions/{uuid.uuid4()}", headers=auth_headers)
             assert resp.status_code == 404
@@ -141,9 +141,9 @@ class TestSessions:
         mock_session = make_session(agent_id="harness")
         path = f"/api/v1/sessions/{mock_session.id}/usage"
         assert (await client.get(path)).status_code == 401
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_session
-            with patch("ah.core.usage.usage_store.summary", new_callable=AsyncMock) as summary:
+            with patch("machina.core.usage.usage_store.summary", new_callable=AsyncMock) as summary:
                 summary.return_value = {
                     "sessionId": str(mock_session.id),
                     "session": {"requests": 2},
@@ -169,11 +169,11 @@ class TestPromptSSE:
                     response=AgentResponse(content="Hello", tokens_used=10, iterations=1),
                 )
 
-        with patch("ah.api.app.session_manager.get_fresh", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get_fresh", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_session
-            with patch("ah.core.provider.get_provider") as mock_provider:
+            with patch("machina.core.provider.get_provider") as mock_provider:
                 mock_provider.return_value = MagicMock()
-                with patch("ah.core.agent.ReActAgent", return_value=FakeAgent()):
+                with patch("machina.core.agent.ReActAgent", return_value=FakeAgent()):
                     resp = await client.post(
                         f"/sessions/{mock_session.id}/prompt",
                         headers=auth_headers,
@@ -215,10 +215,10 @@ class TestPromptSSE:
         provider = FakeProvider()
         FakeAgent.provider = provider
         with patch(
-            "ah.api.app.session_manager.get_fresh", new_callable=AsyncMock, return_value=session
+            "machina.api.app.session_manager.get_fresh", new_callable=AsyncMock, return_value=session
         ):
-            with patch("ah.core.provider.get_provider", return_value=provider):
-                with patch("ah.core.agent.ReActAgent", return_value=FakeAgent()):
+            with patch("machina.core.provider.get_provider", return_value=provider):
+                with patch("machina.core.agent.ReActAgent", return_value=FakeAgent()):
                     response = await client.post(
                         f"/sessions/{session.id}/prompt",
                         headers=auth_headers,
@@ -262,10 +262,10 @@ class TestPromptSSE:
         provider = FakeProvider()
         FakeAgent.provider = provider
         with patch(
-            "ah.api.app.session_manager.get_fresh", new_callable=AsyncMock, return_value=session
+            "machina.api.app.session_manager.get_fresh", new_callable=AsyncMock, return_value=session
         ):
-            with patch("ah.core.provider.get_provider", return_value=provider):
-                with patch("ah.core.agent.ReActAgent", return_value=FakeAgent()):
+            with patch("machina.core.provider.get_provider", return_value=provider):
+                with patch("machina.core.agent.ReActAgent", return_value=FakeAgent()):
                     response = await client.post(
                         f"/sessions/{session.id}/prompt",
                         headers=auth_headers,
@@ -310,10 +310,10 @@ class TestPromptSSE:
         provider = FakeProvider()
         FakeAgent.provider = provider
         with patch(
-            "ah.api.app.session_manager.get_fresh", new_callable=AsyncMock, return_value=session
+            "machina.api.app.session_manager.get_fresh", new_callable=AsyncMock, return_value=session
         ):
-            with patch("ah.core.provider.get_provider", return_value=provider):
-                with patch("ah.core.agent.ReActAgent", return_value=FakeAgent()):
+            with patch("machina.core.provider.get_provider", return_value=provider):
+                with patch("machina.core.agent.ReActAgent", return_value=FakeAgent()):
                     response = await prompt(str(session.id), PromptRequest(text="Hi"))
                     stream = response.body_iterator
                     started = await anext(stream)
@@ -335,14 +335,14 @@ class TestContext:
     async def test_get_context(self, client, auth_headers):
         mock_session = make_session()
 
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_session
             with patch(
-                "ah.api.app.context_manager.get_chunks", new_callable=AsyncMock
+                "machina.api.app.context_manager.get_chunks", new_callable=AsyncMock
             ) as mock_chunks:
                 mock_chunks.return_value = []
                 with patch(
-                    "ah.api.app.context_manager.get_token_usage", new_callable=AsyncMock
+                    "machina.api.app.context_manager.get_token_usage", new_callable=AsyncMock
                 ) as mock_tokens:
                     mock_tokens.return_value = 0
                     resp = await client.get(
@@ -361,14 +361,14 @@ class TestMemory:
     async def test_get_memory(self, client, auth_headers):
         mock_session = make_session()
 
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_session
             with patch(
-                "ah.memory.store.memory_store.search", new_callable=AsyncMock
+                "machina.memory.store.memory_store.search", new_callable=AsyncMock
             ) as mock_search:
                 mock_search.return_value = []
                 with patch(
-                    "ah.memory.store.memory_store.count", new_callable=AsyncMock
+                    "machina.memory.store.memory_store.count", new_callable=AsyncMock
                 ) as mock_count:
                     mock_count.return_value = 0
                     resp = await client.get(
@@ -390,9 +390,9 @@ class TestJobs:
         mock_session = make_session()
         mock_job = MagicMock()
         mock_job.to_dict.return_value = {"id": str(uuid.uuid4()), "noAgent": True}
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_session
-            with patch("ah.core.scheduler.job_store.create", new_callable=AsyncMock) as mock_create:
+            with patch("machina.core.scheduler.job_store.create", new_callable=AsyncMock) as mock_create:
                 mock_create.return_value = mock_job
                 response = await client.post(
                     f"/sessions/{mock_session.id}/jobs",
@@ -423,9 +423,9 @@ class TestJobs:
             "runCount": 0,
         }
 
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_session
-            with patch("ah.core.scheduler.job_store.create", new_callable=AsyncMock) as mock_create:
+            with patch("machina.core.scheduler.job_store.create", new_callable=AsyncMock) as mock_create:
                 mock_create.return_value = mock_job
                 resp = await client.post(
                     f"/sessions/{mock_session.id}/jobs",
@@ -449,9 +449,9 @@ class TestJobs:
         mock_job = MagicMock()
         mock_job.to_dict.return_value = {"id": str(uuid.uuid4())}
 
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = mock_session
-            with patch("ah.core.scheduler.job_store.list", new_callable=AsyncMock) as mock_list:
+            with patch("machina.core.scheduler.job_store.list", new_callable=AsyncMock) as mock_list:
                 mock_list.return_value = [mock_job]
                 resp = await client.get(f"/sessions/{mock_session.id}/jobs", headers=auth_headers)
                 assert resp.status_code == 200
@@ -476,7 +476,7 @@ class TestAgents:
             "source": "builtin",
         }
 
-        with patch("ah.core.agent_def.agent_registry.list", new_callable=AsyncMock) as mock_list:
+        with patch("machina.core.agent_def.agent_registry.list", new_callable=AsyncMock) as mock_list:
             mock_list.return_value = [mock_agent]
             resp = await client.get("/agents", headers=auth_headers)
             assert resp.status_code == 200

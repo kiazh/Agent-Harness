@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ah.core.models import AgentResponse
-from ah.core.scheduler import Job, JobRunner
+from machina.core.models import AgentResponse
+from machina.core.scheduler import Job, JobRunner
 
 
 def _job(*, no_agent=False):
@@ -34,7 +34,7 @@ def _job(*, no_agent=False):
 @pytest.fixture
 def local_turns(monkeypatch):
     """Replace only the database turn lease boundary, retaining runner behavior."""
-    from ah.core import turns
+    from machina.core import turns
 
     held = set()
 
@@ -56,17 +56,17 @@ def local_turns(monkeypatch):
 async def test_script_approval_records_its_execution_outcome(
     monkeypatch, tmp_path, local_turns, outcome
 ):
-    from ah.core import job_scripts
-    from ah.permissions import store
-    from ah.permissions.broker import clear_execution_context, set_approval_handler
+    from machina.core import job_scripts
+    from machina.permissions import store
+    from machina.permissions.broker import clear_execution_context, set_approval_handler
 
     job = _job(no_agent=True)
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     from tests.support.scripts import allow_scripts
 
     allow_scripts(tmp_path, {"job.py": []})
     (tmp_path / "job.py").write_text("pass", encoding="utf-8")
-    monkeypatch.setattr("ah.core.session_mode.get_effective_mode", lambda _sid: "ask")
+    monkeypatch.setattr("machina.core.session_mode.get_effective_mode", lambda _sid: "ask")
     set_approval_handler(None)
     runner = JobRunner()
 

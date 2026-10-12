@@ -3,8 +3,8 @@ import math
 
 import pytest
 
-from ah.memory.policy import MemoryPolicy, RetrievalPolicy
-from ah.memory.rl import MemoryAction, MemoryState
+from machina.memory.policy import MemoryPolicy, RetrievalPolicy
+from machina.memory.rl import MemoryAction, MemoryState
 
 
 def test_feedback_changes_live_policy_and_survives_serialization():
@@ -48,13 +48,13 @@ async def test_terminal_limit_is_rateable_but_cancellation_is_not(monkeypatch, s
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from ah.core.agent import BaseReActAgent, _growth_episode, instrument_run, instrument_stream
-    from ah.core.models import AgentResponse, StreamEvent
+    from machina.core.agent import BaseReActAgent, _growth_episode, instrument_run, instrument_stream
+    from machina.core.models import AgentResponse, StreamEvent
 
     session = SimpleNamespace(id=uuid.uuid4(), agent_id="harness")
-    monkeypatch.setattr("ah.core.agent.session_manager.get", AsyncMock(return_value=session))
+    monkeypatch.setattr("machina.core.agent.session_manager.get", AsyncMock(return_value=session))
     complete = AsyncMock()
-    monkeypatch.setattr("ah.memory.growth.growth_store.complete", complete)
+    monkeypatch.setattr("machina.memory.growth.growth_store.complete", complete)
 
     class LimitedAgent(BaseReActAgent):
         @instrument_run
@@ -91,9 +91,9 @@ async def test_disabled_growth_rejects_management_mutations(monkeypatch, flag):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from ah.core.config import config
-    from ah.gateway.errors import RpcError
-    from ah.gateway.features import growth
+    from machina.core.config import config
+    from machina.gateway.errors import RpcError
+    from machina.gateway.features import growth
 
     monkeypatch.setattr(config, "personality_growth_enabled", True)
     monkeypatch.setattr(config, "memory_enabled", True)
@@ -112,7 +112,7 @@ async def test_additive_growth_migration_is_idempotent(db_pool):
     import uuid
     from contextlib import asynccontextmanager
 
-    from ah.db.connection import Database
+    from machina.db.connection import Database
 
     async with db_pool.acquire() as conn:
         transaction = conn.transaction()
@@ -151,11 +151,11 @@ async def test_ui_checks_with_real_gateway_restart(db_pool, tmp_path):
     if not shutil.which("node"):
         pytest.skip("Node is unavailable")
     root = Path(__file__).resolve().parents[1]
-    from ah.core.config import LEGACY_ENV_VARS, SECRET_KEYS
+    from machina.core.config import LEGACY_ENV_VARS, SECRET_KEYS
 
     env = dict(os.environ)
     for key in SECRET_KEYS:
-        env[f"AGENT_HARNESS_{key.upper()}"] = ""
+        env[f"MACHINA_{key.upper()}"] = ""
         if key in LEGACY_ENV_VARS:
             env[LEGACY_ENV_VARS[key]] = ""
             env[f"{LEGACY_ENV_VARS[key]}_FILE"] = ""
@@ -164,14 +164,14 @@ async def test_ui_checks_with_real_gateway_restart(db_pool, tmp_path):
     env.update(
         {
             "HOME": str(tmp_path),
-            "AH_ENV_FILE": str(env_file),
-            "AH_TEST_PYTHON": sys.executable,
-            "AGENT_HARNESS_TEST_DATABASE_URL": db_pool.dsn,
-            "AGENT_HARNESS_DATABASE_URL": db_pool.dsn,
+            "MACHINA_ENV_FILE": str(env_file),
+            "MACHINA_TEST_PYTHON": sys.executable,
+            "MACHINA_TEST_DATABASE_URL": db_pool.dsn,
+            "MACHINA_DATABASE_URL": db_pool.dsn,
             "DATABASE_URL": db_pool.dsn,
-            "AGENT_HARNESS_PERSONALITY_GROWTH_ENABLED": "true",
-            "AGENT_HARNESS_MEMORY_ENABLED": "true",
-            "AGENT_HARNESS_EXECUTION_MODE": "ask",
+            "MACHINA_PERSONALITY_GROWTH_ENABLED": "true",
+            "MACHINA_MEMORY_ENABLED": "true",
+            "MACHINA_EXECUTION_MODE": "ask",
         }
     )
     result = await asyncio.to_thread(
@@ -192,7 +192,7 @@ async def test_growth_persists_and_feedback_is_owned_and_once(db_pool):
     import asyncio
     import uuid
 
-    from ah.memory.growth import GrowthStore
+    from machina.memory.growth import GrowthStore
 
     store = GrowthStore(db_pool)
     owner = "growth-" + uuid.uuid4().hex
@@ -227,7 +227,7 @@ async def test_growth_persists_and_feedback_is_owned_and_once(db_pool):
 async def test_growth_bounds_notes_and_never_rewards_unfinished_turn(db_pool):
     import uuid
 
-    from ah.memory.growth import GrowthStore
+    from machina.memory.growth import GrowthStore
 
     store = GrowthStore(db_pool)
     owner = "growth-" + uuid.uuid4().hex
@@ -264,9 +264,9 @@ async def test_growth_gateway_binds_feedback_to_session(db_pool, monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from ah.gateway.errors import RpcError
-    from ah.gateway.features import growth
-    from ah.memory.growth import GrowthStore
+    from machina.gateway.errors import RpcError
+    from machina.gateway.features import growth
+    from machina.memory.growth import GrowthStore
 
     store = GrowthStore(db_pool)
     monkeypatch.setattr(growth, "growth_store", store)
@@ -308,19 +308,19 @@ async def test_live_agent_learns_then_reuses_personality_with_new_model(
     import uuid
     from unittest.mock import AsyncMock
 
-    from ah.core.agent import ReActAgent
-    from ah.core.config import config
-    from ah.core.models import LLMResponse, StreamEvent
-    from ah.core.session import session_manager
-    from ah.db.connection import db
-    from ah.memory.growth import GrowthStore
+    from machina.core.agent import ReActAgent
+    from machina.core.config import config
+    from machina.core.models import LLMResponse, StreamEvent
+    from machina.core.session import session_manager
+    from machina.db.connection import db
+    from machina.memory.growth import GrowthStore
 
     monkeypatch.setattr(db, "_pool", db_pool.pool)
     monkeypatch.setattr(config, "personality_growth_enabled", True)
     monkeypatch.setattr(config, "memory_enabled", True)
     monkeypatch.setattr(config, "rag_enabled", False)
     monkeypatch.setattr(config, "learning_review_enabled", False)
-    monkeypatch.setattr("ah.memory.embeddings.embed_query", AsyncMock(return_value=None))
+    monkeypatch.setattr("machina.memory.embeddings.embed_query", AsyncMock(return_value=None))
     owner = "live-growth-" + uuid.uuid4().hex
     sessions = []
 

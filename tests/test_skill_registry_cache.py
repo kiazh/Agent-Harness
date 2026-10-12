@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ah.skills.registry import SkillRegistry
+from machina.skills.registry import SkillRegistry
 
 SKILL_MD = """---
 name: {name}
@@ -33,7 +33,7 @@ def _write_skill(root: Path, name: str) -> None:
 
 def _parse_count(monkeypatch) -> list[int]:
     """Count SkillParser.parse calls."""
-    from ah.skills import registry as reg
+    from machina.skills import registry as reg
 
     calls: list[int] = []
     original = reg.SkillParser.parse
@@ -142,7 +142,7 @@ def test_missing_directory_loads_empty_and_is_cached(tmp_path, monkeypatch):
 def test_default_skill_usage_persists_with_a_new_local_directory(tmp_path, monkeypatch):
     """A fresh installation must not lose builtin telemetry to a missing directory."""
     local = tmp_path / "new" / "skills"
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(local))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(local))
     registry = SkillRegistry()
     registry.load_all()
     registry.record_use("ecc-python-patterns")

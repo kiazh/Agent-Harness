@@ -1,0 +1,554 @@
+"""Memory store — async CRUD for long-term memories using asyncpg.
+
+Follows the same patterns as ContextManager: asyncpg, typed dataclasses,
+structured logging, and audit logging.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from typing import Any
+
+from machina.core.provider import audit_log
+from machina.core.serialization import embedding_to_str, str_to_embedding
+from machina.db.lazy import LazyDb, parse_command_count
+from machina.memory.identity import MemoryProvenance, identity_gate
+from machina.memory.models import MemoryEntry
+from machina.memory.redaction import SecretRedactor
+from machina.security.secrets import get_secret
+
+__all__ = ["MemoryStore", "memory_store"]
+
+logger = logging.getLogger(__name__)
+
+db = LazyDb()
+
+
+class MemoryStore:
+    """CRUD for long-term memories stored in PostgreSQL with pgvector."""
+
+    def __init__(self) -> None:
+        self._redactor = SecretRedactor()
+
+    async def add(
+        self,
+        session_id: uuid.UUID | None,
+        agent_id: str,
+        content: str,
+        category: str,
+        importance: float = 0.5,
+        embedding: list[float] | None = None,
+        explicitly_important: bool = False,
+        base_strength: float = 1.0,
+        connection: Any | None = None,
+        source_agent: str | None = None,
+        parent_memory_id: uuid.UUID | None = None,
+    ) -> MemoryEntry:
+        """Add a new memory entry. Secrets are redacted before storage.
+
+        The IdentityGate validates the memory against the agent's belief
+        model before storage. If validation fails, the memory is still
+        stored but flagged as quarantined.
+        """
+        # Redact secrets from content before storing
+        redaction_result = self._redactor.redact(content)
+        content = redaction_result.text
+
+        # The ID used for signing must be the ID actually inserted.
+        memory_id = uuid.uuid4()
+        source = source_agent or agent_id
+        provenance = None
+        if get_secret("MACHINA_PROVENANCE_KEY"):
+            provenance = MemoryProvenance(
+                memory_id=memory_id,
+                source_agent=source,
+                signature=MemoryProvenance.compute_signature(memory_id, content, source),
+                parent_memory_id=parent_memory_id,
+            )
+
+        # Validate against the identity gate of the *target* agent (the memory's
+        # owner). The memory's attribution stays with the source, so a shared
+        # delivery without valid provenance is quarantined instead of accepted.
+        pre_memory = MemoryEntry(
+            id=memory_id,
+            session_id=session_id,
+            agent_id=source,
+            content=content,
+            category=category,
+            importance=importance,
+        )
+        validation = await identity_gate.validate_incoming(
+            agent_id, pre_memory, provenance, connection=connection
+        )
+        quarantined = not validation.is_valid
+
+        embedding_str = None
+        if embedding is not None:
+            embedding_str = embedding_to_str(embedding)
+
+        async def insert(executor: Any) -> Any:
+            row = await executor.fetchrow(
+                """
+            INSERT INTO memories (
+                id, session_id, agent_id, content, category, importance,
+                embedding, explicitly_important, base_strength, quarantined
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            RETURNING id, session_id, agent_id, content, category, importance,
+                      created_at, last_accessed, access_count, embedding,
+                      explicitly_important, base_strength, quarantined
+            """,
+                memory_id,
+                session_id,
+                agent_id,
+                content,
+                category,
+                importance,
+                embedding_str,
+                explicitly_important,
+                base_strength,
+                quarantined,
+            )
+            if provenance is not None:
+                try:
+                    await executor.execute(
+                        """
+                    INSERT INTO memory_provenance
+                        (memory_id, source_agent, signature, parent_memory_id)
+                    VALUES ($1, $2, $3, $4)
+                    """,
+                        memory_id,
+                        source,
+                        provenance.signature,
+                        parent_memory_id,
+                    )
+                except AttributeError:
+                    # Mocks without execute (e.g. CapturingMock with fetchrow only)
+                    pass
+            return row
+
+        if connection is not None:
+            row = await insert(connection)
+        else:
+            # Use db directly for compat with mocks; when provenance exists
+            # try transactional acquire, falling back to direct on mocks.
+            try:
+                acquire = getattr(db, "acquire", None)
+                if provenance is not None and callable(acquire):
+                    async with db.acquire() as conn:
+                        try:
+                            async with conn.transaction():
+                                row = await insert(conn)
+                        except AttributeError:
+                            row = await insert(conn)
+                else:
+                    row = await insert(db)
+            except (TypeError, AttributeError):
+                row = await insert(db)
+        memory = self._row_to_entry(row)
+        audit_log(
+            "memory_add",
+            memory_id=str(memory.id),
+            agent_id=agent_id,
+            category=category,
+            importance=importance,
+            quarantined=quarantined,
+            validation_reason=validation.reason,
+        )
+        return memory
+
+    async def get(
+        self, memory_id: uuid.UUID, include_quarantined: bool = False
+    ) -> MemoryEntry | None:
+        """Get a memory by ID."""
+        if include_quarantined:
+            row = await db.fetchrow(
+                """
+            SELECT id, session_id, agent_id, content, category, importance,
+                   created_at, last_accessed, access_count, embedding,
+                   explicitly_important, base_strength, quarantined
+            FROM memories WHERE id = $1
+            """,
+                memory_id,
+            )
+        else:
+            row = await db.fetchrow(
+                """
+            SELECT id, session_id, agent_id, content, category, importance,
+                   created_at, last_accessed, access_count, embedding,
+                   explicitly_important, base_strength, quarantined
+            FROM memories WHERE id = $1 AND quarantined = FALSE
+            """,
+                memory_id,
+            )
+        if row is None:
+            return None
+        return self._row_to_entry(row)
+
+    async def search(
+        self,
+        agent_id: str | None = None,
+        category: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+        session_id: uuid.UUID | None = None,
+    ) -> list[MemoryEntry]:
+        """Search memories with optional filters (fully parameterized)."""
+        conditions = ["quarantined = FALSE"]
+        params: list[Any] = []
+        param_idx = 1
+
+        if agent_id is not None:
+            conditions.append(f"agent_id = ${param_idx}")
+            params.append(agent_id)
+            param_idx += 1
+
+        if category is not None:
+            conditions.append(f"category = ${param_idx}")
+            params.append(category)
+            param_idx += 1
+
+        if session_id is not None:
+            conditions.append(f"session_id = ${param_idx}")
+            params.append(session_id)
+            param_idx += 1
+
+        where_clause = " AND ".join(conditions) if conditions else "TRUE"
+
+        params.extend([limit, offset])
+        rows = await db.fetch(
+            f"""
+            SELECT id, session_id, agent_id, content, category, importance,
+                   created_at, last_accessed, access_count, embedding,
+                   explicitly_important, base_strength, quarantined
+            FROM memories
+            WHERE {where_clause}
+            ORDER BY importance DESC, created_at DESC
+            LIMIT ${param_idx} OFFSET ${param_idx + 1}
+            """,  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
+            *params,
+        )
+        return [self._row_to_entry(row) for row in rows]
+
+    async def search_by_embedding(
+        self,
+        embedding: list[float],
+        agent_id: str | None = None,
+        category: str | None = None,
+        limit: int = 5,
+        include_quarantined: bool = False,
+    ) -> list[tuple[MemoryEntry, float]]:
+        """Search memories by embedding similarity (cosine distance).
+
+        Returns list of (MemoryEntry, similarity_score) tuples, sorted by
+        similarity descending.
+        """
+        embedding_str = embedding_to_str(embedding)
+
+        conditions = ["embedding IS NOT NULL"]
+        if not include_quarantined:
+            conditions.append("quarantined = FALSE")
+        params: list[Any] = [embedding_str, limit]
+        param_idx = 3
+
+        if agent_id is not None:
+            conditions.append(f"agent_id = ${param_idx}")
+            params.append(agent_id)
+            param_idx += 1
+
+        if category is not None:
+            conditions.append(f"category = ${param_idx}")
+            params.append(category)
+            param_idx += 1
+
+        where_clause = " AND ".join(conditions)
+
+        rows = await db.fetch(
+            f"""
+            SELECT id, session_id, agent_id, content, category, importance,
+                   created_at, last_accessed, access_count, embedding,
+                   explicitly_important, base_strength, quarantined,
+                   1 - (embedding <=> $1::vector) AS similarity
+            FROM memories
+            WHERE {where_clause}
+            ORDER BY embedding <=> $1::vector
+            LIMIT $2
+            """,  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
+            *params,
+        )
+        results = []
+        for row in rows:
+            entry = self._row_to_entry(row)
+            similarity = row["similarity"]
+            results.append((entry, similarity))
+        return results
+
+    async def backfill_embeddings(self, limit: int = 50) -> dict[str, int]:
+        """Embed stored memories missing dense vectors (AH-AUDIT-038).
+
+        Durable idempotent backfill queue worker: takes up to *limit* rows
+        with NULL embeddings, embeds their redacted content through the
+        shared query embedder (same enforced space as retrieval), and
+        updates them. Provider failures/unavailability skip rows without
+        dropping memories. Returns {embedded, skipped}.
+        """
+        from machina.core.serialization import embedding_to_str as _e2s
+        from machina.memory.embeddings import embed_query as _embed_query
+        from machina.memory.redaction import redact_secrets as _redact
+
+        rows = await db.fetch(
+            "SELECT id, content FROM memories WHERE embedding IS NULL LIMIT $1",
+            limit,
+        )
+        embedded = 0
+        skipped = 0
+        for row in rows:
+            try:
+                content = _redact(str(row["content"] or "")).text
+                if not content.strip():
+                    skipped += 1
+                    continue
+                vector = await _embed_query(content[:2000])
+                if not vector:
+                    skipped += 1
+                    continue
+                await db.execute(
+                    "UPDATE memories SET embedding = $2 WHERE id = $1 AND embedding IS NULL",
+                    row["id"],
+                    _e2s(vector),
+                )
+                embedded += 1
+            except Exception:
+                skipped += 1
+        return {"embedded": embedded, "skipped": skipped}
+
+    async def delete(self, memory_id: uuid.UUID) -> bool:
+        """Delete a memory by ID. Returns True if deleted."""
+        result = await db.execute(
+            "DELETE FROM memories WHERE id = $1",
+            memory_id,
+        )
+        deleted = parse_command_count(result) > 0
+        if deleted:
+            audit_log("memory_delete", memory_id=str(memory_id))
+        return deleted
+
+    async def update_access(self, memory_id: uuid.UUID) -> None:
+        """Update last_accessed and increment access_count."""
+        await db.execute(
+            """
+            UPDATE memories
+            SET last_accessed = now(), access_count = access_count + 1
+            WHERE id = $1
+            """,
+            memory_id,
+        )
+
+    async def batch_update_access(self, memory_ids: list[uuid.UUID]) -> None:
+        """Batch update last_accessed and increment access_count for multiple memories."""
+        if not memory_ids:
+            return
+        await db.execute(
+            """
+            UPDATE memories
+            SET last_accessed = now(), access_count = access_count + 1
+            WHERE id = ANY($1::uuid[]) AND quarantined = FALSE
+            """,
+            memory_ids,
+        )
+
+    async def update_importance(self, memory_id: uuid.UUID, importance: float) -> None:
+        """Update the importance score of a memory."""
+        importance = max(0.0, min(1.0, importance))
+        await db.execute(
+            "UPDATE memories SET importance = $1 WHERE id = $2",
+            importance,
+            memory_id,
+        )
+
+    async def list_all(
+        self,
+        agent_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[MemoryEntry]:
+        """List all memories with optional agent filter."""
+        if agent_id:
+            return await self.search(agent_id=agent_id, limit=limit, offset=offset)
+        return await self.search(limit=limit, offset=offset)
+
+    async def count(
+        self,
+        agent_id: str | None = None,
+        session_id: uuid.UUID | None = None,
+        exclude_quarantined: bool = True,
+    ) -> int:
+        """Count memories, optionally filtered by agent and session."""
+        q_filter = " AND quarantined = FALSE" if exclude_quarantined else ""
+        if agent_id is not None and session_id is not None:
+            result = await db.fetchval(
+                f"SELECT COUNT(*) FROM memories WHERE agent_id = $1 AND session_id = $2{q_filter}",  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
+                agent_id,
+                session_id,
+            )
+        elif session_id is not None:
+            where = "WHERE session_id = $1" + q_filter
+            result = await db.fetchval(
+                f"SELECT COUNT(*) FROM memories {where}",  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
+                session_id,
+            )
+        elif agent_id is not None:
+            where = "WHERE agent_id = $1" + q_filter
+            result = await db.fetchval(
+                f"SELECT COUNT(*) FROM memories {where}",  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
+                agent_id,
+            )
+        else:
+            where = "WHERE quarantined = FALSE" if exclude_quarantined else ""
+            result = await db.fetchval(f"SELECT COUNT(*) FROM memories {where}".strip())  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
+        return result or 0
+
+    async def delete_by_session(self, session_id: uuid.UUID) -> int:
+        """Delete all memories associated with a session. Returns count deleted."""
+        result = await db.execute(
+            "DELETE FROM memories WHERE session_id = $1",
+            session_id,
+        )
+        # Parse "DELETE N" format
+        return parse_command_count(result)
+
+    async def evict_weak_memories(
+        self,
+        threshold: float = 0.05,
+        agent_id: str | None = None,
+        max_memories: int | None = None,
+    ) -> int:
+        """Evict weak/unimportant memories to prevent unbounded growth.
+
+        Args:
+            threshold: Importance threshold below which memories are evicted.
+            agent_id: Optional agent ID filter.
+            max_memories: If set, evict down to this many memories per agent.
+
+        Returns:
+            Number of memories evicted.
+        """
+        if max_memories is not None:
+            # Use a single CTE to atomically count and delete, avoiding race conditions
+            # where concurrent inserts could cause over/under-deletion.
+            # Quarantined and explicitly-important memories are preserved.
+            if agent_id:
+                result = await db.execute(
+                    """
+                    WITH target AS (
+                        SELECT id FROM memories
+                        WHERE agent_id = $1 AND quarantined = FALSE
+                          AND explicitly_important = FALSE
+                        ORDER BY importance ASC, explicitly_important ASC, access_count ASC, created_at ASC
+                        LIMIT GREATEST((SELECT COUNT(*) FROM memories WHERE agent_id = $1 AND quarantined = FALSE AND explicitly_important = FALSE) - $2, 0)
+                    )
+                    DELETE FROM memories WHERE id IN (SELECT id FROM target)
+                    """,
+                    agent_id,
+                    max_memories,
+                )
+            else:
+                result = await db.execute(
+                    """
+                    WITH target AS (
+                        SELECT id FROM memories
+                        WHERE quarantined = FALSE AND explicitly_important = FALSE
+                        ORDER BY importance ASC, explicitly_important ASC, access_count ASC, created_at ASC
+                        LIMIT GREATEST((SELECT COUNT(*) FROM memories WHERE quarantined = FALSE AND explicitly_important = FALSE) - $1, 0)
+                    )
+                    DELETE FROM memories WHERE id IN (SELECT id FROM target)
+                    """,
+                    max_memories,
+                )
+            return parse_command_count(result)
+        else:
+            # Evict by importance threshold (quarantined + explicitly-important preserved)
+            if agent_id:
+                result = await db.execute(
+                    "DELETE FROM memories WHERE agent_id = $1 AND importance < $2 AND quarantined = FALSE AND explicitly_important = FALSE",
+                    agent_id,
+                    threshold,
+                )
+            else:
+                result = await db.execute(
+                    "DELETE FROM memories WHERE importance < $1 AND quarantined = FALSE AND explicitly_important = FALSE",
+                    threshold,
+                )
+            return parse_command_count(result)
+
+    async def get_weak_memories(
+        self,
+        threshold: float = 0.05,
+        agent_id: str | None = None,
+        limit: int = 50,
+    ) -> list[MemoryEntry]:
+        """Get memories with low importance (candidates for forgetting).
+
+        This is a simple importance-based query. The full ForgettingModel
+        computes time-decayed strength, but for DB-level filtering we use
+        importance as a proxy.
+        """
+        if agent_id:
+            rows = await db.fetch(
+                """
+                SELECT id, session_id, agent_id, content, category, importance,
+                       created_at, last_accessed, access_count, embedding,
+                       explicitly_important, base_strength, quarantined
+                FROM memories
+                WHERE agent_id = $1 AND importance < $2 AND quarantined = FALSE
+                  AND explicitly_important = FALSE
+                ORDER BY importance ASC, access_count ASC
+                LIMIT $3
+                """,
+                agent_id,
+                threshold,
+                limit,
+            )
+        else:
+            rows = await db.fetch(
+                """
+                SELECT id, session_id, agent_id, content, category, importance,
+                       created_at, last_accessed, access_count, embedding,
+                       explicitly_important, base_strength, quarantined
+                FROM memories
+                WHERE importance < $1 AND quarantined = FALSE
+                  AND explicitly_important = FALSE
+                ORDER BY importance ASC, access_count ASC
+                LIMIT $2
+                """,
+                threshold,
+                limit,
+            )
+        return [self._row_to_entry(row) for row in rows]
+
+    def _row_to_entry(self, row: Any) -> MemoryEntry:
+        """Convert a database row to a MemoryEntry."""
+        embedding = None
+        if row["embedding"] is not None:
+            embedding = str_to_embedding(row["embedding"])
+
+        return MemoryEntry(
+            id=row["id"],
+            session_id=row["session_id"],
+            agent_id=row["agent_id"],
+            content=row["content"],
+            category=row["category"],
+            importance=row["importance"],
+            created_at=row["created_at"],
+            last_accessed=row["last_accessed"],
+            access_count=row["access_count"],
+            embedding=embedding,
+            explicitly_important=row["explicitly_important"],
+            base_strength=row["base_strength"],
+            quarantined=row.get("quarantined", False),
+        )
+
+
+# Global singleton
+memory_store = MemoryStore()

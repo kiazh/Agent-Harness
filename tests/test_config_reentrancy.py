@@ -6,7 +6,7 @@ import pytest
 
 
 def test_reentrant_load_publishes_the_same_singleton(monkeypatch):
-    module = importlib.import_module("ah.core.config")
+    module = importlib.import_module("machina.core.config")
     observed = []
 
     def load(cls, path=None, *, _target=None):
@@ -23,7 +23,7 @@ def test_reentrant_load_publishes_the_same_singleton(monkeypatch):
 
 
 def test_failed_atomic_save_preserves_default_file_and_live_value(monkeypatch, tmp_path):
-    module = importlib.import_module("ah.core.config")
+    module = importlib.import_module("machina.core.config")
     path = tmp_path / "config.yaml"
     path.write_text("persona_description: Original persona\n")
     monkeypatch.setattr(module, "DEFAULT_CONFIG_PATH", path)

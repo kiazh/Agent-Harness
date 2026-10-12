@@ -2,9 +2,9 @@
 
 import httpx
 
-from ah.security import fetch
-from ah.tools import builtins
-from ah.tools.builtins import _parse_duckduckgo_results
+from machina.security import fetch
+from machina.tools import builtins
+from machina.tools.builtins import _parse_duckduckgo_results
 
 
 def test_duckduckgo_links_accept_attribute_order_and_extra_classes():

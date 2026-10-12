@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import msgpack
 import pytest
 
-from ah.core.session import SessionManager
+from machina.core.session import SessionManager
 
 
 class SessionRows:
@@ -97,7 +97,7 @@ class SessionRows:
 @pytest.fixture
 def session_rows(monkeypatch):
     rows = SessionRows()
-    monkeypatch.setattr("ah.core.session.db", rows)
+    monkeypatch.setattr("machina.core.session.db", rows)
     return rows
 
 

@@ -2,8 +2,8 @@
 
 import pytest
 
-from ah.connectors.models import ConfigError, ConnectorConfig
-from ah.connectors.oauth_models import OAuthSettings
+from machina.connectors.models import ConfigError, ConnectorConfig
+from machina.connectors.oauth_models import OAuthSettings
 
 
 def _http(**fields):
@@ -112,8 +112,8 @@ def test_legacy_config_roundtrip_and_revision_identity():
 def test_partial_oauth_update_merges_and_bumps_revision(tmp_path):
     import asyncio
 
-    from ah.connectors.service import ConnectorService
-    from ah.connectors.store import ConnectorStore
+    from machina.connectors.service import ConnectorService
+    from machina.connectors.store import ConnectorStore
 
     async def _run():
         store = ConnectorStore(tmp_path / "mcp.json")

@@ -6,12 +6,12 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
-from ah.core.context import ContextManager
-from ah.core.session import SessionManager
+from machina.core.context import ContextManager
+from machina.core.session import SessionManager
 
 
 async def test_eviction_queries_a_bounded_page(monkeypatch):
-    from ah.core import context
+    from machina.core import context
 
     database = MagicMock()
     database.fetchrow = AsyncMock(return_value={"total_chunks": 1000, "total_tokens": 0})
@@ -23,7 +23,7 @@ async def test_eviction_queries_a_bounded_page(monkeypatch):
 
 
 async def test_eviction_uses_one_transaction_for_a_page(monkeypatch):
-    from ah.core import context
+    from machina.core import context
 
     session = uuid.uuid4()
     now = datetime.now(UTC)
@@ -58,8 +58,8 @@ async def test_eviction_pages_across_more_than_one_hundred_chunks(db_pool, monke
         await db_pool.fetchval("SELECT to_regclass('idx_context_chunks_session_eviction')")
         is not None
     )
-    monkeypatch.setattr("ah.core.context.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
     session = await SessionManager().create(title="paged eviction", agent_id="owner")
     try:
         start = datetime(2025, 1, 1, tzinfo=UTC)

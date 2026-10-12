@@ -1,6 +1,6 @@
 // Codex-parity commands: project setup and agent-driven review.
 //
-// /init scaffolds an AGENTS.md with AgentHarness instructions (Codexparity:
+// /init scaffolds an AGENTS.md with Machina instructions (Codexparity:
 // "create an AGENTS.md file with instructions"). /review sends the turn to
 // the agent, exactly like Codex's "review my current changes".
 

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.core.context import ContextManager
+from machina.core.context import ContextManager
 
 
 @pytest.fixture
@@ -60,7 +60,7 @@ class TestEvictionArchivesBeforeDelete:
         mock_db.acquire = MagicMock()
         mock_db.acquire.return_value.__aenter__.return_value = connection
 
-        with patch("ah.core.context.db", mock_db):
+        with patch("machina.core.context.db", mock_db):
             evicted = await manager.evict_old_chunks(session_id, max_tokens=50)
 
         assert evicted == 1
@@ -100,7 +100,7 @@ class TestResurrectionViaEmbedding:
             ]
         )
 
-        with patch("ah.core.context.db", mock_db):
+        with patch("machina.core.context.db", mock_db):
             results = await manager.resurrect_context(
                 session_id, query_embedding=[0.1, 0.2, 0.3], top_k=5
             )
@@ -138,7 +138,7 @@ class TestArchivePreservesByteExact:
             }
         )
 
-        with patch("ah.core.context.db", mock_db):
+        with patch("machina.core.context.db", mock_db):
             result = await manager.archive_chunk(
                 session_id=session_id,
                 chunk_id=chunk_id,
@@ -182,7 +182,7 @@ class TestResurrectionCountIncremented:
         )
         mock_db.execute = AsyncMock(return_value="UPDATE 1")
 
-        with patch("ah.core.context.db", mock_db):
+        with patch("machina.core.context.db", mock_db):
             results = await manager.resurrect_context(
                 session_id, query_embedding=[0.1, 0.2, 0.3], top_k=5
             )

@@ -81,7 +81,7 @@ state, approval, output, ui, dialogs, layout, features, app).
   corner square keeps one shape (`▪`) while brightness rises and falls at
   the same cadence. Working footer demand survives the thinking indicator
   hiding on text deltas; ready, approval, stopping and cleanup retire it.
-  Reduced motion (`AH_UI_REDUCED_MOTION=1|true`) keeps activity static without
+  Reduced motion (`MACHINA_UI_REDUCED_MOTION=1|true`) keeps activity static without
   a recurring frame timer. Saved learning uses one 800 ms pulse, coalesced
   to once per 30 s, with no chat notices; idle acknowledgments request their
   first frame immediately. Growth expiry and disposal retire subscriptions.

@@ -23,7 +23,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: agentharness_test
+          POSTGRES_DB: machina_test
         ports:
           - 5432:5432
         options: >-
@@ -33,9 +33,9 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/agentharness_test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/machina_test
       # tests/conftest.py points the database singleton at this (never at DATABASE_URL)
-      AGENT_HARNESS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/agentharness_test
+      MACHINA_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/machina_test
 
     steps:
       - name: Checkout repository
@@ -61,18 +61,18 @@ jobs:
           python -m pip install hatchling
 
       - name: Run ruff check
-        run: python -m ruff check ah/ tools/
+        run: python -m ruff check machina/ tools/
 
       - name: Run ruff format check
-        run: python -m ruff format --check ah/ tools/
+        run: python -m ruff format --check machina/ tools/
 
       - name: Run bandit security scan
-        run: bandit -r ah/ -ll -x ah/cli/
+        run: bandit -r machina/ -ll -x machina/cli/
 
       - name: Run pytest with coverage
         run: |
           pytest tests/ -v \
-            --cov=ah \
+            --cov=machina \
             --cov-report=xml \
             --cov-report=term-missing \
             --cov-fail-under=60
@@ -107,7 +107,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: agentharness_test
+          POSTGRES_DB: machina_test
         ports:
           - 5432:5432
         options: >-
@@ -116,8 +116,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      AGENT_HARNESS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/agentharness_test
-      AGENT_HARNESS_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/agentharness_test
+      MACHINA_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/machina_test
+      MACHINA_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/machina_test
     defaults:
       run:
         working-directory: ui
@@ -141,7 +141,7 @@ jobs:
           python -m pip install -e ".[dev]"
           python - <<'PY'
           import asyncio
-          from ah.db.connection import db
+          from machina.db.connection import db
           async def initialize():
               try:
                   await db.connect()
@@ -150,7 +150,7 @@ jobs:
                   await db.close()
           asyncio.run(initialize())
           PY
-          python -c "import sys; print('AH_TEST_PYTHON=' + sys.executable)" >> "$GITHUB_ENV"
+          python -c "import sys; print('MACHINA_TEST_PYTHON=' + sys.executable)" >> "$GITHUB_ENV"
 
       - name: Install UI dependencies (lockfile, no lifecycle scripts)
         run: npm ci --ignore-scripts
@@ -167,8 +167,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       - name: Build backend image
-        run: docker build --tag agentharness:ci .
+        run: docker build --tag machina:ci .
       - name: Smoke-test installed CLI
-        run: docker run --rm agentharness:ci --help
+        run: docker run --rm machina:ci --help
       - name: Validate Compose without loading local credentials
-        run: AGENT_HARNESS_API_KEY=ci-placeholder docker compose --env-file /dev/null config --quiet
+        run: MACHINA_API_KEY=ci-placeholder docker compose --env-file /dev/null config --quiet

@@ -26,4 +26,4 @@ version: 1.0.0
 - [OpenAI Fine-tuning](https://platform.openai.com/docs/guides/fine-tuning)
 
 ## Practice Project
-Fine-tune an embedding model on AgentHarness context chunks. Measure retrieval quality improvement.
+Fine-tune an embedding model on Machina context chunks. Measure retrieval quality improvement.

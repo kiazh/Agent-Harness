@@ -4,8 +4,8 @@ import uuid
 
 import pytest
 
-from ah.permissions import store
-from ah.permissions.policy import build_request, decide
+from machina.permissions import store
+from machina.permissions.policy import build_request, decide
 
 
 @pytest.mark.asyncio

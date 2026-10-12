@@ -5,8 +5,8 @@ import json
 
 import pytest
 
-from ah.connectors.models import ConnectorConfig
-from ah.connectors.oauth_network import (
+from machina.connectors.models import ConnectorConfig
+from machina.connectors.oauth_network import (
     OAuthNetworkClient,
     OAuthNetworkError,
     issuer_metadata_candidates,
@@ -90,7 +90,7 @@ def _discovery_routes(
     }
     if registration:
         meta["registration_endpoint"] = f"{issuer}/register"
-    from ah.connectors.oauth_network import issuer_metadata_candidates as _candidates
+    from machina.connectors.oauth_network import issuer_metadata_candidates as _candidates
 
     for candidate in _candidates(issuer):
         transport.route(candidate, payload=meta)
@@ -305,7 +305,7 @@ def test_size_cap_and_compressed_metadata_rejected():
 
 
 def test_ssrf_and_loopback_policy():
-    from ah.connectors.oauth_network import validate_outbound_url
+    from machina.connectors.oauth_network import validate_outbound_url
 
     # Literal-loopback http allowed only with local access.
     validate_outbound_url("http://127.0.0.1:9/token", local_access=True)

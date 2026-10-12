@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from ah.core.agent import _TOOL_TIMEOUT_DEFAULT, _TOOL_TIMEOUTS
+from machina.core.agent import _TOOL_TIMEOUT_DEFAULT, _TOOL_TIMEOUTS
 
 
 def test_default_timeout_exceeds_slowest_internal_tool_timeout():

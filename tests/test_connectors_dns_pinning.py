@@ -9,7 +9,7 @@ import ssl
 import httpcore
 import pytest
 
-from ah.connectors.oauth_network import OAuthNetworkClient, OAuthNetworkError
+from machina.connectors.oauth_network import OAuthNetworkClient, OAuthNetworkError
 
 
 class CapturedStream(httpcore.AsyncNetworkStream):
@@ -113,8 +113,8 @@ async def test_oauth_connect_time_private_rebinding_fails_before_secrets(monkeyp
 async def test_mcp_sdk_dials_numeric_ip_with_original_host_and_tls(monkeypatch):
     import httpcore2
 
-    from ah.connectors.mcp_client import MCPConnection
-    from ah.connectors.models import ConnectionFailed, ConnectorConfig
+    from machina.connectors.mcp_client import MCPConnection
+    from machina.connectors.models import ConnectionFailed, ConnectorConfig
 
     stream, dialed = CapturedStream(), []
 
@@ -182,8 +182,8 @@ async def test_scoped_local_access_pins_approved_private_addresses(monkeypatch, 
 async def test_localhost_alias_cannot_bypass_metadata_denial_with_consent(monkeypatch, library):
     import httpcore2
 
-    from ah.connectors.mcp_client import MCPConnection
-    from ah.connectors.models import ConnectionFailed, ConnectorConfig
+    from machina.connectors.mcp_client import MCPConnection
+    from machina.connectors.models import ConnectionFailed, ConnectorConfig
 
     dialed = []
 
@@ -264,7 +264,7 @@ async def test_pinned_backend_connect_timeout_includes_dns_resolution(monkeypatc
 
     import httpx
 
-    from ah.connectors.http_transport import pinned_http_transport
+    from machina.connectors.http_transport import pinned_http_transport
 
     dialed = []
 
@@ -313,7 +313,7 @@ async def test_literal_https_loopback_requires_local_consent(monkeypatch):
 def test_pinned_transport_ignores_environment_ca_paths(monkeypatch, tmp_path, library):
     import importlib
 
-    from ah.connectors.http_transport import pinned_http_transport
+    from machina.connectors.http_transport import pinned_http_transport
 
     module = importlib.import_module(library)
     monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "does-not-exist.pem"))
@@ -358,7 +358,7 @@ def test_timed_out_dns_does_not_hold_asyncio_process_shutdown():
 import asyncio, sys, time
 sys.path.insert(0, sys.argv[1])
 import httpx
-from ah.connectors.http_transport import pinned_http_transport
+from machina.connectors.http_transport import pinned_http_transport
 
 def resolve(host):
     time.sleep(0.4)
@@ -390,7 +390,7 @@ print(time.monotonic() - begin)
 async def test_abandoned_dns_bounds_workers_and_recovers_capacity(monkeypatch, abandon):
     import threading
 
-    from ah.connectors import http_transport
+    from machina.connectors import http_transport
 
     slots = threading.BoundedSemaphore(1)
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
@@ -470,7 +470,7 @@ async def test_rebound_global_does_not_corrupt_slot_accounting(monkeypatch):
     new instance's count and capacity checks pass when they must fail."""
     import threading
 
-    from ah.connectors import http_transport
+    from machina.connectors import http_transport
 
     first = threading.BoundedSemaphore(1)
     second = threading.BoundedSemaphore(1)

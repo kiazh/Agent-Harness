@@ -4,8 +4,8 @@ import base64
 
 import pytest
 
-from ah.core.provider import AnthropicProvider
-from ah.core.usage import _estimate_tokens
+from machina.core.provider import AnthropicProvider
+from machina.core.usage import _estimate_tokens
 
 PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
@@ -17,7 +17,7 @@ def attachment():
 
 
 def test_image_validation_and_openai_blocks():
-    from ah.core.images import image_content, validate_images
+    from machina.core.images import image_content, validate_images
 
     images = validate_images([attachment()])
     content = image_content("Describe [image 1]", images)
@@ -37,7 +37,7 @@ def test_image_validation_and_openai_blocks():
     ],
 )
 def test_bad_images_fail_before_dispatch(bad):
-    from ah.core.images import validate_images
+    from machina.core.images import validate_images
 
     with pytest.raises(ValueError):
         validate_images(bad)
@@ -76,7 +76,7 @@ def test_image_usage_estimate_counts_visual_tokens_instead_of_base64_characters(
 
 
 def test_ollama_image_payload_retains_text_and_decoded_image_data():
-    from ah.core.images import ollama_messages
+    from machina.core.images import ollama_messages
 
     url = "data:image/png;base64," + attachment()["data"]
     out = ollama_messages(

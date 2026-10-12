@@ -1,10 +1,10 @@
 // Capture actual native renderer frames, not browser/CSS mockups.
-// Usage: node ui/test/support/capture-reference.ts /tmp/ah-reference-review
+// Usage: node ui/test/support/capture-reference.ts /tmp/machina-reference-review
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { referenceFixture } from "./reference.ts";
 import { setSkin } from "../../src/theme.ts";
-const output = resolve(process.argv[2] ?? "/tmp/ah-reference-review");
+const output = resolve(process.argv[2] ?? "/tmp/machina-reference-review");
 await mkdir(output, {recursive:true});
 for (const skin of ["codex", "mono", "light"]) {
  for (const [columns, rows] of [[140,52], [80,24], [40,9]]) {

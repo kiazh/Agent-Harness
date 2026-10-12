@@ -417,27 +417,27 @@ test("editing a client metadata document updates its client ID to the new docume
 });
 
 test("real gateway wrapper exposes the oauth method boundary", { timeout: 60_000 }, async (t) => {
-	const python = process.env.AH_TEST_PYTHON;
+	const python = process.env.MACHINA_TEST_PYTHON;
 	if (!python) {
-		t.skip("AH_TEST_PYTHON not set");
+		t.skip("MACHINA_TEST_PYTHON not set");
 		return;
 	}
 	const { mkdtemp } = await import("node:fs/promises");
 	const { tmpdir } = await import("node:os");
 	const { join } = await import("node:path");
 	const { GatewayClient } = await import("../src/gateway.ts");
-	const home = await mkdtemp(join(tmpdir(), "ah-oauth-wrapper-"));
+	const home = await mkdtemp(join(tmpdir(), "machina-oauth-wrapper-"));
 	const token = `oauth-wrapper-${Math.random().toString(36).slice(2)}`;
 	const client = new GatewayClient({
 		python,
 		token,
 		env: {
 			HOME: home,
-			AH_ENV_FILE: join(home, "empty.env"),
-			AGENT_HARNESS_SECRET_BACKEND: "",
-			AGENT_HARNESS_TEST_DATABASE_URL: "",
-			AH_GATEWAY_NO_SCHEDULER: "1",
-			AH_GATEWAY_TOKEN: token,
+			MACHINA_ENV_FILE: join(home, "empty.env"),
+			MACHINA_SECRET_BACKEND: "",
+			MACHINA_TEST_DATABASE_URL: "",
+			MACHINA_GATEWAY_NO_SCHEDULER: "1",
+			MACHINA_GATEWAY_TOKEN: token,
 		},
 	});
 	client.start();

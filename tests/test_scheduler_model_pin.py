@@ -5,14 +5,14 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock
 
-from ah.core.agent_def import AgentDef, agent_registry
-from ah.core.scheduler import JobRunner, JobStore
-from ah.core.session import SessionManager
+from machina.core.agent_def import AgentDef, agent_registry
+from machina.core.scheduler import JobRunner, JobStore
+from machina.core.session import SessionManager
 
 
 async def test_job_model_pin_persists_after_reload(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
     session = await SessionManager().create(title="pinned job", agent_id=f"agent-{uuid.uuid4()}")
     store = JobStore()
     try:
@@ -52,7 +52,7 @@ async def test_job_pin_overrides_agent_definition_for_runner(monkeypatch):
         selected.append(kwargs)
         return provider
 
-    monkeypatch.setattr("ah.core.provider.get_provider", fake_get_provider)
+    monkeypatch.setattr("machina.core.provider.get_provider", fake_get_provider)
     agent = await JobRunner()._build_agent(
         "researcher", model="openrouter/free", provider="openrouter"
     )
@@ -61,11 +61,11 @@ async def test_job_pin_overrides_agent_definition_for_runner(monkeypatch):
 
 
 async def test_gateway_accepts_job_pin_and_rejects_empty_model(db_pool, monkeypatch):
-    from ah.gateway.errors import INVALID_PARAMS, RpcError
-    from ah.gateway.features.jobs import jobs_create
+    from machina.gateway.errors import INVALID_PARAMS, RpcError
+    from machina.gateway.features.jobs import jobs_create
 
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
     session = await SessionManager().create(title="gateway pin", agent_id=f"agent-{uuid.uuid4()}")
 
     class GatewayStub:
@@ -116,11 +116,11 @@ async def test_gateway_accepts_job_pin_and_rejects_empty_model(db_pool, monkeypa
 
 
 async def test_session_scoped_job_mutations_reject_foreign_jobs(db_pool, monkeypatch):
-    from ah.gateway.errors import NOT_FOUND, RpcError
-    from ah.gateway.features.jobs import jobs_delete, jobs_set_enabled
+    from machina.gateway.errors import NOT_FOUND, RpcError
+    from machina.gateway.features.jobs import jobs_delete, jobs_set_enabled
 
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.scheduler.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.scheduler.db", db_pool)
     owner = await SessionManager().create(title="job owner", agent_id=f"owner-{uuid.uuid4()}")
     other = await SessionManager().create(title="other", agent_id=f"other-{uuid.uuid4()}")
     store = JobStore()

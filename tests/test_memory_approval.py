@@ -8,18 +8,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.memory.approval import (
+from machina.memory.approval import (
     ApprovalStatus,
     MemoryApprovalGate,
     PendingMemory,
 )
-from ah.memory.redaction import (
+from machina.memory.redaction import (
     RedactionResult,
     SecretRedactor,
     redact_secrets,
     redact_value,
 )
-from ah.memory.user_profile import (
+from machina.memory.user_profile import (
     UserProfile,
     UserProfileStore,
     _clean_preferences,
@@ -149,7 +149,7 @@ MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy...
         assert secret not in str(_clean_preferences({secret: {secret: "safe"}}))
 
     def test_redact_value_preserves_structural_keys(self, monkeypatch):
-        monkeypatch.setattr("ah.security.secrets.known_secret_values", lambda: ["learning"])
+        monkeypatch.setattr("machina.security.secrets.known_secret_values", lambda: ["learning"])
         assert redact_value({"learning": "safe"}) == {"learning": "safe"}
 
     def test_convenience_function(self):
@@ -216,7 +216,7 @@ class TestMemoryApprovalGate:
         assert "api_key" in d["redactions"]
 
     async def test_submit_creates_pending(self, gate, mock_db):
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             mock_db.execute = AsyncMock(return_value="INSERT 0 1")
             pending = await gate.submit(
                 content="Test memory",
@@ -228,7 +228,7 @@ class TestMemoryApprovalGate:
             assert pending.content == "Test memory"
 
     async def test_submit_redacts_secrets(self, gate, mock_db):
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             mock_db.execute = AsyncMock(return_value="INSERT 0 1")
             pending = await gate.submit(
                 content="API key is sk-abc123def456ghi789jkl012mno345",
@@ -238,7 +238,7 @@ class TestMemoryApprovalGate:
             assert "sk-abc123" not in pending.content
 
     async def test_approve_creates_memory(self, gate, mock_db):
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             # Mock the pending record fetch
             mock_db.fetchrow = AsyncMock(
                 return_value={
@@ -258,14 +258,14 @@ class TestMemoryApprovalGate:
             # Mock memory_store.add
             mock_memory = AsyncMock()
             mock_memory.add = AsyncMock(return_value=MagicMock(id=uuid.uuid4()))
-            with patch("ah.memory.approval.memory_store", mock_memory):
+            with patch("machina.memory.approval.memory_store", mock_memory):
                 mock_db.execute = AsyncMock(return_value="UPDATE 1")
                 _transactional_connection(mock_db)
                 # The mock may yield None; this only checks approve() doesn't raise.
                 await gate.approve(uuid.uuid4())
 
     async def test_reject_pending(self, gate, mock_db):
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value={"status": "pending"})
             mock_db.execute = AsyncMock(return_value="UPDATE 1")
             _transactional_connection(mock_db)
@@ -273,20 +273,20 @@ class TestMemoryApprovalGate:
             assert result is True
 
     async def test_reject_already_reviewed(self, gate, mock_db):
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value={"status": "approved"})
             _transactional_connection(mock_db)
             result = await gate.reject(uuid.uuid4())
             assert result is False
 
     async def test_list_pending(self, gate, mock_db):
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             mock_db.fetch = AsyncMock(return_value=[])
             result = await gate.list_pending()
             assert result == []
 
     async def test_get_stats(self, gate, mock_db):
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             mock_db.fetch = AsyncMock(
                 return_value=[
                     {"status": "pending", "count": 5},
@@ -301,7 +301,7 @@ class TestMemoryApprovalGate:
 
     async def test_disabled_gate_auto_approves(self, mock_db):
         gate = MemoryApprovalGate(enabled=False)
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             mock_db.execute = AsyncMock(return_value="INSERT 0 1")
             mock_db.fetchrow = AsyncMock(
                 return_value={
@@ -320,7 +320,7 @@ class TestMemoryApprovalGate:
             )
             mock_memory = AsyncMock()
             mock_memory.add = AsyncMock(return_value=MagicMock(id=uuid.uuid4()))
-            with patch("ah.memory.approval.memory_store", mock_memory):
+            with patch("machina.memory.approval.memory_store", mock_memory):
                 _transactional_connection(mock_db)
                 pending = await gate.submit("Test", "fact")
                 # When disabled, auto-approve is called
@@ -466,63 +466,63 @@ class TestUserProfileStore:
         return row
 
     async def test_create_profile(self, store, mock_db):
-        with patch("ah.memory.user_profile.db", mock_db):
+        with patch("machina.memory.user_profile.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=self._make_row())
             profile = await store.create(user_id="test_user", display_name="Test User")
             assert profile.user_id == "test_user"
             assert profile.display_name == "Test User"
 
     async def test_get_by_user_id(self, store, mock_db):
-        with patch("ah.memory.user_profile.db", mock_db):
+        with patch("machina.memory.user_profile.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=self._make_row())
             profile = await store.get_by_user_id("test_user")
             assert profile is not None
             assert profile.user_id == "test_user"
 
     async def test_get_by_user_id_not_found(self, store, mock_db):
-        with patch("ah.memory.user_profile.db", mock_db):
+        with patch("machina.memory.user_profile.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=None)
             profile = await store.get_by_user_id("nonexistent")
             assert profile is None
 
     async def test_get_or_create_existing(self, store, mock_db):
-        with patch("ah.memory.user_profile.db", mock_db):
+        with patch("machina.memory.user_profile.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=self._make_row())
             profile = await store.get_or_create("test_user")
             assert profile.user_id == "test_user"
 
     async def test_get_or_create_new(self, store, mock_db):
-        with patch("ah.memory.user_profile.db", mock_db):
+        with patch("machina.memory.user_profile.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=self._make_row())
             profile = await store.get_or_create("new_user")
             assert profile is not None
 
     async def test_update_preferences(self, store, mock_db):
-        with patch("ah.memory.user_profile.db", mock_db):
+        with patch("machina.memory.user_profile.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=self._make_row())
             profile = await store.update_preferences(uuid.uuid4(), {"theme": "light"})
             assert profile is not None
 
     async def test_record_interaction(self, store, mock_db):
-        with patch("ah.memory.user_profile.db", mock_db):
+        with patch("machina.memory.user_profile.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=self._make_row())
             profile = await store.record_interaction(uuid.uuid4(), topic="python")
             assert profile is not None
 
     async def test_list_all(self, store, mock_db):
-        with patch("ah.memory.user_profile.db", mock_db):
+        with patch("machina.memory.user_profile.db", mock_db):
             mock_db.fetch = AsyncMock(return_value=[self._make_row()])
             profiles = await store.list_all()
             assert len(profiles) == 1
 
     async def test_delete(self, store, mock_db):
-        with patch("ah.memory.user_profile.db", mock_db):
+        with patch("machina.memory.user_profile.db", mock_db):
             mock_db.execute = AsyncMock(return_value="DELETE 1")
             result = await store.delete(uuid.uuid4())
             assert result is True
 
     async def test_delete_not_found(self, store, mock_db):
-        with patch("ah.memory.user_profile.db", mock_db):
+        with patch("machina.memory.user_profile.db", mock_db):
             mock_db.execute = AsyncMock(return_value="DELETE 0")
             result = await store.delete(uuid.uuid4())
             assert result is False

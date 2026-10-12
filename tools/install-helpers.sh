@@ -14,7 +14,7 @@
 # Installer-owned DATABASE_URL placeholder. Only an unset URL or exactly
 # this value may be replaced with generated credentials — anything else is
 # a custom URL the installer must preserve.
-INSTALLER_DEFAULT_DB_URL="postgresql://postgres:postgres@localhost:5432/agentharness"
+INSTALLER_DEFAULT_DB_URL="postgresql://postgres:postgres@localhost:5432/machina"
 
 # Keep curl|bash and CI logs plain. On a real terminal, show progress only
 # while a real command is running; always reveal its output if it fails.
@@ -27,7 +27,7 @@ run_animated() (
     "$@"
     exit $?
   fi
-  spinner_output_file="$(mktemp "${TMPDIR:-/tmp}/ah-install.XXXXXX" 2>/dev/null)" || {
+  spinner_output_file="$(mktemp "${TMPDIR:-/tmp}/machina-install.XXXXXX" 2>/dev/null)" || {
     log "$spinner_label"
     "$@"
     exit $?
@@ -70,38 +70,38 @@ run_animated() (
 
 installer_next_steps() {
   local state="$1" docs="$2" step=2
-  printf '\nAgentHarness installed. Next, in this order:\n'
-  printf '  1. ah setup            Configure your provider and database before opening the UI, chat, or server.\n'
+  printf '\nMachina installed. Next, in this order:\n'
+  printf '  1. machina setup            Configure your provider and database before opening the UI, chat, or server.\n'
   case "$state" in
     ready)
       printf '  Database schema initialized automatically.\n'
-      printf '  If setup changes DATABASE_URL, run ah init again.\n'
+      printf '  If setup changes DATABASE_URL, run machina init again.\n'
       ;;
     skipped)
       printf '  Database schema was skipped (--skip-init).\n'
-      printf '  2. ah init             Create the schema after setup.\n'
+      printf '  2. machina init             Create the schema after setup.\n'
       step=3
       ;;
     *)
       printf '  Database schema is not ready.\n'
-      printf '  2. ah init             Create the schema after fixing DATABASE_URL/PostgreSQL in setup.\n'
+      printf '  2. machina init             Create the schema after fixing DATABASE_URL/PostgreSQL in setup.\n'
       step=3
       ;;
   esac
-  printf '  %s. ah doctor           Check your configuration.\n' "$step"
+  printf '  %s. machina doctor           Check your configuration.\n' "$step"
   step=$((step + 1))
-  printf '  %s. ah                  Open the terminal UI.\n' "$step"
-  printf '     ah chat "Hello"     Run a one-shot chat after setup.\n'
-  printf '     ah serve            Start the HTTP API after setup.\n'
+  printf '  %s. machina              Open the terminal UI.\n' "$step"
+  printf '     machina chat "Hello"     Run a one-shot chat after setup.\n'
+  printf '     machina serve            Start the HTTP API after setup.\n'
   printf '\nDocs: %s\n' "$docs"
 }
 
 # resolve_env_file <startup_dir> — stdout: absolute env-file path.
-# AH_ENV_FILE absolute wins as-is; relative AH_ENV_FILE anchors to the
+# MACHINA_ENV_FILE absolute wins as-is; relative MACHINA_ENV_FILE anchors to the
 # startup directory (so a later cd into the checkout cannot redirect it);
 # unset means .env in the current (checkout) directory.
 resolve_env_file() {
-  local startup_dir="$1" override="${AH_ENV_FILE:-}"
+  local startup_dir="$1" override="${MACHINA_ENV_FILE:-}"
   if [ -n "$override" ]; then
     case "$override" in
       /*) printf '%s' "$override" ;;
@@ -173,23 +173,23 @@ maybe_write_db_url() {
 # --- Database provisioning (moved verbatim from install.sh, except the
 # DATABASE_URL write decisions, which now go through maybe_write_db_url so
 # custom URLs survive in every branch). These need the installer's globals
-# (log/warn, AH_BIN, OS_FAMILY) at CALL time only.
+# (log/warn, MACHINA_BIN, OS_FAMILY) at CALL time only.
 # shellcheck disable=SC2154
 
-try_init() { "$AH_BIN" init 2>&1; }
+try_init() { "$MACHINA_BIN" init 2>&1; }
 
 start_docker_db() {
   command -v docker >/dev/null 2>&1 || return 1
   # AH-029: `docker ps` lists running containers only — a stopped
-  # agentharness-db would be missed and `docker run --name` would fail with
+  # machina-db would be missed and `docker run --name` would fail with
   # "already exists". Inspect all containers (-a) and reuse the named one.
-  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^agentharness-db$'; then
-    log "agentharness-db already running, reusing it"
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^machina-db$'; then
+    log "machina-db already running, reusing it"
     return 0
   fi
-  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^agentharness-db$'; then
-    log "Starting existing stopped agentharness-db container"
-    docker start agentharness-db >/dev/null || return 1
+  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^machina-db$'; then
+    log "Starting existing stopped machina-db container"
+    docker start machina-db >/dev/null || return 1
     return 0
   fi
   # AH-006: never publish Postgres beyond loopback with weak default
@@ -197,11 +197,11 @@ start_docker_db() {
   # DATABASE_URL consistent. Existing custom DATABASE_URL values are left
   # alone for compatibility.
   DB_PASS="$(rand_hex | cut -c1-32)"
-  DB_URL="postgresql://postgres:${DB_PASS}@127.0.0.1:5432/agentharness"
+  DB_URL="postgresql://postgres:${DB_PASS}@127.0.0.1:5432/machina"
   log "Starting local Postgres (pgvector/pgvector:pg16 on 127.0.0.1:5432)"
   # shellcheck disable=SC2086
-  docker run -d --name agentharness-db \
-    -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$DB_PASS" -e POSTGRES_DB=agentharness \
+  docker run -d --name machina-db \
+    -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$DB_PASS" -e POSTGRES_DB=machina \
     -p 127.0.0.1:5432:5432 pgvector/pgvector:pg16 >/dev/null || return 1
   # Point a default DATABASE_URL at the generated credentials; a custom URL
   # is preserved by maybe_write_db_url.
@@ -243,32 +243,32 @@ start_brew_db() {
   # custom DATABASE_URL values are preserved untouched.
   CREATED_POSTGRES=0
   if ! "$pg_bin/psql" -h localhost -U "$pg_user" -d postgres -tc \
-    "SELECT 1 FROM pg_roles WHERE rolname='agentharness'" 2>/dev/null | grep -q 1; then
-    "$pg_bin/createuser" -h localhost -U "$pg_user" -s agentharness < /dev/null || return 1
+    "SELECT 1 FROM pg_roles WHERE rolname='machina'" 2>/dev/null | grep -q 1; then
+    "$pg_bin/createuser" -h localhost -U "$pg_user" -s machina < /dev/null || return 1
     CREATED_POSTGRES=1
   fi
   if [ "$CREATED_POSTGRES" = "1" ]; then
     BREW_DB_PASS="$(rand_hex | cut -c1-32)"
     "$pg_bin/psql" -h localhost -U "$pg_user" -d postgres \
-      -c "ALTER USER agentharness PASSWORD '${BREW_DB_PASS}';" >/dev/null 2>&1 || return 1
+      -c "ALTER USER machina PASSWORD '${BREW_DB_PASS}';" >/dev/null 2>&1 || return 1
     # Unlike the pre-fix code, a custom DATABASE_URL is preserved even when
     # the role is new: generated credentials replace only an unset URL or
     # the documented installer-owned placeholder.
     maybe_write_db_url \
-      "postgresql://agentharness:${BREW_DB_PASS}@localhost:5432/agentharness" \
+      "postgresql://machina:${BREW_DB_PASS}@localhost:5432/machina" \
       "$ENV_FILE" || return 1
   else
-    warn "Reusing existing agentharness role; existing credentials preserved (set DATABASE_URL if init fails)"
+    warn "Reusing existing machina role; existing credentials preserved (set DATABASE_URL if init fails)"
   fi
   if ! "$pg_bin/psql" -h localhost -U "$pg_user" -d postgres -tc \
-    "SELECT 1 FROM pg_database WHERE datname='agentharness'" 2>/dev/null | grep -q 1; then
-    "$pg_bin/createdb" -h localhost -U "$pg_user" -O agentharness agentharness < /dev/null || return 1
+    "SELECT 1 FROM pg_database WHERE datname='machina'" 2>/dev/null | grep -q 1; then
+    "$pg_bin/createdb" -h localhost -U "$pg_user" -O machina machina < /dev/null || return 1
   fi
-  if ! "$pg_bin/psql" -h localhost -U agentharness -d agentharness \
+  if ! "$pg_bin/psql" -h localhost -U machina -d machina \
     -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>&1; then
     warn "Brew pgvector doesn't fit postgresql@16; building pgvector from source"
     brew_vector_from_source "$pg_bin" || return 1
-    "$pg_bin/psql" -h localhost -U agentharness -d agentharness \
+    "$pg_bin/psql" -h localhost -U machina -d machina \
       -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>&1 || return 1
   fi
   return 0
@@ -293,7 +293,7 @@ brew_vector_from_source() {
 }
 
 wait_for_init() {
-  # Retry `ah init` while Postgres wakes up; on final failure print the real
+  # Retry `machina init` while Postgres wakes up; on final failure print the real
   # error instead of swallowing it.
   local i out
   for i in $(seq 1 30); do

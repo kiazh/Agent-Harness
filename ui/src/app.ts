@@ -154,7 +154,7 @@ export class App implements FeatureHost {
 			this.resolveExit = done;
 		});
 
-		const reducedMotion = /^(1|true)$/i.test(process.env.AH_UI_REDUCED_MOTION ?? "");
+		const reducedMotion = /^(1|true)$/i.test(process.env.MACHINA_UI_REDUCED_MOTION ?? "");
 		this.coordinator = new AnimationCoordinator(() => this.tui.requestRender(), reducedMotion);
 		this.footer = new Footer(this.coordinator);
 		this.transcript = new Transcript(this.transcriptView, new ThinkingIndicator(this.coordinator), this.coordinator);
@@ -198,7 +198,7 @@ export class App implements FeatureHost {
 
 		this.footer.cwd = process.cwd();
 		this.footer.status = "offline";
-		this.transcript.addNotice("Starting AgentHarness…");
+		this.transcript.addNotice("Starting Machina…");
 		this.tui.start();
 
 		this.client.onEvent = (event) => this.onEvent(event);
@@ -258,7 +258,7 @@ export class App implements FeatureHost {
 			this.transcript.addNotice(`Could not start: ${message(error)}`, "error");
 			const tail = this.client.stderr().slice(-8);
 			if (tail.length) this.transcript.addNotice(tail.join("\n"));
-			this.transcript.addNotice("Run `ah doctor` to check your setup. Press Ctrl+C to exit.");
+			this.transcript.addNotice("Run `machina doctor` to check your setup. Press Ctrl+C to exit.");
 		}
 		this.tui.requestRender();
 	}
@@ -1245,7 +1245,7 @@ export class App implements FeatureHost {
 		this.transcript.addNotice(`The gateway stopped${code === null ? "" : ` (exit code ${code})`}.`, "error");
 		const tail = stderr.slice(-8);
 		if (tail.length) this.transcript.addNotice(tail.join("\n"));
-		this.transcript.addNotice("Press Ctrl+C to exit, then run `ah doctor`.");
+		this.transcript.addNotice("Press Ctrl+C to exit, then run `machina doctor`.");
 		this.tui.requestRender();
 	}
 }

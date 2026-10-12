@@ -13,20 +13,20 @@ class FencingWorker:
 
     @classmethod
     async def start(cls, schema):
-        from ah.core.config import LEGACY_ENV_VARS, SECRET_KEYS
+        from machina.core.config import LEGACY_ENV_VARS, SECRET_KEYS
 
         env = dict(os.environ)
         for key in SECRET_KEYS:
-            env[f"AGENT_HARNESS_{key.upper()}"] = ""
-            env[f"AGENT_HARNESS_{key.upper()}_FILE"] = ""
+            env[f"MACHINA_{key.upper()}"] = ""
+            env[f"MACHINA_{key.upper()}_FILE"] = ""
             legacy = LEGACY_ENV_VARS.get(key)
             if legacy:
                 env[legacy] = ""
                 env[legacy + "_FILE"] = ""
-        env["AGENT_HARNESS_SECRET_BACKEND"] = ""
-        env["AH_GATEWAY_TOKEN"] = "fencing-test-token"
-        env["AH_GATEWAY_NO_SCHEDULER"] = "1"
-        env["AH_FENCING_TEST_SCHEMA"] = schema
+        env["MACHINA_SECRET_BACKEND"] = ""
+        env["MACHINA_GATEWAY_TOKEN"] = "fencing-test-token"
+        env["MACHINA_GATEWAY_NO_SCHEDULER"] = "1"
+        env["MACHINA_FENCING_TEST_SCHEMA"] = schema
         process = await asyncio.create_subprocess_exec(
             sys.executable,
             "-m",

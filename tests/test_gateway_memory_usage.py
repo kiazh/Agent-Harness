@@ -11,12 +11,12 @@ import pytest
 @pytest.mark.asyncio
 async def test_memory_search_passes_session_id_to_retriever(monkeypatch):
     """memory_search should pass session_id to retriever.retrieve()."""
-    from ah.gateway.features import memory_search
+    from machina.gateway.features import memory_search
 
     mock_retriever = MagicMock()
     mock_retriever.retrieve = AsyncMock(return_value=[])
     monkeypatch.setattr(
-        "ah.memory.retriever.MemoryRetriever", MagicMock(return_value=mock_retriever)
+        "machina.memory.retriever.MemoryRetriever", MagicMock(return_value=mock_retriever)
     )
 
     mock_gw = MagicMock()
@@ -38,12 +38,12 @@ async def test_memory_search_passes_session_id_to_retriever(monkeypatch):
 @pytest.mark.asyncio
 async def test_memory_search_without_session_id_passes_none(monkeypatch):
     """memory_search should pass session_id=None when no sessionId param is provided."""
-    from ah.gateway.features import memory_search
+    from machina.gateway.features import memory_search
 
     mock_retriever = MagicMock()
     mock_retriever.retrieve = AsyncMock(return_value=[])
     monkeypatch.setattr(
-        "ah.memory.retriever.MemoryRetriever", MagicMock(return_value=mock_retriever)
+        "machina.memory.retriever.MemoryRetriever", MagicMock(return_value=mock_retriever)
     )
 
     mock_gw = MagicMock()

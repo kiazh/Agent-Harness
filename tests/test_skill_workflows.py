@@ -4,13 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from ah.skills.registry import SkillRegistry
+from machina.skills.registry import SkillRegistry
 
 
 def test_coding_workflow_composes_domain_testing_and_verification(tmp_path, monkeypatch):
-    from ah.skills.workflow import plan_workflow
+    from machina.skills.workflow import plan_workflow
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     plan = plan_workflow("Implement a Python API with authentication", skills=SkillRegistry())
     names = {s.name for s in plan.skills}
     assert {
@@ -24,9 +24,9 @@ def test_coding_workflow_composes_domain_testing_and_verification(tmp_path, monk
 
 
 def test_followup_inherits_stack_but_new_explicit_stack_wins(tmp_path, monkeypatch):
-    from ah.skills.workflow import plan_workflow
+    from machina.skills.workflow import plan_workflow
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     skills = SkillRegistry()
     history = [{"chunk_type": "user_message", "payload": {"content": "Build a Python API"}}]
     followup = plan_workflow("Now add unit tests", skills=skills, recent=history)
@@ -39,10 +39,10 @@ def test_followup_inherits_stack_but_new_explicit_stack_wins(tmp_path, monkeypat
 
 
 def test_automatic_workflow_prompt_is_bounded_and_native(tmp_path, monkeypatch):
-    from ah.core.assembler import get_token_count
-    from ah.skills.runtime import automatic_skill_context
+    from machina.core.assembler import get_token_count
+    from machina.skills.runtime import automatic_skill_context
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     text = automatic_skill_context(
         "Implement a Python API with authentication", skills=SkillRegistry()
     )
@@ -52,10 +52,10 @@ def test_automatic_workflow_prompt_is_bounded_and_native(tmp_path, monkeypatch):
 
 
 def test_resource_paths_resolve_skill_relative_names(tmp_path, monkeypatch):
-    import ah.skills.registry as module
-    from ah.tools.skills import skill_resource
+    import machina.skills.registry as module
+    from machina.tools.skills import skill_resource
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     skills = SkillRegistry()
     skills.load_all()
     monkeypatch.setattr(module, "skill_registry", skills)
@@ -75,8 +75,8 @@ def test_resource_paths_resolve_skill_relative_names(tmp_path, monkeypatch):
 def test_skill_read_search_returns_real_continuation_offsets(tmp_path, monkeypatch):
     import re
 
-    import ah.skills.registry as module
-    from ah.tools.skills import skill_read
+    import machina.skills.registry as module
+    from machina.tools.skills import skill_read
 
     skills = SkillRegistry(tmp_path)
     content = "Introduction ß\n\n## Testing\nRun tests before completion.\n"
@@ -101,10 +101,10 @@ async def test_native_workflow_reads_writes_tests_and_verifies(streaming, tmp_pa
     import uuid
     from unittest.mock import AsyncMock
 
-    from ah.core.agent import BaseReActAgent, ReActAgent
-    from ah.core.config import config
-    from ah.core.models import LLMResponse, Session, StreamEvent
-    from ah.permissions.broker import set_approval_handler
+    from machina.core.agent import BaseReActAgent, ReActAgent
+    from machina.core.config import config
+    from machina.core.models import LLMResponse, Session, StreamEvent
+    from machina.permissions.broker import set_approval_handler
 
     (tmp_path / "tests").mkdir()
     monkeypatch.setenv(
@@ -112,21 +112,21 @@ async def test_native_workflow_reads_writes_tests_and_verifies(streaming, tmp_pa
     )
     monkeypatch.setattr(config, "workspace_root", str(tmp_path))
     monkeypatch.setattr(config, "execution_mode", "ask")
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path / "skills"))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path / "skills"))
     for field in ("memory_enabled", "rag_enabled", "personality_growth_enabled"):
         monkeypatch.setattr(config, field, False)
     session = Session(id=uuid.uuid4(), context_budget=8000)
-    monkeypatch.setattr("ah.core.agent.session_manager.get", AsyncMock(return_value=session))
-    monkeypatch.setattr("ah.core.agent.session_manager.update_activity", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.session_manager.get", AsyncMock(return_value=session))
+    monkeypatch.setattr("machina.core.agent.session_manager.update_activity", AsyncMock())
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.get_recent_context", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.get_recent_context", AsyncMock(return_value=[])
     )
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.search_archive_text", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.search_archive_text", AsyncMock(return_value=[])
     )
-    monkeypatch.setattr("ah.core.agent.context_manager.add_chunks_batch", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.context_manager.add_chunks_batch", AsyncMock())
     monkeypatch.setattr(
-        "ah.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
+        "machina.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
     )
     monkeypatch.setattr(BaseReActAgent, "_reserve_usage", AsyncMock(return_value=None))
     monkeypatch.setattr(BaseReActAgent, "_finish_usage", AsyncMock())
@@ -204,9 +204,9 @@ async def test_native_workflow_reads_writes_tests_and_verifies(streaming, tmp_pa
 
 
 def test_explicit_framework_does_not_inherit_prior_language(tmp_path, monkeypatch):
-    from ah.skills.workflow import plan_workflow
+    from machina.skills.workflow import plan_workflow
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     history = [{"chunk_type": "user_message", "payload": {"content": "Build a PostgreSQL API"}}]
     plan = plan_workflow("Add FastAPI authentication", skills=SkillRegistry(), recent=history)
     assert "ecc-postgres-patterns" not in {s.name for s in plan.skills}
@@ -214,9 +214,9 @@ def test_explicit_framework_does_not_inherit_prior_language(tmp_path, monkeypatc
 
 
 def test_local_trigger_is_an_automatically_loaded_anchor(tmp_path, monkeypatch):
-    from ah.skills.runtime import automatic_skill_context
+    from machina.skills.runtime import automatic_skill_context
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     skills = SkillRegistry()
     skills.create_skill(
         "team-workflow",
@@ -232,11 +232,11 @@ def test_local_trigger_is_an_automatically_loaded_anchor(tmp_path, monkeypatch):
 async def test_resource_integrity_is_not_bypassed_by_tool_result_cache(tmp_path, monkeypatch):
     import shutil
 
-    import ah.skills.registry as module
-    from ah.skills.bundle import ECCBundle
-    from ah.tools.base import registry
+    import machina.skills.registry as module
+    from machina.skills.bundle import ECCBundle
+    from machina.tools.base import registry
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path / "local"))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path / "local"))
     skills = SkillRegistry()
     skills.load_all()
     source = skills._ecc_bundle.root
@@ -253,9 +253,9 @@ async def test_resource_integrity_is_not_bypassed_by_tool_result_cache(tmp_path,
 
 
 def test_followup_uses_latest_stack_instead_of_old_goal(tmp_path, monkeypatch):
-    from ah.skills.workflow import plan_workflow
+    from machina.skills.workflow import plan_workflow
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     history = [
         {"chunk_type": "user_message", "payload": {"content": "Now use Python for the API"}},
         {"chunk_type": "user_message", "payload": {"content": "Build a Docker deployment"}},
@@ -271,9 +271,9 @@ def test_followup_uses_latest_stack_instead_of_old_goal(tmp_path, monkeypatch):
 
 
 def test_workflow_does_not_add_unrequested_installers_or_animation(tmp_path, monkeypatch):
-    from ah.skills.workflow import plan_workflow
+    from machina.skills.workflow import plan_workflow
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     skills = SkillRegistry()
     python = plan_workflow("Implement a Python API with authentication", skills=skills)
     assert "ecc-generating-python-installer" not in {s.name for s in python.skills}
@@ -283,34 +283,34 @@ def test_workflow_does_not_add_unrequested_installers_or_animation(tmp_path, mon
 
 def test_weak_single_word_overlap_activates_nothing(tmp_path, monkeypatch):
     """A vague follow-up must leave the agent a generalist (red: ADR workflow)."""
-    from ah.skills.workflow import plan_workflow
+    from machina.skills.workflow import plan_workflow
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     plan = plan_workflow("why dont you finihs", skills=SkillRegistry())
     assert plan.skills == []
 
 
 def test_real_decision_request_keeps_adr_without_weak_specialists(tmp_path, monkeypatch):
-    from ah.skills.workflow import plan_workflow
+    from machina.skills.workflow import plan_workflow
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     plan = plan_workflow("lets record this decision", skills=SkillRegistry())
     assert [s.name for s in plan.skills] == ["ecc-architecture-decision-records"]
 
 
 def test_coding_without_domain_skill_keeps_generic_pipeline(tmp_path, monkeypatch):
-    from ah.skills.workflow import plan_workflow
+    from machina.skills.workflow import plan_workflow
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     plan = plan_workflow("Build a React component with hooks", skills=SkillRegistry())
     assert plan.kind == "coding"
     assert {"ecc-tdd-workflow", "ecc-verification-loop"} <= {s.name for s in plan.skills}
 
 
 def test_skill_context_frames_workflows_as_conditional_references(tmp_path, monkeypatch):
-    from ah.skills.runtime import automatic_skill_context
+    from machina.skills.runtime import automatic_skill_context
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     text = automatic_skill_context("Implement a Python API", skills=SkillRegistry())
     assert "act as a general agent" in text
     assert "Do not go looking for work" in text
@@ -332,10 +332,10 @@ def test_skill_context_frames_workflows_as_conditional_references(tmp_path, monk
 def test_information_and_conversation_do_not_activate_execution_workflows(
     query, tmp_path, monkeypatch
 ):
-    from ah.skills.runtime import automatic_skill_context
-    from ah.skills.workflow import plan_workflow
+    from machina.skills.runtime import automatic_skill_context
+    from machina.skills.workflow import plan_workflow
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     skills = SkillRegistry()
     history = [{"chunk_type": "user_message", "payload": {"content": "Build a Python API"}}]
     assert plan_workflow(query, skills=skills, recent=history).skills == []
@@ -354,7 +354,7 @@ def test_information_and_conversation_do_not_activate_execution_workflows(
     ],
 )
 def test_polite_task_requests_still_activate_workflows(query, tmp_path, monkeypatch):
-    from ah.skills.workflow import plan_workflow
+    from machina.skills.workflow import plan_workflow
 
-    monkeypatch.setenv("AGENT_HARNESS_SKILLS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SKILLS_DIR", str(tmp_path))
     assert plan_workflow(query, skills=SkillRegistry()).skills

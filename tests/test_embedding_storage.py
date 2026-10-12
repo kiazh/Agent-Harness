@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.memory.approval import MemoryApprovalGate
+from machina.memory.approval import MemoryApprovalGate
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ class TestEmbeddingStorage:
     async def test_submit_stores_embedding(self, gate, mock_db):
         """When embedding is provided, it must be stored in the database."""
         embedding = [0.1, 0.2, 0.3, 0.4]
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             pending = await gate.submit(
                 content="test memory",
                 category="fact",
@@ -43,7 +43,7 @@ class TestEmbeddingStorage:
 
     async def test_submit_without_embedding_stores_none(self, gate, mock_db):
         """When no embedding is provided, None should be stored."""
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             pending = await gate.submit(
                 content="test memory",
                 category="fact",
@@ -58,7 +58,7 @@ class TestEmbeddingStorage:
 
     async def test_submit_with_empty_embedding(self, gate, mock_db):
         """When empty list embedding is provided, it should be stored."""
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             pending = await gate.submit(
                 content="test memory",
                 category="fact",
@@ -101,7 +101,7 @@ async def test_single_approval_preserves_pending_embedding(gate):
     connection.fetchrow = AsyncMock(side_effect=fetchrow)
     memory = MagicMock(id=uuid.uuid4())
     store = MagicMock(add=AsyncMock(return_value=memory))
-    with patch("ah.memory.approval.db", database), patch("ah.memory.approval.memory_store", store):
+    with patch("machina.memory.approval.db", database), patch("machina.memory.approval.memory_store", store):
         approved = await gate.approve(pending_id)
 
     assert approved is memory
@@ -131,7 +131,7 @@ async def test_batch_approval_preserves_pending_embedding(gate, agent_id):
 
     connection.fetch = AsyncMock(side_effect=fetch)
     store = MagicMock(add=AsyncMock(return_value=MagicMock(id=uuid.uuid4())))
-    with patch("ah.memory.approval.db", database), patch("ah.memory.approval.memory_store", store):
+    with patch("machina.memory.approval.db", database), patch("machina.memory.approval.memory_store", store):
         count = await gate.approve_all(agent_id=agent_id)
 
     assert count == 1

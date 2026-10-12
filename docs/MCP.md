@@ -18,7 +18,7 @@ Human management RPC methods are `mcp.configure`, `mcp.remove`, `mcp.preview`, `
 
 Native calls bind the complete non-secret configuration/revision, resolved executable identity, schema, remote name and canonical arguments to the broker digest. The existing session/mode/backend and parent tool restrictions also apply. Explicit host configuration may grant narrowly allowlisted trusted reads; server annotations cannot. Altered configurations/schemas/arguments, missing connections, disabled servers and owner mismatches refuse dispatch.
 
-Configurations are installation-local JSON in `~/.agent-harness/mcp.json`, mode 0600, with advisory locks, atomic replacement and monotonic generations/revisions. This deliberately follows existing local configuration instead of adding the originally planned PostgreSQL connector table. Health and transports are worker-local. Inspection reloads configuration without launching; mutations retire stale transports. Workers on different homes have different inventories. Administrator manual changes must advance generation/revision; rollback of a loaded generation fails closed.
+Configurations are installation-local JSON in `~/.machina/mcp.json`, mode 0600, with advisory locks, atomic replacement and monotonic generations/revisions. This deliberately follows existing local configuration instead of adding the originally planned PostgreSQL connector table. Health and transports are worker-local. Inspection reloads configuration without launching; mutations retire stale transports. Workers on different homes have different inventories. Administrator manual changes must advance generation/revision; rollback of a loaded generation fails closed.
 
 Connections do not autostart after worker restart. Reconnect through the menu. A new worker cannot use another worker's connected process. SDK contexts are entered and retired by one owning task; callers may disconnect from other tasks. A shutdown timeout retains cleanup tracking and refuses replacement rather than pretending retirement succeeded.
 
@@ -26,7 +26,7 @@ Calls have a total deadline including concurrency wait. Waiting without dispatch
 
 ## Scope and remaining work
 
-Only the schema subset enforced by `ah/connectors/policy.py` is accepted: typed values, properties/required, arrays, enum/const, numeric/string/item bounds and supported combinators. Unsupported constraints or malformed schemas fail closed rather than being silently ignored.
+Only the schema subset enforced by `machina/connectors/policy.py` is accepted: typed values, properties/required, arrays, enum/const, numeric/string/item bounds and supported combinators. Unsupported constraints or malformed schemas fail closed rather than being silently ignored.
 
 Supported: stdio and Streamable HTTP, tools, interactive configuration/connect/disconnect/removal, durable local configuration, broker-bound native tool calls, existing exact HTTP approval continuation machinery, and OAuth browser authorization (Authorization Code + S256 PKCE) for HTTP servers with encrypted persistent credentials, refresh and forget/revoke — see [MCP OAuth](MCP_OAUTH.md).
 

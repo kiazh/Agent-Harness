@@ -8,9 +8,9 @@ The design follows the separation between user preferences and reusable agent le
 
 Set the personality you want with `/persona A warm, witty mentor who explains clearly and keeps answers short`. This saves `persona_description` in config and applies on the next turn, including existing sessions. Bare `/persona` opens the Add/Reset menu; `/persona --clear` restores the agent's default. The description steers tone and character while learned preferences and lessons grow within it. It applies globally to agents in this installation, independently of automatic memory/growth flags, and does not change core roles or tool permissions. Descriptions are limited to 2,000 characters and secret-looking text is redacted.
 
-You can also use `ah config-set persona_description 'A warm, witty mentor' --persist`, the YAML setting `persona_description: "A warm, witty mentor"`, or `AGENT_HARNESS_PERSONA_DESCRIPTION`. Existing config precedence applies; an environment value overrides a saved setting.
+You can also use `machina config-set persona_description 'A warm, witty mentor' --persist`, the YAML setting `persona_description: "A warm, witty mentor"`, or `MACHINA_PERSONA_DESCRIPTION`. Existing config precedence applies; an environment value overrides a saved setting.
 
-Restart the harness after updating. Runtime startup applies only the additive growth-table migration; `ah init` also installs it on a fresh database. Migration failure reports growth unavailable and chat continues with ordinary retrieval. CLI growth commands apply the same migration before use.
+Restart the harness after updating. Runtime startup applies only the additive growth-table migration; `machina init` also installs it on a fresh database. Migration failure reports growth unavailable and chat continues with ordinary retrieval. CLI growth commands apply the same migration before use.
 
 In chat, share a durable preference, for example: “Remember that I prefer short explanations with one concrete example.” The model can curate a note. You can also teach one directly:
 
@@ -27,20 +27,20 @@ In chat, share a durable preference, for example: “Remember that I prefer shor
 
 Bare `/growth` immediately offers View progress, Give feedback, Teach, Forget and Restore. Teaching collects the kind, name and text interactively. Forget and Restore ask for an explicit decision with cancellation as the default. Argument commands still work. Restoring revision 0 recovers the original retained baseline; restoration creates a new revision.
 
-Routine background updates use a tiny square at the bottom-right, not repeated messages in your chat. It pulses for 800 ms, at most once per 30 seconds, and stays still otherwise. `/growth show` retains the detailed evidence and trial history. `AH_UI_REDUCED_MOTION=1` uses a brief static acknowledgment. `?` on empty composer input or F1 opens shortcuts; F1 preserves a draft, and question marks inside normal text or forms stay text.
+Routine background updates use a tiny square at the bottom-right, not repeated messages in your chat. It pulses for 800 ms, at most once per 30 seconds, and stays still otherwise. `/growth show` retains the detailed evidence and trial history. `MACHINA_UI_REDUCED_MOTION=1` uses a brief static acknowledgment. `?` on empty composer input or F1 opens shortcuts; F1 preserves a draft, and question marks inside normal text or forms stay text.
 
 `/growth feedback` rates whether the completed approach was useful. The rating informs memory retrieval, the chosen task strategy, actually loaded skills and offered tool ordering. Without an ID it selects the most recent completed, unrated decision in the current session. Each decision accepts one rating. An unfinished, paused or cancelled turn cannot receive feedback. Terminal provider errors and budget/iteration limits can be rated; completion is not assumed to mean task success.
 
 Equivalent CLI commands use the selected session or the last active session:
 
 ```sh
-ah growth show --session <session-id>
-ah growth teach style verbosity 'Prefer short answers' --session <session-id>
-ah growth feedback <episode-id> 1 --session <session-id>
-ah growth forget style:verbosity --session <session-id>
-ah growth rollback 0 --session <session-id>
-ah growth export-policy live-policy.json --session <session-id>
-ah growth import-policy memory-policy.json --session <session-id>
+machina growth show --session <session-id>
+machina growth teach style verbosity 'Prefer short answers' --session <session-id>
+machina growth feedback <episode-id> 1 --session <session-id>
+machina growth forget style:verbosity --session <session-id>
+machina growth rollback 0 --session <session-id>
+machina growth export-policy live-policy.json --session <session-id>
+machina growth import-policy memory-policy.json --session <session-id>
 ```
 
 Gateway methods are `growth.get`, `growth.teach`, `growth.feedback`, `growth.forget`, `growth.installPolicy` and `growth.rollback`, all requiring `sessionId`. They use existing gateway authentication and the same authenticated HTTP `/rpc` dispatch. This is agent-scoped persistence in the existing shared local account model, not separate per-user isolation. Use distinct agents for distinct personalities/users.
@@ -57,20 +57,20 @@ RSI uses those completed episodes to adjust relevant skill ranks and available t
 
 Persona notes have immutable checkpoints. Human teaching, forgetting and policy installation establish a stable revision. Agent-written notes start a trial against the last stable baseline. Three human-rated completed episodes from that exact revision stabilize it when their average is nonnegative or restore the previous baseline when negative. Automatic evidence cannot promote a persona. New human choices, including confirmation of the same note and changes while RSI is disabled, supersede older trials. A turn's revision and note snapshot are read together to prevent concurrent edits from misattributing ratings. This evaluation is a heuristic, not proof of causal improvement.
 
-At most 50 revision snapshots are retained, preserving the baseline of an active trial. Manual restoration uses owned retained revisions and restores notes and retrieval-policy weights. Routing evidence remains bounded experience history; restoring a persona does not erase observations. `/growth show` and `ah growth show` distinguish operational observations, human ratings, trial progress and revision metadata. Counts can overlap because a human rating replaces an episode's proxy rather than creating a second episode.
+At most 50 revision snapshots are retained, preserving the baseline of an active trial. Manual restoration uses owned retained revisions and restores notes and retrieval-policy weights. Routing evidence remains bounded experience history; restoring a persona does not erase observations. `/growth show` and `machina growth show` distinguish operational observations, human ratings, trial progress and revision metadata. Counts can overlap because a human rating replaces an episode's proxy rather than creating a second episode.
 
 Exported live weights and offline trained JSON use the same six-action format. Offline training still requires scored counterfactual outcomes and never runs automatically in chat:
 
 ```sh
-python -m ah.research.train_memory_policy rollouts.jsonl --output memory-policy.json
-ah growth import-policy memory-policy.json --session <session-id>
+python -m machina.research.train_memory_policy rollouts.jsonl --output memory-policy.json
+machina growth import-policy memory-policy.json --session <session-id>
 ```
 
 Live imports require each weight to be finite and within -20 to +20. Imported weights never enable deletion, identity rewriting or additional tools. Personality adaptation comes from learned context; the RL policy learns when to retrieve memory. Neither changes the underlying LLM's weights. Long procedural skills still use the existing opt-in skill-review workflow (`learning_review_enabled` and `/skills proposals`).
 
 Notes are limited to 500 characters each and 2,400 characters total, including keys. Secret-looking content is redacted before persistence; invalid/secret keys are rejected. Reusing a key corrects a note. Full storage returns a clear request to consolidate an existing key; the agent does not silently discard notes. Notes are fallible data subordinate to core identity and policy, not a source of execution authority. As with other model-curated memory, inspect and correct mistaken inferences with `/growth`.
 
-RSI defaults on. Set `rsi_enabled: false` (or `AGENT_HARNESS_RSI_ENABLED=false`) to stop collecting operational evidence and applying RSI routing/strategy adaptation. Existing personality notes and explicit human memory feedback remain available. Human management still versions existing RSI history so an older trial cannot undo a later human choice.
+RSI defaults on. Set `rsi_enabled: false` (or `MACHINA_RSI_ENABLED=false`) to stop collecting operational evidence and applying RSI routing/strategy adaptation. Existing personality notes and explicit human memory feedback remain available. Human management still versions existing RSI history so an older trial cannot undo a later human choice.
 
 Set `personality_growth_enabled` or `memory_enabled` to false to stop automatic growth, personality injection, decisions, teaching, feedback and policy installation. Inspection, export, explicit removal and restoration remain available. Turning it off preserves learned state for later use; existing explicit remember/recall tools retain their original behavior.
 

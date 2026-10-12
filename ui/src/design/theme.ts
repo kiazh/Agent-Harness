@@ -1,4 +1,4 @@
-// AgentHarness skins: dark theme palettes ported from Codex's theme set,
+// Machina skins: dark theme palettes ported from Codex's theme set,
 // plus house skins. Foreground tokens (text through info) follow Codex's
 // values; card backgrounds and borders are derived from each theme's
 // background + ink with mixColors, the way Codex derives subtle surface

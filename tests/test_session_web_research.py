@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock
 import msgpack
 import pytest
 
-from ah.core.exceptions import ToolError
-from ah.memory.redaction import redact_secrets
-from ah.tools import web_research as research_module
+from machina.core.exceptions import ToolError
+from machina.memory.redaction import redact_secrets
+from machina.tools import web_research as research_module
 
 
 async def test_web_research_fetches_and_indexes_with_session_and_source(monkeypatch):

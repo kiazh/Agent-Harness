@@ -17,7 +17,7 @@ def _mock_post(response_data: dict) -> MagicMock:
 
 
 def _make_direct(provider_name: str, response_data: dict | None = None):
-    from ah.core.provider import PROVIDER_SPECS, DirectProvider
+    from machina.core.provider import PROVIDER_SPECS, DirectProvider
 
     spec = PROVIDER_SPECS[provider_name]
     provider = DirectProvider.__new__(DirectProvider)
@@ -41,7 +41,7 @@ def _make_direct(provider_name: str, response_data: dict | None = None):
 
 
 def _make_anthropic(response_data: dict | None = None):
-    from ah.core.provider import AnthropicProvider
+    from machina.core.provider import AnthropicProvider
 
     provider = AnthropicProvider.__new__(AnthropicProvider)
     provider.api_key = "test-key"
@@ -67,7 +67,7 @@ def _make_anthropic(response_data: dict | None = None):
 
 
 def test_providers_tuple_lists_every_family():
-    from ah.core.provider import PROVIDERS
+    from machina.core.provider import PROVIDERS
 
     assert set(PROVIDERS) == {
         "openrouter",
@@ -84,14 +84,14 @@ def test_providers_tuple_lists_every_family():
 
 
 def test_gateway_reexports_same_provider_list():
-    from ah.core.provider import PROVIDERS as core_providers
-    from ah.gateway.server import PROVIDERS as gateway_providers
+    from machina.core.provider import PROVIDERS as core_providers
+    from machina.gateway.server import PROVIDERS as gateway_providers
 
     assert gateway_providers == core_providers
 
 
 def test_direct_specs_have_accurate_base_urls_and_keys():
-    from ah.core.provider import PROVIDER_SPECS
+    from machina.core.provider import PROVIDER_SPECS
 
     expected = {
         # name: (base_url, api key env var, default model)
@@ -121,7 +121,7 @@ def test_direct_specs_have_accurate_base_urls_and_keys():
 
 
 def test_config_registers_every_provider_key():
-    from ah.core.config import DEFAULTS, LEGACY_ENV_VARS, SECRET_KEYS
+    from machina.core.config import DEFAULTS, LEGACY_ENV_VARS, SECRET_KEYS
 
     for env_key in (
         "OPENROUTER_API_KEY",
@@ -146,7 +146,7 @@ def test_config_registers_every_provider_key():
 
 
 def test_normalize_reasoning_effort():
-    from ah.core.provider import normalize_reasoning_effort
+    from machina.core.provider import normalize_reasoning_effort
 
     assert normalize_reasoning_effort(None) == ""
     assert normalize_reasoning_effort("") == ""
@@ -157,8 +157,8 @@ def test_normalize_reasoning_effort():
 
 
 def test_normalize_reasoning_effort_rejects_garbage():
-    from ah.core.exceptions import ValidationError
-    from ah.core.provider import normalize_reasoning_effort
+    from machina.core.exceptions import ValidationError
+    from machina.core.provider import normalize_reasoning_effort
 
     with pytest.raises(ValidationError):
         normalize_reasoning_effort("ultra")
@@ -168,7 +168,7 @@ def test_normalize_reasoning_effort_rejects_garbage():
 
 
 def test_get_provider_builds_every_family(monkeypatch):
-    from ah.core.provider import (
+    from machina.core.provider import (
         PROVIDER_SPECS,
         AnthropicProvider,
         DirectProvider,
@@ -193,16 +193,16 @@ def test_get_provider_builds_every_family(monkeypatch):
 
 
 def test_get_provider_rejects_unknown():
-    from ah.core.exceptions import ValidationError
-    from ah.core.provider import get_provider
+    from machina.core.exceptions import ValidationError
+    from machina.core.provider import get_provider
 
     with pytest.raises(ValidationError, match="Unknown provider"):
         get_provider(provider="skynet")
 
 
 def test_get_provider_requires_key(monkeypatch):
-    from ah.core.exceptions import ValidationError
-    from ah.core.provider import PROVIDER_SPECS, get_provider
+    from machina.core.exceptions import ValidationError
+    from machina.core.provider import PROVIDER_SPECS, get_provider
 
     for name, spec in PROVIDER_SPECS.items():
         monkeypatch.delenv(spec.api_key_env, raising=False)
@@ -249,7 +249,7 @@ async def test_direct_provider_skips_effort_where_unsupported():
 
 @pytest.mark.asyncio
 async def test_direct_provider_reads_effort_from_config(monkeypatch):
-    from ah.core.config import config
+    from machina.core.config import config
 
     monkeypatch.setattr(config, "_session_overrides", {"reasoning_effort": "low"})
     provider = _make_direct("openai")
@@ -259,7 +259,7 @@ async def test_direct_provider_reads_effort_from_config(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_openrouter_sends_reasoning_effort_object():
-    from ah.core.provider import OpenRouterProvider
+    from machina.core.provider import OpenRouterProvider
 
     provider = OpenRouterProvider.__new__(OpenRouterProvider)
     provider.api_key = "test-key"
@@ -286,7 +286,7 @@ async def test_openrouter_sends_reasoning_effort_object():
 
 @pytest.mark.asyncio
 async def test_ollama_maps_effort_to_think_flag():
-    from ah.core.provider import OllamaProvider
+    from machina.core.provider import OllamaProvider
 
     assert OllamaProvider._think_flag("") is None
     assert OllamaProvider._think_flag("low") is False
@@ -298,7 +298,7 @@ async def test_ollama_maps_effort_to_think_flag():
 
 
 def test_anthropic_splits_system_and_tool_messages():
-    from ah.core.provider import AnthropicProvider
+    from machina.core.provider import AnthropicProvider
 
     system, messages = AnthropicProvider._to_anthropic_messages(
         [
@@ -314,7 +314,7 @@ def test_anthropic_splits_system_and_tool_messages():
 
 
 def test_anthropic_thinking_budgets_scale_with_effort():
-    from ah.core.provider import AnthropicProvider
+    from machina.core.provider import AnthropicProvider
 
     provider = AnthropicProvider.__new__(AnthropicProvider)
     provider._default_effort = ""
@@ -392,7 +392,7 @@ class _MockStreamContext:
 
 
 def _make_direct_stream(provider_name, lines):
-    from ah.core.provider import PROVIDER_SPECS, DirectProvider
+    from machina.core.provider import PROVIDER_SPECS, DirectProvider
 
     spec = PROVIDER_SPECS[provider_name]
     provider = DirectProvider.__new__(DirectProvider)
@@ -418,7 +418,7 @@ async def _stream_done(provider, messages):
 
 
 def test_stream_usage_flag_only_where_documented():
-    from ah.core.provider import PROVIDER_SPECS
+    from machina.core.provider import PROVIDER_SPECS
 
     assert PROVIDER_SPECS["openai"].stream_usage is True
     assert PROVIDER_SPECS["deepseek"].stream_usage is True

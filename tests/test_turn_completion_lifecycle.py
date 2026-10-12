@@ -6,16 +6,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.models import AgentResponse, Session, StreamEvent
-from ah.gateway import server
+from machina.core.models import AgentResponse, Session, StreamEvent
+from machina.gateway import server
 
 
 @pytest.mark.parametrize("stop_kind", ["timeout", "cancel"])
 async def test_gateway_quarantine_preserves_owner_and_terminal_order(monkeypatch, stop_kind):
-    from ah import services
-    from ah.core import turns
-    from ah.core.config import config
-    from ah.core.session import session_manager
+    from machina import services
+    from machina.core import turns
+    from machina.core.config import config
+    from machina.core.session import session_manager
 
     turns._local_reset_for_tests()
     session = Session(id=uuid.uuid4())
@@ -80,11 +80,11 @@ async def test_gateway_quarantine_preserves_owner_and_terminal_order(monkeypatch
 
 
 async def test_rest_timeout_quarantines_until_actual_execution_stops(monkeypatch):
-    import ah.core.agent_factory as factory
-    from ah.api import app as api
-    from ah.core import turns
-    from ah.core.config import config
-    from ah.core.session import session_manager
+    import machina.core.agent_factory as factory
+    from machina.api import app as api
+    from machina.core import turns
+    from machina.core.config import config
+    from machina.core.session import session_manager
 
     turns._local_reset_for_tests()
     session = Session(id=uuid.uuid4())

@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from ah.skills.registry import SkillRegistry
+from machina.skills.registry import SkillRegistry
 
 
 def _skill(registry: SkillRegistry, name: str, *, enabled: bool = True, content: str = "Steps"):
@@ -27,8 +27,8 @@ def test_disabled_and_removed_skills_are_not_matched_after_reload(tmp_path):
 
 @pytest.mark.asyncio
 async def test_skill_tools_disclose_bounded_content_and_count_actual_reads(tmp_path, monkeypatch):
-    import ah.skills.registry as skills_module
-    from ah.tools.base import registry as tool_registry
+    import machina.skills.registry as skills_module
+    from machina.tools.base import registry as tool_registry
 
     skills = SkillRegistry(tmp_path)
     _skill(skills, "deploy", content="A" * 1600)
@@ -53,9 +53,9 @@ async def test_skill_tools_disclose_bounded_content_and_count_actual_reads(tmp_p
 
 @pytest.mark.asyncio
 async def test_matching_skill_instructions_activate_automatically(tmp_path, monkeypatch):
-    import ah.skills.registry as skills_module
-    from ah.core.agent import BaseReActAgent
-    from ah.core.models import Session
+    import machina.skills.registry as skills_module
+    from machina.core.agent import BaseReActAgent
+    from machina.core.models import Session
 
     skills = SkillRegistry(tmp_path)
     _skill(skills, "deploy", content="PRIVATE STEPS")
@@ -71,12 +71,12 @@ async def test_matching_skill_instructions_activate_automatically(tmp_path, monk
     async def add_chunk(*args, **kwargs):
         return None
 
-    monkeypatch.setattr("ah.core.agent.session_manager.get", session_get)
-    monkeypatch.setattr("ah.core.agent.context_manager.add_chunk", add_chunk)
-    monkeypatch.setattr("ah.core.agent.context_manager.get_recent_context", no_result)
-    monkeypatch.setattr("ah.core.agent.context_manager.search_archive_text", no_result)
-    monkeypatch.setattr("ah.core.agent.context_manager.get_latest_images", no_result)
-    monkeypatch.setattr("ah.core.agent.plugin_registry.dispatch", add_chunk)
+    monkeypatch.setattr("machina.core.agent.session_manager.get", session_get)
+    monkeypatch.setattr("machina.core.agent.context_manager.add_chunk", add_chunk)
+    monkeypatch.setattr("machina.core.agent.context_manager.get_recent_context", no_result)
+    monkeypatch.setattr("machina.core.agent.context_manager.search_archive_text", no_result)
+    monkeypatch.setattr("machina.core.agent.context_manager.get_latest_images", no_result)
+    monkeypatch.setattr("machina.core.agent.plugin_registry.dispatch", add_chunk)
 
     class Retriever:
         async def retrieve(self, **kwargs):
@@ -99,8 +99,8 @@ async def test_matching_skill_instructions_activate_automatically(tmp_path, monk
 
 @pytest.mark.asyncio
 async def test_skill_list_searches_metadata_and_pages_past_ten(tmp_path, monkeypatch):
-    import ah.skills.registry as skills_module
-    from ah.tools.base import registry as tool_registry
+    import machina.skills.registry as skills_module
+    from machina.tools.base import registry as tool_registry
 
     skills = SkillRegistry(tmp_path)
     for index in range(11):
@@ -115,7 +115,7 @@ async def test_skill_list_searches_metadata_and_pages_past_ten(tmp_path, monkeyp
 
 
 def test_bad_skill_metadata_is_rejected_without_breaking_other_skills(tmp_path):
-    from ah.skills.registry import SkillParser
+    from machina.skills.registry import SkillParser
 
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()
@@ -133,7 +133,7 @@ def test_bad_skill_metadata_is_rejected_without_breaking_other_skills(tmp_path):
 
 
 def test_skill_name_cannot_carry_prompt_instructions(tmp_path):
-    from ah.skills.registry import SkillParser
+    from machina.skills.registry import SkillParser
 
     registry = SkillRegistry(tmp_path)
     with pytest.raises(ValueError, match="name"):
@@ -153,7 +153,7 @@ def test_skill_name_cannot_carry_prompt_instructions(tmp_path):
 def test_reload_preserves_skill_creation_time_for_stale_archiving(tmp_path):
     from datetime import UTC, datetime, timedelta
 
-    from ah.skills.registry import SkillCurator
+    from machina.skills.registry import SkillCurator
 
     registry = SkillRegistry(tmp_path)
     created = registry.create_skill("old-skill", "Old", "Steps")

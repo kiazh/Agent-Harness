@@ -1,0 +1,720 @@
+"""Feature operations shared by the CLI and the gateway.
+
+Each function does the work and returns data (or raises ``ServiceError`` with a
+user-facing message); callers decide how to present it.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from machina.core.compression import CompressionConfig, CompressionResult, ContextCompressor
+from machina.core.config import config
+from machina.core.context import context_manager
+from machina.core.models import Session
+from machina.db.connection import db
+from machina.observability.diagnostics import record_failure
+
+__all__ = [
+    "ServiceError",
+    "CompressOutcome",
+    "compress_session",
+    "compress_session_with_status",
+    "maybe_auto_compact",
+    "export_markdown",
+    "learn_skill",
+    "status_summary",
+]
+
+
+from dataclasses import dataclass
+
+
+@dataclass
+class CompressOutcome:
+    """Typed compression outcome (no-op/stale/failure are distinct, not None).
+
+    status: no_op | completed | stale_ownership | stale_snapshot | failed | busy
+    result: CompressionResult when completed, else None.
+    error: bounded diagnostic for failed (never raw payloads).
+    """
+
+    status: str
+    result: CompressionResult | None = None
+    error: str = ""
+
+
+class ServiceError(Exception):
+    """A failure with a message that is safe to show the user."""
+
+
+async def export_markdown(session: Session) -> str:
+    """Render a session's conversation as Markdown.
+
+    Policy (AH-002): exports are redacted — secret-looking strings are
+    replaced before rendering so raw transcripts never leak via
+    session.export / /rpc. The stored chunks are unchanged.
+    """
+    from machina.memory.redaction import redact_secrets as _redact
+
+    chunks = await context_manager.get_all_chunks(session.id)
+    # AH-AUDIT-012: title/goal are outward-facing export fields subject to
+    # the same structured redaction policy as message content. Raw stored
+    # conversation (DB chunks) is intentionally untouched.
+    lines = [
+        f"# Session: {_redact(str(session.title or '(untitled)')).text}",
+        "",
+        f"**ID:** {session.id}",
+        f"**Status:** {session.status}",
+        f"**Agent:** {session.agent_id}",
+        f"**Goal:** {_redact(str(session.goal or '(none)')).text}",
+        f"**Created:** {session.created_at.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"**Last Activity:** {session.last_activity.strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "## Conversation",
+        "",
+    ]
+    for chunk in reversed(chunks):
+        payload = chunk.payload
+        if chunk.chunk_type == "user_message":
+            lines += ["### User", "", _redact(str(payload.get("content", ""))).text, ""]
+        elif chunk.chunk_type == "assistant_message":
+            lines += ["### Assistant", "", _redact(str(payload.get("content", ""))).text, ""]
+        elif chunk.chunk_type == "compression_summary":
+            lines += [
+                "### Summary of earlier context",
+                "",
+                _redact(str(payload.get("content", ""))).text,
+                "",
+            ]
+        elif chunk.chunk_type == "tool_call":
+            lines.append(
+                f"**Tool:** `{_redact(str(payload.get('tool', 'unknown'))).text}({_redact(str(payload.get('args', {}))).text})`"
+            )
+            preview = payload.get("result_preview", "")
+            if preview:
+                lines.append(f"**Result:** {_redact(str(preview)[:200]).text}")
+            lines.append("")
+    return "\n".join(lines)
+
+
+def _compression_config() -> CompressionConfig:
+    return CompressionConfig(
+        enabled=config.get("compression_enabled"),
+        threshold=config.get("compression_threshold"),
+        target_ratio=config.get("compression_target_ratio"),
+        preserve_recent=config.get("compression_preserve_recent"),
+        llm_summarize=config.get("compression_llm_summarize"),
+    )
+
+
+async def compress_session_with_status(
+    session: Session,
+    *,
+    model: str | None = None,
+    provider: str | None = None,
+    mutation_token: str | None = None,
+) -> CompressOutcome:
+    """Compress with an explicit status (see CompressOutcome).
+
+    Ownership (LP-11): same fencing as compress_session. Stale ownership and
+    stale snapshots abort with rollback and distinct statuses, never partial.
+    Unexpected failures are recorded and returned as failed (bounded error).
+    """
+    from machina.core.turns import begin_mutation, end_mutation
+
+    owned = mutation_token is None
+    if owned:
+        try:
+            mutation_token = await begin_mutation(session.id)
+        except Exception as exc:
+            record_failure("services.compress_session", exc)
+            return CompressOutcome(status="failed", error=type(exc).__name__)
+        if not mutation_token:
+            return CompressOutcome(status="busy")
+    llm_provider = None
+    try:
+        all_chunks = await context_manager.get_all_chunks(session.id)
+        chunks = [c for c in all_chunks if c.chunk_type != "document"]
+        if not chunks:
+            return CompressOutcome(status="no_op")
+
+        comp_config = _compression_config()
+        if comp_config.llm_summarize:
+            from machina.core.provider import get_provider
+
+            try:
+                llm_provider = get_provider(
+                    provider=provider or config.get("provider"), model=model or config.get("model")
+                )
+            except Exception:
+                llm_provider = None
+
+        from machina.core.compression import ContextCompressor as _CC
+
+        compressor = _CC(config=comp_config)
+        if hasattr(compressor, "acompress"):
+            result = await compressor.acompress(
+                chunks=chunks,
+                session_id=session.id,
+                agent_id=session.agent_id,
+                llm_provider=llm_provider,
+            )
+        else:
+            result = ContextCompressor(config=comp_config).compress(
+                chunks=chunks,
+                session_id=session.id,
+                agent_id=session.agent_id,
+                llm_provider=llm_provider,
+            )
+        if result.original_count == 0:
+            return CompressOutcome(status="no_op", result=result)
+        from machina.core.exceptions import StaleOwnershipError, StaleSnapshotError
+
+        try:
+            await context_manager.replace_chunks_by_ids(
+                session.id,
+                [c.id for c in chunks],
+                result.compressed_chunks,
+                archive_reason="compressed",
+                expected_owner=mutation_token,
+            )
+        except StaleOwnershipError as exc:
+            return CompressOutcome(status="stale_ownership", error=type(exc).__name__)
+        except StaleSnapshotError as exc:
+            return CompressOutcome(status="stale_snapshot", error=type(exc).__name__)
+        return CompressOutcome(status="completed", result=result)
+    except Exception as exc:
+        record_failure("services.compress_session", exc)
+        return CompressOutcome(status="failed", error=type(exc).__name__)
+    finally:
+        try:
+            close = getattr(llm_provider, "close", None)
+            if callable(close):
+                try:
+                    import asyncio as _asyncio
+                    import inspect as _inspect
+
+                    r = close()
+                    if _inspect.isawaitable(r):
+                        await _asyncio.wait_for(r, timeout=5)
+                except Exception as e:
+                    import logging as _logging
+
+                    _logging.getLogger(__name__).warning("compression provider close failed: %s", e)
+        finally:
+            if owned:
+                try:
+                    await end_mutation(session.id, mutation_token)
+                except Exception as _boundary_error:
+                    record_failure("services.compress_session", _boundary_error)
+
+
+async def compress_session(
+    session: Session,
+    *,
+    model: str | None = None,
+    provider: str | None = None,
+    mutation_token: str | None = None,
+) -> CompressionResult | None:
+    """Compress a session's context in place (backward-compatible wrapper).
+
+    Returns the CompressionResult on completion, else None for no-op, busy,
+    or stale outcomes. Unexpected failures raise (legacy behavior) — use
+    compress_session_with_status when the distinction matters.
+    """
+    from machina.core.turns import begin_mutation, end_mutation
+
+    owned = mutation_token is None
+    if owned:
+        mutation_token = await begin_mutation(session.id)
+        if not mutation_token:
+            return None
+    # H-04: Ownership lifetime starts immediately after claim acquisition.
+    # All reads, config, provider construction, compression, persistence,
+    # and cleanup happen inside this owning try/finally.
+    llm_provider = None
+    try:
+        # AH-008: fetch ALL chunks (paginated), not just the newest 1000, and
+        # replace only the captured input IDs so concurrent inserts survive.
+        # AH-AUDIT-034: conversational compaction scope excludes indexed
+        # documents — document rows keep their IDs/text/embeddings/source
+        # metadata intact through explicit and automatic compression.
+        # Eviction likewise never selects documents (context.py); dedicated
+        # document lifecycle operations own the document index.
+        all_chunks = await context_manager.get_all_chunks(session.id)
+        chunks = [c for c in all_chunks if c.chunk_type != "document"]
+        if not chunks:
+            return None
+
+        comp_config = _compression_config()
+        if comp_config.llm_summarize:
+            from machina.core.provider import get_provider
+
+            try:
+                llm_provider = get_provider(
+                    provider=provider or config.get("provider"), model=model or config.get("model")
+                )
+            except Exception:
+                llm_provider = None  # no key / provider: fall back to truncation
+
+        # AH-011: await summarization directly instead of blocking the event loop
+        # via Future.result() on a worker thread.
+        from machina.core.compression import ContextCompressor as _CC
+
+        compressor = _CC(config=comp_config)
+        if hasattr(compressor, "acompress"):
+            result = await compressor.acompress(
+                chunks=chunks,
+                session_id=session.id,
+                agent_id=session.agent_id,
+                llm_provider=llm_provider,
+            )
+        else:
+            result = ContextCompressor(config=comp_config).compress(
+                chunks=chunks,
+                session_id=session.id,
+                agent_id=session.agent_id,
+                llm_provider=llm_provider,
+            )
+        if result.original_count == 0:
+            return None
+        # AH-AUDIT-014/015: the live mutation token travels INTO the
+        # archive/delete/insert transaction (fenced there on the DB clock),
+        # and the captured original ID set is validated exactly. Stale
+        # ownership or a stale snapshot aborts with rollback: an explicit
+        # stale outcome, never a partial commit.
+        from machina.core.exceptions import StaleOwnershipError, StaleSnapshotError
+
+        try:
+            await context_manager.replace_chunks_by_ids(
+                session.id,
+                [c.id for c in chunks],
+                result.compressed_chunks,
+                archive_reason="compressed",
+                expected_owner=mutation_token,
+            )
+        except (StaleOwnershipError, StaleSnapshotError):
+            return None
+        return result
+    finally:
+        # Owned compression provider closes on EVERY exit: success, no-op,
+        # summarization/persistence failure, cancellation, or timeout.
+        # AH-AUDIT-026: bounded join (5s) with claim release in an
+        # independent outer finally — a stuck close cannot strand the
+        # mutation claim or the serial runner.
+        try:
+            close = getattr(llm_provider, "close", None)
+            if callable(close):
+                try:
+                    import asyncio as _asyncio
+                    import inspect as _inspect
+
+                    r = close()
+                    if _inspect.isawaitable(r):
+                        await _asyncio.wait_for(r, timeout=5)
+                except Exception as e:
+                    import logging as _logging
+
+                    _logging.getLogger(__name__).warning("compression provider close failed: %s", e)
+        finally:
+            if owned:
+                try:
+                    await end_mutation(session.id, mutation_token)
+                except Exception as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("services.compress_session", _boundary_error)
+
+
+async def _estimate_next_request(session_id, budget: int) -> int:
+    """Conservative approximation of the next model request (AH-AUDIT-041).
+
+    This is an approximation, not a measurement of the rendered request:
+    it sums stored conversational context, the EFFECTIVE tool schema for
+    this session's agent definition (restricted specialists count only
+    their allowlist, not the full registry), reserved output tokens, and
+    the effective system instructions (base prompt plus the session agent's
+    definition prompt). Retrieved memory/RAG material and provider-specific
+    serialization are not measured here — callers treat the result as a
+    compaction trigger threshold, never as exact request accounting. No
+    provider calls, no memory access-state changes.
+    """
+    from machina.core.assembler import get_token_count
+
+    total = 0
+    definition_prompt = ""
+    # Stored context tokens (actual message content)
+    try:
+        total += await context_manager.get_token_usage(session_id)
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services._estimate_next_request", _boundary_error)
+    # Effective tool schema: the session agent's allowlist when resolvable.
+    try:
+        from machina.core.session import session_manager as _sessions
+
+        try:
+            session = await _sessions.get(session_id)
+        except Exception:
+            session = None
+        allowed: list | None = None
+        definition_prompt = ""
+        if session is not None:
+            try:
+                from machina.core.agent_def import agent_registry
+
+                definition = await agent_registry.get(session.agent_id or "harness")
+                if definition is not None:
+                    allowed = definition.tools
+                    definition_prompt = definition.system_prompt or ""
+            except Exception as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("services._estimate_next_request", _boundary_error)
+        from machina.tools.base import registry
+
+        if allowed is None:
+            total += get_token_count(str(registry.get_tool_definitions()))
+        else:
+            allowed_set = set(allowed)
+            total += get_token_count(
+                str(
+                    [
+                        t
+                        for t in registry.get_tool_definitions()
+                        if getattr(t, "name", "") in allowed_set
+                    ]
+                )
+            )
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services._estimate_next_request", _boundary_error)
+    # Reserved output tokens
+    try:
+        total += int(config.get("max_tokens") or 4096)
+    except Exception:
+        total += 4096
+    # Effective system instructions (base + specialist definition prompt)
+    try:
+        from machina.core.agent import SYSTEM_PROMPT
+
+        total += get_token_count(SYSTEM_PROMPT + (definition_prompt or ""))
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services._estimate_next_request", _boundary_error)
+    return total
+
+
+async def maybe_auto_compact(session_id) -> dict | None:
+    """Threshold-triggered rolling compaction at a safe turn boundary.
+
+    Holds a durable MUTATION claim for the whole operation (LP-11): skips
+    when busy (deferred to a later boundary, never queued behind a turn),
+    verifies ownership is still ours before replacing, and budgets the next
+    rendered request including tool schemas and reserved output. Originals
+    archive transactionally; concurrent inserts survive via exact-ID replace.
+    """
+    try:
+        if not config.get("auto_compaction_enabled"):
+            return None
+        if not config.get("compression_enabled"):
+            return None
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services.maybe_auto_compact", _boundary_error)
+    from machina.core.turns import begin_mutation, end_mutation
+
+    # Claim acquisition is inside the recorder too: a failing begin_mutation
+    # is a degraded deferral (never an unhandled task exception) reported
+    # through the same operation name.
+    try:
+        token = await begin_mutation(session_id)
+    except Exception as _claim_error:
+        record_failure("services.maybe_auto_compact", _claim_error)
+        return None
+    if not token:
+        return None  # busy: defer, do not queue behind live work
+    try:
+        from machina.core.session import session_manager as _sessions
+
+        session = await _sessions.get(session_id)
+        if session is None:
+            return None
+        from machina.core.context_windows import context_window_for
+
+        budget = context_window_for(session.model or config.get("model"))
+        try:
+            threshold = float(config.get("compression_threshold") or 0.8)
+        except Exception:
+            threshold = 0.8
+        if await _estimate_next_request(session_id, budget) < int(budget * threshold):
+            return None
+        # No-progress guard: skip when a previous run already compacted at
+        # nearly this size.
+        state = session.state or {}
+        last = state.get("last_auto_compact_tokens")
+        total_now = await context_manager.get_token_usage(session_id)
+        if isinstance(last, int) and total_now <= last + max(100, int(budget * 0.05)):
+            return None
+        # compress_session verifies this same token before replacing (shared
+        # ownership, no double claim).
+        result = await compress_session(session, mutation_token=token)
+        if result is None:
+            return None
+        # Ownership re-check: an expired claim means another worker may own
+        # the session now — record progress only when still ours.
+        try:
+            from machina.db.connection import db as _db
+
+            if _db.connected:
+                from machina.core.turns import _db_claim_state
+
+                current = await _db_claim_state(session_id)
+                if current is None or current.get("claim_owner") != token:
+                    return None
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("services.maybe_auto_compact", _boundary_error)
+        try:
+            # AH-AUDIT-018: transactional field merge preserves unrelated
+            # concurrent state (emotion/watermark) instead of overwriting
+            # from a stale snapshot.
+            await _sessions.update_state_fields(
+                session_id, {"last_auto_compact_tokens": result.compressed_tokens}
+            )
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("services.maybe_auto_compact", _boundary_error)
+        # Eviction pass when configured (retention policy, distinct from
+        # summarization): keep reversible via archive.
+        try:
+            max_tokens = int(config.get("eviction_max_tokens") or 0)
+        except Exception:
+            max_tokens = 0
+        evicted = 0
+        if max_tokens and max_tokens > 0:
+            try:
+                evicted = await context_manager.evict_old_chunks(session_id, max_tokens=max_tokens)
+            except Exception:
+                evicted = 0
+        return {
+            "compressed": True,
+            "originalTokens": result.original_tokens,
+            "compressedTokens": result.compressed_tokens,
+            "evicted": evicted,
+            "method": result.method,
+        }
+    except Exception as _compact_error:
+        record_failure("services.maybe_auto_compact", _compact_error)
+        return None
+    finally:
+        try:
+            await end_mutation(session_id, token)
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("services.maybe_auto_compact", _boundary_error)
+
+
+def learn_skill(
+    source: str,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    triggers: list[str] | None = None,
+):
+    """Create a skill from a file path, an http(s) URL, or an existing skill name."""
+    from machina.skills.registry import skill_registry
+
+    skill_registry.load_all()
+    path = Path(source).expanduser()
+
+    if path.is_file():
+        try:
+            content = path.resolve().read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raise ServiceError(f"Cannot learn from binary or non-UTF-8 file: {path.name}") from None
+        except OSError as e:
+            raise ServiceError(f"Cannot read file: {e}") from None
+        default_name, default_desc = path.stem, f"Skill learned from {path.name}"
+        default_triggers: list[str] = []
+    elif source.startswith(("http://", "https://")):
+        # 5.8: destination enforced AT the pinned connection
+        # (machina/security/fetch.py): single bounded resolution, every address
+        # checked, TCP opened to the validated IP (no re-resolution for
+        # rebinding to steer), TLS SNI/hostname preserved, redirects
+        # re-validated hop-by-hop, body capped DURING streaming. A pre-check
+        # alone (or post-fetch revalidation) is detection, not prevention.
+        # Network initiation here is human transport (CLI/gateway token), and
+        # full-host mode never relaxes SSRF policy.
+        from machina.security.fetch import FetchError, pinned_fetch
+
+        try:
+            content = pinned_fetch(source)
+        except FetchError as e:
+            raise ServiceError(f"URL rejected by security policy: {e}") from None
+        except Exception as e:
+            raise ServiceError(f"Failed to fetch URL: {e}") from None
+        default_name = source.rstrip("/").split("/")[-1].split(".")[0] or "web-skill"
+        default_desc = f"Skill learned from {source}"
+        default_triggers = []
+    else:
+        existing = skill_registry.get(source)
+        if existing is None:
+            raise ServiceError(
+                f"Source not found: {source}. Provide a file path, URL, or existing skill name."
+            )
+        content = skill_registry.get_skill_content(existing.name) or ""
+        default_name, default_desc = (
+            f"{existing.name}-learned",
+            f"Skill derived from {existing.name}",
+        )
+        default_triggers = existing.triggers[:]
+
+    try:
+        return skill_registry.create_skill(
+            name=name or default_name,
+            description=description or default_desc,
+            content=content,
+            triggers=triggers if triggers is not None else default_triggers,
+            source=source,
+            source_type="learned",
+        )
+    except (ValueError, FileExistsError) as e:
+        raise ServiceError(f"Skill rejected: {e}") from None
+
+
+def _safe_config_value(cfg, key: str) -> Any:
+    """Read a config value or report unknown — never raise out of status."""
+    try:
+        value = cfg.get(key)
+        return value if value is not None else "unknown"
+    except Exception as _boundary_error:
+        record_failure("services.status_summary", _boundary_error)
+        return "unknown"
+
+
+def _safe_config_bool(cfg, key: str) -> bool:
+    try:
+        return bool(cfg.get(key))
+    except Exception as _boundary_error:
+        record_failure("services.status_summary", _boundary_error)
+        return False
+
+
+async def status_summary() -> dict[str, Any]:
+    """Database, counts, mode, and real capability health.
+
+    Every flag maps to enforced behavior or an explicit degraded/unsupported
+    state — never healthy-by-config alone. Requires a connected ``db``.
+    """
+    from machina.tools.base import registry
+
+    version = await db.fetchval("SELECT version()")
+    try:
+        from machina.core.runtime import runtime_services
+
+        runtime = runtime_services.status()
+    except Exception:
+        runtime = {}
+    try:
+        from machina.memory.embeddings import embedding_status
+
+        retrieval = embedding_status()
+    except Exception:
+        retrieval = {"mode": "keyword-only"}
+    try:
+        rag_docs = await db.fetchval(
+            "SELECT COUNT(DISTINCT COALESCE(document_source, id::text)) FROM context_chunks WHERE chunk_type = 'document'"
+        )
+    except Exception:
+        rag_docs = 0
+    try:
+        from machina.core.config import config as _cfg
+
+        mode = _cfg.get("execution_mode") or "ask"
+        backend = "sandbox" if mode == "sandbox" else "host"
+        workspace = _cfg.get("workspace_root") or _cfg.get("machina_home") or ""
+        # AH-AUDIT-036: status derives from the actual shared component
+        # identity when initialized; otherwise an honestly labeled
+        # expectation (key presence alone never claims healthy selection).
+        reranker = "passthrough"
+        try:
+            from machina.tools import rag as _rag_tools
+
+            _shared = _rag_tools._rag_pipeline
+            if _shared is not None:
+                reranker = _shared.reranker_identity().get("reranker", "passthrough")
+            elif _cfg.get("cohere_api_key"):
+                reranker = "cohere (key set, pipeline not initialized)"
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("services.status_summary", _boundary_error)
+        auto_compact = bool(_cfg.get("auto_compaction_enabled") and _cfg.get("compression_enabled"))
+        extraction = (
+            "ready"
+            if bool(_cfg.get("memory_consolidation_enabled") and _cfg.get("memory_enabled"))
+            else "disabled"
+        )
+    except Exception:
+        mode, backend, workspace, reranker, auto_compact, extraction = (
+            "ask",
+            "host",
+            "",
+            "unknown",
+            False,
+            "unknown",
+        )
+    try:
+        # AH-AUDIT-021: durable paused state plus legacy error rows.
+        jobs_waiting = await db.fetchval(
+            "SELECT COUNT(*) FROM jobs WHERE status = 'paused_approval' "
+            "OR (status = 'error' AND last_error ILIKE '%needs_approval%')"
+        )
+    except Exception:
+        jobs_waiting = 0
+    base = {
+        "postgres": version.split(",")[0],
+        "sessions": await db.fetchval("SELECT COUNT(*) FROM sessions"),
+        "contextChunks": await db.fetchval("SELECT COUNT(*) FROM context_chunks"),
+        "memories": await db.fetchval("SELECT COUNT(*) FROM memories"),
+        "pendingMemories": await db.fetchval(
+            "SELECT COUNT(*) FROM pending_memories WHERE status = 'pending'"
+        ),
+        "tools": registry.list_tools(),
+        # Total config failure must never crash the endpoint: report unknown.
+        "openrouterKeySet": _safe_config_bool(config, "openrouter_api_key"),
+        "model": _safe_config_value(config, "model"),
+        "provider": _safe_config_value(config, "provider"),
+    }
+    base.update(
+        {
+            "mode": mode,
+            "backend": backend,
+            "workspace": workspace,
+            "chatProvider": runtime.get("chat_provider", "unknown"),
+            "memoryRetrieval": retrieval.get("mode", "keyword-only"),
+            "memoryRetrievalReason": retrieval.get("reason", ""),
+            "memoryExtraction": extraction,
+            "documentRag": (
+                f"ready; {rag_docs} indexed documents"
+                if rag_docs
+                else "degraded; no indexed documents (index material to enable retrieval)"
+            ),
+            "reranker": reranker,
+            "autoCompaction": "enabled" if auto_compact else "disabled",
+            "sandbox": runtime.get("sandbox", "unknown"),
+            "jobsAwaitingApproval": jobs_waiting,
+            "researchTraining": "offline, not part of chat runtime",
+            "capabilities": runtime.get("capabilities", []),
+        }
+    )
+    try:
+        from machina.permissions import store as _perm_store
+
+        durable = _perm_store.is_durable()
+        base["permissionDurability"] = (
+            "durable" if durable else ("local-only" if durable is False else "unknown")
+        )
+    except Exception:
+        base["permissionDurability"] = "unknown"
+    return base

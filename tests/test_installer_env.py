@@ -3,7 +3,7 @@
 Drives tools/install-helpers.sh (and the provisioning functions it now owns)
 with mocked commands, isolated HOME/tmp dirs, and an isolated
 pseudo-terminal — never the developer's terminal, database, or shell files.
-AH_INSTALL_LIB may point the driver at an alternate lib copy (used to show
+MACHINA_INSTALL_LIB may point the driver at an alternate lib copy (used to show
 the brew-URL regression fails against the pre-fix logic).
 """
 
@@ -26,7 +26,7 @@ DEFAULT_LIB = REPO / "tools" / "install-helpers.sh"
 INSTALL_SH = REPO / "install.sh"
 
 PRELUDE = """set -euo pipefail
-LIB_PATH="${AH_INSTALL_LIB:-__LIB__}"
+LIB_PATH="${MACHINA_INSTALL_LIB:-__LIB__}"
 source "$LIB_PATH"
 log() { printf 'LOG: %s\\n' "$*"; }
 warn() { printf 'WARN: %s\\n' "$*" >&2; }
@@ -37,10 +37,10 @@ rand_hex() { printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789a
 
 def _base_env(extra=None, path_prefix=()):
     env = dict(os.environ)
-    env.pop("AH_ENV_FILE", None)
-    env.pop("AH_INSTALL_LIB", None)
-    if "AH_INSTALL_LIB" in (extra or {}):
-        env["AH_INSTALL_LIB"] = extra["AH_INSTALL_LIB"]
+    env.pop("MACHINA_ENV_FILE", None)
+    env.pop("MACHINA_INSTALL_LIB", None)
+    if "MACHINA_INSTALL_LIB" in (extra or {}):
+        env["MACHINA_INSTALL_LIB"] = extra["MACHINA_INSTALL_LIB"]
     for key in ("DATABASE_URL", "OPENROUTER_API_KEY"):
         env.pop(key, None)
     if extra:
@@ -53,7 +53,7 @@ def _base_env(extra=None, path_prefix=()):
 
 def run_bash(script, cwd, env=None, timeout=30, **kwargs):
     """Run a script fragment with the lib sourced; isolated from the developer shell."""
-    lib = os.environ.get("AH_INSTALL_LIB", str(DEFAULT_LIB))
+    lib = os.environ.get("MACHINA_INSTALL_LIB", str(DEFAULT_LIB))
     full = PRELUDE.replace("__LIB__", lib) + script
     merged = _base_env(env)
     return subprocess.run(
@@ -127,18 +127,18 @@ def test_installer_next_steps_put_setup_before_launch_and_report_init_state(tmp_
     assert ready.returncode == 0, ready.stderr
     assert "initialized automatically" in ready.stdout
     assert (
-        ready.stdout.index("ah setup")
-        < ready.stdout.index("ah doctor")
-        < ready.stdout.index("ah chat")
+        ready.stdout.index("machina setup")
+        < ready.stdout.index("machina doctor")
+        < ready.stdout.index("machina chat")
     )
-    assert "If setup changes DATABASE_URL, run ah init again" in ready.stdout
+    assert "If setup changes DATABASE_URL, run machina init again" in ready.stdout
 
     failed = run_bash("installer_next_steps failed /checkout/README.md", cwd=tmp_path)
     assert failed.returncode == 0, failed.stderr
     assert (
-        failed.stdout.index("ah setup")
-        < failed.stdout.index("ah init")
-        < failed.stdout.index("ah chat")
+        failed.stdout.index("machina setup")
+        < failed.stdout.index("machina init")
+        < failed.stdout.index("machina chat")
     )
     assert "not ready" in failed.stdout
 
@@ -153,7 +153,7 @@ def test_resolve_env_file_unset_uses_checkout(tmp_path):
 
 
 def test_resolve_env_file_absolute_override(tmp_path):
-    proc = run_bash("resolve_env_file /startup", cwd=tmp_path, env={"AH_ENV_FILE": "/tmp/x y/.env"})
+    proc = run_bash("resolve_env_file /startup", cwd=tmp_path, env={"MACHINA_ENV_FILE": "/tmp/x y/.env"})
     assert proc.returncode == 0
     assert proc.stdout.strip() == "/tmp/x y/.env"
 
@@ -162,7 +162,7 @@ def test_resolve_env_file_relative_anchors_to_startup(tmp_path):
     proc = run_bash(
         "resolve_env_file /startup; echo; cd / && resolve_env_file /startup; echo",
         cwd=tmp_path,
-        env={"AH_ENV_FILE": "rel dir/custom.env"},
+        env={"MACHINA_ENV_FILE": "rel dir/custom.env"},
     )
     assert proc.returncode == 0
     lines = proc.stdout.strip().splitlines()
@@ -170,7 +170,7 @@ def test_resolve_env_file_relative_anchors_to_startup(tmp_path):
 
 
 def test_resolve_env_file_unicode_name(tmp_path):
-    proc = run_bash("resolve_env_file /s", cwd=tmp_path, env={"AH_ENV_FILE": "/tmp/ünïcode.env"})
+    proc = run_bash("resolve_env_file /s", cwd=tmp_path, env={"MACHINA_ENV_FILE": "/tmp/ünïcode.env"})
     assert proc.stdout.strip() == "/tmp/ünïcode.env"
 
 
@@ -256,7 +256,7 @@ def test_db_url_guard_cases(tmp_path):
         'check() { if db_url_is_installer_default "$1"; then echo "$2 REPLACEABLE";'
         ' else echo "$2 PRESERVED"; fi; };'
         'check "$F_MISSING" missing;'
-        'printf "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness\\n" > "$F_DEF";'
+        'printf "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/machina\\n" > "$F_DEF";'
         'check "$F_DEF" default;'
         'printf "DATABASE_URL=postgresql://u:p@db.internal:5432/prod\\n" > "$F_CUSTOM";'
         'check "$F_CUSTOM" custom;'
@@ -284,7 +284,7 @@ def test_maybe_write_db_url_preserves_custom(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("DATABASE_URL=postgresql://u:p@db.internal:5432/prod\nOTHER=1\n")
     proc = run_bash(
-        'maybe_write_db_url "postgresql://agentharness:NEW@localhost:5432/agentharness" "$F"',
+        'maybe_write_db_url "postgresql://machina:NEW@localhost:5432/machina" "$F"',
         cwd=tmp_path,
         env={"F": str(env_file)},
     )
@@ -298,16 +298,16 @@ def test_maybe_write_db_url_preserves_custom(tmp_path):
 
 def test_maybe_write_db_url_replaces_default(tmp_path):
     env_file = tmp_path / ".env"
-    env_file.write_text("DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness\n")
+    env_file.write_text("DATABASE_URL=postgresql://postgres:postgres@localhost:5432/machina\n")
     proc = run_bash(
-        'maybe_write_db_url "postgresql://agentharness:NEW@localhost:5432/agentharness" "$F"',
+        'maybe_write_db_url "postgresql://machina:NEW@localhost:5432/machina" "$F"',
         cwd=tmp_path,
         env={"F": str(env_file)},
     )
     assert proc.returncode == 0, proc.stderr
     assert "Wrote generated Postgres credentials" in proc.stdout
     assert (
-        "DATABASE_URL=postgresql://agentharness:NEW@localhost:5432/agentharness"
+        "DATABASE_URL=postgresql://machina:NEW@localhost:5432/machina"
         in env_file.read_text().splitlines()
     )
     assert file_mode(env_file) == "0o600"
@@ -353,7 +353,7 @@ def _spawn_ctty(script, cwd, env):
         os.setsid()
         fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
-    lib = os.environ.get("AH_INSTALL_LIB", str(DEFAULT_LIB))
+    lib = os.environ.get("MACHINA_INSTALL_LIB", str(DEFAULT_LIB))
     full = PRELUDE.replace("__LIB__", lib) + script
     proc = subprocess.Popen(
         ["bash", "-c", full],
@@ -618,16 +618,16 @@ def test_brew_custom_url_survives_new_role(tmp_path):
     assert "BREW_RC=0" in proc.stdout
     assert "DATABASE_URL=postgresql://u:p@db.internal:5432/prod" in after.splitlines()
     assert "OTHER=1" in after.splitlines()
-    assert "agentharness:" not in after
+    assert "machina:" not in after
 
 
 def test_brew_default_url_gets_generated_credentials(tmp_path):
-    default = "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness\n"
+    default = "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/machina\n"
     proc, after, _, _ = _run_brew(tmp_path, default)
     assert proc.returncode == 0, proc.stderr
     lines = [line for line in after.splitlines() if line.startswith("DATABASE_URL=")]
     assert lines == [
-        "DATABASE_URL=postgresql://agentharness:0123456789abcdef0123456789abcdef@localhost:5432/agentharness"
+        "DATABASE_URL=postgresql://machina:0123456789abcdef0123456789abcdef@localhost:5432/machina"
     ]
 
 

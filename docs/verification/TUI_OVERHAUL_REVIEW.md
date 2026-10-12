@@ -25,7 +25,7 @@ but the old `#232327` edge and `#111113` surface almost merged into the near-bla
 transcript. Codex now uses `#606069` edges and a distinct `#17171c` fill. Actual
 emitted border/fill contrast (including 256-color quantization), rectangular edges,
 inset/outside margins and the shared approval palette are regression tested. The
-local `ah` launcher was verified to target this checkout; it was not modified.
+local `machina` launcher was verified to target this checkout; it was not modified.
 
 Approvals preserve Deny by default and exact request/session/turn revalidation.
 Queue evidence is attached on activation; overflowed targets/operations remain
@@ -87,7 +87,7 @@ The first full backend run returned **2113 passed, 5 skipped, 2 failed**: an old
 session test double lacked `execution_mode` (a new compatibility bug, corrected to
 an honest unknown label), and Hypothesis exceeded its 200 ms deadline without a
 failed budget assertion (317 ms initially, 26 ms replay). Clean HEAD `1d80ba0`
-in `/home/user/.codex/worktrees/38df/Agent-Harness1` passed the lifecycle check
+in `/home/user/.codex/worktrees/38df/Machina1` passed the lifecycle check
 and reproduced the same property-test timing failure (**1 passed, 1 failed**;
 576 ms deadline). Assembler and property-test sources are unchanged. No deadline
 was relaxed to suppress the failure. The current focused rerun passed both checks.
@@ -103,7 +103,7 @@ The [timed native motion preview](../archive/artifacts/tui-motion.gif) captures 
 and fixed square brightness changes from that same renderer.
 
 ```sh
-COLORTERM=truecolor node ui/test/support/capture-reference.ts /tmp/ah-reference-review
+COLORTERM=truecolor node ui/test/support/capture-reference.ts /tmp/machina-reference-review
 ```
 
 The generator saves ANSI JSON and stripped text for codex/mono/light at 140×52,
@@ -136,9 +136,9 @@ in the bounded output/motion correction.
 - Latest full backend verification after gutter/context/boundary fixes:
   **2119 passed / 5 skipped / 0 failed in 168.11 s**, including the real-gateway
   UI wrapper with all 256 UI tests running and zero UI skips. Command:
-  `AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/home/user/Agent-Harness1 .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`.
+  `MACHINA_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/machina_test PYTHONPATH=/tmp/machina-ui-reference-runtime:/home/user/Machina1 .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`.
 - Latest touched-file Ruff check/format check passed on seven Python files.
-  Bandit `-q ah/core/self_knowledge.py ah/tools/harness.py -ll` emitted no medium+
+  Bandit `-q machina/core/self_knowledge.py machina/tools/harness.py -ll` emitted no medium+
   findings. Scoped Impeccable layout detector returned `[]`; `git diff --check`
   passed. Current standalone UI results remain the 256-test run below.
 - After clarifying that empty notes mean none are *currently* saved (they may
@@ -147,30 +147,30 @@ in the bounded output/motion correction.
 - `npm --prefix ui run check`: typecheck, **256 tests / 251 passed / 5 environment-
   gated real-gateway skips / 0 failures**, eslint clean.
 - Real gateway restart wrapper runs the same UI checks with **zero skipped tests**:
-  `AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test .venv/bin/python -m pytest -q tests/test_personality_growth.py::test_ui_checks_with_real_gateway_restart --tb=short -p no:cacheprovider`.
+  `MACHINA_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/machina_test .venv/bin/python -m pytest -q tests/test_personality_growth.py::test_ui_checks_with_real_gateway_restart --tb=short -p no:cacheprovider`.
 - Follow-up isolated real-gateway wrapper: **1 passed in 33.19 s**, exercising
   all 256 UI tests with zero UI skips. Only UI/docs changed in this follow-up;
   the full backend suite was not repeated.
 - Prior final sequential backend run after review fixes: **2106 passed / 5 skipped /
   0 failed in 115.43 s**. This includes the real gateway wrapper with all 252
   UI tests running and zero UI skips. Command:
-  `AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`.
+  `MACHINA_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/machina_test .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider`.
   Disposable bootstrap described below was provided through PYTHONPATH.
 - Ruff check and format check passed on all 10 touched Python files (including
-  pre-existing configuration changes). Bandit `-r ah/connectors/ ah/gateway/features/connectors.py -ll`
+  pre-existing configuration changes). Bandit `-r machina/connectors/ machina/gateway/features/connectors.py -ll`
   found **0 medium / 0 high** issues; its metrics retain 7 low findings.
 - Scoped Impeccable detector emitted no findings. `git diff --check` passed.
 
 Python verification runs use a disposable home lookup/bootstrap and an empty env
 file, with only the dedicated test DSN enabled. Child tests retain their own
-explicit temporary HOME directories. No production `agentharness` database,
+explicit temporary HOME directories. No production `machina` database,
 operator configuration, shell startup file, live key or current terminal was used.
 
 The first full run had 2 failures: method inventory lacked the newly added MCP
 methods (test contract updated), and the initial isolation bootstrap replaced a
 child test’s own temporary HOME (verification setup corrected). Both affected
 checks passed on clean HEAD `0ea164e` in managed worktree
-`/home/user/.codex/worktrees/27d1/Agent-Harness1` (**5 passed**) and in the current
+`/home/user/.codex/worktrees/27d1/Machina1` (**5 passed**) and in the current
 checkout (**5 passed**). This is evidence of the exact causes, not a blanket
 pre-existing-failure claim. No unresolved failure is being waived.
 

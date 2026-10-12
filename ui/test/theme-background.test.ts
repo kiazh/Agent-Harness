@@ -71,11 +71,11 @@ test("real fullscreen launch paints every viewport row, including empty transcri
 		write(data: string) { writes.push(painter.paint(data, this.columns)); },
 	} as Terminal;
 	const tui = new TuiAltScreen(terminal);
-	tui.addChild(new Text("AgentHarness", 0, 0));
+	tui.addChild(new Text("Machina", 0, 0));
 	try {
 		tui.start();
 		tui.renderNow(true);
-		const frame = writes.findLast(write => write.includes("AgentHarness"));
+		const frame = writes.findLast(write => write.includes("Machina"));
 		assert.ok(frame);
 		assert.equal(frame.split(" ".repeat(80)).length - 1, 24, "all 24 rows have explicit background cells");
 	} finally { tui.stop({ preserveScreen: true }); }

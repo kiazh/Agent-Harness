@@ -2,7 +2,7 @@
 
 import pytest
 
-from ah.tools.base import ToolRegistry
+from machina.tools.base import ToolRegistry
 
 
 def test_internal_no_tools_name_is_reserved():

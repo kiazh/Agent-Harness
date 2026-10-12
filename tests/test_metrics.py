@@ -1,9 +1,9 @@
-"""Tests for ah.core.metrics."""
+"""Tests for machina.core.metrics."""
 
 import json
 import logging
 
-from ah.core.metrics import JsonFormatter, MetricsCollector, metrics, timed
+from machina.core.metrics import JsonFormatter, MetricsCollector, metrics, timed
 
 
 def test_latency_stats():

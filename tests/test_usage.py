@@ -10,12 +10,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.agent import ReActAgent
-from ah.core.config import config
-from ah.core.exceptions import DatabaseError, UsageBudgetExceededError, ValidationError
-from ah.core.models import LLMResponse, Session, StreamEvent
-from ah.core.usage import UsageStore, _check_limit, _estimate_tokens, _limits
-from ah.gateway.server import Gateway
+from machina.core.agent import ReActAgent
+from machina.core.config import config
+from machina.core.exceptions import DatabaseError, UsageBudgetExceededError, ValidationError
+from machina.core.models import LLMResponse, Session, StreamEvent
+from machina.core.usage import UsageStore, _check_limit, _estimate_tokens, _limits
+from machina.gateway.server import Gateway
 
 
 def test_budget_check_counts_reservations_and_requests():
@@ -31,7 +31,7 @@ async def test_agent_does_not_call_provider_after_budget_rejection(monkeypatch):
     provider = SimpleNamespace(model="test", complete=AsyncMock())
     agent = ReActAgent(provider=provider)
     reserve = AsyncMock(side_effect=UsageBudgetExceededError("session request budget exceeded"))
-    monkeypatch.setattr("ah.core.agent.usage_store.reserve", reserve)
+    monkeypatch.setattr("machina.core.agent.usage_store.reserve", reserve)
 
     with pytest.raises(UsageBudgetExceededError, match="session request budget"):
         await agent._call_llm_with_retry([{"role": "user", "content": "hello"}], [], uuid.uuid4())
@@ -51,10 +51,10 @@ async def test_budget_error_reaches_regular_and_streaming_clients(monkeypatch):
         "_prepare_context",
         AsyncMock(return_value=(session, [{"role": "user", "content": "hello"}])),
     )
-    monkeypatch.setattr("ah.core.agent.session_manager.get", AsyncMock(return_value=session))
-    monkeypatch.setattr("ah.core.agent.plugin_registry.dispatch", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.session_manager.get", AsyncMock(return_value=session))
+    monkeypatch.setattr("machina.core.agent.plugin_registry.dispatch", AsyncMock())
     monkeypatch.setattr(
-        "ah.core.agent.usage_store.reserve",
+        "machina.core.agent.usage_store.reserve",
         AsyncMock(side_effect=UsageBudgetExceededError("session request budget exceeded")),
     )
 
@@ -68,7 +68,7 @@ async def test_budget_error_reaches_regular_and_streaming_clients(monkeypatch):
 @pytest.mark.asyncio
 async def test_unknown_usage_retains_reservation(monkeypatch):
     execute = AsyncMock()
-    monkeypatch.setattr("ah.core.usage.db", SimpleNamespace(execute=execute))
+    monkeypatch.setattr("machina.core.usage.db", SimpleNamespace(execute=execute))
     store = UsageStore()
     call_id = uuid.uuid4()
 
@@ -85,9 +85,9 @@ async def test_gateway_usage_get_returns_persisted_summary(monkeypatch):
     frames = []
     gateway = Gateway(frames.append, owns_db=False)
     gateway._db_ready = True
-    monkeypatch.setattr("ah.gateway.server.session_manager.get", AsyncMock(return_value=session))
+    monkeypatch.setattr("machina.gateway.server.session_manager.get", AsyncMock(return_value=session))
     summary = AsyncMock(return_value={"sessionId": str(sid), "session": {"requests": 3}})
-    monkeypatch.setattr("ah.core.usage.usage_store.summary", summary)
+    monkeypatch.setattr("machina.core.usage.usage_store.summary", summary)
 
     await gateway.handle_line(
         json.dumps(
@@ -105,7 +105,7 @@ async def test_gateway_usage_get_returns_persisted_summary(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_database_budget_survives_new_store_instance(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.core.usage.db", db_pool)
+    monkeypatch.setattr("machina.core.usage.db", db_pool)
     monkeypatch.setattr(config, "usage_session_request_limit", 1)
     monkeypatch.setattr(config, "usage_session_token_limit", 0)
     monkeypatch.setattr(config, "usage_agent_request_limit", 0)
@@ -130,7 +130,7 @@ async def test_database_budget_survives_new_store_instance(db_pool, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_agent_complete_and_stream_calls_are_persisted(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.core.usage.db", db_pool)
+    monkeypatch.setattr("machina.core.usage.db", db_pool)
     for key in (
         "usage_session_request_limit",
         "usage_session_token_limit",
@@ -185,7 +185,7 @@ async def test_agent_complete_and_stream_calls_are_persisted(db_pool, monkeypatc
 
 @pytest.mark.asyncio
 async def test_failed_provider_call_keeps_conservative_usage(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.core.usage.db", db_pool)
+    monkeypatch.setattr("machina.core.usage.db", db_pool)
     for key in (
         "usage_session_request_limit",
         "usage_session_token_limit",
@@ -220,7 +220,7 @@ async def test_failed_provider_call_keeps_conservative_usage(db_pool, monkeypatc
 
 @pytest.mark.asyncio
 async def test_concurrent_agent_budget_allows_one_reservation(db_pool, monkeypatch):
-    monkeypatch.setattr("ah.core.usage.db", db_pool)
+    monkeypatch.setattr("machina.core.usage.db", db_pool)
     monkeypatch.setattr(config, "usage_session_request_limit", 0)
     monkeypatch.setattr(config, "usage_session_token_limit", 0)
     monkeypatch.setattr(config, "usage_agent_request_limit", 1)
@@ -256,7 +256,7 @@ def test_limits_rejects_negative_values(monkeypatch):
 
 def test_estimate_tokens_fallback_on_value_error(monkeypatch):
     """_estimate_tokens falls back to len(payload)//3 when tiktoken rejects input."""
-    import ah.core.usage as usage_mod
+    import machina.core.usage as usage_mod
 
     monkeypatch.setattr(
         usage_mod, "get_token_count", lambda _text: (_ for _ in ()).throw(ValueError("bad token"))
@@ -269,7 +269,7 @@ def test_estimate_tokens_fallback_on_value_error(monkeypatch):
 async def test_reserve_raises_database_error_when_db_not_connected(monkeypatch):
     """reserve() raises DatabaseError when budgets are set but DB is not connected."""
     monkeypatch.setattr(config, "usage_session_request_limit", 10)
-    monkeypatch.setattr("ah.core.usage.db", SimpleNamespace(connected=False))
+    monkeypatch.setattr("machina.core.usage.db", SimpleNamespace(connected=False))
     store = UsageStore()
     with pytest.raises(DatabaseError, match="database required"):
         await store.reserve(uuid.uuid4(), "agent", "fake", "fake", [], [], 8)
@@ -324,7 +324,7 @@ async def test_reserve_propagates_db_exceptions(monkeypatch):
         def acquire(self):
             return FakeConn()
 
-    monkeypatch.setattr("ah.core.usage.db", FakeDB())
+    monkeypatch.setattr("machina.core.usage.db", FakeDB())
     store = UsageStore()
     with pytest.raises(RuntimeError, match="connection lost"):
         await store.reserve(uuid.uuid4(), "agent", "fake", "fake", [], [], 8)
@@ -377,7 +377,7 @@ async def test_complete_call_wraps_finish_exception_after_provider_success(monke
 @pytest.mark.asyncio
 async def test_summary_filters_to_complete_status(db_pool, monkeypatch):
     """summary() only counts rows with status='complete' for requests and tokens."""
-    monkeypatch.setattr("ah.core.usage.db", db_pool)
+    monkeypatch.setattr("machina.core.usage.db", db_pool)
     for key in (
         "usage_session_request_limit",
         "usage_session_token_limit",
@@ -416,7 +416,7 @@ async def test_totals_aggregation(monkeypatch):
             return {"requests": 10, "tokens": 500, "unknown_calls": 3}[key]
 
     fetchrow = AsyncMock(return_value=FakeRow())
-    monkeypatch.setattr("ah.core.usage.db", SimpleNamespace(fetchrow=fetchrow))
+    monkeypatch.setattr("machina.core.usage.db", SimpleNamespace(fetchrow=fetchrow))
     store = UsageStore()
     result = await store.totals()
     assert result == {"requests": 10, "accounted_tokens": 500, "unknown_calls": 3}
@@ -426,7 +426,7 @@ async def test_totals_aggregation(monkeypatch):
 async def test_cleanup_orphaned_reservations_parses_update_count(monkeypatch):
     """cleanup_orphaned_reservations() parses the UPDATE count from the result string."""
     execute = AsyncMock(return_value="UPDATE 5")
-    monkeypatch.setattr("ah.core.usage.db", SimpleNamespace(execute=execute))
+    monkeypatch.setattr("machina.core.usage.db", SimpleNamespace(execute=execute))
     store = UsageStore()
     result = await store.cleanup_orphaned_reservations()
     assert result == 5
@@ -436,7 +436,7 @@ async def test_cleanup_orphaned_reservations_parses_update_count(monkeypatch):
 async def test_cleanup_orphaned_reservations_returns_zero_on_bad_result(monkeypatch):
     """cleanup_orphaned_reservations() returns 0 when the result string is unparseable."""
     execute = AsyncMock(return_value="UPDATE")
-    monkeypatch.setattr("ah.core.usage.db", SimpleNamespace(execute=execute))
+    monkeypatch.setattr("machina.core.usage.db", SimpleNamespace(execute=execute))
     store = UsageStore()
     result = await store.cleanup_orphaned_reservations()
     assert result == 0
@@ -481,7 +481,7 @@ async def test_reserve_locks_agent_before_session(monkeypatch):
         def acquire(self):
             return FakeConn()
 
-    monkeypatch.setattr("ah.core.usage.db", FakeDB())
+    monkeypatch.setattr("machina.core.usage.db", FakeDB())
     store = UsageStore()
     sid = uuid.uuid4()
     agent_id = "test-agent"

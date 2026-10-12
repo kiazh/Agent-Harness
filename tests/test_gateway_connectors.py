@@ -11,13 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from ah.connectors.manager import ConnectorManager
-from ah.connectors.models import ConnectorConfig
-from ah.connectors.registry import ConnectorRegistry
-from ah.connectors.service import ConnectorService
-from ah.core.runtime import RuntimeServices
-from ah.gateway.errors import INVALID_PARAMS, METHOD_NOT_FOUND, NOT_FOUND, UNAUTHORIZED
-from ah.gateway.server import Gateway
+from machina.connectors.manager import ConnectorManager
+from machina.connectors.models import ConnectorConfig
+from machina.connectors.registry import ConnectorRegistry
+from machina.connectors.service import ConnectorService
+from machina.core.runtime import RuntimeServices
+from machina.gateway.errors import INVALID_PARAMS, METHOD_NOT_FOUND, NOT_FOUND, UNAUTHORIZED
+from machina.gateway.server import Gateway
 
 
 class WireHarness:
@@ -168,8 +168,8 @@ def test_actual_stdio_gateway_reports_empty_harness_inventory_without_initializi
         env={
             **os.environ,
             "MCP_INSPECTION_TEST_STATE": str(tmp_path),
-            "AH_GATEWAY_TOKEN": token,
-            "AH_GATEWAY_NO_SCHEDULER": "1",
+            "MACHINA_GATEWAY_TOKEN": token,
+            "MACHINA_GATEWAY_NO_SCHEDULER": "1",
         },
     )
     assert process.returncode == 0, process.stderr

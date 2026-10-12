@@ -1,23 +1,23 @@
-"""Basic tests for AgentHarness."""
+"""Basic tests for Machina."""
 
 import pytest
 
 
 def test_import():
     """Test that all modules import cleanly."""
-    import ah
+    import machina
 
-    assert ah.__version__ == "0.2.0"
+    assert machina.__version__ == "0.2.0"
 
 
 def test_tool_registry():
     """Test tool registry has built-in tools."""
-    from ah.tools import (
+    from machina.tools import (
         builtins,  # noqa: F401 — registers web_search, web_extract, search_files
         file,  # noqa: F401 — registers read_file, write_file, list_files
         terminal,  # noqa: F401 — registers terminal
     )
-    from ah.tools.base import registry
+    from machina.tools.base import registry
 
     tools = registry.list_tools()
     assert "read_file" in tools
@@ -33,7 +33,7 @@ def test_session_dataclass():
     """Test Session dataclass creation."""
     import uuid
 
-    from ah.core.models import Session
+    from machina.core.models import Session
 
     s = Session(id=uuid.uuid4(), title="test", agent_id="harness")
     assert s.status == "active"
@@ -44,7 +44,7 @@ def test_context_chunk_dataclass():
     """Test ContextChunk dataclass creation."""
     import uuid
 
-    from ah.core.models import ContextChunk
+    from machina.core.models import ContextChunk
 
     c = ContextChunk(
         id=uuid.uuid4(),
@@ -59,7 +59,7 @@ def test_context_chunk_dataclass():
 
 def test_prompt_assembler():
     """Test PromptAssembler basic functionality."""
-    from ah.core.assembler import PromptAssembler
+    from machina.core.assembler import PromptAssembler
 
     assembler = PromptAssembler(session_budget=8000)
     prompt = assembler.assemble(
@@ -77,7 +77,7 @@ def test_prompt_assembler():
 @pytest.mark.asyncio
 async def test_database_connection():
     """Test database connection (requires PostgreSQL)."""
-    from ah.db.connection import db
+    from machina.db.connection import db
 
     try:
         await db.connect()
@@ -92,10 +92,10 @@ async def test_database_connection():
 @pytest.mark.asyncio
 async def test_session_crud():
     """Test session CRUD operations (requires PostgreSQL)."""
-    from ah.core.session import session_manager
+    from machina.core.session import session_manager
 
     try:
-        from ah.db.connection import db
+        from machina.db.connection import db
 
         await db.connect()
     except Exception:

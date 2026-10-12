@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from ah.connectors.models import ConnectorConfig
-from ah.connectors.service import ConnectorService
-from ah.core.runtime import RuntimeServices
+from machina.connectors.models import ConnectorConfig
+from machina.connectors.service import ConnectorService
+from machina.core.runtime import RuntimeServices
 from tests.test_gateway_connectors import WireHarness
 
 ROOT = Path(__file__).resolve().parents[1]

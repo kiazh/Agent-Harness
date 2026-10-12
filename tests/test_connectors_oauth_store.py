@@ -8,14 +8,14 @@ import stat
 
 import pytest
 
-from ah.connectors.oauth_models import OAuthBinding
-from ah.connectors.oauth_store import (
+from machina.connectors.oauth_models import OAuthBinding
+from machina.connectors.oauth_store import (
     OAuthCredentialRecord,
     OAuthCredentialStore,
     credential_key_for,
 )
-from ah.security import oauth_keys
-from ah.security.oauth_keys import OAuthKeyUnavailable
+from machina.security import oauth_keys
+from machina.security.oauth_keys import OAuthKeyUnavailable
 
 SECRET = "test-access-token-secret-value"
 REFRESH = "test-refresh-token-secret-value"
@@ -74,7 +74,7 @@ def _record(binding, **overrides):
 async def test_failed_index_lock_closes_descriptor_without_changing_authority(
     tmp_path, monkeypatch, operation, failure
 ):
-    from ah.connectors import oauth_store
+    from machina.connectors import oauth_store
 
     store = OAuthCredentialStore(tmp_path / "oauth", key_provider=_key_provider)
     binding = _binding()
@@ -274,22 +274,22 @@ def test_logout_tombstone_rejects_stale_writes_and_rollback(tmp_path):
 
 def test_key_sources_and_no_plaintext_fallback(tmp_path, monkeypatch):
     # Missing backend and no env → storage_unavailable.
-    monkeypatch.delenv("AGENT_HARNESS_OAUTH_MASTER_KEY", raising=False)
-    monkeypatch.setenv("AGENT_HARNESS_SECRET_BACKEND", "")
+    monkeypatch.delenv("MACHINA_OAUTH_MASTER_KEY", raising=False)
+    monkeypatch.setenv("MACHINA_SECRET_BACKEND", "")
     import sys
 
     monkeypatch.setitem(sys.modules, "keyring", None)
     with pytest.raises(OAuthKeyUnavailable):
         oauth_keys.get_master_key()
     # Malformed supplied key does not fall back.
-    monkeypatch.setenv("AGENT_HARNESS_OAUTH_MASTER_KEY", "not-base64!!")
+    monkeypatch.setenv("MACHINA_OAUTH_MASTER_KEY", "not-base64!!")
     with pytest.raises(OAuthKeyUnavailable):
         oauth_keys.get_master_key()
-    monkeypatch.setenv("AGENT_HARNESS_OAUTH_MASTER_KEY", base64.b64encode(b"short").decode())
+    monkeypatch.setenv("MACHINA_OAUTH_MASTER_KEY", base64.b64encode(b"short").decode())
     with pytest.raises(OAuthKeyUnavailable):
         oauth_keys.get_master_key()
     # Valid supplied key resolves.
-    monkeypatch.setenv("AGENT_HARNESS_OAUTH_MASTER_KEY", base64.b64encode(b"k" * 32).decode())
+    monkeypatch.setenv("MACHINA_OAUTH_MASTER_KEY", base64.b64encode(b"k" * 32).decode())
     assert oauth_keys.get_master_key() == b"k" * 32
 
 
@@ -307,7 +307,7 @@ def test_fake_keyring_backend_selection(tmp_path, monkeypatch):
     import sys
 
     monkeypatch.setitem(sys.modules, "keyring", _Keyring)
-    monkeypatch.delenv("AGENT_HARNESS_OAUTH_MASTER_KEY", raising=False)
+    monkeypatch.delenv("MACHINA_OAUTH_MASTER_KEY", raising=False)
     with pytest.raises(OAuthKeyUnavailable):
         oauth_keys.get_master_key()
 
@@ -315,7 +315,7 @@ def test_fake_keyring_backend_selection(tmp_path, monkeypatch):
 def test_refresh_lock_cancellation_releases_file_and_local_locks(tmp_path, monkeypatch):
     import threading
 
-    from ah.connectors import oauth_store
+    from machina.connectors import oauth_store
 
     async def run():
         store = OAuthCredentialStore(tmp_path / "oauth", key_provider=_key_provider)
@@ -386,7 +386,7 @@ def test_keyring_timeout_returns_without_waiting_for_backend(monkeypatch, operat
             release.wait(0.5)
 
     monkeypatch.setitem(sys.modules, "keyring", FakeKeyring)
-    monkeypatch.delenv("AGENT_HARNESS_OAUTH_MASTER_KEY", raising=False)
+    monkeypatch.delenv("MACHINA_OAUTH_MASTER_KEY", raising=False)
     started = time.monotonic()
     try:
         with pytest.raises(OAuthKeyUnavailable):
@@ -403,7 +403,7 @@ def test_keyring_timeout_does_not_hold_process_shutdown(tmp_path):
 
     program = textwrap.dedent("""
         import sys, threading
-        from ah.security.oauth_keys import get_master_key, OAuthKeyUnavailable
+        from machina.security.oauth_keys import get_master_key, OAuthKeyUnavailable
         class Backend:
             pass
         Backend.__module__ = "keyring.backends.macos"
@@ -421,7 +421,7 @@ def test_keyring_timeout_does_not_hold_process_shutdown(tmp_path):
             print("timed out", flush=True)
     """)
     env = os.environ.copy()
-    env.pop("AGENT_HARNESS_OAUTH_MASTER_KEY", None)
+    env.pop("MACHINA_OAUTH_MASTER_KEY", None)
     result = subprocess.run(
         [sys.executable, "-c", program], env=env, capture_output=True, text=True, timeout=2
     )
@@ -459,7 +459,7 @@ def test_timed_out_key_creation_keeps_lock_until_backend_write_finishes(tmp_path
             finished.set()
 
     monkeypatch.setitem(sys.modules, "keyring", FakeKeyring)
-    monkeypatch.delenv("AGENT_HARNESS_OAUTH_MASTER_KEY", raising=False)
+    monkeypatch.delenv("MACHINA_OAUTH_MASTER_KEY", raising=False)
     lock_path = tmp_path / "creation.lock"
     try:
         with pytest.raises(OAuthKeyUnavailable):
@@ -495,7 +495,7 @@ def test_failed_keyring_read_never_creates_replacement_key(monkeypatch):
             pytest.fail("unreadable keyring must not mint a replacement master key")
 
     monkeypatch.setitem(sys.modules, "keyring", FakeKeyring)
-    monkeypatch.delenv("AGENT_HARNESS_OAUTH_MASTER_KEY", raising=False)
+    monkeypatch.delenv("MACHINA_OAUTH_MASTER_KEY", raising=False)
     with pytest.raises(OAuthKeyUnavailable):
         oauth_keys.get_master_key(timeout=0.2)
 
@@ -503,7 +503,7 @@ def test_failed_keyring_read_never_creates_replacement_key(monkeypatch):
 def test_repeated_refresh_cancellation_waits_for_file_worker_cleanup(tmp_path, monkeypatch):
     import threading
 
-    from ah.connectors import oauth_store
+    from machina.connectors import oauth_store
 
     async def run():
         store = OAuthCredentialStore(tmp_path / "oauth", key_provider=_key_provider)

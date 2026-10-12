@@ -2,10 +2,10 @@
 
 import asyncio
 
-from ah.connectors.oauth import OAuthCoordinator
-from ah.connectors.oauth_store import OAuthCredentialStore
-from ah.connectors.service import ConnectorService
-from ah.connectors.store import ConnectorStore
+from machina.connectors.oauth import OAuthCoordinator
+from machina.connectors.oauth_store import OAuthCredentialStore
+from machina.connectors.service import ConnectorService
+from machina.connectors.store import ConnectorStore
 
 
 async def test_durable_inventory_with_oauth_coordinator_does_not_reenter_refresh(tmp_path):

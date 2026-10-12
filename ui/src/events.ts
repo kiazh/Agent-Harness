@@ -1,4 +1,4 @@
-// Generated from ah/protocol/events.json; edit the schema, then regenerate.
+// Generated from machina/protocol/events.json; edit the schema, then regenerate.
 export type CanonicalEvent = { protocolVersion: 2; sessionId: string; turnId: string } & (
 	{ type: "message.start" }
 	| { type: "turn.started" }

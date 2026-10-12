@@ -4,7 +4,7 @@ Date: 2026-10-12. Starting checkout: `main`, HEAD `54d79d5`. This document descr
 
 ## Scope
 
-Source checkout: CLI, terminal UI, gateway/HTTP, persistence, tools, runtime learning, curated skills, default ECC subagents and broker-integrated MCP tools. Python wheels contain the backend and bundled resources; TUI sources and Node dependencies require a checkout/`AH_UI_DIR`. Docker is the HTTP backend.
+Source checkout: CLI, terminal UI, gateway/HTTP, persistence, tools, runtime learning, curated skills, default ECC subagents and broker-integrated MCP tools. Python wheels contain the backend and bundled resources; TUI sources and Node dependencies require a checkout/`MACHINA_UI_DIR`. Docker is the HTTP backend.
 
 MCP now includes installation-local saved configuration, human-reviewed launch, discovery and native broker-bound calls. OAuth/HTTP credential profiles, resources/prompts, server callbacks and complete DNS-rebinding protections remain outside the release scope. See [MCP setup](../MCP.md).
 
@@ -19,20 +19,20 @@ MCP now includes installation-local saved configuration, human-reviewed launch, 
 
 ## Verification commands
 
-All database checks used only the dedicated `agentharness_test` database. The local Python subprocess environment redirected HOME/config and removed live credentials through a disposable bootstrap outside the repository.
+All database checks used only the dedicated `machina_test` database. The local Python subprocess environment redirected HOME/config and removed live credentials through a disposable bootstrap outside the repository.
 
 ```sh
-AGENT_HARNESS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/agentharness_test \
-  PYTHONPATH=/tmp/agentharness-ui-reference-runtime:/home/user/Agent-Harness1 \
+MACHINA_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/machina_test \
+  PYTHONPATH=/tmp/machina-ui-reference-runtime:/home/user/Machina1 \
   .venv/bin/python -m pytest -q --tb=short -p no:cacheprovider \
   --cov=ah --cov-report=term --cov-fail-under=60
 npm --prefix ui run check
-.venv/bin/python -m ruff check ah/ tools/
-.venv/bin/python -m ruff format --check ah/ tools/
-.venv/bin/python -m bandit -r ah/ tools/ -ll -x ah/cli/
+.venv/bin/python -m ruff check machina/ tools/
+.venv/bin/python -m ruff format --check machina/ tools/
+.venv/bin/python -m bandit -r machina/ tools/ -ll -x machina/cli/
 uv lock --check --offline
-.venv/bin/python -m hatchling build -d /tmp/ah-release-dist
-.venv/bin/python tools/check_release_artifacts.py /tmp/ah-release-dist/*
+.venv/bin/python -m hatchling build -d /tmp/machina-release-dist
+.venv/bin/python tools/check_release_artifacts.py /tmp/machina-release-dist/*
 git diff --check
 ```
 

@@ -89,4 +89,4 @@ snapshot, and the UI suite has one failure reproduced on the same snapshot:
 - UI `selected rows paint an accent background pill`: missing expected fill.
 
 The repository-wide format check also reports existing formatting in
-`ah/gateway/server.py` and `ah/memory/user_profile.py`; these files were not changed.
+`machina/gateway/server.py` and `machina/memory/user_profile.py`; these files were not changed.

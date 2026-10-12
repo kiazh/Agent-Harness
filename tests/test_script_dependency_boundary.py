@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core import job_scripts
+from machina.core import job_scripts
 
 
 def policy(root, scripts):
@@ -15,7 +15,7 @@ def policy(root, scripts):
 
 
 async def test_script_without_administrator_allowlist_is_refused(monkeypatch, tmp_path):
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     target = tmp_path / "entry.py"
     target.write_text("print('unlisted')", encoding="utf-8")
     with pytest.raises(ValueError, match="allowlist"):
@@ -23,7 +23,7 @@ async def test_script_without_administrator_allowlist_is_refused(monkeypatch, tm
 
 
 async def test_unlisted_script_cannot_execute(monkeypatch, tmp_path):
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     (tmp_path / "entry.py").write_text("print('unlisted')", encoding="utf-8")
     policy(tmp_path, {"other.py": []})
     with pytest.raises(ValueError, match="allowlist"):
@@ -31,7 +31,7 @@ async def test_unlisted_script_cannot_execute(monkeypatch, tmp_path):
 
 
 async def test_changed_imported_dependency_fails_before_execution(monkeypatch, tmp_path):
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     (tmp_path / "entry.py").write_text("import helper\nprint(helper.VALUE)", encoding="utf-8")
     dependency = tmp_path / "helper.py"
     dependency.write_text("VALUE = 'reviewed'", encoding="utf-8")
@@ -48,13 +48,13 @@ async def test_changed_imported_dependency_fails_before_execution(monkeypatch, t
 
 
 async def test_dependency_mutation_during_approval_cannot_execute(monkeypatch, tmp_path):
-    from ah.core import turns
-    from ah.core.scheduler import JobRunner
-    from ah.permissions import store
-    from ah.permissions.broker import clear_execution_context, set_approval_handler
+    from machina.core import turns
+    from machina.core.scheduler import JobRunner
+    from machina.permissions import store
+    from machina.permissions.broker import clear_execution_context, set_approval_handler
     from tests.test_deep_scheduler import _job
 
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     (tmp_path / "job.py").write_text(
         "import helper\nfrom pathlib import Path\nPath('effect.txt').write_text(helper.VALUE)",
         encoding="utf-8",
@@ -87,7 +87,7 @@ async def test_dependency_mutation_during_approval_cannot_execute(monkeypatch, t
 
 @pytest.mark.parametrize("dependency", ["../outside.py", "/absolute.py", ".env"])
 def test_dependency_manifest_rejects_escape_and_private_files(monkeypatch, tmp_path, dependency):
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     (tmp_path / "entry.py").write_text("pass", encoding="utf-8")
     policy(tmp_path, {"entry.py": [dependency]})
     with pytest.raises(ValueError):

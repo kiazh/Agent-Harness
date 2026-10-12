@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.memory.approval import MemoryApprovalGate
+from machina.memory.approval import MemoryApprovalGate
 
 
 @pytest.fixture
@@ -61,8 +61,8 @@ class TestApproveAllBatch:
         mock_memory = AsyncMock()
         mock_memory.add = AsyncMock(side_effect=[MagicMock(id=uuid.uuid4()) for _ in range(3)])
         with (
-            patch("ah.memory.approval.db", mock_db),
-            patch("ah.memory.approval.memory_store", mock_memory),
+            patch("machina.memory.approval.db", mock_db),
+            patch("machina.memory.approval.memory_store", mock_memory),
         ):
             count = await gate.approve_all()
         assert count == 3
@@ -76,8 +76,8 @@ class TestApproveAllBatch:
         mock_memory = AsyncMock()
         mock_memory.add = AsyncMock(side_effect=[MagicMock(id=uuid.uuid4()) for _ in range(2)])
         with (
-            patch("ah.memory.approval.db", mock_db),
-            patch("ah.memory.approval.memory_store", mock_memory),
+            patch("machina.memory.approval.db", mock_db),
+            patch("machina.memory.approval.memory_store", mock_memory),
         ):
             count = await gate.approve_all(agent_id="harness")
         assert count == 2
@@ -86,7 +86,7 @@ class TestApproveAllBatch:
     async def test_approve_all_empty(self, gate, mock_db):
         """approve_all with no pending records returns 0."""
         mock_db.acquire.return_value.__aenter__.return_value.fetch = AsyncMock(return_value=[])
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             count = await gate.approve_all()
         assert count == 0
         mock_db.fetchrow.assert_not_called()
@@ -98,7 +98,7 @@ class TestRejectAllBatch:
     async def test_reject_all_no_agent_filter_no_fetchrow(self, gate, mock_db):
         """reject_all must not call fetchrow (which reject() uses per-record)."""
         mock_db.execute = AsyncMock(return_value="UPDATE 5")
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             count = await gate.reject_all()
         assert count == 5
         mock_db.fetchrow.assert_not_called()
@@ -106,7 +106,7 @@ class TestRejectAllBatch:
     async def test_reject_all_with_agent_filter_no_fetchrow(self, gate, mock_db):
         """With agent filter, reject_all must not call fetchrow."""
         mock_db.execute = AsyncMock(return_value="UPDATE 3")
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             count = await gate.reject_all(agent_id="harness")
         assert count == 3
         mock_db.fetchrow.assert_not_called()
@@ -114,7 +114,7 @@ class TestRejectAllBatch:
     async def test_reject_all_with_note(self, gate, mock_db):
         """reject_all passes review_note to the batch UPDATE."""
         mock_db.execute = AsyncMock(return_value="UPDATE 2")
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             count = await gate.reject_all(review_note="not useful")
         assert count == 2
         mock_db.fetchrow.assert_not_called()

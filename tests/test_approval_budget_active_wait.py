@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.models import AgentResponse, Session, StreamEvent
-from ah.gateway.server import Gateway
+from machina.core.models import AgentResponse, Session, StreamEvent
+from machina.gateway.server import Gateway
 
 
 class _AccountingAsyncio:
@@ -64,11 +64,11 @@ class _AccountingAsyncio:
 async def test_approval_waits_preserve_the_compute_budget(
     monkeypatch, approval_count, compute_after_approval, timed_out
 ):
-    from ah import services
-    from ah.core.config import config
-    from ah.core.session import session_manager
-    from ah.gateway import server
-    from ah.permissions.broker import _approval_handler
+    from machina import services
+    from machina.core.config import config
+    from machina.core.session import session_manager
+    from machina.gateway import server
+    from machina.permissions.broker import _approval_handler
 
     session = Session(id=uuid.uuid4())
     frames = []

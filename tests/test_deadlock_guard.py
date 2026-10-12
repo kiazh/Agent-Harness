@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.core.orchestrator import Orchestrator
+from machina.core.orchestrator import Orchestrator
 
 
 @pytest.fixture
@@ -38,10 +38,10 @@ class TestDeadlockGuard:
         mock_agent_def.tools = None
 
         with (
-            patch("ah.core.orchestrator.agent_registry") as mock_registry,
-            patch("ah.core.orchestrator.session_manager") as mock_session_mgr,
-            patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr,
-            patch("ah.core.orchestrator.db") as mock_db,
+            patch("machina.core.orchestrator.agent_registry") as mock_registry,
+            patch("machina.core.orchestrator.session_manager") as mock_session_mgr,
+            patch("machina.core.orchestrator.context_manager") as mock_ctx_mgr,
+            patch("machina.core.orchestrator.db") as mock_db,
         ):
             mock_registry.get = AsyncMock(return_value=mock_agent_def)
             mock_session = MagicMock()
@@ -83,10 +83,10 @@ class TestDeadlockGuard:
         mock_agent_def.tools = None
 
         with (
-            patch("ah.core.orchestrator.agent_registry") as mock_registry,
-            patch("ah.core.orchestrator.session_manager") as mock_session_mgr,
-            patch("ah.core.orchestrator.context_manager") as mock_ctx_mgr,
-            patch("ah.core.orchestrator.db") as mock_db,
+            patch("machina.core.orchestrator.agent_registry") as mock_registry,
+            patch("machina.core.orchestrator.session_manager") as mock_session_mgr,
+            patch("machina.core.orchestrator.context_manager") as mock_ctx_mgr,
+            patch("machina.core.orchestrator.db") as mock_db,
         ):
             mock_registry.get = AsyncMock(return_value=mock_agent_def)
             mock_session = MagicMock()
@@ -117,7 +117,7 @@ class TestDeadlockGuard:
         mock_agent_def.system_prompt = None
         mock_agent_def.tools = None
 
-        with patch("ah.core.orchestrator.agent_registry") as mock_registry:
+        with patch("machina.core.orchestrator.agent_registry") as mock_registry:
             mock_registry.get = AsyncMock(return_value=mock_agent_def)
 
             with pytest.raises((ValueError, RecursionError)):

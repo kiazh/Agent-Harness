@@ -7,15 +7,15 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ah.core.scheduler import Job, JobRunner
+from machina.core.scheduler import Job, JobRunner
 
 
 async def test_script_changed_during_approval_cannot_execute_unreviewed_content(
     monkeypatch, tmp_path
 ):
-    from ah.core.context import context_manager
-    from ah.permissions import store
-    from ah.permissions.broker import clear_execution_context, set_approval_handler
+    from machina.core.context import context_manager
+    from machina.permissions import store
+    from machina.permissions.broker import clear_execution_context, set_approval_handler
 
     script = tmp_path / "reviewed.py"
     script.write_text(
@@ -29,11 +29,11 @@ async def test_script_changed_during_approval_cannot_execute_unreviewed_content(
         "Path('unreviewed.txt').write_text('changed after approval')\n"
         "print('unreviewed output')\n"
     )
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     from tests.support.scripts import allow_scripts
 
     allow_scripts(tmp_path, {"reviewed.py": [], "identity.py": ["sibling.py"]})
-    monkeypatch.setattr("ah.core.session_mode.get_effective_mode", lambda _sid: "ask")
+    monkeypatch.setattr("machina.core.session_mode.get_effective_mode", lambda _sid: "ask")
     outputs = []
     approvals = []
 
@@ -83,9 +83,9 @@ async def test_script_changed_during_approval_cannot_execute_unreviewed_content(
 async def test_python_snapshot_preserves_encoding_and_script_identity(
     monkeypatch, tmp_path, encoding
 ):
-    from ah.core.job_scripts import run_job_script
+    from machina.core.job_scripts import run_job_script
 
-    monkeypatch.setenv("AGENT_HARNESS_SCRIPTS_DIR", str(tmp_path))
+    monkeypatch.setenv("MACHINA_SCRIPTS_DIR", str(tmp_path))
     from tests.support.scripts import allow_scripts
 
     allow_scripts(tmp_path, {"reviewed.py": [], "identity.py": ["sibling.py"]})

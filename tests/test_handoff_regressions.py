@@ -2,7 +2,7 @@
 
 Focused, DB-free where possible. DB-backed acceptance (1001+ chunks,
 two-runner fencing, hung-job isolation) requires
-AGENT_HARNESS_TEST_DATABASE_URL and runs in the integration suite.
+MACHINA_TEST_DATABASE_URL and runs in the integration suite.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ def _assert_no_trace(secret: str, output: str) -> None:
 
 def test_streaming_equals_whole_recognition_all_formats_all_splits():
     """LP-09: streamed output must equal whole-string redaction at every split."""
-    from ah.memory.redaction import StreamingSecretRedactor, redact_secrets
+    from machina.memory.redaction import StreamingSecretRedactor, redact_secrets
 
     secrets = [
         "sk-" + "A" * 24,
@@ -71,7 +71,7 @@ def test_streaming_equals_whole_recognition_all_formats_all_splits():
 
 def test_streaming_redactor_huge_delta_prefix_emission():
     """Addendum 5.1 counterexample: secret + 486 padding in ONE delta."""
-    from ah.memory.redaction import StreamingSecretRedactor
+    from machina.memory.redaction import StreamingSecretRedactor
 
     secret = "sk-" + "A" * 24
     text = secret + " " + "z" * 486
@@ -83,7 +83,7 @@ def test_streaming_redactor_huge_delta_prefix_emission():
 def test_streaming_redactor_char_at_a_time_and_partitions():
     import random
 
-    from ah.memory.redaction import StreamingSecretRedactor
+    from machina.memory.redaction import StreamingSecretRedactor
 
     secrets = [
         "sk-" + "B" * 24,
@@ -112,7 +112,7 @@ def test_streaming_redactor_char_at_a_time_and_partitions():
 
 
 def test_streaming_redactor_bearer_split():
-    from ah.memory.redaction import StreamingSecretRedactor
+    from machina.memory.redaction import StreamingSecretRedactor
 
     text = "Bearer abcdef1234567890XYZ"
     for i in range(1, len(text)):
@@ -126,7 +126,7 @@ def test_streaming_redactor_bearer_split():
 
 
 def test_redact_value_covers_nested_structures():
-    from ah.api.app import _redact_value
+    from machina.api.app import _redact_value
 
     secret = "sk-" + "B" * 24
     payload = {"preview": secret, "nested": [{"content": secret}], "ok": "hello"}
@@ -139,7 +139,7 @@ def test_redact_value_covers_nested_structures():
 
 
 def test_resolve_path_rejects_symlink_escape(tmp_path, monkeypatch):
-    import ah.tools.file as fmod
+    import machina.tools.file as fmod
 
     base = tmp_path / "base"
     base.mkdir()
@@ -156,7 +156,7 @@ def test_resolve_path_rejects_symlink_escape(tmp_path, monkeypatch):
 
 
 def test_resolve_path_allows_ordinary_file(tmp_path, monkeypatch):
-    import ah.tools.file as fmod
+    import machina.tools.file as fmod
 
     base = tmp_path / "base"
     base.mkdir()
@@ -195,7 +195,7 @@ def _swap_hook_factory(fmod, real_open, swap_from: str, swap_to: str):
 
 def test_write_ancestor_swap_leaves_outside_untouched(tmp_path, monkeypatch):
     """5.2: swap validated ancestor to outside before open → reject, no effect."""
-    import ah.tools.file as fmod
+    import machina.tools.file as fmod
 
     base = tmp_path / "base"
     (base / "sub").mkdir(parents=True)
@@ -220,7 +220,7 @@ def test_write_ancestor_swap_leaves_outside_untouched(tmp_path, monkeypatch):
 
 
 def test_write_final_symlink_leaves_outside_untouched(tmp_path, monkeypatch):
-    import ah.tools.file as fmod
+    import machina.tools.file as fmod
 
     base = tmp_path / "base"
     base.mkdir()
@@ -239,7 +239,7 @@ def test_write_final_symlink_leaves_outside_untouched(tmp_path, monkeypatch):
 
 
 def test_write_normal_and_new_file_still_work(tmp_path, monkeypatch):
-    import ah.tools.file as fmod
+    import machina.tools.file as fmod
 
     base = tmp_path / "base"
     base.mkdir()
@@ -258,8 +258,8 @@ def test_write_normal_and_new_file_still_work(tmp_path, monkeypatch):
 async def test_acompress_llm_path_is_awaited_directly():
     import uuid as _uuid
 
-    from ah.core.compression import CompressionConfig, ContextCompressor
-    from ah.core.models import ContextChunk
+    from machina.core.compression import CompressionConfig, ContextCompressor
+    from machina.core.models import ContextChunk
 
     chunks = [
         ContextChunk(
@@ -276,7 +276,7 @@ async def test_acompress_llm_path_is_awaited_directly():
     class _Provider:
         async def complete(self, messages, temperature=0.3, max_tokens=500, tools=None):
             await asyncio.sleep(0.01)
-            from ah.core.models import LLMResponse
+            from machina.core.models import LLMResponse
 
             return LLMResponse(content="summary", model="m", usage={}, tool_calls=[])
 
@@ -294,8 +294,8 @@ async def test_acompress_llm_path_is_awaited_directly():
 def test_truncate_keeps_call_result_pairs_atomic():
     import uuid as _uuid
 
-    from ah.core.compression import CompressionConfig, ContextCompressor
-    from ah.core.models import ContextChunk
+    from machina.core.compression import CompressionConfig, ContextCompressor
+    from machina.core.models import ContextChunk
 
     sid = _uuid.uuid4()
     call = ContextChunk(
@@ -334,8 +334,8 @@ def test_truncate_keeps_call_result_pairs_atomic():
 def test_identify_pairs_by_call_id_not_name():
     import uuid as _uuid
 
-    from ah.core.compression import ContextCompressor
-    from ah.core.models import ContextChunk
+    from machina.core.compression import ContextCompressor
+    from machina.core.models import ContextChunk
 
     sid = _uuid.uuid4()
 
@@ -367,9 +367,9 @@ def test_identify_pairs_by_call_id_not_name():
 def test_truncate_chunk_respects_token_bound_cjk():
     import uuid as _uuid
 
-    from ah.core.assembler import get_token_count
-    from ah.core.compression import ContextCompressor
-    from ah.core.models import ContextChunk
+    from machina.core.assembler import get_token_count
+    from machina.core.compression import ContextCompressor
+    from machina.core.models import ContextChunk
 
     payload = {"content": "日本語テスト" * 200}
     chunk = ContextChunk(
@@ -391,8 +391,8 @@ def test_truncate_chunk_respects_token_bound_cjk():
 def test_truncate_clears_stale_embedding():
     import uuid as _uuid
 
-    from ah.core.compression import ContextCompressor
-    from ah.core.models import ContextChunk
+    from machina.core.compression import ContextCompressor
+    from machina.core.models import ContextChunk
 
     chunk = ContextChunk(
         id=_uuid.uuid4(),
@@ -412,7 +412,7 @@ def test_truncate_clears_stale_embedding():
 
 
 def test_documented_prompt_route_registered():
-    from ah.api.app import create_app
+    from machina.api.app import create_app
 
     app = create_app()
     paths = {r.path for r in app.routes if hasattr(r, "path")}
@@ -426,9 +426,9 @@ def test_documented_prompt_route_registered():
 
 async def test_agent_binds_scope_for_rag_tools():
 
-    from ah.core.agent import BaseReActAgent
-    from ah.tools import agents as agents_mod
-    from ah.tools.base import Tool, registry
+    from machina.core.agent import BaseReActAgent
+    from machina.tools import agents as agents_mod
+    from machina.tools.base import Tool, registry
 
     seen: dict = {}
 
@@ -479,12 +479,12 @@ async def test_agent_binds_scope_for_rag_tools():
 
 
 async def test_researcher_factory_blocks_write_tools():
-    from ah.core.agent_factory import build_agent_for_session
-    from ah.core.models import Session
+    from machina.core.agent_factory import build_agent_for_session
+    from machina.core.models import Session
 
     session = Session(id=uuid.uuid4(), agent_id="researcher", model="m", provider="openrouter")
     # Avoid network: stub get_provider and registry.get.
-    import ah.core.agent_def as adef
+    import machina.core.agent_def as adef
 
     real_get = adef.agent_registry.get
 
@@ -492,7 +492,7 @@ async def test_researcher_factory_blocks_write_tools():
         return adef.BUILTIN_AGENTS["researcher"]
 
     adef.agent_registry.get = _fake_get  # type: ignore[method-assign]
-    import ah.core.provider as prov
+    import machina.core.provider as prov
 
     real_provider = prov.get_provider
     prov.get_provider = lambda provider=None, model=None: type(
@@ -512,7 +512,7 @@ async def test_researcher_factory_blocks_write_tools():
 
 
 async def test_close_agent_provider_only_owned():
-    from ah.core.agent_factory import close_agent_provider
+    from machina.core.agent_factory import close_agent_provider
 
     closed = []
 
@@ -541,7 +541,7 @@ async def test_close_agent_provider_only_owned():
 
 
 async def test_db_acquire_preserves_caller_typeerror():
-    from ah.db.connection import Database
+    from machina.db.connection import Database
 
     # Legacy pool: acquire(timeout=) raises TypeError synchronously;
     # acquire() returns an awaitable yielding a connection.
@@ -574,7 +574,7 @@ def test_dns_timeout_returns_quickly(monkeypatch):
     import socket as _socket
     import time as _time
 
-    import ah.tools.builtins as bi
+    import machina.tools.builtins as bi
 
     def _slow(host, port, *a, **k):
         _time.sleep(0.6)
@@ -593,7 +593,7 @@ def test_dns_timeout_returns_quickly(monkeypatch):
 def _budget_chunk(payload, token_count=5000, chunk_type="user_message"):
     import uuid as _uuid
 
-    from ah.core.models import ContextChunk
+    from machina.core.models import ContextChunk
 
     return ContextChunk(
         id=_uuid.uuid4(),
@@ -606,7 +606,7 @@ def _budget_chunk(payload, token_count=5000, chunk_type="user_message"):
 
 
 def test_truncate_tiny_budgets_no_fit():
-    from ah.core.compression import ContextCompressor
+    from machina.core.compression import ContextCompressor
 
     c = _budget_chunk({"content": "hello world"})
     assert ContextCompressor()._truncate_chunk(c, 0) is None
@@ -615,7 +615,7 @@ def test_truncate_tiny_budgets_no_fit():
     tiny = ContextCompressor()._truncate_chunk(c, 1)
     assert (
         tiny is None
-        or __import__("ah.core.assembler", fromlist=["get_token_count"]).get_token_count(
+        or __import__("machina.core.assembler", fromlist=["get_token_count"]).get_token_count(
             str(tiny.payload)
         )
         <= 1
@@ -623,8 +623,8 @@ def test_truncate_tiny_budgets_no_fit():
 
 
 def test_truncate_never_exceeds_bound_varied_scripts():
-    from ah.core.assembler import get_token_count
-    from ah.core.compression import ContextCompressor
+    from machina.core.assembler import get_token_count
+    from machina.core.compression import ContextCompressor
 
     texts = [
         "日本語テスト" * 200,
@@ -643,7 +643,7 @@ def test_truncate_never_exceeds_bound_varied_scripts():
 
 
 def test_truncate_preserves_tool_protocol():
-    from ah.core.compression import ContextCompressor
+    from machina.core.compression import ContextCompressor
 
     call = _budget_chunk(
         {"tool": "read_file", "args": {"path": "x" * 2000}, "result_preview": "y" * 2000},
@@ -656,7 +656,7 @@ def test_truncate_preserves_tool_protocol():
 
 
 def test_truncate_zero_counts_use_real_tokens():
-    from ah.core.compression import ContextCompressor
+    from machina.core.compression import ContextCompressor
 
     chunks = [_budget_chunk({"content": "z" * 2000}, token_count=0) for _ in range(4)]
     comp = ContextCompressor()
@@ -673,8 +673,8 @@ def test_keyset_pagination_counts_and_concurrent_insert():
     import uuid as _uuid
     from datetime import UTC, datetime
 
-    from ah.core.context import ContextManager
-    from ah.core.models import ContextChunk
+    from machina.core.context import ContextManager
+    from machina.core.models import ContextChunk
 
     async def _run(n, identical_ts):
         mgr = ContextManager()
@@ -730,7 +730,7 @@ def _fake_pinned_transport(monkeypatch, routes):
 
     handler(status, headers) -> body chunks iterator. Records connected IPs.
     """
-    import ah.security.fetch as fetchmod
+    import machina.security.fetch as fetchmod
 
     connected = []
 
@@ -797,7 +797,7 @@ def _ok(body: bytes, headers=None):
 
 
 def test_pinned_fetch_connects_validated_ip(monkeypatch):
-    from ah.security.fetch import pinned_fetch
+    from machina.security.fetch import pinned_fetch
 
     connected = _fake_pinned_transport(
         monkeypatch,
@@ -809,7 +809,7 @@ def test_pinned_fetch_connects_validated_ip(monkeypatch):
 
 def test_pinned_fetch_rejects_mixed_private_dns(monkeypatch):
     """Rebinding-style answer (public + private) fails closed with no connect."""
-    import ah.security.fetch as fetchmod
+    import machina.security.fetch as fetchmod
 
     connected = _fake_pinned_transport(
         monkeypatch,
@@ -821,7 +821,7 @@ def test_pinned_fetch_rejects_mixed_private_dns(monkeypatch):
 
 
 def test_pinned_fetch_redirect_to_private_rejected(monkeypatch):
-    from ah.security.fetch import pinned_fetch
+    from machina.security.fetch import pinned_fetch
 
     def _redir():
         return (302, {"Location": "http://10.9.9.9/evil"}, [b""])
@@ -839,7 +839,7 @@ def test_pinned_fetch_redirect_to_private_rejected(monkeypatch):
 
 
 def test_pinned_fetch_caps_body_during_stream(monkeypatch):
-    import ah.security.fetch as fetchmod
+    import machina.security.fetch as fetchmod
 
     def _big():
         return (200, {"Content-Length": str(10_000_000)}, [b"x" * 100])
@@ -855,7 +855,7 @@ def test_skills_learn_off_loop(monkeypatch):
     import time
     import types
 
-    from ah.gateway.features import skills as skillsmod
+    from machina.gateway.features import skills as skillsmod
 
     def _slow_learn(source, **kw):
         time.sleep(0.3)
@@ -897,7 +897,7 @@ def test_skills_learn_off_loop(monkeypatch):
 def test_job_claim_token_field_and_signatures():
     import inspect as _inspect
 
-    from ah.core.scheduler import Job, JobStore
+    from machina.core.scheduler import Job, JobStore
 
     assert "claim_token" in Job.__dataclass_fields__
     assert "claim_token" in _inspect.signature(JobStore.renew_lease).parameters
@@ -908,7 +908,7 @@ def test_job_claim_token_field_and_signatures():
 
 
 def test_default_skills_dir_never_empty():
-    from ah.skills.registry import default_skills_dir
+    from machina.skills.registry import default_skills_dir
 
     p = default_skills_dir()
     assert str(p).endswith("skills")
@@ -921,8 +921,8 @@ def _compress_session_with(chunks, provider, monkeypatch, **kw):
     import asyncio
     from types import SimpleNamespace
 
-    import ah.core.provider as provmod
-    from ah.core import context as ctxmod
+    import machina.core.provider as provmod
+    from machina.core import context as ctxmod
 
     async def _all_chunks(session_id):
         return list(chunks)
@@ -938,7 +938,7 @@ def _compress_session_with(chunks, provider, monkeypatch, **kw):
             return len(new_chunks)
 
         monkeypatch.setattr(ctxmod.context_manager, "replace_chunks_by_ids", _replace)
-    from ah import services as svcmod
+    from machina import services as svcmod
 
     session = SimpleNamespace(id=chunks[0].session_id if chunks else None, agent_id="h")
     return asyncio.run(svcmod.compress_session(session))
@@ -948,7 +948,7 @@ def test_compress_session_closes_provider_on_noop(monkeypatch):
     """5.6: original_count==0 early return must still close the owned provider."""
     import uuid as _uuid
 
-    from ah.core.models import ContextChunk
+    from machina.core.models import ContextChunk
 
     closed = []
     sid = _uuid.uuid4()
@@ -977,7 +977,7 @@ def test_compress_session_closes_provider_on_persistence_failure(monkeypatch):
     import asyncio
     import uuid as _uuid
 
-    from ah.core.models import ContextChunk
+    from machina.core.models import ContextChunk
 
     closed = []
     sid = _uuid.uuid4()
@@ -999,8 +999,8 @@ def test_compress_session_closes_provider_on_persistence_failure(monkeypatch):
     ]
     from types import SimpleNamespace
 
-    import ah.core.provider as provmod
-    from ah.core import context as ctxmod
+    import machina.core.provider as provmod
+    from machina.core import context as ctxmod
 
     async def _all_chunks(session_id):
         return list(chunks)
@@ -1011,7 +1011,7 @@ def test_compress_session_closes_provider_on_persistence_failure(monkeypatch):
     monkeypatch.setattr(ctxmod.context_manager, "get_all_chunks", _all_chunks)
     monkeypatch.setattr(provmod, "get_provider", lambda provider=None, model=None: _P())
     monkeypatch.setattr(ctxmod.context_manager, "replace_chunks_by_ids", _boom_replace)
-    from ah import services as svcmod
+    from machina import services as svcmod
 
     with pytest.raises(RuntimeError):
         asyncio.run(svcmod.compress_session(SimpleNamespace(id=sid, agent_id="h")))
@@ -1022,7 +1022,7 @@ def test_compress_session_closes_provider_on_cancel(monkeypatch):
     import asyncio
     import uuid as _uuid
 
-    from ah.core.models import ContextChunk
+    from machina.core.models import ContextChunk
 
     closed = []
     sid = _uuid.uuid4()
@@ -1044,8 +1044,8 @@ def test_compress_session_closes_provider_on_cancel(monkeypatch):
     ]
     from types import SimpleNamespace
 
-    import ah.core.provider as provmod
-    from ah.core import context as ctxmod
+    import machina.core.provider as provmod
+    from machina.core import context as ctxmod
 
     async def _all_chunks(session_id):
         return list(chunks)
@@ -1056,7 +1056,7 @@ def test_compress_session_closes_provider_on_cancel(monkeypatch):
     monkeypatch.setattr(ctxmod.context_manager, "get_all_chunks", _all_chunks)
     monkeypatch.setattr(provmod, "get_provider", lambda provider=None, model=None: _P())
     monkeypatch.setattr(ctxmod.context_manager, "replace_chunks_by_ids", _cancel_replace)
-    from ah import services as svcmod
+    from machina import services as svcmod
 
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(svcmod.compress_session(SimpleNamespace(id=sid, agent_id="h")))
@@ -1066,7 +1066,7 @@ def test_compress_session_closes_provider_on_cancel(monkeypatch):
 def test_shared_provider_not_closed_by_non_owner():
     import asyncio
 
-    from ah.core.agent_factory import close_agent_provider
+    from machina.core.agent_factory import close_agent_provider
 
     closed = []
 

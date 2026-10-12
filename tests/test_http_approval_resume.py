@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from ah.api.app import create_app
-from ah.core.agent import ReActAgent
-from ah.core.config import config
-from ah.core.models import AgentResponse, LLMResponse, StreamEvent
-from ah.core.session import SessionManager
-from ah.permissions import store
+from machina.api.app import create_app
+from machina.core.agent import ReActAgent
+from machina.core.config import config
+from machina.core.models import AgentResponse, LLMResponse, StreamEvent
+from machina.core.session import SessionManager
+from machina.permissions import store
 
 
 def events(response):
@@ -25,10 +25,10 @@ def events(response):
 
 @pytest.fixture
 async def approval_http(db_pool, monkeypatch, tmp_path):
-    import ah.core.agent_factory as factory
-    from ah import services
-    from ah.tools import file
-    from ah.tools.base import Tool, registry
+    import machina.core.agent_factory as factory
+    from machina import services
+    from machina.tools import file
+    from machina.tools.base import Tool, registry
 
     # Use an unclassified extension effect to exercise approval recovery.
     # Built-in workspace writes now proceed under the routine risk policy.
@@ -45,13 +45,13 @@ async def approval_http(db_pool, monkeypatch, tmp_path):
         ),
     )
 
-    monkeypatch.setenv("AGENT_HARNESS_API_KEY", "approval-resume-test")
-    monkeypatch.setattr("ah.db.connection.db", db_pool)
-    monkeypatch.setattr("ah.core.session.db", db_pool)
-    monkeypatch.setattr("ah.core.context.db", db_pool)
+    monkeypatch.setenv("MACHINA_API_KEY", "approval-resume-test")
+    monkeypatch.setattr("machina.db.connection.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr("machina.core.context.db", db_pool)
     monkeypatch.setattr(config, "execution_mode", "ask")
     monkeypatch.setattr(config, "workspace_root", str(tmp_path))
-    monkeypatch.setattr(config, "agent_harness_home", str(tmp_path))
+    monkeypatch.setattr(config, "machina_home", str(tmp_path))
     monkeypatch.setattr(services, "maybe_auto_compact", AsyncMock())
     session = await SessionManager().create(title="HTTP approval")
     arguments = {"path": "approved.txt", "content": "exact reviewed bytes"}
@@ -119,7 +119,7 @@ async def test_http_approved_action_resumes_once_with_new_fence(approval_http, p
     emitted = events(resumed)
     assert resumed.headers["X-AH-Protocol-Version"] == str(protocol_version)
     if protocol_version == 2:
-        from ah.protocol import validate_event
+        from machina.protocol import validate_event
 
         for event in emitted:
             validate_event(event)
@@ -182,7 +182,7 @@ async def test_resume_revalidates_action_and_origin(approval_http, change):
 async def test_mode_change_between_validation_and_execution_requires_new_approval(
     approval_http, monkeypatch
 ):
-    import ah.core.agent_factory as factory
+    import machina.core.agent_factory as factory
 
     client, session, record, arguments, root, database = approval_http
     rid = record["request_id"]

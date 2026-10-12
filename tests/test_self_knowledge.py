@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.config import config
-from ah.core.models import LLMResponse, Session, StreamEvent
+from machina.core.config import config
+from machina.core.models import LLMResponse, Session, StreamEvent
 
 
 def test_capability_brief_explains_oauth_and_inline_user_images():
-    from ah.core.self_knowledge import FEATURES
+    from machina.core.self_knowledge import FEATURES
 
     assert "OAuth remains unavailable" not in FEATURES["mcp"]
     assert "OAuth" in FEATURES["mcp"]
@@ -20,7 +20,7 @@ def test_capability_brief_explains_oauth_and_inline_user_images():
 
 
 def setup_agent(monkeypatch, *, allowed_tools=None):
-    from ah.core.agent import ReActAgent
+    from machina.core.agent import ReActAgent
 
     for name in (
         "memory_enabled",
@@ -33,8 +33,8 @@ def setup_agent(monkeypatch, *, allowed_tools=None):
     ):
         monkeypatch.setattr(config, name, False)
     session = Session(id=uuid.uuid4(), agent_id="knowledge-test", execution_mode="workspace")
-    monkeypatch.setattr("ah.core.agent.session_manager.get", AsyncMock(return_value=session))
-    monkeypatch.setattr("ah.core.agent.session_manager.update_activity", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.session_manager.get", AsyncMock(return_value=session))
+    monkeypatch.setattr("machina.core.agent.session_manager.update_activity", AsyncMock())
     for method in (
         "add_chunk",
         "add_chunks_batch",
@@ -42,9 +42,9 @@ def setup_agent(monkeypatch, *, allowed_tools=None):
         "get_recent_context",
         "get_latest_images",
     ):
-        monkeypatch.setattr(f"ah.core.agent.context_manager.{method}", AsyncMock(return_value=[]))
-    monkeypatch.setattr("ah.core.agent.usage_store.reserve", AsyncMock(return_value=None))
-    monkeypatch.setattr("ah.core.agent.usage_store.finish", AsyncMock())
+        monkeypatch.setattr(f"machina.core.agent.context_manager.{method}", AsyncMock(return_value=[]))
+    monkeypatch.setattr("machina.core.agent.usage_store.reserve", AsyncMock(return_value=None))
+    monkeypatch.setattr("machina.core.agent.usage_store.finish", AsyncMock())
 
     class Provider:
         model = "knowledge-fixture"
@@ -105,8 +105,8 @@ async def test_feature_brief_reaches_model_even_with_empty_notes_and_custom_prom
 
 
 async def test_capability_brief_is_bounded_live_and_never_reads_secrets(monkeypatch):
-    from ah.core.assembler import get_token_count
-    from ah.core.self_knowledge import capability_context
+    from machina.core.assembler import get_token_count
+    from machina.core.self_knowledge import capability_context
 
     secret = "sk-or-v1-" + "a" * 50
     monkeypatch.setattr(config, "openrouter_api_key", secret)
@@ -127,8 +127,8 @@ async def test_capability_brief_is_bounded_live_and_never_reads_secrets(monkeypa
     "emotion", ["sk-or-v1-" + "a" * 50, "word " * 10000], ids=["secret", "oversized"]
 )
 async def test_unrestricted_emotion_never_leaks_or_expands_feature_context(monkeypatch, emotion):
-    from ah.core.assembler import get_token_count
-    from ah.core.self_knowledge import capability_context, configuration
+    from machina.core.assembler import get_token_count
+    from machina.core.self_knowledge import capability_context, configuration
 
     monkeypatch.setattr(config, "persona_default_emotion", emotion)
     session = Session(id=uuid.uuid4())
@@ -141,14 +141,14 @@ async def test_unrestricted_emotion_never_leaks_or_expands_feature_context(monke
 def test_mode_summary_is_bounded_and_missing_mode_is_unknown():
     from types import SimpleNamespace
 
-    from ah.core.self_knowledge import configuration
+    from machina.core.self_knowledge import configuration
 
     assert configuration(SimpleNamespace())["mode"] == "unknown"
     assert configuration(SimpleNamespace(execution_mode="word " * 10000))["mode"] == "unknown"
 
 
 async def test_status_omits_oversized_data_without_losing_counts_or_breaking_json(monkeypatch):
-    from ah.tools import harness
+    from machina.tools import harness
 
     sid = uuid.uuid4()
     owner = "bounded-owner"
@@ -185,7 +185,7 @@ async def test_status_omits_oversized_data_without_losing_counts_or_breaking_jso
 
 
 async def test_status_tool_is_read_only_owned_and_redacted(monkeypatch):
-    from ah.tools import harness
+    from machina.tools import harness
 
     sid = uuid.uuid4()
     owner = "status-owner"
@@ -212,15 +212,15 @@ async def test_status_tool_is_read_only_owned_and_redacted(monkeypatch):
     assert payload["session"]["mode"] == "ask"
     assert secret not in json.dumps(payload)
     assert payload["read_only"] is True
-    from ah.permissions.tools import action_for_tool
+    from machina.permissions.tools import action_for_tool
 
     assert action_for_tool("harness_status", {})["operation"] == "context.read"
     assert "mcp_call" in payload["features"]["mcp"], "discovery is not remote tool exposure"
 
 
 async def test_status_tool_refuses_wrong_owner_and_sanitizes_failure(monkeypatch):
-    from ah.core.exceptions import ToolError
-    from ah.tools import harness
+    from machina.core.exceptions import ToolError
+    from machina.tools import harness
 
     sid = uuid.uuid4()
     monkeypatch.setattr(harness, "active_agent_scope", AsyncMock(return_value=("caller", sid)))
@@ -252,10 +252,10 @@ async def test_failed_growth_preparation_still_describes_feature_without_claimin
     monkeypatch.setattr(config, "personality_growth_enabled", True)
     monkeypatch.setattr(config, "rsi_enabled", True)
     monkeypatch.setattr(
-        "ah.memory.growth.growth_store.begin",
+        "machina.memory.growth.growth_store.begin",
         AsyncMock(side_effect=RuntimeError("fixture unavailable")),
     )
-    monkeypatch.setattr("ah.memory.embeddings.embed_query", AsyncMock(return_value=None))
+    monkeypatch.setattr("machina.memory.embeddings.embed_query", AsyncMock(return_value=None))
     agent.memory_retriever.retrieve = AsyncMock(return_value=[])
     _, messages = await agent._prepare_context(session.id, "What is RSI?", pending_chunks=[])
     prompt = messages[0]["content"]
@@ -267,10 +267,10 @@ async def test_failed_growth_preparation_still_describes_feature_without_claimin
 async def test_live_agent_inspects_own_state_without_approval_or_truncated_evidence(
     db_pool, monkeypatch, streaming
 ):
-    from ah.core.agent import ReActAgent
-    from ah.core.session import session_manager
-    from ah.db.connection import db
-    from ah.memory.growth import growth_store
+    from machina.core.agent import ReActAgent
+    from machina.core.session import session_manager
+    from machina.db.connection import db
+    from machina.memory.growth import growth_store
 
     monkeypatch.setattr(db, "_pool", db_pool.pool)
     monkeypatch.setattr(config, "memory_enabled", True)
@@ -279,7 +279,7 @@ async def test_live_agent_inspects_own_state_without_approval_or_truncated_evide
     monkeypatch.setattr(config, "rag_enabled", False)
     monkeypatch.setattr(config, "memory_consolidation_enabled", False)
     monkeypatch.setattr(config, "learning_review_enabled", False)
-    monkeypatch.setattr("ah.memory.embeddings.embed_query", AsyncMock(return_value=None))
+    monkeypatch.setattr("machina.memory.embeddings.embed_query", AsyncMock(return_value=None))
     owner = "self-knowledge-" + uuid.uuid4().hex
     session = await session_manager.create(agent_id=owner)
 
@@ -346,8 +346,8 @@ async def test_live_agent_inspects_own_state_without_approval_or_truncated_evide
 
 
 async def test_status_registry_never_reuses_other_agents_or_stale_configuration(monkeypatch):
-    from ah.tools import harness
-    from ah.tools.base import registry
+    from machina.tools import harness
+    from machina.tools.base import registry
 
     sid = uuid.uuid4()
     monkeypatch.setattr(harness, "active_agent_scope", AsyncMock(return_value=("one", sid)))

@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from ah.observability.audit import AuditPersistence
+from machina.observability.audit import AuditPersistence
 
 
 async def _cancel_tasks(*tasks):
@@ -16,7 +16,7 @@ async def _cancel_tasks(*tasks):
 
 @pytest.mark.asyncio
 async def test_finished_writer_callback_does_not_drop_restarted_events(monkeypatch):
-    from ah.observability import audit
+    from machina.observability import audit
 
     persisted = []
     first_written = asyncio.Event()
@@ -47,7 +47,7 @@ async def test_finished_writer_callback_does_not_drop_restarted_events(monkeypat
 
 @pytest.mark.asyncio
 async def test_timed_out_writer_finishes_cancellation_on_its_original_queue(monkeypatch):
-    from ah.observability import audit
+    from machina.observability import audit
 
     started = asyncio.Event()
     cancelling = asyncio.Event()
@@ -81,7 +81,7 @@ async def test_timed_out_writer_finishes_cancellation_on_its_original_queue(monk
 
 @pytest.mark.asyncio
 async def test_start_during_shutdown_persists_events_in_a_new_writer(monkeypatch):
-    from ah.observability import audit
+    from machina.observability import audit
 
     started = asyncio.Event()
     release = asyncio.Event()
@@ -117,7 +117,7 @@ async def test_start_during_shutdown_persists_events_in_a_new_writer(monkeypatch
 
 @pytest.mark.asyncio
 async def test_cancelled_shutdown_cancels_the_owned_writer(monkeypatch):
-    from ah.observability import audit
+    from machina.observability import audit
 
     started = asyncio.Event()
     cancelled = asyncio.Event()

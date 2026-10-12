@@ -3,7 +3,7 @@
 import msgpack
 import pytest
 
-from ah.rag.pipeline import RAGConfig, RAGPipeline
+from machina.rag.pipeline import RAGConfig, RAGPipeline
 from tests.test_deep_rag_scope import ChunkRows, QueryEmbedder
 
 
@@ -32,7 +32,7 @@ class BackfillRows(ChunkRows):
 @pytest.fixture
 def rows(monkeypatch):
     boundary = BackfillRows()
-    monkeypatch.setattr("ah.rag.pipeline.db", boundary)
+    monkeypatch.setattr("machina.rag.pipeline.db", boundary)
     return boundary
 
 

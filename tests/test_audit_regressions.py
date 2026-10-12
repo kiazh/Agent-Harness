@@ -12,18 +12,18 @@ from unittest.mock import AsyncMock
 import pytest
 import yaml
 
-from ah.core.agent import BaseReActAgent
-from ah.core.assembler import PromptAssembler, get_token_count
-from ah.core.models import LLMResponse
-from ah.core.provider import AsyncTokenBucket
+from machina.core.agent import BaseReActAgent
+from machina.core.assembler import PromptAssembler, get_token_count
+from machina.core.models import LLMResponse
+from machina.core.provider import AsyncTokenBucket
 
 
 @pytest.mark.asyncio
 async def test_tool_allowlist_is_enforced_at_execution_and_ollama_arguments_work(monkeypatch):
     # Pins ask-mode broker behavior regardless of the developer's live config.
-    monkeypatch.setenv("AGENT_HARNESS_EXECUTION_MODE", "ask")
-    from ah.core.context import context_manager
-    from ah.tools.base import registry
+    monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
+    from machina.core.context import context_manager
+    from machina.tools.base import registry
 
     execute = AsyncMock(return_value="read")
     monkeypatch.setattr(registry, "execute", execute)
@@ -60,7 +60,7 @@ async def test_stream_does_not_retry_after_a_visible_delta():
             self.calls = 0
 
         async def stream_complete(self, **_kwargs):
-            from ah.core.models import StreamEvent
+            from machina.core.models import StreamEvent
 
             self.calls += 1
             yield StreamEvent(type="text", content="partial")
@@ -89,9 +89,9 @@ def test_prompt_budget_and_document_text():
 
 @pytest.mark.asyncio
 async def test_rag_cache_respects_result_count_and_dense_mode(monkeypatch):
-    from ah.core.models import ContextChunk
-    from ah.rag.pipeline import RAGConfig, RAGPipeline
-    from ah.rag.search import SearchResult
+    from machina.core.models import ContextChunk
+    from machina.rag.pipeline import RAGConfig, RAGPipeline
+    from machina.rag.search import SearchResult
 
     class Embedder:
         model_name = "text-embedding-3-small"
@@ -126,7 +126,7 @@ async def test_rag_cache_respects_result_count_and_dense_mode(monkeypatch):
             return await self.search(**kwargs)
 
     search = Search()
-    monkeypatch.setattr("ah.rag.pipeline.db.fetch", AsyncMock(return_value=[]))
+    monkeypatch.setattr("machina.rag.pipeline.db.fetch", AsyncMock(return_value=[]))
     pipeline = RAGPipeline(embedder=Embedder(), search=search)
     session_id = uuid.uuid4()
     assert len(await pipeline.search("same", session_id, top_k=1, rerank=False)) == 1
@@ -143,9 +143,9 @@ async def test_rag_cache_respects_result_count_and_dense_mode(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_http_rpc_uses_app_database_without_closing_it(monkeypatch):
-    from ah.api.app import _RpcGateway
-    from ah.core.session import session_manager
-    from ah.db.connection import db
+    from machina.api.app import _RpcGateway
+    from machina.core.session import session_manager
+    from machina.db.connection import db
 
     monkeypatch.setattr(db, "_pool", object())
     close = AsyncMock()
@@ -160,8 +160,8 @@ async def test_http_rpc_uses_app_database_without_closing_it(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_memory_store_filters_search_and_count_by_session(monkeypatch):
-    from ah.db.connection import db
-    from ah.memory.store import MemoryStore
+    from machina.db.connection import db
+    from machina.memory.store import MemoryStore
 
     session_id = uuid.uuid4()
     fetch = AsyncMock(return_value=[])
@@ -178,8 +178,8 @@ async def test_memory_store_filters_search_and_count_by_session(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_gateway_session_cursor_reaches_older_sessions(monkeypatch):
-    from ah.core.session import session_manager
-    from ah.gateway.server import Gateway
+    from machina.core.session import session_manager
+    from machina.gateway.server import Gateway
 
     sessions = [
         SimpleNamespace(
@@ -208,8 +208,8 @@ async def test_gateway_session_cursor_reaches_older_sessions(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_parallel_delegation_serializes_one_failure(monkeypatch):
-    from ah.core.orchestrator import DelegationResult, orchestrator
-    from ah.gateway.features import agents_run
+    from machina.core.orchestrator import DelegationResult, orchestrator
+    from machina.gateway.features import agents_run
 
     session_id = uuid.uuid4()
     good = DelegationResult("researcher", "a", "done", session_id, 2, 1, "complete")
@@ -230,9 +230,9 @@ async def test_parallel_delegation_serializes_one_failure(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_job_claim_has_recovery_lease_and_named_agent_definition(monkeypatch):
-    from ah.core.agent_def import AgentDef, agent_registry
-    from ah.core.scheduler import JobRunner, JobStore
-    from ah.db.connection import db
+    from machina.core.agent_def import AgentDef, agent_registry
+    from machina.core.scheduler import JobRunner, JobStore
+    from machina.db.connection import db
 
     fetchrow = AsyncMock(return_value=None)
     monkeypatch.setattr(db, "fetchrow", fetchrow)
@@ -251,7 +251,7 @@ async def test_job_claim_has_recovery_lease_and_named_agent_definition(monkeypat
     )
     monkeypatch.setattr(agent_registry, "get", AsyncMock(return_value=definition))
     provider = object()
-    monkeypatch.setattr("ah.core.provider.get_provider", lambda **_kwargs: provider)
+    monkeypatch.setattr("machina.core.provider.get_provider", lambda **_kwargs: provider)
     agent = await JobRunner()._build_agent("researcher")
     assert agent.allowed_tools == ["read_file"]
     assert agent.system_prompt == "Research only"
@@ -260,15 +260,15 @@ async def test_job_claim_has_recovery_lease_and_named_agent_definition(monkeypat
 
 @pytest.mark.asyncio
 async def test_running_job_renews_its_lease(monkeypatch):
-    from ah.core.scheduler import JobRunner
+    from machina.core.scheduler import JobRunner
 
-    monkeypatch.setattr("ah.core.scheduler.RUN_LEASE_SECONDS", 0.3)
+    monkeypatch.setattr("machina.core.scheduler.RUN_LEASE_SECONDS", 0.3)
     job_id = uuid.uuid4()
     session_id = uuid.uuid4()
     claim = uuid.uuid4()
     renewed = asyncio.Event()
-    monkeypatch.setattr("ah.core.turns.try_begin_turn", AsyncMock(return_value=object()))
-    monkeypatch.setattr("ah.core.turns.end_turn", AsyncMock())
+    monkeypatch.setattr("machina.core.turns.try_begin_turn", AsyncMock(return_value=object()))
+    monkeypatch.setattr("machina.core.turns.end_turn", AsyncMock())
 
     class Store:
         def __init__(self):
@@ -319,6 +319,6 @@ async def test_zero_rate_limit_disables_throttling():
 def test_compose_starts_api_and_initializes_schema():
     compose = yaml.safe_load((Path(__file__).parents[1] / "docker-compose.yml").read_text())
     app = compose["services"]["app"]
-    assert "ah init" in app["command"][0]
-    assert "ah serve" in app["command"][0]
+    assert "machina init" in app["command"][0]
+    assert "machina serve" in app["command"][0]
     assert "127.0.0.1:8000:8000" in app["ports"]

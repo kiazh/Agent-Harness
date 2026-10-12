@@ -7,7 +7,7 @@ Use [SECURITY.md](SECURITY.md) for boundaries and limitations.
 
 ## Configuration contract
 
-For normal settings: per-call/session override → `AGENT_HARNESS_<KEY>` → documented
+For normal settings: per-call/session override → `MACHINA_<KEY>` → documented
 legacy variable → YAML configuration → default. Secret settings use the same
 overrides/environment precedence, followed by mounted `<ENV_NAME>_FILE`, then the
 configured Vault/AWS backend. YAML credential fields are ignored; an explicitly
@@ -19,41 +19,41 @@ finish with the credential they originally acquired.
 
 Do not put credentials in YAML, command arguments, image layers, prompts, tool
 arguments, or monitoring labels. Use process environment, ACL-protected mounted
-files, Vault, or AWS Secrets Manager. `AH_ENV_FILE` selects the operator-managed
+files, Vault, or AWS Secrets Manager. `MACHINA_ENV_FILE` selects the operator-managed
 dotenv path. Secret updates validate/persist before activating; failed writes
 preserve the previous live setting. Configure only trusted backend endpoints.
 
 | Requirement | Setting/check |
 |---|---|
-| PostgreSQL 16+ | `DATABASE_URL` or `AGENT_HARNESS_DATABASE_URL`; dedicated application role; encrypt remote transport and limit network access. |
+| PostgreSQL 16+ | `DATABASE_URL` or `MACHINA_DATABASE_URL`; dedicated application role; encrypt remote transport and limit network access. |
 | Extensions | `vector`, `pg_trgm`; install with an administrative role before using a restricted runtime role. |
-| Test isolation | `AGENT_HARNESS_TEST_DATABASE_URL` must name a separate test database. Never point it at production. |
-| Provider | `AGENT_HARNESS_PROVIDER`, `AGENT_HARNESS_MODEL`, matching provider key, or operator-configured Ollama service. |
-| HTTP authorization | `AGENT_HARNESS_API_KEY`; terminate TLS at a trusted edge. `/health` and `/ready` are public; `/metrics` requires authentication. |
-| Local gateway | `AH_GATEWAY_TOKEN`; TUI launcher provisions its own token. Do not publish unauthenticated stdio transport. |
-| Provenance | `AGENT_HARNESS_PROVENANCE_KEY`, distinct from API/provider keys. |
-| Workspace | `AGENT_HARNESS_WORKSPACE_ROOT`; provision separate trusted script root with `AGENT_HARNESS_SCRIPTS_DIR`. |
+| Test isolation | `MACHINA_TEST_DATABASE_URL` must name a separate test database. Never point it at production. |
+| Provider | `MACHINA_PROVIDER`, `MACHINA_MODEL`, matching provider key, or operator-configured Ollama service. |
+| HTTP authorization | `MACHINA_API_KEY`; terminate TLS at a trusted edge. `/health` and `/ready` are public; `/metrics` requires authentication. |
+| Local gateway | `MACHINA_GATEWAY_TOKEN`; TUI launcher provisions its own token. Do not publish unauthenticated stdio transport. |
+| Provenance | `MACHINA_PROVENANCE_KEY`, distinct from API/provider keys. |
+| Workspace | `MACHINA_WORKSPACE_ROOT`; provision separate trusted script root with `MACHINA_SCRIPTS_DIR`. |
 | Docker sandbox | Working daemon and built `Dockerfile.sandbox` image; inspect approved mounts/network policy. Absence refuses sandbox execution. |
 | Search | Optional operator-controlled `SEARXNG_URL`; internet fetching still enforces per-hop address/deadline restrictions. |
-| HTTP rate limit | `AGENT_HARNESS_HTTP_RATE_LIMIT`, default 120 requests/minute per transport peer per worker; 0 disables. Enforce a deployment-wide limit at the trusted edge. |
-| Usage budgets | Session/agent token/request limits under `AGENT_HARNESS_USAGE_*`; defaults 0 (unlimited). Set explicit production budgets. |
-| Timeouts | `AGENT_HARNESS_TURN_TIMEOUT` 300 seconds compute; `AGENT_HARNESS_APPROVAL_TIMEOUT` 300 seconds wait. Both validate 1–3600. |
+| HTTP rate limit | `MACHINA_HTTP_RATE_LIMIT`, default 120 requests/minute per transport peer per worker; 0 disables. Enforce a deployment-wide limit at the trusted edge. |
+| Usage budgets | Session/agent token/request limits under `MACHINA_USAGE_*`; defaults 0 (unlimited). Set explicit production budgets. |
+| Timeouts | `MACHINA_TURN_TIMEOUT` 300 seconds compute; `MACHINA_APPROVAL_TIMEOUT` 300 seconds wait. Both validate 1–3600. |
 | Ownership | Turn TTL 360 seconds; renew every 30 seconds. Mutation TTL 120 seconds. Scheduler lease 300 seconds, periodically renewed. |
 
 ## Install, upgrade, and rollback
 
 Use a pinned release artifact and locked UI dependencies. Python 3.11+ and Node
 22.19+ are required for the current TUI. A non-editable Python wheel supplies the
-Python runtime and built-in skills; set `AH_UI_DIR` to a matching checkout's `ui/`
+Python runtime and built-in skills; set `MACHINA_UI_DIR` to a matching checkout's `ui/`
 and run `npm ci --ignore-scripts --prefix ui` for the TUI. Keep the UI and backend
 from the same release; the TUI negotiates protocol v2, while legacy clients that
 omit `protocolVersion` retain v1. See [the wire contract](communications/ui-gateway-protocol.md).
 
 Before upgrade: stop accepting work; drain or stop active workers; capture a
-consistent backup and record artifact/config versions. Run `ah init` using an
+consistent backup and record artifact/config versions. Run `machina init` using an
 operator migration role. Schema application is an atomic transaction and can be
 repeated. The gateway does not self-migrate on startup: deploying code that
-references new columns without running `ah init` first fails at turn time
+references new columns without running `machina init` first fails at turn time
 (`UndefinedColumnError` on first write), not at boot — always migrate before
 starting new workers. Legacy modes migrate to `ask`; execution claims remain separate from
 session business status. Version-1 action approvals require fresh review after
@@ -106,7 +106,7 @@ operation names, IDs and counts; never put conversation content in labels.
 Alert on unavailable readiness, repeated provider errors/429s, claim loss,
 cleanup timeout/late failure, audit persistence failures/dropped entries, budget
 exhaustion, scheduler lease loss, and failed jobs. For example, the exported
-`ah_operations_total{operation="audit.persistence.failed"}` counter should
+`machina_operations_total{operation="audit.persistence.failed"}` counter should
 produce an alert when its increase over five minutes is nonzero. First verify
 the selected metric labels against a staging scrape. Send a controlled test
 failure through the configured alert path and confirm delivery and recovery.
@@ -114,7 +114,7 @@ failure through the configured alert path and confirm delivery and recovery.
 Gateway logs rotate at 5 MiB with three backups per gateway log file (about
 20 MiB including the current file). Multiple processes writing the same
 rotating file need an operator-managed collector or separate process log paths.
-Protect `~/.agent-harness/logs`; exception messages are scrubbed, and audit events
+Protect `~/.machina/logs`; exception messages are scrubbed, and audit events
 exclude raw prompts/completions/tool payloads. The audit writer is best effort:
 queue overflow and failed persistence have metrics, not a durable replay queue.
 Set PostgreSQL audit retention and Prometheus retention outside the application;

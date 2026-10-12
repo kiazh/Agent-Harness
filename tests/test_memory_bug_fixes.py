@@ -9,16 +9,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ah.core.models import LLMResponse
-from ah.memory import (
+from machina.core.models import LLMResponse
+from machina.memory import (
     MemoryConsolidator,
     MemoryEntry,
     MemoryRetriever,
     MemoryStore,
     RetrievedMemory,
 )
-from ah.memory.approval import MemoryApprovalGate
-from ah.memory.identity import ValidationResult
+from machina.memory.approval import MemoryApprovalGate
+from machina.memory.identity import ValidationResult
 
 
 def _make_row(**overrides):
@@ -79,7 +79,7 @@ class TestRejectRaceCondition:
 
     async def test_reject_uses_transaction_with_for_update(self, gate, mock_db):
         """Verify reject() uses FOR UPDATE in a transaction to prevent race conditions."""
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value={"status": "pending"})
             mock_db.execute = AsyncMock(return_value="UPDATE 1")
             conn = _transactional_connection(mock_db)
@@ -93,7 +93,7 @@ class TestRejectRaceCondition:
 
     async def test_reject_concurrent_already_approved(self, gate, mock_db):
         """Verify reject() returns False when memory was already approved concurrently."""
-        with patch("ah.memory.approval.db", mock_db):
+        with patch("machina.memory.approval.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value={"status": "approved"})
             mock_db.execute = AsyncMock(return_value="UPDATE 0")
             _transactional_connection(mock_db)
@@ -132,7 +132,7 @@ class TestStoreAddSourceAgent:
         cross-agent check sees agent_b != agent_a and demands provenance.
         Unsigned deliveries are then quarantined instead of accepted.
         """
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.fetchrow = AsyncMock(return_value=_make_row())
 
             captured_agent_id = None
@@ -144,7 +144,7 @@ class TestStoreAddSourceAgent:
                 captured_memory_agent = memory.agent_id
                 return ValidationResult(is_valid=True, confidence=0.9, reason="OK")
 
-            with patch("ah.memory.store.identity_gate") as mock_gate:
+            with patch("machina.memory.store.identity_gate") as mock_gate:
                 mock_gate.validate_incoming = mock_validate
                 entry = await store.add(
                     session_id=uuid.uuid4(),
@@ -186,7 +186,7 @@ class TestGetWeakMemoriesQuarantined:
 
     async def test_get_weak_memories_filters_quarantined(self, store, mock_db):
         """Verify get_weak_memories() filters out quarantined memories."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.fetch = AsyncMock(return_value=[_make_row(importance=0.02)])
             await store.get_weak_memories(threshold=0.05)
             # Verify the query includes quarantined = FALSE
@@ -197,7 +197,7 @@ class TestGetWeakMemoriesQuarantined:
 
     async def test_get_weak_memories_with_agent_filters_quarantined(self, store, mock_db):
         """Verify get_weak_memories() with agent filter also filters quarantined."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.fetch = AsyncMock(return_value=[_make_row(importance=0.02)])
             await store.get_weak_memories(threshold=0.05, agent_id="harness")
             call_args = mock_db.fetch.call_args
@@ -232,7 +232,7 @@ class TestEvictWeakMemoriesCTE:
 
     async def test_evict_weak_memories_uses_limit(self, store, mock_db):
         """Verify evict_weak_memories() uses LIMIT to avoid full table scan."""
-        with patch("ah.memory.store.db", mock_db):
+        with patch("machina.memory.store.db", mock_db):
             mock_db.execute = AsyncMock(return_value="DELETE 5")
             result = await store.evict_weak_memories(max_memories=10)
             assert result == 5
@@ -292,7 +292,7 @@ class TestRerankTimeout:
         ]
 
         # Patch asyncio.wait_for to verify it's called
-        with patch("ah.memory.retriever.asyncio.wait_for", side_effect=TimeoutError()):
+        with patch("machina.memory.retriever.asyncio.wait_for", side_effect=TimeoutError()):
             result = await retriever._rerank("test", candidates)
             # Should fall back to original candidates on timeout
             assert result == candidates
@@ -328,7 +328,7 @@ class TestKeywordSearchFTS:
         attach_connection(mock_db)
         mock_db.fetch = AsyncMock(return_value=[])
 
-        with patch("ah.memory.retriever.db", mock_db):
+        with patch("machina.memory.retriever.db", mock_db):
             results = await retriever._keyword_search("test query")
             assert isinstance(results, list)
             # Verify the query uses to_tsvector or similar FTS
@@ -404,7 +404,7 @@ class TestConsolidatorBatchDedup:
         consolidator._extract_memories = mock_extract
 
         # Mock context_manager
-        with patch("ah.memory.consolidator.context_manager") as mock_cm:
+        with patch("machina.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[])
             # This should not raise and should complete
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")

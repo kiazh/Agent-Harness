@@ -15,10 +15,10 @@ from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
 # Set a test API key before importing the app
-os.environ["AGENT_HARNESS_API_KEY"] = "test-key-123"
+os.environ["MACHINA_API_KEY"] = "test-key-123"
 
-from ah.api.app import _RpcGateway, create_app
-from ah.core.models import Session
+from machina.api.app import _RpcGateway, create_app
+from machina.core.models import Session
 
 TEST_API_KEY = "test-key-123"
 
@@ -44,8 +44,8 @@ def auth_headers():
 
 @pytest.fixture
 async def client():
-    with patch("ah.api.app.db.connect", new_callable=AsyncMock):
-        with patch("ah.api.app.db.close", new_callable=AsyncMock):
+    with patch("machina.api.app.db.connect", new_callable=AsyncMock):
+        with patch("machina.api.app.db.close", new_callable=AsyncMock):
             app = create_app()
             mock_gw = AsyncMock()
             mock_gw.call.return_value = {"result": "ok"}
@@ -64,7 +64,7 @@ class TestRpcGatewayThreadSafety:
 
     async def test_concurrent_calls_get_unique_ids(self):
         """Concurrent calls to _RpcGateway.call() must each get a unique request ID."""
-        with patch("ah.api.app.Gateway") as mock_gateway_cls:
+        with patch("machina.api.app.Gateway") as mock_gateway_cls:
             mock_gw_instance = MagicMock()
             mock_gw_instance._db_ready = False
             mock_gw_instance.close = AsyncMock()
@@ -101,7 +101,7 @@ class TestRpcGatewayThreadSafety:
 
     async def test_concurrent_calls_no_response_overwrite(self):
         """Concurrent calls must not overwrite each other's responses."""
-        with patch("ah.api.app.Gateway") as mock_gateway_cls:
+        with patch("machina.api.app.Gateway") as mock_gateway_cls:
             mock_gw_instance = MagicMock()
             mock_gw_instance._db_ready = False
             mock_gw_instance.close = AsyncMock()
@@ -142,7 +142,7 @@ class TestRpcGatewayThreadSafety:
 
     async def test_next_id_increment_is_atomic(self):
         """_next_id increment must be atomic (no duplicate IDs under concurrency)."""
-        with patch("ah.api.app.Gateway") as mock_gateway_cls:
+        with patch("machina.api.app.Gateway") as mock_gateway_cls:
             mock_gw_instance = MagicMock()
             mock_gw_instance._db_ready = False
             mock_gw_instance.close = AsyncMock()
@@ -190,7 +190,7 @@ class TestDocumentOwnership:
         """POST /api/v1/documents must reject when agent doesn't own the session."""
         session = make_session(agent_id="owner-agent")
 
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = session
             resp = await client.post(
                 "/api/v1/documents",
@@ -208,9 +208,9 @@ class TestDocumentOwnership:
         """POST /api/v1/documents must accept when agent owns the session."""
         session = make_session(agent_id="owner-agent")
 
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = session
-            with patch("ah.tools.rag.get_rag_pipeline", new_callable=AsyncMock) as mock_pipeline:
+            with patch("machina.tools.rag.get_rag_pipeline", new_callable=AsyncMock) as mock_pipeline:
                 mock_pipeline.return_value = AsyncMock()
                 mock_pipeline.return_value.index_document = AsyncMock(return_value=[object()])
                 resp = await client.post(
@@ -229,9 +229,9 @@ class TestDocumentOwnership:
         """POST /api/v1/documents must accept when no agent is specified (uses session's agent_id)."""
         session = make_session(agent_id="harness")
 
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = session
-            with patch("ah.tools.rag.get_rag_pipeline", new_callable=AsyncMock) as mock_pipeline:
+            with patch("machina.tools.rag.get_rag_pipeline", new_callable=AsyncMock) as mock_pipeline:
                 mock_pipeline.return_value = AsyncMock()
                 mock_pipeline.return_value.index_document = AsyncMock(return_value=[object()])
                 resp = await client.post(
@@ -249,7 +249,7 @@ class TestDocumentOwnership:
         """GET /api/v1/documents/search must reject when agent doesn't own the session."""
         session = make_session(agent_id="owner-agent")
 
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = session
             resp = await client.get(
                 f"/api/v1/documents/search?sessionId={session.id}&query=test&agent=intruder-agent",
@@ -261,9 +261,9 @@ class TestDocumentOwnership:
         """GET /api/v1/documents/search must accept when agent owns the session."""
         session = make_session(agent_id="owner-agent")
 
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = session
-            with patch("ah.tools.rag.get_rag_pipeline", new_callable=AsyncMock) as mock_pipeline:
+            with patch("machina.tools.rag.get_rag_pipeline", new_callable=AsyncMock) as mock_pipeline:
                 mock_pipeline.return_value = AsyncMock()
                 mock_pipeline.return_value.search = AsyncMock(return_value=[])
                 resp = await client.get(
@@ -276,9 +276,9 @@ class TestDocumentOwnership:
         """GET /api/v1/documents/search must accept when no agent is specified."""
         session = make_session(agent_id="harness")
 
-        with patch("ah.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
+        with patch("machina.api.app.session_manager.get", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = session
-            with patch("ah.tools.rag.get_rag_pipeline", new_callable=AsyncMock) as mock_pipeline:
+            with patch("machina.tools.rag.get_rag_pipeline", new_callable=AsyncMock) as mock_pipeline:
                 mock_pipeline.return_value = AsyncMock()
                 mock_pipeline.return_value.search = AsyncMock(return_value=[])
                 resp = await client.get(
@@ -288,18 +288,18 @@ class TestDocumentOwnership:
                 assert resp.status_code == 200
 
 
-# ─── Bug 3: AGENT_HARNESS_API_KEY=disabled bypass ────────────────────────────
+# ─── Bug 3: MACHINA_API_KEY=disabled bypass ────────────────────────────
 
 
 class TestAuthDisabledBypass:
-    """AGENT_HARNESS_API_KEY=disabled must not bypass auth."""
+    """MACHINA_API_KEY=disabled must not bypass auth."""
 
     async def test_disabled_key_still_requires_auth(self):
         """When API key is 'disabled', requests without a key must still be rejected."""
-        from ah.api.auth import require_api_key
+        from machina.api.auth import require_api_key
 
         # Temporarily set the key to 'disabled'
-        with patch("ah.api.auth.configured_key", return_value="disabled"):
+        with patch("machina.api.auth.configured_key", return_value="disabled"):
             # A request without any auth headers should be rejected
             with pytest.raises(HTTPException) as exc_info:
                 await require_api_key(authorization=None, x_api_key=None)
@@ -307,9 +307,9 @@ class TestAuthDisabledBypass:
 
     async def test_disabled_key_with_correct_key_succeeds(self):
         """When API key is 'disabled', presenting 'disabled' as the key should succeed."""
-        from ah.api.auth import require_api_key
+        from machina.api.auth import require_api_key
 
-        with patch("ah.api.auth.configured_key", return_value="disabled"):
+        with patch("machina.api.auth.configured_key", return_value="disabled"):
             # Presenting 'disabled' as the key should succeed
             result = await require_api_key(
                 authorization="Bearer disabled",
@@ -319,9 +319,9 @@ class TestAuthDisabledBypass:
 
     async def test_disabled_key_with_wrong_key_rejected(self):
         """When API key is 'disabled', presenting a wrong key must be rejected."""
-        from ah.api.auth import require_api_key
+        from machina.api.auth import require_api_key
 
-        with patch("ah.api.auth.configured_key", return_value="disabled"):
+        with patch("machina.api.auth.configured_key", return_value="disabled"):
             with pytest.raises(HTTPException) as exc_info:
                 await require_api_key(
                     authorization="Bearer wrong-key",
@@ -338,7 +338,7 @@ class TestRpcGatewayTTL:
 
     async def test_responses_cleaned_up_after_timeout(self):
         """Old entries in _responses should be cleaned up after a timeout."""
-        with patch("ah.api.app.Gateway") as mock_gateway_cls:
+        with patch("machina.api.app.Gateway") as mock_gateway_cls:
             mock_gw_instance = MagicMock()
             mock_gw_instance._db_ready = False
             mock_gw_instance.close = AsyncMock()
@@ -365,7 +365,7 @@ class TestRpcGatewayTTL:
 
     async def test_responses_dict_does_not_grow_unboundedly(self):
         """_responses dict should not grow without bound when responses never arrive."""
-        with patch("ah.api.app.Gateway") as mock_gateway_cls:
+        with patch("machina.api.app.Gateway") as mock_gateway_cls:
             mock_gw_instance = MagicMock()
             mock_gw_instance._db_ready = False
             mock_gw_instance.close = AsyncMock()
@@ -388,7 +388,7 @@ class TestRpcGatewayTTL:
 
     async def test_ttl_cleanup_removes_old_entries(self):
         """TTL cleanup should remove entries older than the timeout."""
-        with patch("ah.api.app.Gateway") as mock_gateway_cls:
+        with patch("machina.api.app.Gateway") as mock_gateway_cls:
             mock_gw_instance = MagicMock()
             mock_gw_instance._db_ready = False
             mock_gw_instance.close = AsyncMock()
@@ -416,7 +416,7 @@ class TestRpcGatewayTTL:
 
     async def test_ttl_cleanup_keeps_recent_entries(self):
         """TTL cleanup should keep entries that are not yet expired."""
-        with patch("ah.api.app.Gateway") as mock_gateway_cls:
+        with patch("machina.api.app.Gateway") as mock_gateway_cls:
             mock_gw_instance = MagicMock()
             mock_gw_instance._db_ready = False
             mock_gw_instance.close = AsyncMock()

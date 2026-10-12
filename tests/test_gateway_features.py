@@ -9,16 +9,16 @@ import uuid
 
 import pytest
 
-from ah.core.config import config
-from ah.core.context import context_manager
-from ah.core.session import session_manager
-from ah.db.connection import db
-from ah.gateway.server import INVALID_PARAMS, NOT_FOUND, Gateway
+from machina.core.config import config
+from machina.core.context import context_manager
+from machina.core.session import session_manager
+from machina.db.connection import db
+from machina.gateway.server import INVALID_PARAMS, NOT_FOUND, Gateway
 from tests.test_gateway import Harness
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("AGENT_HARNESS_TEST_DATABASE_URL"),
-    reason="AGENT_HARNESS_TEST_DATABASE_URL not set",
+    not os.environ.get("MACHINA_TEST_DATABASE_URL"),
+    reason="MACHINA_TEST_DATABASE_URL not set",
 )
 
 
@@ -48,7 +48,7 @@ def result(response: dict) -> dict:
 
 
 def test_every_feature_method_is_registered():
-    from ah.gateway import features
+    from machina.gateway import features
 
     methods = Gateway(lambda frame: None)._methods
     assert set(features.METHODS) <= set(methods)
@@ -56,7 +56,7 @@ def test_every_feature_method_is_registered():
 
 class TestProfileScope:
     async def test_session_create_accepts_profile_agent(self, h):
-        from ah.memory.user_profile import user_profile_store
+        from machina.memory.user_profile import user_profile_store
 
         tag = f"scope{uuid.uuid4().hex[:8]}"
         await user_profile_store.get_or_create(user_id=tag)
@@ -75,13 +75,13 @@ class TestProfileScope:
         assert response["error"]["code"] == INVALID_PARAMS
 
     async def test_profile_scope_resolves_to_general_tools(self, h, monkeypatch):
-        from ah.core.agent_def import agent_registry
-        from ah.core.agent_factory import build_agent_for_session
+        from machina.core.agent_def import agent_registry
+        from machina.core.agent_factory import build_agent_for_session
 
         # Provider construction needs a key; no network calls are made.
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
         tag = f"scopedef{uuid.uuid4().hex[:8]}"
-        from ah.memory.user_profile import user_profile_store
+        from machina.memory.user_profile import user_profile_store
 
         await user_profile_store.get_or_create(user_id=tag)
         try:
@@ -99,8 +99,8 @@ class TestProfileScope:
             await db.execute("DELETE FROM user_profiles WHERE user_id = $1", tag)
 
     async def test_unknown_agent_still_fails_closed(self, h):
-        from ah.core.agent_def import agent_registry
-        from ah.core.agent_factory import AgentDefinitionError, build_agent_for_session
+        from machina.core.agent_def import agent_registry
+        from machina.core.agent_factory import AgentDefinitionError, build_agent_for_session
 
         assert await agent_registry.get("no-such-agent") is None
         session = await session_manager.create(title="broken", agent_id="harness")
@@ -311,9 +311,9 @@ class TestMemory:
             await session_manager.delete(other_session.id)
 
     async def test_share_uses_session_owner_and_rejects_other_agents_memory(self, h, monkeypatch):
-        from ah.memory.store import memory_store
+        from machina.memory.store import memory_store
 
-        monkeypatch.setenv("AGENT_HARNESS_PROVENANCE_KEY", "test-only-provenance-key")
+        monkeypatch.setenv("MACHINA_PROVENANCE_KEY", "test-only-provenance-key")
         sid = await new_session(h)
         other_agent = f"other-{uuid.uuid4()}"
         recipient = f"recipient-{uuid.uuid4()}"
@@ -373,7 +373,7 @@ class TestMemory:
         assert bad["error"]["code"] == INVALID_PARAMS
 
     async def test_approval_flow(self, h, monkeypatch):
-        from ah.memory.approval import memory_approval_gate
+        from machina.memory.approval import memory_approval_gate
 
         monkeypatch.setattr(memory_approval_gate, "enabled", True)
         keep = await memory_approval_gate.submit(content="keep this fact", category="fact")
@@ -403,7 +403,7 @@ class TestMemory:
 
 class TestSkills:
     async def test_learn_show_list_curator_delete(self, h, tmp_path, monkeypatch):
-        from ah.skills.registry import skill_registry
+        from machina.skills.registry import skill_registry
 
         monkeypatch.setattr(skill_registry, "skills_dir", tmp_path / "skills")
         monkeypatch.setattr(skill_registry, "_skills", {})
@@ -426,7 +426,7 @@ class TestSkills:
         assert (await h.call("skills.show", {"name": "deploying"}))["error"]["code"] == NOT_FOUND
 
     async def test_learn_reports_bad_source(self, h, tmp_path, monkeypatch):
-        from ah.skills.registry import skill_registry
+        from machina.skills.registry import skill_registry
 
         monkeypatch.setattr(skill_registry, "skills_dir", tmp_path / "skills")
         response = await h.call("skills.learn", {"source": str(tmp_path / "missing.md")})

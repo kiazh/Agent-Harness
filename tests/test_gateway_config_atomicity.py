@@ -4,8 +4,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from ah.core.config import config
-from ah.gateway.server import Gateway
+from machina.core.config import config
+from machina.gateway.server import Gateway
 
 
 @pytest.mark.parametrize("key,value", [("model", "replacement-model"), ("provider", "deepseek")])

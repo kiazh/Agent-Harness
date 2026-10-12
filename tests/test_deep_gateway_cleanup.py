@@ -4,14 +4,14 @@ import asyncio
 import uuid
 from unittest.mock import AsyncMock
 
-from ah.core.models import AgentResponse, Session, StreamEvent
-from ah.gateway.server import Gateway
+from machina.core.models import AgentResponse, Session, StreamEvent
+from machina.gateway.server import Gateway
 
 
 async def test_gateway_honors_explicit_factory_with_stored_session_settings(monkeypatch):
-    import ah.core.agent_factory as factory
-    from ah import services
-    from ah.core.session import session_manager
+    import machina.core.agent_factory as factory
+    from machina import services
+    from machina.core.session import session_manager
 
     session = Session(id=uuid.uuid4(), model="saved-model", provider="saved-provider")
     frames, calls = [], []
@@ -40,9 +40,9 @@ async def test_gateway_honors_explicit_factory_with_stored_session_settings(monk
 
 
 async def test_gateway_completion_does_not_wait_for_resistant_learning(monkeypatch):
-    import ah.core.agent_factory as factory
-    from ah import services
-    from ah.core.session import session_manager
+    import machina.core.agent_factory as factory
+    from machina import services
+    from machina.core.session import session_manager
 
     started, release = asyncio.Event(), asyncio.Event()
 
@@ -84,10 +84,10 @@ async def test_gateway_completion_does_not_wait_for_resistant_learning(monkeypat
 
 
 async def test_late_turn_cleanup_cannot_release_replacement_turn(monkeypatch):
-    import ah.core.agent_factory as factory
-    from ah import services
-    from ah.core import turns
-    from ah.core.session import session_manager
+    import machina.core.agent_factory as factory
+    from machina import services
+    from machina.core import turns
+    from machina.core.session import session_manager
 
     started, release = asyncio.Event(), asyncio.Event()
     session = Session(id=uuid.uuid4())

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ah.core.agent import (
+from machina.core.agent import (
     _notify_growth,
     add_growth_listener,
     remove_growth_listener,
@@ -42,17 +42,17 @@ def test_listeners_fan_out_and_isolate_failures():
 async def test_consolidation_notifies_only_on_new_memories(monkeypatch):
     from types import SimpleNamespace
 
-    from ah.core.agent import BaseReActAgent
+    from machina.core.agent import BaseReActAgent
 
     agent = BaseReActAgent.__new__(BaseReActAgent)
     agent.agent_id = "harness"
     agent.memory_consolidator = AsyncMock()
     monkeypatch.setattr(
-        "ah.core.agent.session_manager.get",
+        "machina.core.agent.session_manager.get",
         AsyncMock(return_value=SimpleNamespace(state={}, id=uuid.uuid4())),
     )
-    monkeypatch.setattr("ah.core.agent.context_manager.get_chunks", AsyncMock(return_value=[]))
-    monkeypatch.setattr("ah.core.agent.session_manager.update_state_fields", AsyncMock())
+    monkeypatch.setattr("machina.core.agent.context_manager.get_chunks", AsyncMock(return_value=[]))
+    monkeypatch.setattr("machina.core.agent.session_manager.update_state_fields", AsyncMock())
     seen = []
 
     def _record(sid, stage, detail):
@@ -76,8 +76,8 @@ async def test_consolidation_notifies_only_on_new_memories(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_review_notifies_only_when_staged(monkeypatch):
-    from ah.core.agent import BaseReActAgent
-    from ah.core.models import AgentResponse
+    from machina.core.agent import BaseReActAgent
+    from machina.core.models import AgentResponse
 
     agent = BaseReActAgent.__new__(BaseReActAgent)
     agent.agent_id = "harness"
@@ -89,7 +89,7 @@ async def test_review_notifies_only_when_staged(monkeypatch):
 
     add_growth_listener(_record)
     try:
-        import ah.skills.learning as learning_module
+        import machina.skills.learning as learning_module
 
         monkeypatch.setattr(
             learning_module.learning_reviewer,
@@ -120,7 +120,7 @@ async def test_review_notifies_only_when_staged(monkeypatch):
 def test_profile_slug_rules():
     import re
 
-    from ah.memory.user_profile import PROFILE_ID_RE, profile_slug
+    from machina.memory.user_profile import PROFILE_ID_RE, profile_slug
 
     assert re.fullmatch(PROFILE_ID_RE, "work")
     assert re.fullmatch(PROFILE_ID_RE, "my-work-2")

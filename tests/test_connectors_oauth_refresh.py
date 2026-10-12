@@ -5,12 +5,12 @@ import multiprocessing
 
 import pytest
 
-from ah.connectors.models import ConnectorConfig
-from ah.connectors.oauth import OAuthCoordinator, OAuthError
-from ah.connectors.oauth_models import OAuthBinding
-from ah.connectors.oauth_store import OAuthCredentialStore
-from ah.connectors.registry import ConnectorRegistry
-from ah.connectors.service import ConnectorService
+from machina.connectors.models import ConnectorConfig
+from machina.connectors.oauth import OAuthCoordinator, OAuthError
+from machina.connectors.oauth_models import OAuthBinding
+from machina.connectors.oauth_store import OAuthCredentialStore
+from machina.connectors.registry import ConnectorRegistry
+from machina.connectors.service import ConnectorService
 from tests.support.mcp_oauth_fixture import OAuthFixture
 from tests.test_connectors_oauth_flow import _full_login, _owner
 
@@ -102,9 +102,9 @@ def _worker(root: str, endpoint: str, issuer: str, queue):
     async def _run():
         from pathlib import Path as _Path
 
-        from ah.connectors.oauth import OAuthCoordinator as _Coord
-        from ah.connectors.oauth_models import OAuthBinding as _Binding
-        from ah.connectors.oauth_store import OAuthCredentialStore as _Store
+        from machina.connectors.oauth import OAuthCoordinator as _Coord
+        from machina.connectors.oauth_models import OAuthBinding as _Binding
+        from machina.connectors.oauth_store import OAuthCredentialStore as _Store
 
         creds = _Store(_Path(root), key_provider=lambda: b"k" * 32)
         coordinator = _Coord(credential_store=creds)
@@ -411,7 +411,7 @@ def test_refresh_uses_configured_local_access_policy(tmp_path):
 @pytest.mark.parametrize("failure", ["invalid_grant", "lost_response"])
 def test_refresh_failure_clears_cached_authority_and_prevents_replay(tmp_path, failure):
     async def run():
-        from ah.connectors.oauth_network import OAuthNetworkError
+        from machina.connectors.oauth_network import OAuthNetworkError
 
         coordinator, config, binding, identity = await _seed_refresh(tmp_path)
 
