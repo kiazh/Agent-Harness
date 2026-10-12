@@ -68,6 +68,94 @@ def _record(binding, **overrides):
     return OAuthCredentialRecord(**base)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["save", "forget"])
+@pytest.mark.parametrize("failure", ["timeout", "exception"])
+async def test_failed_index_lock_closes_descriptor_without_changing_authority(
+    tmp_path, monkeypatch, operation, failure
+):
+    from ah.connectors import oauth_store
+
+    store = OAuthCredentialStore(tmp_path / "oauth", key_provider=_key_provider)
+    binding = _binding()
+    await store.save(_record(binding), expected_generation=0)
+    index_before = store._index_path().read_bytes()
+    envelopes_before = set((store.root / "grants").iterdir())
+    descriptors = []
+
+    def fail_acquire(fd, **kwargs):
+        descriptors.append(fd)
+        if failure == "exception":
+            raise OSError("synthetic acquisition error")
+        return False
+
+    monkeypatch.setattr(oauth_store, "_file_lock_acquire", fail_acquire)
+    try:
+        with pytest.raises(TimeoutError if failure == "timeout" else OSError):
+            if operation == "save":
+                await store.save(_record(binding, generation=2), expected_generation=1)
+            else:
+                await store.forget(binding, expected_generation=1)
+        assert descriptors
+        for fd in descriptors:
+            with pytest.raises(OSError):
+                os.fstat(fd)
+        assert store._index_path().read_bytes() == index_before
+        assert set((store.root / "grants").iterdir()) == envelopes_before
+        assert (await store.load(binding)).generation == 1
+    finally:
+        # Close a leaked descriptor when verifying the unfixed implementation.
+        for fd in descriptors:
+            try:
+                os.fstat(fd)
+            except OSError:
+                pass
+            else:
+                os.close(fd)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["rotate", "forget"])
+async def test_load_retries_when_snapshot_envelope_is_replaced(tmp_path, monkeypatch, mutation):
+    import threading
+
+    reader = OAuthCredentialStore(tmp_path / "oauth", key_provider=_key_provider)
+    writer = OAuthCredentialStore(reader.root, key_provider=_key_provider)
+    binding = _binding()
+    await writer.save(_record(binding), expected_generation=0)
+    captured, resume = threading.Event(), threading.Event()
+    original = reader._read_index
+
+    def pause_first_snapshot():
+        index = original()
+        if not captured.is_set():
+            captured.set()
+            assert resume.wait(3)
+        return index
+
+    monkeypatch.setattr(reader, "_read_index", pause_first_snapshot)
+    task = asyncio.create_task(reader.load(binding))
+    try:
+        async with asyncio.timeout(2):
+            while not captured.is_set():
+                await asyncio.sleep(0.001)
+        if mutation == "rotate":
+            await writer.save(
+                _record(binding, access_token="rotated-test-token"), expected_generation=1
+            )
+        else:
+            await writer.forget(binding, expected_generation=1)
+        resume.set()
+        result = await task
+        if mutation == "rotate":
+            assert result.access_token == "rotated-test-token"
+        else:
+            assert result is None
+    finally:
+        resume.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 def test_encrypted_grant_survives_restart_and_contains_no_secret_bytes(tmp_path):
     async def _run():
         store = OAuthCredentialStore(tmp_path / "oauth", key_provider=_key_provider)

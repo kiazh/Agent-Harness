@@ -152,4 +152,6 @@ async def test_catalog_truncation_is_reported_without_schemas():
     out = await service.tools_list("alpha")
     assert out["truncated"] is True
     assert all("schema" not in item for item in out["tools"])
-    assert all(set(item) == {"name", "remote_name", "description", "verdict"} for item in out["tools"])
+    assert all(
+        set(item) == {"name", "remote_name", "description", "verdict"} for item in out["tools"]
+    )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -10,6 +11,7 @@ from typing import Any
 import asyncpg
 import msgpack
 
+from ah.core.images import MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TOTAL_IMAGE_BYTES, validate_images
 from ah.core.models import ContextChunk
 from ah.core.serialization import (
     embedding_to_str,
@@ -25,6 +27,95 @@ logger = logging.getLogger(__name__)
 __all__ = ["ContextChunk", "ContextManager", "context_manager"]
 
 db = LazyDb()
+
+# Five 255-character names can consume 5100 UTF-8 bytes; allow the bounded
+# keys, media types and MessagePack headers in addition to those names.
+_MAX_IMAGE_CONTEXT_BYTES = MAX_TOTAL_IMAGE_BYTES + 8192
+
+
+def _is_missing_image_relation(exc: BaseException) -> bool:
+    """Detect a missing session_image_context table (unmigrated database).
+
+    Reads degrade to no images and writes fall back to plain chunk inserts
+    so a pending runtime migration never loses prompts or kills turns.
+    The relation name is matched so an unrelated missing table stays loud.
+    """
+    if isinstance(exc, asyncpg.UndefinedTableError):
+        return "session_image_context" in str(exc)
+    return getattr(exc, "sqlstate", None) == "42P01" and "session_image_context" in str(exc)
+
+
+# Sessions whose full legacy scan found no images while the cache table
+# exists. Consulted only on a cache miss; any image-bearing write through
+# add_chunk/add_chunks_batch creates a cache row (checked first) and discards
+# the mark, so marks can never suppress newly arrived images. Dead sessions
+# leave harmless small entries until process exit.
+_NO_LEGACY_IMAGES: set[tuple[uuid.UUID, str]] = set()
+
+# Bound the per-turn legacy scan: one DB round trip per candidate row.
+_LEGACY_SCAN_ROW_LIMIT = 50
+
+
+_ADD_CHUNK_SQL = """
+    INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
+    """
+
+_ADD_CHUNK_WITH_IMAGES_SQL = """
+    WITH inserted AS (
+        INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
+    ), latest_images AS (
+        INSERT INTO session_image_context (session_id, agent_id, images_msgpack)
+        SELECT session_id, agent_id, $9::bytea FROM inserted
+        ON CONFLICT (session_id, agent_id) DO UPDATE
+        SET images_msgpack=EXCLUDED.images_msgpack, updated_at=now()
+    )
+    SELECT * FROM inserted
+    """
+
+_ADD_CHUNKS_BATCH_SQL = """
+    INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
+    SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::bytea[], $6::int[], $7::text[]::vector[], $8::text[], $9::text[])
+    RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
+    """
+
+_ADD_CHUNKS_BATCH_WITH_IMAGES_SQL = """
+    WITH inserted AS (
+        INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
+        SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::bytea[], $6::int[], $7::text[]::vector[], $8::text[], $9::text[])
+        RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
+    ), latest_images AS (
+        INSERT INTO session_image_context (session_id, agent_id, images_msgpack)
+        SELECT * FROM UNNEST($10::uuid[], $11::text[], $12::bytea[]) WHERE TRUE
+        ON CONFLICT (session_id, agent_id) DO UPDATE
+        SET images_msgpack=EXCLUDED.images_msgpack, updated_at=now()
+    )
+    SELECT * FROM inserted
+    """
+
+_SEED_LATEST_IMAGES_SQL = """
+    INSERT INTO session_image_context (session_id, agent_id, images_msgpack)
+    VALUES ($1, $2, $3::bytea)
+    ON CONFLICT (session_id, agent_id) DO NOTHING
+    """
+
+
+def _image_context_for(chunk_type: str, payload: dict[str, Any]) -> bytes | None:
+    if chunk_type not in ("user", "user_message") or not payload.get("images"):
+        return None
+    images = validate_images(payload["images"])
+    # Store decoded bytes so the durable latest-only context does not retain
+    # the base64 expansion. The metadata allowance is bounded separately.
+    encoded = msgpack.packb(
+        [{**image, "data": base64.b64decode(image["data"], validate=True)} for image in images],
+        use_bin_type=True,
+    )
+    if len(encoded) > _MAX_IMAGE_CONTEXT_BYTES:
+        raise ValueError("image context exceeds storage limit")
+    return encoded
 
 
 def _search_text_for(payload: dict[str, Any]) -> str | None:
@@ -84,12 +175,8 @@ class ContextManager:
                             document_source = msrc
             except Exception:
                 document_source = None
-        row = await db.fetchrow(
-            """
-            INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
-            """,
+        query = _ADD_CHUNK_SQL
+        base_args = (
             session_id,
             agent_id,
             chunk_type,
@@ -99,6 +186,24 @@ class ContextManager:
             _search_text_for(payload),
             document_source,
         )
+        image_context = _image_context_for(chunk_type, payload)
+        if image_context is None:
+            row = await db.fetchrow(query, *base_args)
+            return self._row_to_chunk(row)
+        _NO_LEGACY_IMAGES.discard((session_id, agent_id))
+        try:
+            row = await db.fetchrow(_ADD_CHUNK_WITH_IMAGES_SQL, *base_args, image_context)
+        except Exception as exc:
+            if not _is_missing_image_relation(exc):
+                raise
+            logger.warning(
+                "session_image_context missing for session %s agent %s; "
+                "stored chunk payload intact without image-cache update",
+                session_id,
+                agent_id,
+                exc_info=True,
+            )
+            row = await db.fetchrow(query, *base_args)
         return self._row_to_chunk(row)
 
     async def add_chunks_batch(
@@ -118,7 +223,11 @@ class ContextManager:
 
         # Prepare records for executemany
         records = []
+        image_updates: dict[tuple[uuid.UUID, str], bytes] = {}
         for c in chunks:
+            image_context = _image_context_for(c["chunk_type"], c["payload"])
+            if image_context is not None:
+                image_updates[(c["session_id"], c["agent_id"])] = image_context
             payload_msgpack = payload_to_msgpack(c["payload"])
             embedding_str = None
             if c.get("embedding") is not None:
@@ -161,12 +270,8 @@ class ContextManager:
 
         # Use a single execute with RETURNING to insert all rows and get them
         # back in one round-trip, avoiding the executemany + extra fetch.
-        rows = await db.fetch(
-            """
-            INSERT INTO context_chunks (id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
-            SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::bytea[], $6::int[], $7::text[]::vector[], $8::text[], $9::text[])
-            RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
-            """,
+        query = _ADD_CHUNKS_BATCH_SQL
+        base_args = (
             [r[0] for r in records_with_ids],
             [r[1] for r in records_with_ids],
             [r[2] for r in records_with_ids],
@@ -177,7 +282,220 @@ class ContextManager:
             [r[7] for r in records_with_ids],
             [r[8] for r in records_with_ids],
         )
+        if not image_updates:
+            rows = await db.fetch(query, *base_args)
+            return [self._row_to_chunk(r) for r in rows]
+        for key in image_updates:
+            _NO_LEGACY_IMAGES.discard(key)
+        try:
+            rows = await db.fetch(
+                _ADD_CHUNKS_BATCH_WITH_IMAGES_SQL,
+                *base_args,
+                [key[0] for key in image_updates],
+                [key[1] for key in image_updates],
+                list(image_updates.values()),
+            )
+        except Exception as exc:
+            if not _is_missing_image_relation(exc):
+                raise
+            logger.warning(
+                "session_image_context missing; stored batch payloads intact without image-cache update",
+                exc_info=True,
+            )
+            rows = await db.fetch(query, *base_args)
         return [self._row_to_chunk(r) for r in rows]
+
+    async def get_latest_images(self, session_id: uuid.UUID, agent_id: str) -> list[dict[str, str]]:
+        """Retrieve the latest image-bearing user turn independently of compaction.
+
+        A missing session_image_context table (pending runtime migration)
+        falls back to a legacy chunk scan rather than failing the turn. A
+        corrupt cache row is quarantined (deleted) and likewise falls back
+        to legacy chunks, so one bad row cannot fail every turn.
+        """
+        try:
+            row = await db.fetchrow(
+                "SELECT images_msgpack FROM session_image_context WHERE session_id=$1 AND agent_id=$2",
+                session_id,
+                agent_id,
+            )
+        except Exception as exc:
+            if not _is_missing_image_relation(exc):
+                raise
+            logger.warning(
+                "session_image_context missing for session %s agent %s; "
+                "stored chunk payloads intact, serving legacy images unseeded",
+                session_id,
+                agent_id,
+                exc_info=True,
+            )
+            return await self._get_legacy_images_and_seed(
+                session_id, agent_id, allow_negative_mark=False
+            )
+        if row is None:
+            if (session_id, agent_id) in _NO_LEGACY_IMAGES:
+                return []
+            return await self._get_legacy_images_and_seed(session_id, agent_id)
+        try:
+            return self._decode_image_context(row["images_msgpack"])
+        except Exception:
+            logger.error(
+                "corrupt session_image_context row for session %s agent %s; "
+                "quarantining row and falling back to legacy chunks",
+                session_id,
+                agent_id,
+                exc_info=True,
+            )
+            try:
+                await db.execute(
+                    "DELETE FROM session_image_context WHERE session_id=$1 AND agent_id=$2",
+                    session_id,
+                    agent_id,
+                )
+            except Exception as cleanup_exc:
+                if not _is_missing_image_relation(cleanup_exc):
+                    logger.warning(
+                        "corrupt image-cache row could not be quarantined for session %s agent %s",
+                        session_id,
+                        agent_id,
+                        exc_info=True,
+                    )
+            return await self._get_legacy_images_and_seed(session_id, agent_id)
+
+    @staticmethod
+    def _decode_image_context(raw: bytes) -> list[dict[str, str]]:
+        if len(raw) > _MAX_IMAGE_CONTEXT_BYTES:
+            raise ValueError("saved image context exceeds storage limit")
+        images = msgpack.unpackb(
+            raw,
+            raw=False,
+            max_bin_len=MAX_IMAGE_BYTES,
+            max_array_len=MAX_IMAGES,
+            max_map_len=3,
+            max_str_len=1024,
+        )
+        if not isinstance(images, list):
+            raise ValueError("saved image context is invalid")
+        try:
+            encoded = [
+                {**image, "data": base64.b64encode(image["data"]).decode("ascii")}
+                for image in images
+            ]
+        except (KeyError, TypeError) as exc:
+            raise ValueError("saved image context is invalid") from exc
+        return validate_images(encoded)
+
+    async def _get_legacy_images_and_seed(
+        self, session_id: uuid.UUID, agent_id: str, *, allow_negative_mark: bool = True
+    ) -> list[dict[str, str]]:
+        """Read older image-bearing turns and seed the durable cache.
+
+        The recovered bytes are written back with DO NOTHING semantics so a
+        later compaction that removes the source chunks cannot lose them, and
+        a concurrent newer write is never clobbered. Seeding is best-effort:
+        the recovered images are returned even if the seed write fails.
+        When the table exists and the scan exhausts with no images, the
+        session/agent pair is marked so later turns skip the repeat scan;
+        any image-bearing write clears the mark (and a fresh cache row always
+        takes precedence over it).
+        """
+        images = await self._get_legacy_images(session_id, agent_id)
+        if not images:
+            if allow_negative_mark:
+                _NO_LEGACY_IMAGES.add((session_id, agent_id))
+            return images
+        _NO_LEGACY_IMAGES.discard((session_id, agent_id))
+        try:
+            packed = _image_context_for("user_message", {"images": images})
+        except ValueError:
+            logger.warning(
+                "legacy images (%d image(s)) exceed cache bound for session %s agent %s; "
+                "serving without seeding, compaction may lose them",
+                len(images),
+                session_id,
+                agent_id,
+            )
+            return images
+        try:
+            await db.execute(_SEED_LATEST_IMAGES_SQL, session_id, agent_id, packed)
+        except Exception as exc:
+            if _is_missing_image_relation(exc):
+                logger.warning(
+                    "session_image_context missing for session %s agent %s; "
+                    "serving legacy images unseeded",
+                    session_id,
+                    agent_id,
+                    exc_info=True,
+                )
+            else:
+                logger.warning(
+                    "latest-image seed write failed for session %s agent %s; "
+                    "serving recovered images",
+                    session_id,
+                    agent_id,
+                    exc_info=True,
+                )
+        return images
+
+    async def _get_legacy_images(
+        self, session_id: uuid.UUID, agent_id: str
+    ) -> list[dict[str, str]]:
+        """Read older image-bearing turns when the latest-image cache is empty.
+
+        Filter on the MessagePack 'images' key to avoid fetching text-only
+        history. Inspect one bounded payload at a time and retain session and
+        agent isolation. New writes always use the durable cache above.
+        The scan is capped: corrupt rows are skipped (newest valid wins) and
+        exhaustion returns no images rather than looping forever. NULL
+        timestamps use the same epoch floor as the other readers so the
+        keyset cursor always advances.
+        """
+        before = None
+        for _ in range(_LEGACY_SCAN_ROW_LIMIT):
+            row = await db.fetchrow(
+                """SELECT id, created_at, payload_msgpack FROM context_chunks
+                   WHERE session_id=$1 AND agent_id=$2
+                     AND chunk_type IN ('user', 'user_message')
+                     AND octet_length(payload_msgpack) <= $3
+                     AND position($4::bytea IN payload_msgpack) > 0
+                     AND ($5::timestamptz IS NULL OR (COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz), id)
+                               < ($5, $6::uuid))
+                   ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) DESC,
+                            id DESC LIMIT 1""",
+                session_id,
+                agent_id,
+                MAX_TOTAL_IMAGE_BYTES * 2,
+                b"\xa6images",
+                before[0] if before else None,
+                before[1] if before else None,
+            )
+            if row is None:
+                return []
+            try:
+                payload = msgpack.unpackb(
+                    row["payload_msgpack"],
+                    raw=False,
+                    max_str_len=MAX_TOTAL_IMAGE_BYTES * 2,
+                    max_bin_len=MAX_IMAGE_BYTES,
+                    max_array_len=MAX_IMAGES,
+                    max_map_len=1024,
+                )
+                if isinstance(payload, dict) and payload.get("images"):
+                    return validate_images(payload["images"])
+            except Exception:
+                logger.warning(
+                    "skipping corrupt legacy chunk %s during image recovery",
+                    row["id"],
+                    exc_info=True,
+                )
+            before = (row["created_at"], row["id"])
+            logger.warning(
+                "legacy image scan exceeded %d rows for session %s agent %s; stopping",
+                _LEGACY_SCAN_ROW_LIMIT,
+                session_id,
+                agent_id,
+            )
+            return []
 
     async def get_chunks(
         self,
@@ -563,14 +881,36 @@ class ContextManager:
         return len(records)
 
     async def delete_chunks(self, session_id: uuid.UUID) -> int:
-        """Delete all chunks for a session."""
+        """Delete all chunks for a session.
+
+        The latest-image cache is session-scoped too: without clearing it, a
+        later turn would resurrect pre-wipe images. (Compaction paths keep
+        the cache intentionally; only the explicit wipe clears it.)
+        """
         result = await db.execute(
             "DELETE FROM context_chunks WHERE session_id = $1",
             session_id,
         )
         from ah.db.connection import parse_command_count
 
-        return parse_command_count(result)
+        count = parse_command_count(result)
+        try:
+            await db.execute(
+                "DELETE FROM session_image_context WHERE session_id = $1",
+                session_id,
+            )
+        except Exception as exc:
+            if not _is_missing_image_relation(exc):
+                raise
+            logger.warning(
+                "session_image_context missing while wiping session %s",
+                session_id,
+                exc_info=True,
+            )
+        _NO_LEGACY_IMAGES.difference_update(
+            {key for key in _NO_LEGACY_IMAGES if key[0] == session_id}
+        )
+        return count
 
     async def get_token_usage(self, session_id: uuid.UUID) -> int:
         """Get total token count for a session."""

@@ -96,6 +96,11 @@ ALTER TABLE context_chunks ADD COLUMN IF NOT EXISTS document_source TEXT;
 CREATE INDEX IF NOT EXISTS idx_context_chunks_doc_source ON context_chunks(document_source)
     WHERE chunk_type = 'document';
 
+-- Latest image context lives in image_context_schema.sql so both fresh
+-- installs (initialize_schema) and existing installations
+-- (initialize_runtime_schema) apply it; schema.sql alone never runs on
+-- existing databases.
+
 -- ─── Context Archive (reversible eviction) ─────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS context_archive (

@@ -75,6 +75,7 @@ class ImageGateway:
         # The application owns the pool, as for a borrowed HTTP gateway.
         self.gateway._db_ready = True
         self.request_id = 0
+        self.pending_turn_id = None
 
     async def call(self, method, params=None):
         self.request_id += 1
@@ -89,7 +90,10 @@ class ImageGateway:
                 }
             )
         )
-        return next(frame for frame in self.frames if frame.get("id") == rid)
+        response = next(frame for frame in self.frames if frame.get("id") == rid)
+        if method == "prompt.submit" and "result" in response:
+            self.pending_turn_id = response["result"]["turnId"]
+        return response
 
     def events(self, kind):
         return [
@@ -100,9 +104,15 @@ class ImageGateway:
 
     async def complete(self):
         async with asyncio.timeout(10):
-            while not self.events("message.complete"):
+            while True:
+                matches = [
+                    event
+                    for event in self.events("message.complete")
+                    if event.get("turnId") == self.pending_turn_id
+                ]
+                if matches:
+                    return matches[-1]
                 await asyncio.sleep(0.01)
-        return self.events("message.complete")[-1]
 
 
 @pytest_asyncio.fixture
@@ -327,3 +337,402 @@ async def test_followup_image_context_respects_budget_without_duplicating_text(i
         assert PNG_DATA not in text
     finally:
         await resumed.gateway.close()
+
+
+@pytest.mark.parametrize("compact", [False, True])
+async def test_followup_retains_image_after_tool_churn_and_compaction(image_gateway, compact):
+    harness, sid, provider = image_gateway
+    await harness.call("prompt.submit", {"sessionId": sid, "text": "Describe", "images": [png()]})
+    await harness.complete()
+    await harness.gateway.close()
+    session_id = uuid.UUID(sid)
+    await context_manager.add_chunks_batch(
+        [
+            {
+                "session_id": session_id,
+                "agent_id": "harness",
+                "chunk_type": "result",
+                "payload": {"content": f"Tool output {index}"},
+                "token_count": 5,
+            }
+            for index in range(24)
+        ]
+    )
+    recent = await context_manager.get_recent_context(session_id, limit=10)
+    assert all(not chunk["payload"].get("images") for chunk in recent)
+    if compact:
+        originals = await context_manager.get_all_chunks(session_id)
+        await context_manager.replace_chunks_by_ids(
+            session_id, [chunk.id for chunk in originals], []
+        )
+        assert await context_manager.get_chunks(session_id) == []
+    resumed = ImageGateway(ReActAgent(provider=provider, max_iterations=1, allowed_tools=[]))
+    try:
+        await resumed.call("session.resume", {"sessionId": sid})
+        result = await resumed.call(
+            "prompt.submit", {"sessionId": sid, "text": "What color is that image?"}
+        )
+        assert result["result"]["turnId"]
+        await resumed.complete()
+        content = provider.messages[-1][0]["content"]
+        assert isinstance(content, list), (
+            "tool churn must not discard the image referenced by a follow-up"
+        )
+        image = next(block for block in content if block["type"] == "image_url")
+        assert base64.b64decode(image["image_url"]["url"].split(",", 1)[1]) == base64.b64decode(
+            PNG_DATA
+        )
+    finally:
+        await resumed.gateway.close()
+
+
+@pytest.mark.parametrize("write", ["single", "batch"])
+async def test_latest_image_storage_replaces_only_images_and_scopes_session_agent(
+    image_gateway, db_pool, write
+):
+    harness, sid, provider = image_gateway
+    session_id = uuid.UUID(sid)
+    first, latest, foreign = (
+        png(),
+        {**png(), "name": "latest.png"},
+        {**png(), "name": "foreign.png"},
+    )
+    await context_manager.add_chunk(
+        session_id, "harness", "user_message", {"content": "first", "images": [first]}
+    )
+    image_chunk = {
+        "session_id": session_id,
+        "agent_id": "harness",
+        "chunk_type": "user_message",
+        "payload": {"content": "latest", "images": [latest]},
+    }
+    if write == "single":
+        await context_manager.add_chunk(**image_chunk)
+        await context_manager.add_chunk(
+            session_id, "harness", "user_message", {"content": "text only"}
+        )
+    else:
+        await context_manager.add_chunks_batch(
+            [
+                {**image_chunk, "payload": {"content": "earlier in batch", "images": [first]}},
+                image_chunk,
+                {**image_chunk, "payload": {"content": "text only"}},
+            ]
+        )
+    await context_manager.add_chunk(
+        session_id, "other-agent", "user_message", {"content": "foreign", "images": [foreign]}
+    )
+    other = (
+        await harness.call("session.create", {"title": "other images", "model": provider.model})
+    )["result"]["session"]["id"]
+    other_id = uuid.UUID(other)
+    try:
+        await context_manager.add_chunk(
+            other_id, "harness", "user_message", {"content": "another session", "images": [foreign]}
+        )
+        assert await context_manager.get_latest_images(session_id, "harness") == [latest]
+        assert await context_manager.get_latest_images(session_id, "other-agent") == [foreign]
+        assert await context_manager.get_latest_images(other_id, "harness") == [foreign]
+        assert await context_manager.get_latest_images(session_id, "unknown-agent") == []
+        assert (
+            await db_pool.fetchval(
+                "SELECT count(*) FROM session_image_context WHERE session_id=$1 AND agent_id='harness'",
+                session_id,
+            )
+            == 1
+        )
+        await db_pool.execute("DELETE FROM sessions WHERE id=$1", other_id)
+        assert await context_manager.get_latest_images(other_id, "harness") == []
+    finally:
+        await db_pool.execute("DELETE FROM sessions WHERE id=$1", other_id)
+
+
+async def test_failed_chunk_batch_does_not_replace_latest_image_context(image_gateway, db_pool):
+    import asyncpg
+
+    harness, sid, provider = image_gateway
+    session_id = uuid.UUID(sid)
+    await context_manager.add_chunk(
+        session_id, "harness", "user_message", {"content": "first", "images": [png()]}
+    )
+    with pytest.raises(asyncpg.CheckViolationError):
+        await context_manager.add_chunks_batch(
+            [
+                {
+                    "session_id": session_id,
+                    "agent_id": "harness",
+                    "chunk_type": "user_message",
+                    "payload": {"content": "new", "images": [{**png(), "name": "uncommitted.png"}]},
+                },
+                {
+                    "session_id": session_id,
+                    "agent_id": "harness",
+                    "chunk_type": "invalid-type",
+                    "payload": {"content": "reject"},
+                },
+            ]
+        )
+    assert await context_manager.get_latest_images(session_id, "harness") == [png()]
+    assert len(await context_manager.get_chunks(session_id)) == 1
+
+
+async def test_latest_image_getter_validates_saved_payload(image_gateway, db_pool):
+    import msgpack
+
+    harness, sid, provider = image_gateway
+    session_id = uuid.UUID(sid)
+    await context_manager.add_chunk(
+        session_id, "harness", "user_message", {"content": "first", "images": [png()]}
+    )
+    corrupt = msgpack.packb(
+        [{"mediaType": "image/png", "data": b"not-an-image", "name": "bad.png"}], use_bin_type=True
+    )
+    await db_pool.execute(
+        "UPDATE session_image_context SET images_msgpack=$2 WHERE session_id=$1",
+        session_id,
+        corrupt,
+    )
+    # A corrupt cache row is quarantined and the turn recovers from legacy
+    # chunks instead of failing every follow-up turn. Recovery reseeds the
+    # cache, so the next read is served from a valid row.
+    assert await context_manager.get_latest_images(session_id, "harness") == [png()]
+    assert await context_manager.get_latest_images(session_id, "harness") == [png()]
+    row = await db_pool.fetchrow(
+        "SELECT images_msgpack FROM session_image_context WHERE session_id=$1", session_id
+    )
+    assert row is not None
+
+
+async def test_corrupt_cache_without_legacy_chunks_returns_empty(image_gateway, db_pool):
+    import msgpack
+
+    harness, sid, _provider = image_gateway
+    session_id = uuid.UUID(sid)
+    await context_manager.add_chunk(session_id, "harness", "user_message", {"content": "plain"})
+    await db_pool.execute(
+        "INSERT INTO session_image_context (session_id, agent_id, images_msgpack)"
+        " VALUES ($1, 'harness', $2)",
+        session_id,
+        msgpack.packb([{"mediaType": "image/png"}], use_bin_type=True),
+    )
+    assert await context_manager.get_latest_images(session_id, "harness") == []
+    assert (
+        await db_pool.fetchval(
+            "SELECT count(*) FROM session_image_context WHERE session_id=$1", session_id
+        )
+        == 0
+    )
+
+
+async def test_explicit_chunk_wipe_clears_latest_image_cache(image_gateway, db_pool):
+    harness, sid, _provider = image_gateway
+    session_id = uuid.UUID(sid)
+    await context_manager.add_chunk(
+        session_id, "harness", "user_message", {"content": "pic", "images": [png()]}
+    )
+    assert await context_manager.get_latest_images(session_id, "harness") == [png()]
+    await context_manager.delete_chunks(session_id)
+    assert await context_manager.get_latest_images(session_id, "harness") == []
+
+
+async def test_image_cache_sql_bound_matches_application_constant():
+    import re
+    from pathlib import Path
+
+    from ah.core.images import MAX_TOTAL_IMAGE_BYTES
+
+    sql = (
+        Path(__file__).resolve().parents[1] / "ah" / "db" / "image_context_schema.sql"
+    ).read_text()
+    match = re.search(r"octet_length\(images_msgpack\) <= (\d+)", sql)
+    assert match is not None
+    assert int(match.group(1)) == MAX_TOTAL_IMAGE_BYTES + 8192
+
+
+async def test_unmigrated_database_still_completes_image_and_text_turns(image_gateway, db_pool):
+    """Regression: a database without session_image_context (existing
+    installations only run initialize_runtime_schema) must degrade, not
+    fail every turn with 'agent turn failed'."""
+    harness, sid, _provider = image_gateway
+    await db_pool.execute("DROP TABLE IF EXISTS session_image_context")
+    try:
+        result = await harness.call(
+            "prompt.submit", {"sessionId": sid, "text": "Describe", "images": [png()]}
+        )
+        assert result["result"]["turnId"]
+        complete = await harness.complete()
+        assert not complete.get("cancelled")
+        assert harness.events("error") == []
+        result = await harness.call("prompt.submit", {"sessionId": sid, "text": "heello"})
+        assert result["result"]["turnId"]
+        complete = await harness.complete()
+        assert not complete.get("cancelled")
+        assert harness.events("error") == []
+    finally:
+        await db.initialize_runtime_schema()
+
+
+async def test_runtime_schema_migration_restores_image_context(image_gateway, db_pool):
+    harness, sid, _provider = image_gateway
+    session_id = uuid.UUID(sid)
+    await db_pool.execute("DROP TABLE IF EXISTS session_image_context")
+    try:
+        assert await context_manager.get_latest_images(session_id, "harness") == []
+        await db.initialize_runtime_schema()
+        assert (
+            await db_pool.fetchval("SELECT to_regclass('public.session_image_context')") is not None
+        )
+        await context_manager.add_chunk(
+            session_id, "harness", "user_message", {"content": "first", "images": [png()]}
+        )
+        assert await context_manager.get_latest_images(session_id, "harness") == [png()]
+    finally:
+        await db.initialize_runtime_schema()
+
+
+async def test_image_writes_fall_back_to_plain_chunks_without_table(image_gateway, db_pool):
+    harness, sid, _provider = image_gateway
+    session_id = uuid.UUID(sid)
+    await db_pool.execute("DROP TABLE IF EXISTS session_image_context")
+    try:
+        chunk = await context_manager.add_chunk(
+            session_id, "harness", "user_message", {"content": "keep me", "images": [png()]}
+        )
+        assert chunk.payload["content"] == "keep me"
+        stored = await context_manager.get_chunks(session_id)
+        assert any(c.payload.get("content") == "keep me" for c in stored)
+        batch = await context_manager.add_chunks_batch(
+            [
+                {
+                    "session_id": session_id,
+                    "agent_id": "harness",
+                    "chunk_type": "user_message",
+                    "payload": {"content": "batch kept", "images": [png()]},
+                }
+            ]
+        )
+        assert [c.payload.get("content") for c in batch] == ["batch kept"]
+    finally:
+        await db.initialize_runtime_schema()
+
+
+async def test_latest_image_storage_accepts_total_limit_with_unicode_names(image_gateway):
+    from ah.core.images import MAX_IMAGES, MAX_TOTAL_IMAGE_BYTES
+
+    _, sid, _ = image_gateway
+    size = MAX_TOTAL_IMAGE_BYTES // MAX_IMAGES
+    data = b"\x89PNG\r\n\x1a\n" + b"x" * (size - 8)
+    images = [
+        {"mediaType": "image/png", "data": base64.b64encode(data).decode(), "name": "😀" * 255}
+        for _ in range(MAX_IMAGES)
+    ]
+    session_id = uuid.UUID(sid)
+    await context_manager.add_chunk(
+        session_id, "harness", "user_message", {"content": "maximum images", "images": images}
+    )
+    assert await context_manager.get_latest_images(session_id, "harness") == images
+
+
+async def test_runtime_schema_updates_existing_image_size_constraint(image_gateway, db_pool):
+    from ah.core.context import _MAX_IMAGE_CONTEXT_BYTES
+
+    await db_pool.execute("""
+        ALTER TABLE session_image_context DROP CONSTRAINT session_image_context_images_msgpack_check;
+        ALTER TABLE session_image_context ADD CONSTRAINT session_image_context_images_msgpack_check
+            CHECK (octet_length(images_msgpack) <= 20975616)
+    """)
+    await db.initialize_runtime_schema()
+    await db.initialize_runtime_schema()
+    constraint = await db_pool.fetchval("""
+        SELECT pg_get_constraintdef(oid) FROM pg_constraint
+        WHERE conrelid='session_image_context'::regclass
+          AND conname='session_image_context_images_msgpack_check'
+    """)
+    assert str(_MAX_IMAGE_CONTEXT_BYTES) in constraint
+
+
+async def test_upgrade_recovers_prior_image_turn_after_tool_churn(image_gateway, db_pool):
+    import msgpack
+
+    harness, sid, provider = image_gateway
+    session_id = uuid.UUID(sid)
+    # Simulate an attachment saved by the previous version, before the cache
+    # existed. A later text-only user turn and other agents must not hide it.
+    await db_pool.execute(
+        """INSERT INTO context_chunks(session_id, agent_id, chunk_type, payload_msgpack)
+           VALUES($1, 'harness', 'user_message', $2)""",
+        session_id,
+        msgpack.packb({"content": "prior attachment", "images": [png()]}, use_bin_type=True),
+    )
+    await context_manager.add_chunks_batch(
+        [
+            {
+                "session_id": session_id,
+                "agent_id": "harness",
+                "chunk_type": "user_message",
+                "payload": {"content": f"text only {index}"},
+            }
+            for index in range(15)
+        ]
+    )
+    await context_manager.add_chunk(
+        session_id,
+        "other-agent",
+        "user_message",
+        {"content": "other agent", "images": [{**png(), "name": "other.png"}]},
+    )
+    await db.initialize_runtime_schema()
+    await harness.call("prompt.submit", {"sessionId": sid, "text": "Recall the prior image"})
+    await harness.complete()
+    content = provider.messages[-1][0]["content"]
+    assert isinstance(content, list)
+    assert content[-1]["image_url"]["url"].endswith(PNG_DATA)
+
+
+async def test_legacy_fallback_seeds_cache_before_compaction(image_gateway, db_pool):
+    """An upgraded session (image chunks, no cache row) recovers images and
+    seeds the durable cache, so compacting away legacy chunks cannot lose
+    them for a later turn."""
+    harness, sid, provider = image_gateway
+    session_id = uuid.UUID(sid)
+    await context_manager.add_chunk(
+        session_id, "harness", "user_message", {"content": "old picture", "images": [png()]}
+    )
+    await db_pool.execute(
+        "DELETE FROM session_image_context WHERE session_id=$1 AND agent_id='harness'",
+        session_id,
+    )
+    try:
+        recovered = await context_manager.get_latest_images(session_id, "harness")
+        assert recovered == [png()]
+        assert (
+            await db_pool.fetchval(
+                "SELECT count(*) FROM session_image_context WHERE session_id=$1 AND agent_id='harness'",
+                session_id,
+            )
+            == 1
+        )
+        originals = await context_manager.get_all_chunks(session_id)
+        await context_manager.replace_chunks_by_ids(
+            session_id, [chunk.id for chunk in originals], []
+        )
+        assert await context_manager.get_chunks(session_id) == []
+        assert await context_manager.get_latest_images(session_id, "harness") == [png()]
+        resumed = ImageGateway(ReActAgent(provider=provider, max_iterations=1, allowed_tools=[]))
+        try:
+            await resumed.call("session.resume", {"sessionId": sid})
+            result = await resumed.call(
+                "prompt.submit", {"sessionId": sid, "text": "What color is that image?"}
+            )
+            assert result["result"]["turnId"]
+            await resumed.complete()
+            content = provider.messages[-1][0]["content"]
+            assert isinstance(content, list), "seeded cache must survive legacy compaction"
+            image = next(block for block in content if block["type"] == "image_url")
+            assert base64.b64decode(image["image_url"]["url"].split(",", 1)[1]) == base64.b64decode(
+                PNG_DATA
+            )
+        finally:
+            await resumed.gateway.close()
+    finally:
+        await db.initialize_runtime_schema()

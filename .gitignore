@@ -84,6 +84,15 @@ communications/*
 # Generated caches are not part of the pinned distribution.
 skills/ecc/**/__pycache__/
 skills/ecc/**/*.py[cod]
+# ECC upstream test suites are never tracked here; the installed
+# ecc-universal distribution and any future vendor copy ship without them.
+skills/ecc/**/tests/
+skills/ecc/**/test/
+skills/ecc/**/*_test.py
+skills/ecc/**/*.test.ts
+skills/ecc/**/*.test.js
+vendor/ecc/**/tests/
+vendor/ecc/**/test/
 
 # Archived virtual environments and generated coverage
 .venv.*/

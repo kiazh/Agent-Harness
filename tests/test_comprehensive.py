@@ -1113,6 +1113,7 @@ class TestCLI:
             mock_db.close = AsyncMock()
             mock_sm.create = AsyncMock(return_value=Session(id=uuid.uuid4()))
             mock_sm.get_last_active = AsyncMock(return_value=None)
+            mock_cm.get_latest_images = AsyncMock(return_value=[])
             mock_cm.get_recent_context = AsyncMock(return_value=[])
             result = runner.invoke(app, ["chat"])
             # chat without message prints guidance and exits non-zero
@@ -1408,6 +1409,7 @@ class TestReActAgent:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=mock_provider, max_iterations=5)
@@ -1453,6 +1455,7 @@ class TestReActAgent:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=mock_provider, max_iterations=5)
@@ -1501,6 +1504,7 @@ class TestReActAgent:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=mock_provider, max_iterations=3)

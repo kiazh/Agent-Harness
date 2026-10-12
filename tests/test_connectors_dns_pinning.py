@@ -322,3 +322,140 @@ def test_pinned_transport_ignores_environment_ca_paths(monkeypatch, tmp_path, li
     context = transport._pool._ssl_context
     assert context.check_hostname
     assert context.verify_mode == ssl.CERT_REQUIRED
+
+
+@pytest.mark.asyncio
+async def test_oauth_destination_check_respects_deadline_and_keeps_loop_responsive(monkeypatch):
+    import time
+
+    def slow_dns(host, port, *args, **kwargs):
+        time.sleep(0.3)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", slow_dns)
+    client = OAuthNetworkClient(local_access=False)
+    heartbeat = asyncio.create_task(asyncio.sleep(0.02))
+    begin = asyncio.get_running_loop().time()
+    try:
+        with pytest.raises(OAuthNetworkError):
+            await client._post_form(
+                "https://slow-dns.example/token", {}, max_bytes=65536, deadline=begin + 0.05
+            )
+        elapsed = asyncio.get_running_loop().time() - begin
+        assert heartbeat.done()
+        assert elapsed < 0.15
+    finally:
+        await heartbeat
+        await client.aclose()
+
+
+def test_timed_out_dns_does_not_hold_asyncio_process_shutdown():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = """
+import asyncio, sys, time
+sys.path.insert(0, sys.argv[1])
+import httpx
+from ah.connectors.http_transport import pinned_http_transport
+
+def resolve(host):
+    time.sleep(0.4)
+    return ("93.184.216.34",)
+
+transport = pinned_http_transport(httpx, resolve)
+async def run():
+    async with httpx.AsyncClient(transport=transport, trust_env=False, timeout=0.01) as client:
+        try:
+            await client.get("https://slow-dns.example/")
+        except httpx.ConnectTimeout:
+            pass
+begin = time.monotonic()
+asyncio.run(run())
+print(time.monotonic() - begin)
+"""
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", script, str(Path(__file__).resolve().parents[1])],
+        text=True,
+        capture_output=True,
+        timeout=5,
+        check=True,
+    )
+    assert float(result.stdout.strip()) < 0.15
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("abandon", ["timeout", "cancel"])
+async def test_abandoned_dns_bounds_workers_and_recovers_capacity(monkeypatch, abandon):
+    import threading
+
+    from ah.connectors import http_transport
+
+    slots = threading.BoundedSemaphore(1)
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    monkeypatch.setattr(http_transport, "_DNS_SLOTS", slots)
+
+    def blocked():
+        entered.set()
+        try:
+            release.wait(2)
+            return "approved"
+        finally:
+            finished.set()
+
+    task = asyncio.create_task(
+        http_transport.run_dns_check(blocked, timeout=0.05 if abandon == "timeout" else None)
+    )
+    try:
+        async with asyncio.timeout(1):
+            while not entered.is_set():
+                await asyncio.sleep(0.001)
+        if abandon == "cancel":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            with pytest.raises(TimeoutError):
+                await task
+        with pytest.raises(OSError, match="capacity"):
+            await http_transport.run_dns_check(lambda: pytest.fail("excess worker"), timeout=0.1)
+        assert not finished.is_set()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+    async with asyncio.timeout(1):
+        while not finished.is_set() or not slots.acquire(blocking=False):
+            await asyncio.sleep(0.001)
+    slots.release()
+    assert await http_transport.run_dns_check(lambda: "recovered", timeout=0.1) == "recovered"
+
+
+@pytest.mark.asyncio
+async def test_mixed_public_private_answers_fail_before_secret_transmission(monkeypatch):
+    dialed = []
+
+    def dns(host, port, *args, **kwargs):
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port or 0))
+            for address in ("93.184.216.34", "127.0.0.1")
+        ]
+
+    async def connect(_backend, host, port, **kwargs):
+        dialed.append(host)
+        return CapturedStream()
+
+    monkeypatch.setattr(socket, "getaddrinfo", dns)
+    monkeypatch.setattr(httpcore.AnyIOBackend, "connect_tcp", connect)
+    client = OAuthNetworkClient(local_access=False)
+    try:
+        with pytest.raises(OAuthNetworkError):
+            await client._post_form(
+                "https://mixed.example/token",
+                {"refresh_token": "synthetic-secret"},
+                max_bytes=65536,
+                deadline=asyncio.get_running_loop().time() + 1,
+            )
+        assert not dialed
+    finally:
+        await client.aclose()

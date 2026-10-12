@@ -5,8 +5,67 @@ from __future__ import annotations
 import asyncio
 import importlib
 import ipaddress
+import threading
 from collections.abc import Callable
 from typing import Any
+
+# Abandoned OS DNS calls may outlive a cancelled request. Bound their count
+# and keep them out of asyncio's executor, which joins workers on shutdown.
+_DNS_SLOTS = threading.BoundedSemaphore(32)
+
+
+async def run_dns_check(check: Callable[[], Any], *, timeout: float | None):
+    if not _DNS_SLOTS.acquire(blocking=False):
+        raise OSError("connector DNS resolution capacity exceeded")
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+
+    def _consume_completed(fut: asyncio.Future) -> None:
+        # A timed-out or cancelled waiter never retrieves the outcome; consume
+        # it here so late worker errors don't emit "exception was never
+        # retrieved" noise. Retrieval by the live waiter as well is harmless.
+        if fut.cancelled():
+            return
+        try:
+            fut.exception()
+        except Exception:
+            pass
+
+    future.add_done_callback(_consume_completed)
+
+    def deliver(value, error):
+        if future.done():
+            return
+        if error is None:
+            future.set_result(value)
+        else:
+            future.set_exception(error)
+
+    def worker():
+        value, error = None, None
+        try:
+            value = check()
+        except Exception as exc:
+            error = exc
+        finally:
+            _DNS_SLOTS.release()
+        try:
+            loop.call_soon_threadsafe(deliver, value, error)
+        except RuntimeError:
+            pass  # The owning loop may already have shut down after timeout.
+
+    thread = threading.Thread(target=worker, name="connector-dns", daemon=True)
+    try:
+        thread.start()
+    except Exception:
+        _DNS_SLOTS.release()
+        raise
+    try:
+        async with asyncio.timeout(timeout):
+            return await future
+    except (TimeoutError, asyncio.CancelledError):
+        future.cancel()
+        raise
 
 
 def pinned_http_transport(http_module: Any, resolve: Callable[[str], tuple[str, ...]]):
@@ -30,10 +89,11 @@ def pinned_http_transport(http_module: Any, resolve: Callable[[str], tuple[str, 
             # Keep the complete validated answer set immutable across retries.
             # DNS consumes the same connect deadline as the socket attempts.
             try:
-                async with asyncio.timeout(timeout):
-                    approved = await asyncio.to_thread(resolve, host)
+                approved = await run_dns_check(lambda: resolve(host), timeout=timeout)
             except TimeoutError as exc:
                 raise core.ConnectTimeout("destination resolution timed out") from exc
+            except OSError as exc:
+                raise core.ConnectError("destination resolution unavailable") from exc
             addresses = tuple(str(ipaddress.ip_address(ip)) for ip in approved)
             if not addresses:
                 raise core.ConnectError("destination has no approved addresses")

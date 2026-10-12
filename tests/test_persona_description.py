@@ -60,6 +60,9 @@ async def test_persona_applies_live_without_growth_and_clears(monkeypatch):
         "ah.core.agent.context_manager.get_recent_context", AsyncMock(return_value=[])
     )
     monkeypatch.setattr(
+        "ah.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
+    )
+    monkeypatch.setattr(
         "ah.core.agent.context_manager.search_archive_text", AsyncMock(return_value=[])
     )
     agent = BaseReActAgent(

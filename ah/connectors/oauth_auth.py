@@ -19,12 +19,19 @@ class OAuthBearerAuth(_AuthBase):  # type: ignore[misc]
     sync_auth_flow = None
 
     def __init__(
-        self, coordinator, binding, expected_grant: dict[str, Any], deadline_factory
+        self,
+        coordinator,
+        binding,
+        expected_grant: dict[str, Any],
+        deadline_factory,
+        *,
+        register_token=None,
     ) -> None:
         self._coordinator = coordinator
         self._binding = binding
         self._expected_grant = dict(expected_grant)
         self._deadline_factory = deadline_factory
+        self._register_token = register_token
 
     async def async_auth_flow(self, request):
         from ah.connectors.models import ConnectionFailed
@@ -46,6 +53,8 @@ class OAuthBearerAuth(_AuthBase):  # type: ignore[misc]
             from ah.connectors.models import AuthRequired
 
             raise AuthRequired(str(exc) or "authorization required") from exc
+        if self._register_token is not None:
+            self._register_token(token)
         request.headers["Authorization"] = f"Bearer {token}"
         yield request
         # Intentionally no post-response handling: no retry after 401/403.

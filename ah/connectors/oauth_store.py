@@ -307,17 +307,36 @@ class OAuthCredentialStore:
     async def load(self, binding: OAuthBinding) -> OAuthCredentialRecord | None:
         key = _safe_name(binding.credential_key)
         await self._master()
-        index = await asyncio.to_thread(self._read_index)
-        entry = index["grants"].get(key)
-        if entry is None:
-            return None
-        envelope_name = entry.get("envelope")
-        if not isinstance(envelope_name, str) or "/" in envelope_name:
-            raise ValueError("oauth index references an invalid envelope")
-        envelope_path = self.root / "grants" / envelope_name
-        _check_secret_file(envelope_path, max_bytes=OAUTH_GRANT_FILE_MAX_BYTES)
-        raw = await asyncio.to_thread(envelope_path.read_bytes)
-        return await self._decrypt(raw, expected_key=key)
+        for attempt in range(3):
+            index = await asyncio.to_thread(self._read_index)
+            entry = index["grants"].get(key)
+            if entry is None:
+                return None
+            envelope_name = entry.get("envelope")
+            if not isinstance(envelope_name, str) or "/" in envelope_name:
+                raise ValueError("oauth index references an invalid envelope")
+            envelope_path = self.root / "grants" / envelope_name
+
+            def read_envelope():
+                _check_secret_file(envelope_path, max_bytes=OAUTH_GRANT_FILE_MAX_BYTES)
+                return envelope_path.read_bytes()
+
+            try:
+                raw = await asyncio.to_thread(read_envelope)
+            except (FileNotFoundError, ValueError) as exc:
+                # Rotation/forget can publish a new index then remove the old
+                # envelope after our snapshot. Retry only that specific race;
+                # missing unchanged files and genuine corruption still fail.
+                if not isinstance(exc, FileNotFoundError) and not isinstance(
+                    exc.__cause__, FileNotFoundError
+                ):
+                    raise
+                latest = await asyncio.to_thread(self._read_index)
+                if latest["grants"].get(key) == entry or attempt == 2:
+                    raise
+                continue
+            return await self._decrypt(raw, expected_key=key)
+        raise ValueError("oauth credential changed during read")  # pragma: no cover
 
     async def public_identity(self, binding: OAuthBinding) -> dict[str, Any] | None:
         record = await self.load(binding)
@@ -349,8 +368,10 @@ class OAuthCredentialStore:
 
         def _commit() -> OAuthCredentialRecord:
             fd = _lock_file(self._lock_path())
+            acquired = False
             try:
-                if not _file_lock_acquire(fd, timeout=OAUTH_LOCK_SECONDS):
+                acquired = _file_lock_acquire(fd, timeout=OAUTH_LOCK_SECONDS)
+                if not acquired:
                     raise TimeoutError("oauth store lock acquisition timed out")
                 try:
                     index = self._read_index()
@@ -391,6 +412,9 @@ class OAuthCredentialStore:
                 except OSError:
                     pass
                 raise
+            finally:
+                if not acquired:
+                    os.close(fd)
 
         committed = await asyncio.to_thread(_commit)
         # Defense in depth: report failure loudly; caller marks flow failed.
@@ -409,8 +433,10 @@ class OAuthCredentialStore:
 
         def _commit() -> int:
             fd = _lock_file(self._lock_path())
+            acquired = False
             try:
-                if not _file_lock_acquire(fd, timeout=OAUTH_LOCK_SECONDS):
+                acquired = _file_lock_acquire(fd, timeout=OAUTH_LOCK_SECONDS)
+                if not acquired:
                     raise TimeoutError("oauth store lock acquisition timed out")
                 try:
                     index = self._read_index()
@@ -439,8 +465,9 @@ class OAuthCredentialStore:
                     return new_gen
                 finally:
                     _file_lock_release(fd)
-            except BaseException:
-                raise
+            finally:
+                if not acquired:
+                    os.close(fd)
 
         return await asyncio.to_thread(_commit)
 

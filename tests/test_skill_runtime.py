@@ -75,6 +75,7 @@ async def test_matching_skill_instructions_activate_automatically(tmp_path, monk
     monkeypatch.setattr("ah.core.agent.context_manager.add_chunk", add_chunk)
     monkeypatch.setattr("ah.core.agent.context_manager.get_recent_context", no_result)
     monkeypatch.setattr("ah.core.agent.context_manager.search_archive_text", no_result)
+    monkeypatch.setattr("ah.core.agent.context_manager.get_latest_images", no_result)
     monkeypatch.setattr("ah.core.agent.plugin_registry.dispatch", add_chunk)
 
     class Retriever:

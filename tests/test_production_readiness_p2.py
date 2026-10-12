@@ -503,7 +503,9 @@ async def _run_broken_pipe_case(monkeypatch, pipe, cleaned):
         "ah.core.windows_job",
         types.SimpleNamespace(create_script_job=lambda pid: 999, close_script_job=lambda h: None),
     )
-    monkeypatch.setattr(js.os, "name", "nt")
+    # Patch only this module's platform view; mutating the shared os module
+    # also changes pathlib/pytest and masks failures with WindowsPath errors.
+    monkeypatch.setattr(js, "os", types.SimpleNamespace(name="nt", environ=js.os.environ))
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
     monkeypatch.setattr(js, "_terminate_tree", fake_terminate)
     monkeypatch.setattr(js.sys, "executable", "/usr/bin/python3")

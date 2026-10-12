@@ -423,3 +423,83 @@ async def test_shutdown_timeout_keeps_owner_tracked_until_cleanup_finishes(monke
         release.set()
         await connection.disconnect()
     assert owner.done() and connection._owner_task is None
+
+
+@pytest.mark.asyncio
+async def test_rotated_bearer_token_is_registered_before_request_and_never_replayed():
+    import json
+    from unittest.mock import AsyncMock
+
+    import httpx2
+    import mcp.types
+
+    from ah.connectors.models import ConnectorConfig
+
+    connection = MCPConnection(
+        ConnectorConfig(
+            id="rotating",
+            transport="streamable_http",
+            endpoint="https://resource.example/mcp",
+            oauth={"client_mode": "auto"},
+        )
+    )
+    initial, rotated = "initial-synthetic-token", 'rotated-synthetic-"token'
+    identity = {
+        "credentialKey": "synthetic-key",
+        "resource": connection.config.endpoint,
+        "issuer": "https://issuer.example",
+        "clientId": "synthetic-client",
+    }
+    coordinator = AsyncMock()
+    coordinator.auth_identity = lambda _id: identity
+    coordinator.ensure_token.side_effect = [initial, rotated]
+    auth, token = await connection._oauth_preflight(coordinator)
+    connection.register_oauth_token(token)
+    flow = auth.async_auth_flow(httpx2.Request("POST", connection.config.endpoint))
+    request = await anext(flow)
+    assert request.headers["Authorization"] == f"Bearer {rotated}"
+    assert connection._redact(f"{initial} {rotated}") == "[REDACTED] [REDACTED]"
+    assert json.loads(connection._redact(json.dumps({"error": rotated})))["error"] == "[REDACTED]"
+    result = mcp.types.CallToolResult(
+        content=[mcp.types.TextContent(type="text", text=f"{initial} {rotated}")],
+        structured_content={"echo": rotated},
+    )
+    outcome = connection._normalize("echo", result, mcp.types)
+    assert outcome.text == "[REDACTED] [REDACTED]"
+    assert outcome.structured == {"echo": "[REDACTED]"}
+    with pytest.raises(StopAsyncIteration):
+        await flow.asend(httpx2.Response(401))
+    assert coordinator.ensure_token.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["schema", "name"])
+async def test_discovery_rejects_secret_echoes_in_dispatch_contract(field):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from ah.connectors.models import ConnectionFailed, ConnectorConfig
+
+    token = "synthetic-catalog-token"
+    connection = MCPConnection(
+        ConnectorConfig(
+            id="catalog",
+            transport="streamable_http",
+            endpoint="https://resource.example/mcp",
+        )
+    )
+    connection.register_oauth_token(token)
+    entry = SimpleNamespace(
+        name=token if field == "name" else "echo",
+        description=token,
+        input_schema={"type": "object", "description": token}
+        if field == "schema"
+        else {"type": "object"},
+    )
+    connection._session = SimpleNamespace(
+        list_tools=AsyncMock(return_value=SimpleNamespace(tools=[entry], next_cursor=None))
+    )
+    with pytest.raises(ConnectionFailed) as error:
+        await connection.list_tools()
+    assert token not in str(error.value)
+    assert connection._schemas == {}

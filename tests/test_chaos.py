@@ -68,6 +68,7 @@ class TestLLMChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -104,6 +105,7 @@ class TestLLMChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -140,6 +142,7 @@ class TestLLMChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -175,6 +178,7 @@ class TestLLMChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -196,6 +200,7 @@ class TestLLMChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -217,6 +222,7 @@ class TestLLMChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -244,6 +250,7 @@ class TestLLMChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -272,6 +279,7 @@ class TestLLMChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -299,6 +307,7 @@ class TestLLMChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -378,6 +387,7 @@ class TestToolChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):
@@ -418,6 +428,7 @@ class TestToolChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):
@@ -476,6 +487,7 @@ class TestToolChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):
@@ -517,6 +529,7 @@ class TestToolChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):
@@ -561,6 +574,7 @@ class TestToolChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):
@@ -598,6 +612,7 @@ class TestContextChaos:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 # Simulate context overflow by returning huge context
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(
                     return_value=[
                         {
@@ -634,6 +649,7 @@ class TestContextChaos:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
                 # Return corrupted context
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(
                     return_value=[
                         {"type": "unknown", "payload": None},
@@ -692,6 +708,7 @@ class TestDatabaseChaos:
                         Exception("Connection lost"),  # Second call fails
                     ]
                 )
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -720,6 +737,7 @@ class TestDatabaseChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock(side_effect=slow_add_chunk)
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -747,6 +765,7 @@ class TestDatabaseChaos:
 
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock(side_effect=Exception("Pool exhausted"))
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -782,6 +801,7 @@ class TestStreamingChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -819,6 +839,7 @@ class TestStreamingChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -857,6 +878,7 @@ class TestConcurrentChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 agent = ReActAgent(provider=provider, max_iterations=5)
@@ -904,6 +926,7 @@ class TestConcurrentChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):
@@ -995,6 +1018,7 @@ class TestRecoveryChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):
@@ -1034,6 +1058,7 @@ class TestRecoveryChaos:
             with patch("ah.core.agent.context_manager") as mock_cm:
                 mock_cm.add_chunk = AsyncMock()
                 mock_cm.add_chunks_batch = AsyncMock()
+                mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("ah.core.agent.registry", test_registry):

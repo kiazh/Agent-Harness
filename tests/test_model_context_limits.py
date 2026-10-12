@@ -188,7 +188,7 @@ async def test_real_loop_preserves_long_context_and_executes_reported_chain(
         monkeypatch.setattr(config, field, False)
     monkeypatch.setattr("ah.core.agent.session_manager.get", AsyncMock(return_value=session))
     monkeypatch.setattr("ah.core.agent.session_manager.update_activity", AsyncMock())
-    for method in ("add_chunk", "add_chunks_batch", "search_archive_text"):
+    for method in ("add_chunk", "add_chunks_batch", "search_archive_text", "get_latest_images"):
         monkeypatch.setattr(context_module.context_manager, method, AsyncMock(return_value=[]))
     monkeypatch.setattr(
         context_module.context_manager,

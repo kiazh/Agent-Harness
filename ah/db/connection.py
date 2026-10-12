@@ -181,7 +181,11 @@ class Database:
                 )
                 await conn.execute(schema_sql)
                 if default_schema:
-                    for name in ("growth_schema.sql", "delegation_schema.sql"):
+                    for name in (
+                        "growth_schema.sql",
+                        "delegation_schema.sql",
+                        "image_context_schema.sql",
+                    ):
                         with open(
                             os.path.join(os.path.dirname(__file__), name), encoding="utf-8"
                         ) as f:
@@ -193,7 +197,7 @@ class Database:
             await conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended('ah:runtime_migrations', 0))"
             )
-            for name in ("growth_schema.sql", "delegation_schema.sql"):
+            for name in ("growth_schema.sql", "delegation_schema.sql", "image_context_schema.sql"):
                 with open(os.path.join(os.path.dirname(__file__), name), encoding="utf-8") as f:
                     await conn.execute(f.read())
 

@@ -77,6 +77,9 @@ async def test_skill_read_continuation_reaches_model_without_silent_truncation(m
     skills.load_all()
     monkeypatch.setattr(module, "skill_registry", skills)
     monkeypatch.setattr("ah.core.agent.context_manager.add_chunk", AsyncMock())
+    monkeypatch.setattr(
+        "ah.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
+    )
     agent = BaseReActAgent(provider=object(), allowed_tools=["skill_read"])
     messages = []
     response = LLMResponse(
@@ -121,6 +124,9 @@ async def test_default_skills_reach_first_provider_call(streaming, monkeypatch):
         "ah.core.agent.context_manager.search_archive_text", AsyncMock(return_value=[])
     )
     monkeypatch.setattr("ah.core.agent.context_manager.add_chunks_batch", AsyncMock())
+    monkeypatch.setattr(
+        "ah.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
+    )
     monkeypatch.setattr("ah.core.agent.BaseReActAgent._reserve_usage", AsyncMock(return_value=None))
     monkeypatch.setattr("ah.core.agent.BaseReActAgent._finish_usage", AsyncMock())
 

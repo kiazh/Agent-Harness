@@ -35,7 +35,13 @@ def setup_agent(monkeypatch, *, allowed_tools=None):
     session = Session(id=uuid.uuid4(), agent_id="knowledge-test", execution_mode="workspace")
     monkeypatch.setattr("ah.core.agent.session_manager.get", AsyncMock(return_value=session))
     monkeypatch.setattr("ah.core.agent.session_manager.update_activity", AsyncMock())
-    for method in ("add_chunk", "add_chunks_batch", "search_archive_text", "get_recent_context"):
+    for method in (
+        "add_chunk",
+        "add_chunks_batch",
+        "search_archive_text",
+        "get_recent_context",
+        "get_latest_images",
+    ):
         monkeypatch.setattr(f"ah.core.agent.context_manager.{method}", AsyncMock(return_value=[]))
     monkeypatch.setattr("ah.core.agent.usage_store.reserve", AsyncMock(return_value=None))
     monkeypatch.setattr("ah.core.agent.usage_store.finish", AsyncMock())

@@ -522,7 +522,7 @@ class BaseReActAgent:
         from ah.core.images import IMAGE_TOKEN_RESERVE, image_content, validate_images
 
         images = validate_images(images or [])
-        visual_tokens = len(images) * IMAGE_TOKEN_RESERVE
+        submitted_visual_tokens = len(images) * IMAGE_TOKEN_RESERVE
         payload = {"content": user_message}
         if images:
             payload["images"] = images
@@ -546,6 +546,10 @@ class BaseReActAgent:
 
         await plugin_registry.dispatch("pre_agent_run", session, user_message)
 
+        if not images:
+            images = await context_manager.get_latest_images(session_id, self.agent_id)
+        visual_tokens = len(images) * IMAGE_TOKEN_RESERVE
+
         assembler = PromptAssembler(
             max(
                 1,
@@ -563,7 +567,7 @@ class BaseReActAgent:
                     "agent_id": self.agent_id,
                     "chunk_type": "user_message",
                     "payload": payload,
-                    "token_count": len(user_message) // 4 + visual_tokens,
+                    "token_count": len(user_message) // 4 + submitted_visual_tokens,
                 }
             )
         else:
@@ -572,21 +576,11 @@ class BaseReActAgent:
                 agent_id=self.agent_id,
                 chunk_type="user_message",
                 payload=payload,
-                token_count=len(user_message) // 4 + visual_tokens,
+                token_count=len(user_message) // 4 + submitted_visual_tokens,
             )
 
         # Get recent context for prompt assembly
         recent = await context_manager.get_recent_context(session_id, limit=10)
-        # Reserve the latest referenced images before assembling text. This
-        # keeps follow-up turns within the same context budget as initial ones.
-        if not images:
-            for chunk in recent:
-                prior = chunk.get("payload", {})
-                if chunk.get("type") == "user_message" and prior.get("images"):
-                    images = validate_images(prior["images"])
-                    visual_tokens = len(images) * IMAGE_TOKEN_RESERVE
-                    break
-            assembler.session_budget = max(1, assembler.session_budget - visual_tokens)
 
         # Build retrieved chunks for the assembler
         retrieved_chunks: list[tuple] = []

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote_plus, urlparse
 
+from ah.connectors.http_transport import run_dns_check
 from ah.connectors.oauth_models import (
     OAUTH_MAX_ISSUERS,
     OAUTH_MAX_SCOPES,
@@ -307,6 +308,24 @@ class OAuthNetworkClient:
             await self._client.aclose()
             self._client = None
 
+    async def _validate_url(self, url: str, *, deadline: float, stage: str) -> None:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise OAuthNetworkError(f"oauth destination check deadline expired during {stage}")
+        local_access = self._local_access
+        try:
+            await run_dns_check(
+                lambda: validate_outbound_url(url, local_access=local_access),
+                timeout=min(remaining, self._timeout),
+            )
+        except (TimeoutError, OSError) as exc:
+            # Host only: these URLs carry no secrets, but the full URL is
+            # still left out of the message to keep logs terse.
+            host = urlparse(url).hostname or "unknown host"
+            raise OAuthNetworkError(
+                f"oauth destination check for {host} timed out or unavailable during {stage}"
+            ) from exc
+
     @staticmethod
     def _check_response(status: int, headers: dict, *, body: bytes, max_bytes: int) -> None:
         if status in (301, 302, 303, 307, 308):
@@ -361,7 +380,7 @@ class OAuthNetworkClient:
     async def _fetch_json(
         self, url: str, *, max_bytes: int, deadline: float, extra_headers: dict | None = None
     ) -> tuple[int, dict[str, str], bytes]:
-        validate_outbound_url(url, local_access=self._local_access)
+        await self._validate_url(url, deadline=deadline, stage="metadata fetch")
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             raise OAuthNetworkError("oauth discovery deadline expired")
@@ -389,7 +408,7 @@ class OAuthNetworkClient:
         extra_headers: dict | None = None,
         expect_json: bool = True,
     ) -> dict[str, Any]:
-        validate_outbound_url(url, local_access=self._local_access)
+        await self._validate_url(url, deadline=deadline, stage="token request")
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             raise OAuthNetworkError("oauth deadline expired")
@@ -437,7 +456,7 @@ class OAuthNetworkClient:
             raise OAuthNetworkError("oauth response is not valid JSON") from exc
 
     async def _probe_resource(self, endpoint: str, *, deadline: float):
-        validate_outbound_url(endpoint, local_access=self._local_access)
+        await self._validate_url(endpoint, deadline=deadline, stage="resource probe")
         remaining = deadline - asyncio.get_running_loop().time()
         if self._transport is not None and hasattr(self._transport, "probe"):
             return await self._transport.probe(endpoint, timeout=min(remaining, 3.0))
@@ -493,12 +512,16 @@ class OAuthNetworkClient:
         # Protected resource metadata.
         prm_urls: list[str] = []
         if challenge_metadata_url:
-            validate_outbound_url(challenge_metadata_url, local_access=local_access)
+            await self._validate_url(
+                challenge_metadata_url, deadline=deadline, stage="challenge metadata"
+            )
             prm_urls = [challenge_metadata_url]
         else:
             prm_urls = protected_resource_candidates(endpoint)
             for candidate in prm_urls:
-                validate_outbound_url(candidate, local_access=local_access)
+                await self._validate_url(
+                    candidate, deadline=deadline, stage="protected resource metadata"
+                )
         prm: dict[str, Any] | None = None
         prm_fetched = False
         for candidate in prm_urls:
@@ -569,11 +592,16 @@ class OAuthNetworkClient:
             raise OAuthNetworkError(
                 "configured issuer is not advertised", reason="oauth_issuer_mismatch"
             )
-        validate_outbound_url(selected, local_access=local_access)
+        await self._validate_url(selected, deadline=deadline, stage="issuer selection")
         # Public-to-private pivot: public resource must not inherit private issuer
         # without local consent.
-        endpoint_public = _host_is_public(endpoint)
-        issuer_private = not _host_is_public(selected)
+        try:
+            endpoint_public, issuer_private = await run_dns_check(
+                lambda: (_host_is_public(endpoint), not _host_is_public(selected)),
+                timeout=max(0.0, min(deadline - asyncio.get_running_loop().time(), self._timeout)),
+            )
+        except (TimeoutError, OSError) as exc:
+            raise OAuthNetworkError("oauth destination classification unavailable") from exc
         if endpoint_public and issuer_private and not local_access:
             raise OAuthNetworkError(
                 "public resource advertises a private issuer", reason="oauth_unsafe_destination"
@@ -581,7 +609,9 @@ class OAuthNetworkClient:
         # Authorization server metadata (OAuth then OIDC candidates).
         server_meta: dict[str, Any] | None = None
         for candidate in issuer_metadata_candidates(selected):
-            validate_outbound_url(candidate, local_access=local_access)
+            await self._validate_url(
+                candidate, deadline=deadline, stage="authorization server metadata"
+            )
             status, _, body = await self._fetch_json(
                 candidate, max_bytes=OAUTH_METADATA_MAX_BYTES, deadline=deadline
             )
@@ -616,7 +646,7 @@ class OAuthNetworkClient:
             + ([registration_endpoint] if registration_endpoint else [])
             + ([revocation_endpoint] if revocation_endpoint else [])
         ):
-            validate_outbound_url(url, local_access=local_access)
+            await self._validate_url(url, deadline=deadline, stage="endpoint pinning")
         response_types = server_meta.get("response_types_supported", ["code"])
         if "code" not in (response_types or []):
             raise OAuthNetworkError(
@@ -686,7 +716,9 @@ class OAuthNetworkClient:
             "token_endpoint_auth_method": "none",
         }
 
-        validate_outbound_url(snapshot.registration_endpoint, local_access=self._local_access)
+        await self._validate_url(
+            snapshot.registration_endpoint, deadline=deadline, stage="client registration"
+        )
         remaining = deadline - asyncio.get_running_loop().time()
         if self._transport is not None and hasattr(self._transport, "register"):
             response = await self._transport.register(

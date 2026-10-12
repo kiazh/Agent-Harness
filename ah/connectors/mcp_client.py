@@ -23,6 +23,7 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 
+from ah.connectors.http_transport import run_dns_check
 from ah.connectors.models import (
     MAX_CATALOG_TOOLS,
     MAX_DESCRIPTION_CHARS,
@@ -383,7 +384,10 @@ class MCPConnection:
         from mcp.client.streamable_http import streamable_http_client
 
         parts = urlparse(self.config.endpoint)
-        _classify_host(parts.hostname or "", local_access=self.config.local_access)
+        await run_dns_check(
+            lambda: _classify_host(parts.hostname or "", local_access=self.config.local_access),
+            timeout=self.config.call_timeout,
+        )
         if self.config.credential_profile:
             raise AuthRequired(
                 "HTTP credential profiles are not implemented; authentication is deferred"
@@ -400,15 +404,7 @@ class MCPConnection:
         if getattr(self.config, "oauth", None):
             oauth_auth, oauth_token_value = await self._oauth_preflight(coordinator)
             if oauth_token_value:
-                self._secret_values = tuple(
-                    sorted(
-                        set(self._secret_values)
-                        | {oauth_token_value}
-                        | {__import__("json").dumps(oauth_token_value, ensure_ascii=False)[1:-1]},
-                        key=len,
-                        reverse=True,
-                    )
-                )
+                self.register_oauth_token(oauth_token_value)
 
         async def check_destination(request):
             destination = urlparse(str(request.url))
@@ -418,8 +414,11 @@ class MCPConnection:
                 parts.port,
             ):
                 raise ConnectionFailed("MCP transport destination changed")
-            await asyncio.to_thread(
-                _classify_host, destination.hostname or "", local_access=self.config.local_access
+            await run_dns_check(
+                lambda: _classify_host(
+                    destination.hostname or "", local_access=self.config.local_access
+                ),
+                timeout=self.config.call_timeout,
             )
 
         assert self._stack is not None
@@ -488,13 +487,16 @@ class MCPConnection:
         def _deadline() -> float:
             return asyncio.get_running_loop().time() + self.config.call_timeout
 
-        return OAuthBearerAuth(coordinator, binding, identity, _deadline), token
+        return OAuthBearerAuth(
+            coordinator, binding, identity, _deadline, register_token=self.register_oauth_token
+        ), token
 
     def register_oauth_token(self, token_value: str) -> None:
         if token_value:
             self._secret_values = tuple(
                 sorted(
-                    set(self._secret_values) | {token_value},
+                    set(self._secret_values)
+                    | {token_value, json.dumps(token_value, ensure_ascii=False)[1:-1]},
                     key=len,
                     reverse=True,
                 )
@@ -572,6 +574,14 @@ class MCPConnection:
                 )
                 for entry in page.tools or []:
                     schema = getattr(entry, "input_schema", None) or {}
+                    schema_json = json.dumps(schema, default=str, ensure_ascii=False)
+                    if (
+                        self._redact(entry.name) != entry.name
+                        or self._redact(schema_json) != schema_json
+                    ):
+                        # Rewriting schema values could weaken argument validation
+                        # or change an approved dispatch contract. Refuse discovery.
+                        raise ConnectionFailed("tool catalog contains credential material")
                     tools.append(
                         DiscoveredTool(
                             connector_id=self.config.id,
@@ -594,6 +604,8 @@ class MCPConnection:
                 seen_cursors.add(cursor)
         except TimeoutError as exc:
             raise ConnectionFailed("tool discovery timed out") from exc
+        except ConnectionFailed:
+            raise
         except Exception as exc:
             raise ConnectionFailed(f"tool discovery failed: {type(exc).__name__}") from exc
         self._schemas = {

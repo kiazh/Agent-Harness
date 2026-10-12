@@ -114,6 +114,9 @@ async def test_parallel_delegate_fan_out_runs_every_subagent(tmp_path, monkeypat
         "ah.core.agent.context_manager.search_archive_text", AsyncMock(return_value=[])
     )
     monkeypatch.setattr("ah.core.agent.context_manager.add_chunks_batch", AsyncMock())
+    monkeypatch.setattr(
+        "ah.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
+    )
     monkeypatch.setattr(BaseReActAgent, "_reserve_usage", AsyncMock(return_value=None))
     monkeypatch.setattr(BaseReActAgent, "_finish_usage", AsyncMock())
 
