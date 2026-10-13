@@ -220,6 +220,9 @@ _TOOL_TIMEOUTS: dict[str, float] = {
     "web_research": 120.0,
     "index_document": 120.0,
     "terminal": 60.0,
+    # N6 (final pass): a cold scan of a large repo can exceed the 30s default;
+    # 120s matches the other "legitimately slow read" tools above.
+    "learn_directory": 120.0,
 }
 _TOOL_TIMEOUT_DEFAULT = 30.0
 
@@ -1842,6 +1845,9 @@ class ReActAgent(BaseReActAgent):
                     context_window=effective_budget,
                 )
                 await self._flush_pending_chunks(pending_chunks)
+                # M1 (final pass): mirror run()'s failed-path catch-up so a
+                # failed interactive turn consolidates like a failed job.
+                self._schedule_memory_consolidation(session_id)
                 yield StreamEvent(
                     type="done",
                     response=AgentResponse(
@@ -1919,6 +1925,8 @@ class ReActAgent(BaseReActAgent):
                     error=str(e),
                     iteration=iteration,
                 )
+                # M1 (final pass): mirror run()'s failed-path catch-up.
+                self._schedule_memory_consolidation(session_id)
                 yield StreamEvent(
                     type="done",
                     response=AgentResponse(

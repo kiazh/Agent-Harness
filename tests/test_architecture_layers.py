@@ -156,6 +156,10 @@ def test_deferred_import_count_ratchet():
     #   import); wave-4 removed -1 net (agent.py -3: datetime/uuid/images
     #   hoisted to module level, +1 tool-trace hook; controller/wiring.py +2
     #   trace/evidence helpers). Net since wave-2: -1, so cap stays 677.
+    #   Final wave (A5, 6a1131a): -1 (agent.py 31 -> 29 deferred imports after
+    #   the turn_flow extraction; new core/turn_flow.py +1 guarded helper
+    #   import). Census = 675. N1 (final pass): entry added to make the
+    #   procedure table complete; the cap was already honest at 675 <= 677.
     # Procedure: this number may only move with a delta table like the above
     # in this comment; silent growth fails the suite by design.
     total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))

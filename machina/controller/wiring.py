@@ -124,7 +124,12 @@ def record_triage(agent: Any, user_message: str) -> None:
         agent._last_triage = resolve_task(user_message)
         logger.debug("s3 triage task=%s", agent._last_triage)
     except Exception:
-        pass
+        # N2 (final pass): clear any stale label from a reused agent instance so
+        # a failed hook cannot carry the previous turn's hint into this one.
+        try:
+            agent._last_triage = None
+        except Exception:
+            pass
 
 
 def log_complexity(agent: Any, user_message: str) -> None:

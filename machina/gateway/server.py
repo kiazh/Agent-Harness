@@ -180,7 +180,6 @@ class Gateway:
         self._db_ready = False
         self._job_runner = None
         self._turns: dict[str, asyncio.Task[None]] = {}
-        self._turn_locks: dict[str, asyncio.Lock] = {}
         self._turn_tokens: dict[str, str] = {}
         self._turn_ownership_lost: dict[str, asyncio.Event] = {}
         self._turn_progress: dict[str, dict[str, int]] = {}
@@ -600,9 +599,10 @@ class Gateway:
             if marker not in text:
                 text += "\n" + marker
         key = str(session.id)
-        # Shared coordinator claim (cross-transport owner token). The
-        # in-process lock serializes same-process racers; the DB claim fences
-        # REST/scheduler workers. Fails closed on claim errors.
+        # Shared coordinator claim (cross-transport owner token). The DB claim
+        # fences same-process and REST/scheduler workers alike (N3, final pass:
+        # the former `_turn_locks` in-process lock was declared but never
+        # acquired — removed). Fails closed on claim errors.
         from machina.core.turns import try_begin_turn
 
         turn_id = uuid.uuid4().hex[:12]

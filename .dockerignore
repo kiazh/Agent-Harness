@@ -63,3 +63,7 @@ ui/node_modules/
 .ruff_cache/
 .skill-hub/
 coverage.xml
+# N5 (final pass): runtime skill telemetry is machine-local state; keep it out
+# of image build contexts (hatch force-include cannot exclude it from wheels).
+skills/telemetry.json
+skills/telemetry.json.lock

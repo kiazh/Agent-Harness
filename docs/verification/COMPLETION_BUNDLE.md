@@ -80,7 +80,29 @@ Enforcement audit: all 7 execution paths guarded (P6/P7 re-tested against the re
 - Export fidelity: unit-level coverage; full persisted-DB vs export comparison not exercised.
 - `provider.py` god-file split (template-method refactor) deferred; ceilings tracked with delta tables.
 - Ports caller migration (tools/memory/rag `ports.py` consumers) — seams exist, callers partial.
-- Memory/RAG FTS index (`idx_memories_fts`) proposed in SQL, not applied (DDL awaiting operator).
-- `researcher`/`coder` builtin tool lists do not yet include `learn_directory` (recommended next change).
-- ContentHashCache fixed-tmp-name race (pre-existing, degrades to re-scan).
+- Memory/RAG FTS index — proposed SQL, not applied (operator DDL):
+  ```sql
+  CREATE INDEX IF NOT EXISTS idx_memories_fts
+      ON memories USING GIN (to_tsvector('english', content));
+  ```
+- Fresh-test-DB priming: `test_schema_conformance` expects `workflow_trial`'s lazily-created
+  tables (`_SETUP_SQL` in `machina/research/workflow_trial.py`); a brand-new DB needs that module's
+  setup run once (pre-existing mechanism, not a regression).
+- ContentHashCache uses a fixed `<path>.tmp` name; concurrent savers of the same root can race
+  (pre-existing `cache.py`; worst case degrades to a re-scan).
+- Hatchling `force-include` bypasses `[tool.hatch.build] exclude` (verified empirically), so runtime
+  telemetry counters can ship in wheels built from a used checkout; `.dockerignore` prunes them from
+  image contexts and pyproject documents the limitation. Counters only, no secrets.
 - 2 user stashes + `session-5f625662.md` (tracked, scrubbed) left as-authored by operator.
+
+## 8. Final adversarial pass (post-program)
+
+Independent hostile review of the integrated state (invariants, cross-feature interactions, probe
+suite, bundle-claims audit): **verdict CONCERNS (low) — zero blocker/major**. Verified independently:
+full suite 3428/0 (144.7s idle), UI 337/0, replay metrics exact, prefix probe 3566 tok / 71.5%,
+ratchet 675≤677, E1 OFF byte-identity + ON/OFF cache separation, V1 confinement, sandbox context
+builds, placeholder guard precedence. Findings, all addressed at this HEAD (`see final-pass commit`):
+M1 loop failure-path parity (run_stream now schedules consolidation), M2 bundle ledger self-fix,
+N1 A5 delta-table entry, N2 stale-triage clearing, N3 dead `_turn_locks` removed, N4 provider cache
+comment corrected to the true scoping, N5 telemetry hygiene (dockerignore + docs), N6
+`learn_directory` 120s tool timeout. Regressions: `tests/test_final_pass_fixes.py` (6, RED-verified).

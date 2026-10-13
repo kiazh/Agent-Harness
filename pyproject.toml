@@ -53,6 +53,11 @@ packages = ["machina"]
 # AH-030: ship built-in skills inside the wheel so non-editable installs
 # still discover SKILL.md content. Falls back to MACHINA_SKILLS_DIR
 # at runtime when overridden.
+# N5 (final pass): hatchling's force-include bypasses [tool.hatch.build]
+# exclude (verified empirically), so gitignored runtime telemetry
+# (skills/telemetry.json[.lock]) can ship in wheels built from a used
+# checkout — counters only, no secrets. Image hygiene is enforced where it
+# works: .dockerignore prunes these paths from Docker build contexts.
 [tool.hatch.build.targets.wheel.force-include]
 "skills" = "skills"
 

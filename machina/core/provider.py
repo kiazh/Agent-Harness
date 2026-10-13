@@ -617,11 +617,11 @@ _RATE_LIMITERS: dict[str, AsyncTokenBucket] = {}
 # identical payloads. Keys include the provider, effective request, and caller
 # identity when one was supplied; entries are TTL- and size-bounded.
 #
-# Residual sharing: callers that pass neither session_id nor agent_id remain
-# identity-free, so two callers issuing the identical stateless request can
-# share one cached body. That is the pre-existing contract for stateless calls
-# (no usage reservation is attached to them either); accounting callers are
-# always scoped by identity.
+# Residual sharing (N4, final pass): callers passing neither session_id nor
+# agent_id stay identity-free — including the main agent path, which reaches
+# complete() through usage.complete_call WITHOUT identity kwargs. Identical
+# requests from two sessions can share one cached body within the TTL; the
+# second reservation re-attributes cached usage (conservative over-count).
 # ---------------------------------------------------------------------------
 _RESPONSE_CACHE_TTL = 60  # seconds
 _RESPONSE_CACHE_MAXSIZE = 256
