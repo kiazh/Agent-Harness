@@ -28,6 +28,7 @@ def workspace(tmp_path, monkeypatch):
         ("search_files", {"pattern": "credential", "path": "."}),
         ("web_search", {"query": "Python documentation"}),
         ("web_extract", {"url": "https://example.com"}),
+        ("web_crawl", {"url": "https://example.com"}),
         ("search_documents", {"query": "credentials"}),
         ("terminal", {"command": "git status --short"}),
         ("terminal", {"command": "rg permissions ah"}),

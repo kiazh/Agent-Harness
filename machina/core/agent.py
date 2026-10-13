@@ -221,6 +221,7 @@ _TOOL_TIMEOUTS: dict[str, float] = {
     "share_memory": 60.0,
     "web_extract": 45.0,
     "web_research": 120.0,
+    "web_crawl": 120.0,
     "index_document": 120.0,
     "terminal": 60.0,
     # N6 (final pass): a cold scan of a large repo can exceed the 30s default;

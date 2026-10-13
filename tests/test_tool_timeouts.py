@@ -38,7 +38,7 @@ def test_delegation_allows_a_sub_agent_to_finish():
     assert _TOOL_TIMEOUTS["delegate"] >= 60.0
 
 
-@pytest.mark.parametrize("tool", ["web_search", "web_extract", "terminal", "read_file"])
+@pytest.mark.parametrize("tool", ["web_search", "web_extract", "web_crawl", "terminal", "read_file"])
 def test_every_known_tool_gets_a_usable_timeout(tool):
     """No tool may resolve to a timeout below one second."""
     assert _TOOL_TIMEOUTS.get(tool, _TOOL_TIMEOUT_DEFAULT) >= 1.0

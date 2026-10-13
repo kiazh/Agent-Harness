@@ -16,6 +16,7 @@ from machina.tools import (
     session_recall,  # noqa: F401 — transcript recall
     skills,  # noqa: F401 — skill discovery and reading
     terminal,  # noqa: F401 — terminal
+    web_crawl,  # noqa: F401 — bounded multi-page crawl into session RAG
     web_research,  # noqa: F401 — session-scoped public web research
 )
 from machina.tools.base import Tool, ToolRegistry, registry
@@ -35,5 +36,6 @@ __all__ = [
     "session_recall",
     "skills",
     "agents",
+    "web_crawl",
     "web_research",
 ]

@@ -70,6 +70,7 @@ _ELIGIBLE = frozenset(
         "web_search",
         "web_extract",
         "web_research",
+        "web_crawl",
         "harness_status",
         "list_agents",
     }
@@ -93,6 +94,7 @@ _TARGET_KEYS: dict[str, tuple[str, ...]] = {
     "web_search": ("query",),
     "web_extract": ("url",),
     "web_research": ("query", "url"),
+    "web_crawl": ("url",),
 }
 
 

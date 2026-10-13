@@ -400,6 +400,7 @@ def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
             "web_search",
             "web_extract",
             "web_research",
+            "web_crawl",
         }:
             return Decision("allowed", "built-in web read (backend validates URLs)", req)
         if req.operation == "process.exec":

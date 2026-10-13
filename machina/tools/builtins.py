@@ -10,7 +10,7 @@ import re
 import socket
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 
@@ -274,21 +274,28 @@ async def web_extract(url: str) -> str:
 # Extraction bounds: the raw-body cap is generous so real pages (often a few
 # hundred KB of markup) can still be processed; the extracted-text cap stays
 # modest because tool output feeds model context. Callers that index pages
-# (web_research) pass a larger text_limit for retrieval quality.
+# (web_research, web_crawl) pass a larger text_limit for retrieval quality.
 _EXTRACT_MAX_BYTES = 1_000_000
 _EXTRACT_TEXT_LIMIT = 20_000
+_EXTRACT_TIMEOUT = 30.0
 
 
-async def extract_url_text(url: str, *, text_limit: int = _EXTRACT_TEXT_LIMIT) -> str:
-    """Fetch and extract bounded page text through the SSRF-safe fetcher."""
+async def fetch_page_html(
+    url: str, *, max_bytes: int = _EXTRACT_MAX_BYTES, timeout: float = _EXTRACT_TIMEOUT
+) -> str:
+    """Fetch a page body through the SSRF-safe pinned fetcher (the only network path)."""
     from machina.security.fetch import FetchError, pinned_fetch
 
     try:
-        content = await asyncio.to_thread(
-            pinned_fetch, url.strip(), max_bytes=_EXTRACT_MAX_BYTES, timeout=30
+        return await asyncio.to_thread(
+            pinned_fetch, url.strip(), max_bytes=max_bytes, timeout=timeout
         )
     except FetchError as error:
-        raise ToolError(f"Error extracting URL: {error}") from None
+        raise ToolError(f"Error fetching URL: {error}") from None
+
+
+def extract_text_from_html(content: str, text_limit: int = _EXTRACT_TEXT_LIMIT) -> str:
+    """Strip markup and trim to the text budget."""
     if re.search(
         r"<(?:!doctype|html|head|body|div|p|h[1-6]|article|script|style)\b", content, re.I
     ):
@@ -298,6 +305,44 @@ async def extract_url_text(url: str, *, text_limit: int = _EXTRACT_TEXT_LIMIT) -
             line.strip() for line in "".join(parser.parts).splitlines() if line.strip()
         )
     return content[:text_limit]
+
+
+async def extract_url_text(url: str, *, text_limit: int = _EXTRACT_TEXT_LIMIT) -> str:
+    """Fetch and extract bounded page text through the SSRF-safe fetcher."""
+    content = await fetch_page_html(url)
+    return extract_text_from_html(content, text_limit)
+
+
+class _PageLinks(HTMLParser):
+    """Collect anchor hrefs for crawling; malformed markup never escapes."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.hrefs: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "a":
+            return
+        for key, value in attrs:
+            if key == "href" and value:
+                self.hrefs.append(value)
+
+
+def _extract_links(html: str, base_url: str) -> list[str]:
+    """Public http(s) links from a page, resolved and policy-checked, in order."""
+    parser = _PageLinks()
+    try:
+        parser.feed(html)
+    except Exception:
+        return []
+    links: list[str] = []
+    seen: set[str] = set()
+    for href in parser.hrefs:
+        canonical = _canonical_result_url(urljoin(base_url, href))
+        if canonical and canonical not in seen:
+            seen.add(canonical)
+            links.append(canonical)
+    return links
 
 
 @registry.register(description="Search file contents with regex")

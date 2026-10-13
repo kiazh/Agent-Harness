@@ -55,7 +55,7 @@ def action_for_tool(name: str, args: dict) -> dict:
         return {"operation": "file.read", "targets": [str(args.get("path", ""))]}
     if name == "search_documents":
         return {"operation": "context.read", "targets": []}
-    if name in ("web_search", "web_extract", "web_research"):
+    if name in ("web_search", "web_extract", "web_research", "web_crawl"):
         return {
             "operation": "network.fetch",
             # FM3-F4: the full URL/query is bound and digested; the card
