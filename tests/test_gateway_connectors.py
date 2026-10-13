@@ -63,7 +63,7 @@ def inspection_runtime():
     return RuntimeServices(_connector_service=service), service
 
 
-async def test_empty_runtime_inventory_is_lazy_and_does_not_require_sdk(monkeypatch):
+async def test_empty_runtime_inventory_is_lazy_and_does_not_require_sdk(monkeypatch, tmp_path):
     real_import = builtins.__import__
 
     def without_sdk(name, *args, **kwargs):
@@ -71,6 +71,8 @@ async def test_empty_runtime_inventory_is_lazy_and_does_not_require_sdk(monkeypa
             pytest.fail("inspection imported the optional MCP SDK")
         return real_import(name, *args, **kwargs)
 
+    # Hermetic inventory: never read the operator's real ~/.machina/mcp.json.
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(builtins, "__import__", without_sdk)
     runtime = RuntimeServices()
     harness = WireHarness(runtime)

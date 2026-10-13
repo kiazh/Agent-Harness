@@ -124,7 +124,12 @@ async def test_fresh_schema_fks_indexes_and_projections(db_pool):
 
 
 def static_queries():
-    """Complete literal SQL passed to the database, excluding dynamic builders."""
+    """Complete literal SQL passed to the database, excluding dynamic builders.
+
+    SQLite-dialect statements are skipped: ``?`` placeholders can never compile
+    against PostgreSQL, so they are never production schema SQL (the research
+    runner reads OpenCode's sqlite ledger through the sqlite3 module).
+    """
     root = Path(__file__).resolve().parents[1] / "machina"
     for path in root.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -163,15 +168,19 @@ def static_queries():
                         break
                 else:
                     query = "".join(pieces)
-                    if re.match(r"\s*(SELECT|INSERT|UPDATE|DELETE)\b", query, re.I):
+                    if "?" not in query and re.match(
+                        r"\s*(SELECT|INSERT|UPDATE|DELETE)\b", query, re.I
+                    ):
                         yield path.name + ":" + str(node.lineno), query
                 continue
             try:
                 query = ast.literal_eval(argument)
             except (ValueError, TypeError):
                 continue
-            if isinstance(query, str) and re.match(
-                r"\s*(SELECT|INSERT|UPDATE|DELETE)\b", query, re.I
+            if (
+                isinstance(query, str)
+                and "?" not in query
+                and re.match(r"\s*(SELECT|INSERT|UPDATE|DELETE)\b", query, re.I)
             ):
                 yield path.name + ":" + str(node.lineno), query
 
