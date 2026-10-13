@@ -294,17 +294,44 @@ def _inside_workspace(path: str) -> bool:
         return False
 
 
+def _has_full_grant(grants: list[dict], req: ActionRequest) -> bool:
+    """True when a live full-mode session grant authorizes this session."""
+    for g in grants:
+        if not _grant_usable(g, req):
+            continue
+        if (
+            g.get("mode") == "full"
+            and g.get("capability") == "session"
+            and g.get("digest") == "full-mode-session"
+        ):
+            return True
+    return False
+
+
 def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
     """Policy decision without side effects. Grants checked by digest/scope."""
     grants = grants or []
+    if req.mode == "full" and _has_full_grant(grants, req):
+        # Full mode is explicit no-approval authority for THIS session:
+        # a live full-mode session grant allows everything, including
+        # sensitive capabilities, without approval cards.
+        return Decision("allowed", "full-mode session grant", req)
+    if req.mode == "full":
+        # LP-07: full authority comes from a live full-mode grant bound to
+        # THIS session — never from the global config value alone. A global
+        # `full` default only auto-grants at session creation (disclosed
+        # persistent scope); activating session A never elevates session B.
+        return Decision(
+            "pending", "full mode requires explicit session activation (/mode full)", req
+        )
     sens = _sensitive_capabilities(req)
     if sens:
-        # AH-AUDIT-007: sensitive exclusions remain explicit in EVERY mode,
-        # including full. EVERY required sensitive capability must be covered
+        # Sensitive exclusions require explicit approval in ask/workspace/
+        # sandbox modes. Full mode (with a live session grant, checked above)
+        # bypasses this. EVERY required sensitive capability must be covered
         # by exact capability identity on a live, digest-bound grant for this
         # exact action. One matching grant never authorizes the others, and
-        # substring matching is never used. Ordinary operation/session grants
-        # and full-mode grants are not sensitive consent.
+        # substring matching is never used.
         needed = set(sens)
         covered: set[str] = set()
         for g in grants:
@@ -338,23 +365,6 @@ def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
         )
     ):
         return Decision("allowed", "in-process operation", req)
-    if req.mode == "full":
-        # LP-07: full authority comes from a live full-mode grant bound to
-        # THIS session — never from the global config value alone. A global
-        # `full` default only auto-grants at session creation (disclosed
-        # persistent scope); activating session A never elevates session B.
-        for g in grants:
-            if not _grant_usable(g, req):
-                continue
-            if (
-                g.get("mode") == "full"
-                and g.get("capability") == "session"
-                and g.get("digest") == "full-mode-session"
-            ):
-                return Decision("allowed", "full-mode session grant", req)
-        return Decision(
-            "pending", "full mode requires explicit session activation (/mode full)", req
-        )
     if req.mode == "sandbox" and req.operation == "process.exec" and req.backend != "sandbox":
         return Decision(
             "pending",

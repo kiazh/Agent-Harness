@@ -40,7 +40,6 @@ export const agentsCommand: Command = {
 						["Name", agent.name],
 						["Source", agent.source],
 						["Model", agent.model ?? "(default)"],
-						["Max iterations", agent.maxIterations],
 						["Tools", agent.tools.join(", ") || "all"],
 						["Description", agent.description],
 						["Prompt", agent.systemPrompt || "(default)"],
@@ -57,7 +56,6 @@ export const agentsCommand: Command = {
 				description: desc,
 				systemPrompt: "",
 				tools: [],
-				maxIterations: 10,
 			});
 			host.print(`Saved agent "${agent.name}".`, "success");
 			return;

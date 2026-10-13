@@ -203,7 +203,7 @@ export interface AgentInfo {
 	tools: string[];
 	model: string | null;
 	provider: string | null;
-	maxIterations: number;
+	maxIterations?: number;
 	source: string;
 }
 

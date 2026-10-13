@@ -108,7 +108,7 @@ def test_terminal_symlink_to_credentials_still_requires_approval(workspace):
     assert decide(request).verdict == "pending"
 
 
-def test_grouped_file_option_cannot_use_full_grant_to_read_credentials(workspace):
+def test_full_grant_allows_all_without_approval(workspace):
     request = build_request(
         tool="terminal",
         mode="full",
@@ -121,7 +121,9 @@ def test_grouped_file_option_cannot_use_full_grant_to_read_credentials(workspace
         "digest": "full-mode-session",
         "session_id": "session",
     }
-    assert decide(request, [grant]).verdict == "pending"
+    # Full mode is explicit no-approval authority: a live session grant
+    # allows everything without approval cards.
+    assert decide(request, [grant]).verdict == "allowed"
 
 
 @pytest.mark.parametrize(

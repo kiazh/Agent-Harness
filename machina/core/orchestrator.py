@@ -121,7 +121,6 @@ class Orchestrator:
         model = definition.model or config.get("model")
         return ReActAgent(
             provider=get_provider(provider=provider_name, model=model),
-            max_iterations=definition.max_iterations,
             agent_id=definition.name,
             system_prompt=definition.system_prompt or None,
             allowed_tools=definition.tools or None,

@@ -247,7 +247,6 @@ async def test_job_claim_has_recovery_lease_and_named_agent_definition(monkeypat
         tools=["read_file"],
         model="special-model",
         provider="ollama",
-        max_iterations=3,
     )
     monkeypatch.setattr(agent_registry, "get", AsyncMock(return_value=definition))
     provider = object()
@@ -255,7 +254,8 @@ async def test_job_claim_has_recovery_lease_and_named_agent_definition(monkeypat
     agent = await JobRunner()._build_agent("researcher")
     assert agent.allowed_tools == ["read_file"]
     assert agent.system_prompt == "Research only"
-    assert agent.max_iterations == 3
+    # The agent loop is unbounded: stored iteration caps are never enforced.
+    assert agent.max_iterations is None
 
 
 @pytest.mark.asyncio

@@ -1474,13 +1474,13 @@ class TestReActAgent:
             with pytest.raises(ValueError, match="not found"):
                 await agent.run(uuid.uuid4(), "test message")
 
-    async def test_agent_max_iterations(self, mock_provider, mock_session, monkeypatch):
-        """Test agent reaching max iterations."""
+    async def test_agent_unbounded_tool_calls(self, mock_provider, mock_session, monkeypatch):
+        """Agent loop is unbounded: many tool rounds run until the model finishes."""
         from machina.core.config import config
 
         monkeypatch.setattr(config, "workspace_root", "/tmp")
         monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
-        # Always return tool calls
+        # Return tool calls well beyond the old cap of 10, then a final answer.
         tool_call_response = LLMResponse(
             content="",
             model="test-model",
@@ -1495,7 +1495,15 @@ class TestReActAgent:
                 }
             ],
         )
-        mock_provider.complete = AsyncMock(return_value=tool_call_response)
+        final_response = LLMResponse(
+            content="done after many tools",
+            model="test-model",
+            usage={"total_tokens": 5},
+            tool_calls=[],
+        )
+        mock_provider.complete = AsyncMock(
+            side_effect=[tool_call_response] * 12 + [final_response]
+        )
 
         with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -1507,11 +1515,12 @@ class TestReActAgent:
                 mock_cm.get_latest_images = AsyncMock(return_value=[])
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
-                agent = ReActAgent(provider=mock_provider, max_iterations=3)
+                agent = ReActAgent(provider=mock_provider)
                 response = await agent.run(mock_session.id, "test message", verbose=False)
 
-                assert "max iterations" in response.content.lower()
-                assert response.iterations == 3
+                assert "max iterations" not in response.content.lower()
+                assert response.content == "done after many tools"
+                assert response.iterations == 13
 
 
 # ============================================================================

@@ -272,7 +272,7 @@ class BaseReActAgent:
     def __init__(
         self,
         provider: LLMProvider | None = None,
-        max_iterations: int = 10,
+        max_iterations: int | None = None,
         agent_id: str = "harness",
         system_prompt: str | None = None,
         memory_retriever: MemoryRetriever | None = None,
@@ -281,6 +281,9 @@ class BaseReActAgent:
         allowed_tools: list[str] | None = None,
     ) -> None:
         self.provider = provider or get_provider()
+        # Unbounded tool calls: the ReAct loop runs until the model stops
+        # calling tools (or context/usage budgets stop the turn). Kept only
+        # for backward compatibility with stored definitions / callers.
         self.max_iterations = max_iterations
         self.agent_id = agent_id
         self.system_prompt = system_prompt or SYSTEM_PROMPT
@@ -1626,9 +1629,10 @@ class ReActAgent(BaseReActAgent):
         total_tokens = 0
         tool_calls_made = []
 
-        for iteration in range(self.max_iterations):
+        iteration = 0
+        while True:
             if verbose:
-                console.print(f"[dim]Iteration {iteration + 1}/{self.max_iterations}[/dim]")
+                console.print(f"[dim]Iteration {iteration + 1}[/dim]")
 
             # Capacity applies to this request, never cumulative billed usage.
             self._condense_history(messages)
@@ -1761,21 +1765,7 @@ class ReActAgent(BaseReActAgent):
                     iterations=iteration + 1,
                     needs_approval=pauses,
                 )
-        audit_log(
-            "agent_run_max_iterations",
-            session_id=str(session_id),
-            max_iterations=self.max_iterations,
-            total_tokens=total_tokens,
-        )
-        await self._flush_pending_chunks(pending_chunks)
-        self._schedule_memory_consolidation(session_id)
-        return AgentResponse(
-            content="Reached max iterations. Partial results may be available.",
-            outcome="failed",
-            tool_calls=tool_calls_made,
-            tokens_used=total_tokens,
-            iterations=self.max_iterations,
-        )
+            iteration += 1
 
     @instrument_stream
     async def run_stream(
@@ -1817,9 +1807,10 @@ class ReActAgent(BaseReActAgent):
         total_tokens = 0
         tool_calls_made = []
 
-        for iteration in range(self.max_iterations):
+        iteration = 0
+        while True:
             if verbose:
-                console.print(f"[dim]Iteration {iteration + 1}/{self.max_iterations}[/dim]")
+                console.print(f"[dim]Iteration {iteration + 1}[/dim]")
 
             # Capacity applies to this request, never cumulative billed usage.
             self._condense_history(messages)
@@ -1996,21 +1987,4 @@ class ReActAgent(BaseReActAgent):
                     ),
                 )
                 return
-        audit_log(
-            "agent_run_max_iterations",
-            session_id=str(session_id),
-            max_iterations=self.max_iterations,
-            total_tokens=total_tokens,
-        )
-        await self._flush_pending_chunks(pending_chunks)
-        self._schedule_memory_consolidation(session_id)
-        yield StreamEvent(
-            type="done",
-            response=AgentResponse(
-                content="Reached max iterations. Partial results may be available.",
-                outcome="failed",
-                tool_calls=tool_calls_made,
-                tokens_used=total_tokens,
-                iterations=self.max_iterations,
-            ),
-        )
+            iteration += 1

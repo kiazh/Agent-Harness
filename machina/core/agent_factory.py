@@ -138,7 +138,6 @@ async def build_agent_for_session(
         model = model_override or session.model or definition.model or config.get("model")
         system_prompt = definition.system_prompt or None
         allowed_tools = definition.tools or None
-        max_iterations = definition.max_iterations
         agent_id = definition.name
     else:
         from machina.core.config import config as _cfg
@@ -147,7 +146,6 @@ async def build_agent_for_session(
         model = model_override or session.model or _cfg.get("model")
         system_prompt = None
         allowed_tools = None
-        max_iterations = _cfg.get("max_iterations")
         agent_id = session.agent_id
 
     # Shared dependencies (lazy, never eager cloud instantiation).
@@ -186,7 +184,6 @@ async def build_agent_for_session(
     llm = get_provider(provider=provider_name, model=model)
     agent = ReActAgent(
         provider=llm,
-        max_iterations=max_iterations,
         agent_id=agent_id,
         system_prompt=system_prompt,
         memory_retriever=memory_retriever,

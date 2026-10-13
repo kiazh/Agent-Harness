@@ -42,7 +42,9 @@ async def agents_save(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
             tools=tools,
             model=_str(params, "model", required=False, max_len=200) or None,
             provider=_str(params, "provider", required=False, max_len=50) or None,
-            max_iterations=_int(params, "maxIterations", 10, 1, 50),
+            # Stored for DB compatibility only; the agent loop is unbounded
+            # and never enforces this value.
+            max_iterations=10,
         )
     )
     return {"agent": _agent(saved)}

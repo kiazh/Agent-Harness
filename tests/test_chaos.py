@@ -1028,8 +1028,8 @@ class TestRecoveryChaos:
                     assert response is not None
                     assert "succeeded" in response.content.lower() or response.iterations >= 3
 
-    async def test_agent_terminates_after_max_iterations_with_failures(self, mock_session):
-        """Agent should terminate even if all iterations have failures."""
+    async def test_agent_terminates_after_tool_failures(self, mock_session):
+        """Agent should terminate when the model finishes, even if tools failed."""
         test_registry = ToolRegistry()
 
         @test_registry.register()
@@ -1037,19 +1037,24 @@ class TestRecoveryChaos:
             raise RuntimeError("Always fails")
 
         provider = AsyncMock()
-        provider.complete = AsyncMock(
-            return_value=LLMResponse(
-                content="",
-                model="test",
-                usage={"total_tokens": 5},
-                tool_calls=[
-                    {
-                        "id": "call_1",
-                        "function": {"name": "always_fails", "arguments": "{}"},
-                    }
-                ],
-            )
+        tool_response = LLMResponse(
+            content="",
+            model="test",
+            usage={"total_tokens": 5},
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "function": {"name": "always_fails", "arguments": "{}"},
+                }
+            ],
         )
+        final_response = LLMResponse(
+            content="gave up gracefully",
+            model="test",
+            usage={"total_tokens": 5},
+            tool_calls=[],
+        )
+        provider.complete = AsyncMock(side_effect=[tool_response] * 3 + [final_response])
 
         with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)
@@ -1062,9 +1067,10 @@ class TestRecoveryChaos:
                 mock_cm.get_recent_context = AsyncMock(return_value=[])
 
                 with patch("machina.core.agent.registry", test_registry):
-                    agent = ReActAgent(provider=provider, max_iterations=3)
+                    agent = ReActAgent(provider=provider)
                     response = await agent.run(mock_session.id, "test", verbose=False)
 
-                    # Should terminate after max_iterations
+                    # Terminates on the model's final answer, not on a cap.
                     assert response is not None
-                    assert response.iterations <= 3
+                    assert response.content == "gave up gracefully"
+                    assert response.iterations == 4

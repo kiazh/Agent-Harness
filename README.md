@@ -392,7 +392,7 @@ Important settings include `DATABASE_URL`, `MACHINA_PROVIDER`, `MACHINA_MODEL`, 
 | `MACHINA_USAGE_AGENT_TOKEN_LIMIT` / `MACHINA_USAGE_AGENT_REQUEST_LIMIT` | Optional agent usage budgets | `0` = unlimited |
 | `MACHINA_CONTEXT_BUDGET` | Legacy compatibility setting | Does not impose a cumulative turn-token cap |
 | `MACHINA_MAX_TOKENS` | Requested provider response length | `4096`; separate from prompt capacity |
-| `MACHINA_MAX_ITERATIONS` | Agent loop iteration bound | `10` |
+| `MACHINA_MAX_ITERATIONS` | Deprecated; the agent loop is unbounded (no iteration cap) | Ignored |
 | `MACHINA_TURN_TIMEOUT` | Turn deadline in seconds | `300` |
 | `SEARXNG_URL` | Optional SearXNG search endpoint; blank uses DuckDuckGo | blank |
 | `MACHINA_TERMINAL_SANDBOX` | Terminal backend setting | `disabled`; configure `local` or `docker` as appropriate |

@@ -19,7 +19,7 @@ def test_native_mcp_tools_are_lazy_and_uncached():
     assert {"mcp_list", "mcp_describe", "mcp_call"} <= _UNCACHEABLE_TOOLS
 
 
-def test_untrusted_mcp_calls_require_exact_consent_even_full_mode():
+def test_full_grant_allows_mcp_calls_without_approval():
     from machina.connectors.execution import call_spec
 
     service = ConnectorService()
@@ -41,11 +41,13 @@ def test_untrusted_mcp_calls_require_exact_consent_even_full_mode():
     )
     args = {"name": "fixture__echo", "arguments": {"text": "hello"}}
     req = build_request(**call_spec(service, args), tool="mcp_call", mode="full")
+    # Full mode is explicit no-approval authority: a live session grant
+    # allows the call without an approval card.
     assert (
         decide(
             req, [{"mode": "full", "capability": "session", "digest": "full-mode-session"}]
         ).verdict
-        == "pending"
+        == "allowed"
     )
     service.registry.update("fixture", argv=["--changed"])
     service.registry.set_tools(

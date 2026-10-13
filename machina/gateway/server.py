@@ -137,7 +137,6 @@ def _default_agent_factory(model: str, provider: str) -> StreamingAgent:
     llm = get_provider(provider=provider, model=model)
     agent = ReActAgent(
         provider=llm,
-        max_iterations=config.get("max_iterations"),
         agent_id=config.get("agent_id"),
     )
     agent._owns_provider = True  # type: ignore[attr-defined]

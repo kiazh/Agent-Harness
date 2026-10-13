@@ -85,6 +85,8 @@ DEFAULTS: dict[str, Any] = {
     "provider": "openrouter",
     # Legacy storage/config compatibility only; runtime uses model context capacity.
     "context_budget": 8000,
+    # Deprecated: the agent loop is unbounded (no iteration cap). Kept so
+    # existing config files and API payloads still validate; it is ignored.
     "max_iterations": 10,
     "turn_timeout": 300,
     "verbose": True,
