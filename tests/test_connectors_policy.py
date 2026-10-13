@@ -125,6 +125,28 @@ def test_validation_tolerates_inert_annotations_from_real_servers():
         validate_arguments("t", {"url": "x"}, {**schema, "patternProperties": {}})
 
 
+def test_real_world_schema_keywords_are_enforced_bounded():
+    schema = {
+        "type": "object",
+        "propertyNames": {"type": "string", "pattern": "^[a-z_]+$"},
+        "properties": {"url": {"type": "string", "format": "uri", "pattern": "^https://"}},
+    }
+    validate_arguments("t", {"url": "https://example.com"}, schema)
+    with pytest.raises(ConnectorToolError):
+        validate_arguments("t", {"URL": "https://example.com"}, schema)  # bad key name
+    with pytest.raises(ConnectorToolError):
+        validate_arguments("t", {"url": "ftp://example.com"}, schema)  # pattern miss
+    # "format" is a spec-level annotation (JSON Schema draft 2019-09+ treats
+    # it as non-enforcing by default), so it never rejects a string value.
+    fmt = {"type": "object", "properties": {"v": {"type": "string", "format": "uri"}}}
+    validate_arguments("t", {"v": "not-a-uri"}, fmt)
+    # Invalid or oversized patterns fail closed before matching anything.
+    with pytest.raises(ConnectorToolError):
+        validate_arguments("t", "x", {"type": "string", "pattern": "([bad"})
+    with pytest.raises(ConnectorToolError):
+        validate_arguments("t", "x", {"type": "string", "pattern": "a" * 201})
+
+
 def test_validation_combinators():
     def prop(branches):
         return {"type": "object", "properties": {"v": branches}}
@@ -205,8 +227,8 @@ def test_binding_digest_covers_everything_and_changes_on_any_edit():
         ({"allOf": [{"type": "object"}], "additionalProperties": False}, {"extra": 1}),
         ({"type": "object", "properties": {"unused": {"$ref": "#/bad"}}}, {}),
         (
-            {"type": "object", "properties": {"v": {"format": "email", "type": "string"}}},
-            {"v": "invalid"},
+            {"type": "object", "properties": {"v": {"type": "number", "multipleOf": 2}}},
+            {"v": 3},
         ),
         ({"type": "object", "additionalProperties": {"type": "integer"}}, {"extra": "invalid"}),
         ({"type": "object", "properties": {"v": {"const": True}}}, {"v": 1}),

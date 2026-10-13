@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from typing import Any
 
 from machina.connectors.models import (
@@ -32,12 +33,17 @@ _SUPPORTED_KEYWORDS = frozenset(
         # Inert dialect/annotation keywords emitted by real MCP servers
         # (draft-07 "$schema" from FastMCP/pydantic, "$id", "$comment",
         # "examples"): they change no validation semantics and are ignored.
-        # "$ref" stays unsupported — reference resolution is different
-        # semantics; fail closed until it is implemented.
+        # "format" is also treated as an annotation (not enforced). "pattern"
+        # and "propertyNames" are enforced below, bounded like every other
+        # constraint. "$ref" stays unsupported — reference resolution is
+        # different semantics; fail closed until it is implemented.
         "$schema",
         "$id",
         "$comment",
         "examples",
+        "format",
+        "pattern",
+        "propertyNames",
         "type",
         "properties",
         "required",
@@ -108,6 +114,14 @@ def _check_schema(schema: Any, depth: int = 0) -> None:
             raise ConnectorToolError("invalid schema items")
         for item in items if isinstance(items, list) else [items]:
             _check_schema(item, depth + 1)
+    if "pattern" in schema and (
+        not isinstance(schema["pattern"], str) or len(schema["pattern"]) > 200
+    ):
+        raise ConnectorToolError("invalid schema pattern")
+    if "format" in schema and not isinstance(schema["format"], str):
+        raise ConnectorToolError("invalid schema format")
+    if "propertyNames" in schema:
+        _check_schema(schema["propertyNames"], depth + 1)
     for key in ("minLength", "maxLength", "minItems", "maxItems"):
         if key in schema and (
             not isinstance(schema[key], int) or isinstance(schema[key], bool) or schema[key] < 0
@@ -157,6 +171,16 @@ def _validate(schema: Any, value: Any, depth: int, path: str) -> None:
         raise ConnectorToolError(
             f"unsupported schema keywords at {path or 'root'}: {sorted(unknown)}"
         )
+    if "pattern" in schema and isinstance(value, str):
+        try:
+            matched = re.search(schema["pattern"], value) is not None
+        except re.error:
+            raise ConnectorToolError(f"invalid schema pattern at {path or 'root'}") from None
+        if not matched:
+            raise ConnectorToolError(f"string does not match pattern at {path or 'root'}")
+    if "propertyNames" in schema and isinstance(value, dict):
+        for key in value:
+            _validate(schema["propertyNames"], key, depth + 1, f"{path}/{key}")
     for key in ("anyOf", "oneOf", "allOf"):
         if key not in schema:
             continue
