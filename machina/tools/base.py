@@ -11,9 +11,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, get_type_hints
 
-from machina.core.exceptions import ToolError, ValidationError
-from machina.core.models import ToolDefinition
-from machina.core.provider import audit_log
+import importlib as _importlib
+import sys as _sys
+
+
+# SEAM: leaf-core seam for machina.core (exceptions ToolError/ValidationError,
+# models ToolDefinition, provider audit_log). Deferred via sys.modules/importlib
+# so this module imports with machina.core blocked; resolves to the same objects
+# when core is present. No logic change.
+def _core_symbol(module: str, name: str):
+    mod = _sys.modules.get(module)
+    if mod is None:
+        mod = _importlib.import_module(module)
+    return getattr(mod, name)
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +182,7 @@ class ToolRegistry:
         """
         if self._definitions_cache is None:
             self._definitions_cache = [
-                ToolDefinition(
+                _core_symbol("machina.core.models", "ToolDefinition")(
                     name=t.name,
                     description=t.description,
                     parameters=t.parameters,
@@ -196,7 +206,7 @@ class ToolRegistry:
         # Check required parameters
         for req_param in required:
             if req_param not in kwargs:
-                raise ValidationError(
+                raise _core_symbol("machina.core.exceptions", "ValidationError")(
                     f"Tool '{tool.name}' missing required parameter: '{req_param}'"
                 )
 
@@ -205,7 +215,7 @@ class ToolRegistry:
         provided_params = set(kwargs.keys())
         unknown_params = provided_params - allowed_params
         if unknown_params:
-            raise ValidationError(
+            raise _core_symbol("machina.core.exceptions", "ValidationError")(
                 f"Tool '{tool.name}' received unknown parameters: {unknown_params}. "
                 f"Allowed: {allowed_params}"
             )
@@ -232,18 +242,18 @@ class ToolRegistry:
                 # bool is a subclass of int: reject it explicitly where a
                 # real integer/number is expected.
                 if expected_type in ("integer", "number") and isinstance(param_value, bool):
-                    raise ValidationError(
+                    raise _core_symbol("machina.core.exceptions", "ValidationError")(
                         f"Tool '{tool.name}' parameter '{param_name}' expected type "
                         f"'{expected_type}', got 'bool'"
                     )
                 python_type = type_map[expected_type]
                 if not isinstance(param_value, python_type):
-                    raise ValidationError(
+                    raise _core_symbol("machina.core.exceptions", "ValidationError")(
                         f"Tool '{tool.name}' parameter '{param_name}' expected type "
                         f"'{expected_type}', got '{type(param_value).__name__}'"
                     )
             if isinstance(param_value, str) and len(param_value) > _MAX_STRING_ARG_CHARS:
-                raise ValidationError(
+                raise _core_symbol("machina.core.exceptions", "ValidationError")(
                     f"Tool '{tool.name}' parameter '{param_name}' is too long "
                     f"(max {_MAX_STRING_ARG_CHARS} characters)"
                 )
@@ -251,8 +261,12 @@ class ToolRegistry:
     async def execute(self, name: str, /, **kwargs) -> Any:
         """Execute a tool by name with input validation and TTL caching."""
         if name not in self._tools:
-            audit_log("tool_execution_error", tool_name=name, error="not_registered")
-            raise ToolError(f"Tool '{name}' not registered")
+            _core_symbol("machina.core.provider", "audit_log")(
+                "tool_execution_error", tool_name=name, error="not_registered"
+            )
+            raise _core_symbol("machina.core.exceptions", "ToolError")(
+                f"Tool '{name}' not registered"
+            )
 
         tool = self._tools[name]
 
@@ -260,7 +274,9 @@ class ToolRegistry:
         try:
             self._validate_tool_args(tool, kwargs)
         except ValueError as e:
-            audit_log("tool_execution_validation_error", tool_name=name, error=str(e))
+            _core_symbol("machina.core.provider", "audit_log")(
+                "tool_execution_validation_error", tool_name=name, error=str(e)
+            )
             raise
 
         # TTL cache: only for read-only, deterministic tools. Side-effecting tools

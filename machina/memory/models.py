@@ -6,7 +6,18 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from machina.core.exceptions import ValidationError
+import importlib as _importlib
+import sys as _sys
+
+
+# SEAM: leaf-core seam for machina.core.exceptions (ValidationError). Deferred
+# via sys.modules/importlib so this module imports with machina.core blocked;
+# resolves to the same object when core is present. No logic change.
+def _core_symbol(module: str, name: str):
+    mod = _sys.modules.get(module)
+    if mod is None:
+        mod = _importlib.import_module(module)
+    return getattr(mod, name)
 
 
 def age_days(dt: datetime | None, now: datetime | None = None) -> float:
@@ -52,7 +63,7 @@ class MemoryEntry:
         """Validate category and clamp importance to [0, 1]."""
         valid_categories = {"preference", "decision", "fact", "event", "transient"}
         if self.category not in valid_categories:
-            raise ValidationError(
+            raise _core_symbol("machina.core.exceptions", "ValidationError")(
                 f"Invalid category '{self.category}'. Must be one of: {valid_categories}"
             )
         self.importance = max(0.0, min(1.0, self.importance))

@@ -21,7 +21,7 @@ import yaml
 
 from machina.db.connection import db
 
-__all__ = ["AgentDef", "AgentRegistry", "agent_registry", "BUILTIN_AGENTS"]
+__all__ = ["AgentDef", "AgentRegistry", "agent_registry", "BUILTIN_AGENTS", "frozen_roster"]
 
 logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -398,3 +398,18 @@ class AgentRegistry:
 
 
 agent_registry = AgentRegistry()
+
+
+def frozen_roster() -> list[str]:
+    """Builtin + file-definition agent names without touching the database.
+
+    Zero-cost validation seam for the delegate tool: file definitions come
+    from the TTL-cached YAML/SoulSpec scan (existing imports only), so this
+    never opens a DB connection. Profile scopes (``harness-<slug>``) are
+    intentionally absent: they resolve dynamically via ``_profile_scope``.
+    """
+    try:
+        file_defs = agent_registry._file_definitions()
+    except Exception:
+        file_defs = {}
+    return sorted(set(BUILTIN_AGENTS) | set(file_defs))

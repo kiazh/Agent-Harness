@@ -1,12 +1,68 @@
-"""Resolve the execution boundary once; backends consume broker snapshots."""
+"""Resolve the execution boundary once; backends consume broker snapshots.
+
+Stream B seam notes: mode resolution is turn-scoped in
+:mod:`machina.core.session_mode` (explicit ``turn_scope()`` or the implicit
+broker-turn cache — one durable read per turn, failures never cached). The
+broker-stamped snapshot consumed here is immutable for the guard+execute
+window; this module never re-resolves mutable globals behind a snapshot.
+Deletion test: removing this module pushes boundary logic (mode/backend/
+workspace binding) into every tool backend — the seam earns its keep.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from machina.core.config import config
-from machina.core.session_mode import MODES, get_effective_mode, resolve_effective_mode
+from machina.core.session_mode import (
+    MODES,
+    begin_turn_scope,
+    end_turn_scope,
+    get_effective_mode,
+    invalidate_turn_mode,
+    peek_turn_mode,
+    resolve_effective_mode,
+    turn_scope,
+)
+
+__all__ = [
+    "ExecutionContext",
+    "configured_workspace",
+    "resolve_execution_context",
+    "execution_context",
+    "turn_scope",
+    "begin_turn_scope",
+    "end_turn_scope",
+    "peek_turn_mode",
+    "invalidate_turn_mode",
+    "count_prompt_sections",
+    "summarize_section_tokens",
+]
+
+
+SECTION_ORDER = ("system", "skills", "tools", "recent", "retrieved", "query")
+
+
+def count_prompt_sections(sections: Mapping[str, str]) -> dict[str, int]:
+    """Token count per prompt section (diagnostics only, never mutates input).
+
+    Split _prepare_context assembly into (system / skills / tools schema /
+    recent / retrieved / query) counts loggable per LLM call. Read-only: the
+    assembled prompt text is unchanged by counting it.
+    """
+    from machina.core.assembler import get_token_count
+
+    return {name: get_token_count(sections[name]) for name in sections}
+
+
+def summarize_section_tokens(counts: Mapping[str, int]) -> str:
+    """One-line `name=n` summary in SECTION_ORDER, then stragglers, plus total."""
+    parts = [f"{name}={counts[name]}" for name in SECTION_ORDER if name in counts]
+    parts += [f"{name}={counts[name]}" for name in counts if name not in SECTION_ORDER]
+    parts.append(f"prompt={sum(counts.values())}")
+    return "prompt_sections " + " ".join(parts)
 
 
 @dataclass(frozen=True)

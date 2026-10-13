@@ -6,7 +6,6 @@ import asyncio
 import inspect
 import json
 import logging
-import re
 import time
 import uuid
 from collections.abc import AsyncGenerator, Callable
@@ -27,6 +26,23 @@ from machina.core.exceptions import (
 )
 from machina.core.metrics import metrics
 from machina.core.models import AgentResponse, LLMResponse, StreamEvent, ToolDefinition
+from machina.core.prompt import (
+    _effective_turn_budget,
+    _request_context_tokens,
+    _stale_tool_preview,
+    _turn_model,
+    append_tool_messages,
+    assemble_turn_prompt,
+    build_capability_section,
+    build_persona_section,
+    build_skill_section,
+    build_system_prompt,
+    build_turn_messages,
+    condense_history,
+    prompt_section_tokens,
+    stale_tool_preview,
+    tool_message_limit,
+)
 from machina.core.provider import LLMProvider, audit_log, get_provider
 from machina.core.session import Session, session_manager
 from machina.core.usage import usage_store
@@ -46,6 +62,22 @@ __all__ = [
     "MAX_PENDING_LEARNING_REVIEWS",
     "instrument_run",
     "instrument_stream",
+    # Re-exported from machina.core.prompt (moves-only extraction compat).
+    "_stale_tool_preview",
+    "_turn_model",
+    "_effective_turn_budget",
+    "_request_context_tokens",
+    "append_tool_messages",
+    "assemble_turn_prompt",
+    "build_capability_section",
+    "build_persona_section",
+    "build_skill_section",
+    "build_system_prompt",
+    "build_turn_messages",
+    "condense_history",
+    "prompt_section_tokens",
+    "stale_tool_preview",
+    "tool_message_limit",
 ]
 
 logger = logging.getLogger(__name__)
@@ -149,78 +181,12 @@ def _notify_growth(session_id: uuid.UUID | str, stage: str, detail: str = "") ->
             record_failure("agent.growth.notify", _boundary_error)
 
 
-# Earlier-round tool results shrink to a head+tail preview before the next
-# LLM call (append-time caps already bound each result to ~1k / 9k for
-# skill pages). Stale rounds keep orientation at roughly two-thirds size.
-_TOOL_RESULT_STALE_HEAD = 350
-_TOOL_RESULT_STALE_TAIL = 350
-_TOOL_RESULT_STALE_CAP = _TOOL_RESULT_STALE_HEAD + _TOOL_RESULT_STALE_TAIL
+# Prompt-section assembly (stale previews, turn capacity, message shaping,
+# system-prompt builders) lives in machina.core.prompt (moves-only extraction);
+# the underscore aliases above are re-exported here so existing import paths
+# (``from machina.core.agent import _request_context_tokens`` etc.) keep working.
 # Retained evidence is separate from short previews assembled into prompts.
 _STORED_TOOL_RESULT_CHARS = 65536
-# Positionally addressed skill pages must keep resolving their offsets.
-_SKILL_PAGE_RE = re.compile(r"^(Skill \S+|ECC resource \S+) \[\d+:\d+/\d+\]:")
-
-
-def _stale_tool_preview(content: str) -> str:
-    """Head+tail preview of a stale-round tool result (verdicts live in tails)."""
-    return (
-        f"{content[:_TOOL_RESULT_STALE_HEAD]}"
-        f"\n…[earlier output condensed to {_TOOL_RESULT_STALE_HEAD}+{_TOOL_RESULT_STALE_TAIL} chars"
-        f" of {len(content)}; re-run the tool for the full output]…\n"
-        f"{content[-_TOOL_RESULT_STALE_TAIL:]}"
-    )
-
-
-def _turn_model(session, provider) -> str | None:
-    """Best-known model id for capacity: session first, then provider/config.
-
-    The session pins the explicit per-turn choice; the provider object is
-    built for the session and only backs it up when the session is unpinned.
-    """
-    for candidate in (
-        getattr(session, "model", None),
-        getattr(provider, "model", None),
-    ):
-        if isinstance(candidate, str) and candidate:
-            return candidate
-    try:
-        configured = config.get("model")
-        return configured if isinstance(configured, str) and configured else None
-    except Exception:
-        return None
-
-
-def _effective_turn_budget(session, provider) -> int:
-    """Compatibility name for request capacity, never cumulative spend."""
-    from machina.core.context_windows import context_window_for
-
-    current = _turn_model(session, provider)
-    resolved = getattr(session, "context_window", None)
-    tagged = getattr(session, "context_window_model", None)
-    if type(resolved) is int and resolved > 0 and tagged == current:
-        return resolved
-    return context_window_for(current, provider)
-
-
-def _request_context_tokens(messages, tools, provider) -> int:
-    from machina.core.assembler import get_token_count
-    from machina.core.images import token_messages
-    from machina.core.provider import _tools_payload
-
-    messages, visual_tokens = token_messages(messages)
-
-    output = int(config.get("max_tokens"))
-    resolver = getattr(type(provider), "reservation_max_tokens", None)
-    if resolver is not None:
-        output = resolver(provider, output, config.get("reasoning_effort"))
-    return (
-        get_token_count(json.dumps(messages, ensure_ascii=False))
-        + get_token_count(json.dumps(_tools_payload(tools), ensure_ascii=False))
-        + 16
-        + 8 * len(messages)
-        + output
-        + visual_tokens
-    )
 
 
 MAX_PENDING_LEARNING_REVIEWS = 16
@@ -543,7 +509,7 @@ class BaseReActAgent:
         Raises:
             ValueError: If the session is not found.
         """
-        from machina.core.images import IMAGE_TOKEN_RESERVE, image_content, validate_images
+        from machina.core.images import IMAGE_TOKEN_RESERVE, validate_images
 
         images = validate_images(images or [])
         submitted_visual_tokens = len(images) * IMAGE_TOKEN_RESERVE
@@ -699,59 +665,30 @@ class BaseReActAgent:
         except Exception as e:
             logger.warning("Archived context retrieval failed: %s", e)
 
-        from machina.soulspec.runtime import resolve_persona
-
-        effective = resolve_persona(
+        # Prompt sections assemble in machina.core.prompt (moves-only): the
+        # composition order below matches the previous inline version exactly,
+        # so the assembled text is byte-identical.
+        system_prompt = build_system_prompt(
             self.soul_spec,
-            requested_style=config.get("persona_description")
-            or self.soul_spec.persona.requested_style,
-            notes=growth_notes,
-            growth_enabled=growth_state == "active",
-        )
-        system_prompt = effective.render_prompt(
-            can_learn=self.allowed_tools is None or "learn_personality" in self.allowed_tools,
-            rsi_choice=_rsi_choice.get() or {},
-        )
-        from machina.core.self_knowledge import capability_context
-
-        system_prompt += capability_context(
+            self.allowed_tools,
             session,
-            tool_names={tool.name for tool in self._tool_defs()},
-            growth_state=growth_state,
-        )
-        from machina.core.assembler import get_token_count
-        from machina.skills.runtime import automatic_skill_context
-
-        query_tokens = get_token_count("\n\n## Current Query\n" + user_message)
-        available = (
-            session.context_budget
-            - min(query_tokens, session.context_budget // 2)
-            - get_token_count(system_prompt)
-            - 32
-        )
-        system_prompt += automatic_skill_context(
             user_message,
-            budget=min(1200, session.context_budget // 5, max(0, available)),
-            can_read=self.allowed_tools is None or "skill_read" in self.allowed_tools,
-            can_search=self.allowed_tools is None or "skill_list" in self.allowed_tools,
-            can_resources=self.allowed_tools is None or "skill_resource" in self.allowed_tools,
-            recent=recent,
-            goal=session.goal,
-            skill_weights=(_rsi_choice.get() or {}).get("skill_weights", {}),
-            activated=_rsi_skills.get(),
+            recent,
+            growth_notes,
+            growth_state,
+            _rsi_choice.get() or {},
+            _rsi_skills.get(),
+            {tool.name for tool in self._tool_defs()},
         )
-        prompt = assembler.assemble(
-            system_prompt=system_prompt,
-            goal=session.goal,
-            recent_chunks=recent,
-            retrieved_chunks=retrieved_chunks,
-            query=user_message,
+        prompt = assemble_turn_prompt(
+            assembler,
+            system_prompt,
+            session.goal,
+            recent,
+            retrieved_chunks,
+            user_message,
         )
-
-        # Keep the latest image-bearing user turn in recent context useful on
-        # follow-up requests and after gateway restart. Raw encodings never go
-        # through the text assembler, retrieval embeddings, or display history.
-        messages = [{"role": "user", "content": image_content(prompt, images)}]
+        messages = build_turn_messages(prompt, images)
         return session, messages
 
     def _append_tool_messages(
@@ -761,54 +698,22 @@ class BaseReActAgent:
         tc: dict[str, Any],
         content: str,
     ) -> None:
-        """Append one assistant batch followed by each of its tool results."""
-        # The execution loop replays results in provider order. Only its first
-        # result introduces the assistant message; later results share it.
-        if not response.tool_calls or tc is response.tool_calls[0]:
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": response.content,
-                    "tool_calls": response.tool_calls or [tc],
-                }
-            )
-        messages.append(
-            {
-                "role": "tool",
-                "content": content,
-                "tool_call_id": tc.get("id", ""),
-            }
-        )
+        """Append one assistant batch followed by each of its tool results.
+
+        Thin wrapper over :func:`machina.core.prompt.append_tool_messages`
+        (the moved implementation) so the method seam stays on the agent.
+        """
+        append_tool_messages(messages, response, tc, content)
 
     @staticmethod
     def _condense_history(messages: list[dict[str, Any]]) -> None:
         """Shrink stale tool results in place before the next LLM call.
 
-        Tool messages from earlier rounds keep a head+tail preview; the
-        latest batch keeps its append-time previews (normally 1000 chars;
-        skill pages up to 9000 chars), including every result in that batch.
-        Heads preserve listings, tails preserve verdicts ("1 passed"); the
-        marker points back at the tool for the full output. Positionally
-        addressed skill pages (``Skill name [o:e/n]`` / ``ECC resource``)
-        are never condensed — offsets into them must keep resolving.
-        Context storage keeps a separate 500-character result preview, not
-        the full output. Re-run the tool when more output is needed.
+        Thin wrapper over :func:`machina.core.prompt.condense_history`
+        (the moved implementation) so the method seam stays on the agent.
+        See prompt.py for the full contract.
         """
-        last_assistant = -1
-        for i, message in enumerate(messages):
-            if message.get("role") == "assistant" and message.get("tool_calls"):
-                last_assistant = i
-        for message in messages[: last_assistant + 1]:
-            if message.get("role") != "tool":
-                continue
-            content = message.get("content", "")
-            if (
-                isinstance(content, str)
-                and len(content) > _TOOL_RESULT_STALE_CAP
-                and not _SKILL_PAGE_RE.match(content)
-                and "\n…[earlier output condensed to " not in content
-            ):
-                message["content"] = _stale_tool_preview(content)
+        condense_history(messages)
 
     async def _execute_tool_calls(
         self,
@@ -1374,12 +1279,7 @@ class BaseReActAgent:
             tool_calls_made.append(tool_entry)
             # Skill pages and status snapshots already have bounded output.
             # Preserve continuation offsets and complete JSON beyond the preview cap.
-            message_limit = (
-                9000
-                if tool_name
-                in ("skill_read", "skill_resource", "harness_status", "search_documents")
-                else 1000
-            )
+            message_limit = tool_message_limit(tool_name)
             self._append_tool_messages(messages, response, tc, result_str[:message_limit])
 
     async def _flush_pending_chunks(self, pending_chunks: list[dict[str, Any]]) -> None:

@@ -11,9 +11,19 @@ from collections import OrderedDict
 
 import httpx
 
-from machina.core.config import config
-from machina.core.exceptions import ProviderError
-from machina.core.provider import audit_log
+import importlib as _importlib
+import sys as _sys
+
+
+# SEAM: leaf-core seam for machina.core (config, exceptions ProviderError,
+# provider audit_log). Deferred via sys.modules/importlib so this module imports
+# with machina.core blocked; resolves to the same objects when core is present.
+# No logic change.
+def _core_symbol(module: str, name: str):
+    mod = _sys.modules.get(module)
+    if mod is None:
+        mod = _importlib.import_module(module)
+    return getattr(mod, name)
 
 logger = logging.getLogger(__name__)
 
@@ -72,16 +82,22 @@ class OpenAIEmbedder(Embedder):
         timeout: float = 30.0,
         dimensions: int | None = None,
     ) -> None:
-        self.api_key = api_key or config.get("openai_api_key") or ""
+        self.api_key = (
+            api_key or _core_symbol("machina.core.config", "config").get("openai_api_key") or ""
+        )
         if not self.api_key:
             # Fall back to OpenRouter if no OpenAI key
-            self.api_key = config.get("openrouter_api_key") or ""
+            self.api_key = (
+                _core_symbol("machina.core.config", "config").get("openrouter_api_key") or ""
+            )
             if self.api_key:
                 base_url = "https://openrouter.ai/api/v1"
                 logger.info("Using OpenRouter for embeddings (no OPENAI_API_KEY set)")
 
         if not self.api_key:
-            raise ProviderError("No API key found. Set OPENAI_API_KEY or OPENROUTER_API_KEY.")
+            raise _core_symbol("machina.core.exceptions", "ProviderError")(
+                "No API key found. Set OPENAI_API_KEY or OPENROUTER_API_KEY."
+            )
 
         self._model = model
         self._base_url = base_url.rstrip("/")
@@ -215,7 +231,7 @@ class OpenAIEmbedder(Embedder):
         if not texts:
             return []
 
-        audit_log(
+        _core_symbol("machina.core.provider", "audit_log")(
             "rag_embed_start",
             model=self._model,
             count=len(texts),
@@ -230,7 +246,9 @@ class OpenAIEmbedder(Embedder):
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
-            audit_log("rag_embed_error", model=self._model, error=str(e))
+            _core_symbol("machina.core.provider", "audit_log")(
+                "rag_embed_error", model=self._model, error=str(e)
+            )
             logger.error("Embedding API call failed: %s", e)
             raise
 
@@ -242,7 +260,7 @@ class OpenAIEmbedder(Embedder):
         items.sort(key=lambda x: x["index"])
         embeddings = [item["embedding"] for item in items]
 
-        audit_log(
+        _core_symbol("machina.core.provider", "audit_log")(
             "rag_embed_complete",
             model=self._model,
             count=len(embeddings),

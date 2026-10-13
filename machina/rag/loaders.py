@@ -8,8 +8,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from machina.core.config import config
-from machina.core.exceptions import ValidationError
+import importlib as _importlib
+import sys as _sys
+
+
+# SEAM: leaf-core seam for machina.core (config, exceptions ValidationError).
+# Deferred via sys.modules/importlib so this module imports with machina.core
+# blocked; resolves to the same objects when core is present. No logic change.
+def _core_symbol(module: str, name: str):
+    mod = _sys.modules.get(module)
+    if mod is None:
+        mod = _importlib.import_module(module)
+    return getattr(mod, name)
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +110,10 @@ class FileLoader:
         self._base_dir = (
             Path(base_dir).resolve()
             if base_dir
-            else Path(config.get("machina_home") or os.getcwd()).resolve()
+            else Path(
+                _core_symbol("machina.core.config", "config").get("machina_home")
+                or os.getcwd()
+            ).resolve()
         )
 
     def load(self, path: str | Path) -> Document:
@@ -111,9 +124,9 @@ class FileLoader:
         file_path = self._resolve_path(path)
 
         if not file_path.exists():
-            raise ValidationError(f"File not found: {path}")
+            raise _core_symbol("machina.core.exceptions", "ValidationError")(f"File not found: {path}")
         if not file_path.is_file():
-            raise ValidationError(f"Not a file: {path}")
+            raise _core_symbol("machina.core.exceptions", "ValidationError")(f"Not a file: {path}")
 
         ext = file_path.suffix.lower()
         if ext == ".pdf":
@@ -121,7 +134,7 @@ class FileLoader:
         elif ext in self.TEXT_EXTENSIONS:
             return self._load_text(file_path)
         else:
-            raise ValidationError(f"Unsupported document extension: {ext or '(none)'}")
+            raise _core_symbol("machina.core.exceptions", "ValidationError")(f"Unsupported document extension: {ext or '(none)'}")
 
     def load_directory(
         self,
@@ -133,9 +146,9 @@ class FileLoader:
         dir_path = self._resolve_path(path)
 
         if not dir_path.exists():
-            raise ValidationError(f"Directory not found: {path}")
+            raise _core_symbol("machina.core.exceptions", "ValidationError")(f"Directory not found: {path}")
         if not dir_path.is_dir():
-            raise ValidationError(f"Not a directory: {path}")
+            raise _core_symbol("machina.core.exceptions", "ValidationError")(f"Not a directory: {path}")
 
         documents = []
         glob_pattern = f"**/{pattern}" if recursive else pattern
@@ -159,7 +172,7 @@ class FileLoader:
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
         except Exception as e:
-            raise ValidationError(f"Failed to read {file_path}: {e}") from e
+            raise _core_symbol("machina.core.exceptions", "ValidationError")(f"Failed to read {file_path}: {e}") from e
 
         metadata = {
             "filename": file_path.name,
@@ -183,7 +196,7 @@ class FileLoader:
         try:
             import PyPDF2
         except ImportError:
-            raise ValidationError(
+            raise _core_symbol("machina.core.exceptions", "ValidationError")(
                 "PDF support requires PyPDF2. Install with: pip install PyPDF2"
             ) from None
 
@@ -195,7 +208,7 @@ class FileLoader:
                     text_parts.append(page.extract_text() or "")
                 content = "\n\n".join(text_parts)
         except Exception as e:
-            raise ValidationError(f"Failed to read PDF {file_path}: {e}") from e
+            raise _core_symbol("machina.core.exceptions", "ValidationError")(f"Failed to read PDF {file_path}: {e}") from e
 
         metadata = {
             "filename": file_path.name,
@@ -215,7 +228,7 @@ class FileLoader:
         """Resolve path relative to base directory, ensuring it stays inside."""
         candidate = (self._base_dir / str(path)).resolve()
         if not candidate.is_relative_to(self._base_dir):
-            raise ValidationError(
+            raise _core_symbol("machina.core.exceptions", "ValidationError")(
                 f"Path '{path}' escapes the allowed base directory '{self._base_dir}'"
             )
         parts = (part.lower() for part in candidate.relative_to(self._base_dir).parts)
@@ -227,5 +240,5 @@ class FileLoader:
             or (part.startswith(".env.") and part != ".env.example")
             for part in parts
         ):
-            raise ValidationError(f"Path '{path}' is private")
+            raise _core_symbol("machina.core.exceptions", "ValidationError")(f"Path '{path}' is private")
         return candidate

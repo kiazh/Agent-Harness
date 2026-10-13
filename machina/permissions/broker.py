@@ -54,6 +54,14 @@ def clear_execution_context() -> None:
     _execution_context.set(None)
 
 
+def get_current_turn() -> str:
+    """Return the current broker turn id, or "" outside a turn."""
+    try:
+        return str(_turn.get() or "")
+    except Exception:
+        return ""
+
+
 def set_approval_handler(
     handler: ApprovalHandler | None, *, principal: str = "tui", turn_id: str = ""
 ) -> None:

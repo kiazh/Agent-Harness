@@ -181,3 +181,9 @@ v1.0.0 gate stays open until DB/Docker/staging verification per
 | Gateway approval | `approvals.resolve` accepts `cancelled`/`expired` (parity with HTTP) and optionally binds `sessionId` | `test_http_approval_resume.py` pattern, `test_approvals_ownership.py` |
 | Gateway completion | `message.complete` carries `needsApproval` summary when the turn ends paused (parity with HTTP `done`) | protocol schema `needsApproval?`, UI `transcript` reconciliation |
 | TUI contract | `transcript.apply` explicitly handles `turn.started`, `needs_approval`/`permission.required`, `approval.resolved`, `approval.resumed`, `turn.ownership_lost`, `turn.cleanup_pending`; `app.onEvent` notices `approval.resumed`/`turn.started` | `npm --prefix ui test` (87 passed, 3 DB-skipped), `typecheck`, `lint` |
+
+## Intent routing fix (dogfood iteration, 2026-10-13)
+
+| Boundary | Change | Proof |
+|---|---|---|
+| Conversational routing | `core/intent.py` `_FOLLOW_ON_ACTION` verb list extended with mutation verbs (`change|update|modify|edit|remove|delete|set|enable|disable|rename|migrate|deploy|install|configure`); question+mutating follow-on now routes to a task instead of conversation | `tests/test_turn_intent.py::test_mutating_follow_on_action_after_a_question_routes_to_task` (7 new cases, red->green); pure questions/greetings re-verified conversational; 84 passed across intent/skill/rsi modules |

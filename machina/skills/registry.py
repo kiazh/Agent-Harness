@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from machina.observability.diagnostics import record_failure
+from machina.skills.ports import SkillSource
 
 logger = logging.getLogger(__name__)
 
@@ -226,8 +227,12 @@ class SkillParser:
         )
 
 
-class SkillRegistry:
-    """Load, match, and manage skills."""
+class SkillRegistry(SkillSource):
+    """Load, match, and manage skills.
+
+    Stream B seam: conforms to :class:`machina.skills.ports.SkillSource` (the
+    narrow consumer-facing interface). Internals below are untouched.
+    """
 
     def __init__(self, skills_dir: str | Path | None = None) -> None:
         self._include_ecc = skills_dir is None

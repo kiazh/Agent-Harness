@@ -23,10 +23,22 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from machina.core.provider import audit_log
+import importlib as _importlib
+import sys as _sys
+
 from machina.db.lazy import LazyDb
 from machina.memory.models import MemoryEntry
 from machina.security.secrets import get_secret
+
+
+# SEAM: leaf-core seam for machina.core.provider (audit_log). Deferred via
+# sys.modules/importlib so this module imports with machina.core blocked;
+# resolves to the same object when core is present. No logic change.
+def _core_symbol(module: str, name: str):
+    mod = _sys.modules.get(module)
+    if mod is None:
+        mod = _importlib.import_module(module)
+    return getattr(mod, name)
 
 __all__ = [
     "AgentBelief",
@@ -327,7 +339,7 @@ class IdentityGate:
                 agent_id,
                 memory_ids,
             )
-            audit_log(
+            _core_symbol("machina.core.provider", "audit_log")(
                 "drift_containment",
                 agent_id=agent_id,
                 memory_count=len(memory_ids),
@@ -449,7 +461,7 @@ class IdentityGate:
                     causal_ids,
                     contained,
                 )
-        audit_log(
+        _core_symbol("machina.core.provider", "audit_log")(
             "belief_transition",
             agent_id=proposed.agent_id,
             drift_score=score,

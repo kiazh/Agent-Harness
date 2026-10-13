@@ -130,7 +130,9 @@ async def test_delegate_tool_uses_isolated_session_context(monkeypatch):
         token = current_session_id.set(session_id)
         agent_token = current_agent_id.set("harness")
         try:
-            await delegate("reviewer", "Review")
+            # Name is incidental here (orchestrator is mocked); use a builtin
+            # so the delegate tool's name validator passes.
+            await delegate("researcher", "Review")
         finally:
             current_agent_id.reset(agent_token)
             current_session_id.reset(token)

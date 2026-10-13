@@ -14,11 +14,22 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from machina.core.provider import audit_log
+import importlib as _importlib
+import sys as _sys
 
 #: Profile ids usable for per-profile agent scopes (`harness-<slug>`).
 from machina.db.lazy import LazyDb
 from machina.memory.redaction import _default_redactor, redact_secrets
+
+
+# SEAM: leaf-core seam for machina.core.provider (audit_log). Deferred via
+# sys.modules/importlib so this module imports with machina.core blocked;
+# resolves to the same object when core is present. No logic change.
+def _core_symbol(module: str, name: str):
+    mod = _sys.modules.get(module)
+    if mod is None:
+        mod = _importlib.import_module(module)
+    return getattr(mod, name)
 
 db = LazyDb()
 PROFILE_ID_RE = r"[a-z0-9][a-z0-9-]{0,39}"
@@ -211,7 +222,7 @@ class UserProfileStore:
             now,
         )
         profile = self._row_to_profile(row)
-        audit_log(
+        _core_symbol("machina.core.provider", "audit_log")(
             "user_profile_create",
             profile_id=str(profile.id),
             user_id=user_id,
@@ -278,7 +289,7 @@ class UserProfileStore:
         if row is None:
             return None
         profile = self._row_to_profile(row)
-        audit_log(
+        _core_symbol("machina.core.provider", "audit_log")(
             "user_profile_update_prefs",
             profile_id=str(profile.id),
             user_id=profile.user_id,
@@ -364,7 +375,9 @@ class UserProfileStore:
         )
         deleted = result != "DELETE 0"
         if deleted:
-            audit_log("user_profile_delete", profile_id=str(profile_id))
+            _core_symbol("machina.core.provider", "audit_log")(
+                "user_profile_delete", profile_id=str(profile_id)
+            )
         return deleted
 
     def _row_to_profile(self, row: Any) -> UserProfile:

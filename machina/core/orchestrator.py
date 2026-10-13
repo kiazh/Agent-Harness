@@ -326,7 +326,10 @@ class Orchestrator:
         for pause in pauses:
             pause.setdefault("session_id", str(child.id))
             pause.setdefault("agent_id", agent_name)
-        status = "waiting_approval" if pauses else "complete"
+        # Typed outcomes (never prose): a failed child is an error even when
+        # its body sounds benign. Pauses keep waiting_approval semantics.
+        outcome = getattr(response, "outcome", "completed")
+        status = "waiting_approval" if pauses else ("error" if outcome == "failed" else "complete")
         await self._record_end(message_id, status=status, response=response.content, tokens=tokens)
         if parent_session_id is not None:
             await context_manager.add_chunk(

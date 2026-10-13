@@ -38,6 +38,68 @@ class _MemoryStore:
 _mem = _MemoryStore()
 _last_durable: bool | None = None
 
+# Per-turn grant cache (Stream A cost seam): list_grants is called on every
+# broker guard, so N tool calls cost N identical SELECTs. Cache per
+# (broker-turn, session) on the durable path only; the memory fallback stays
+# uncached (cheap and outage-sensitive). Approval rows are NEVER cached here:
+# only list_grants reads/writes this cache, and approval creation never
+# touches it. Bounded; turn ids are unique per turn so entries naturally
+# partition by turn.
+#
+# Stream B seam contract (formalized, behavior unchanged):
+# - Copies in/out: hits return fresh ``dict`` copies and the cache stores
+#   fresh copies, so callers mutating a result can never poison later reads.
+# - Bypass without turn id: when no broker turn is active the cache is
+#   skipped entirely (every read hits durable authority).
+# - Invalidation: save_grant / revoke_grants invalidate the session slice,
+#   revoke_all_grants and resolve_decision clear the whole cache (decisions
+#   are human-paced, not hot-path), and session_mode.activate_durable_mode's
+#   raw-SQL revocation (which bypasses store.revoke_grants) invalidates
+#   explicitly at its own call site.
+# - Fail-closed: durable read failures raise before anything is cached.
+# Deletion test: removing this cache only costs N SELECTs per turn — verdicts
+# are identical with it cold, which the pair tests lock in.
+_grant_cache: dict[tuple[str, str], list[dict]] = {}
+_GRANT_CACHE_CAP = 1024
+
+
+def _current_turn() -> str:
+    """Broker turn id, or "" outside a turn (then caching is bypassed).
+
+    THE single broker-turn seam in this module (Stream B): only list_grants
+    reads the turn, and only through here. Prefers the
+    ``broker.get_current_turn()`` accessor when present, falling back to the
+    ``broker._turn`` ContextVar otherwise. The import stays deferred (not
+    module-level): broker imports this store at module level, so a top-level
+    back-edge would be a static cycle AND a partial-initialization hazard
+    (``_turn`` is defined after broker's imports). Never raises — failures
+    yield "" so reads bypass the cache (fail-closed, never poisoned).
+    """
+    try:
+        from machina.permissions import broker as _broker
+
+        accessor = getattr(_broker, "get_current_turn", None)
+        if callable(accessor):
+            return str(accessor() or "")
+        return str(_broker._turn.get() or "")
+    except Exception:
+        return ""
+
+
+def invalidate_grant_cache(session_id: str | None = None) -> None:
+    """Drop cached grants for one session, or the whole cache when None."""
+    if session_id is None:
+        _grant_cache.clear()
+        return
+    sid = str(session_id)
+    for key in [k for k in _grant_cache if k[1] == sid]:
+        _grant_cache.pop(key, None)
+
+
+def clear_grant_cache() -> None:
+    """Empty the grant cache (tests only)."""
+    _grant_cache.clear()
+
 
 async def _db() -> Any | None:
     try:
@@ -136,6 +198,7 @@ async def save_grant(grant: dict, *, connection: Any | None = None) -> dict:
         logger.warning("permission grant stored in-memory only (DB unavailable)")
         _last_durable = False
         _mem.grants[grant["id"]] = grant
+        invalidate_grant_cache(grant.get("session_id"))
         return grant
     try:
         await db.execute(
@@ -158,11 +221,16 @@ async def save_grant(grant: dict, *, connection: Any | None = None) -> dict:
         logger.exception("durable grant write failed")
         raise
     _last_durable = True
+    invalidate_grant_cache(grant.get("session_id"))
     return grant
 
 
 async def list_grants(session_id: str) -> list[dict]:
-    """Live grants only: revoked/expired/foreign rows are never returned."""
+    """Live grants only: revoked/expired/foreign rows are never returned.
+
+    Durable reads are cached per (broker-turn, session) so the N guards in
+    one turn cost one SELECT. Writes (save/revoke/decision) invalidate.
+    """
     db = await _db()
     if db is None:
         now = _utcnow()
@@ -171,6 +239,10 @@ async def list_grants(session_id: str) -> list[dict]:
             for g in _mem.grants.values()
             if g.get("session_id") == str(session_id) and _grant_live(g, now=now)
         ]
+    turn = _current_turn()
+    cache_key = (turn, str(session_id)) if turn else None
+    if cache_key is not None and cache_key in _grant_cache:
+        return [dict(g) for g in _grant_cache[cache_key]]
     try:
         recs = await db.fetch(
             f"""SELECT {GRANT_COLUMNS} FROM permission_grants
@@ -184,7 +256,12 @@ async def list_grants(session_id: str) -> list[dict]:
     # Once durable authority is reachable, discard local grants from an
     # earlier outage so they cannot reappear during a later outage.
     _mem.grants.clear()
-    return [_row_to_grant(r) for r in recs]
+    grants = [_row_to_grant(r) for r in recs]
+    if cache_key is not None:
+        if len(_grant_cache) >= _GRANT_CACHE_CAP:
+            _grant_cache.pop(next(iter(_grant_cache)), None)
+        _grant_cache[cache_key] = [dict(g) for g in grants]
+    return grants
 
 
 async def revoke_grants(session_id: str, grant_id: str | None = None) -> int:
@@ -217,6 +294,7 @@ async def revoke_grants(session_id: str, grant_id: str | None = None) -> int:
         _last_durable = True
     elif n:
         _last_durable = False
+    invalidate_grant_cache(session_id)
     return n
 
 
@@ -243,6 +321,7 @@ async def revoke_all_grants() -> int:
         _last_durable = True
     elif n:
         _last_durable = False
+    _grant_cache.clear()
     return n
 
 
@@ -368,6 +447,8 @@ async def resolve_decision(request_id: str, verdict: str, principal: str) -> dic
     db = await _db()
     if db is None:
         _last_durable = False if rec is not None else _last_durable
+        if mem_ok:
+            invalidate_grant_cache((rec or {}).get("session_id"))
         return rec if mem_ok else None
     try:
         async with db.acquire() as conn:
@@ -394,6 +475,9 @@ async def resolve_decision(request_id: str, verdict: str, principal: str) -> dic
         logger.exception("durable decision resolve failed")
         raise
     _last_durable = True
+    # Decision writes invalidate the grant cache (session unknown on this
+    # path without an extra read; decisions are human-paced, not hot-path).
+    _grant_cache.clear()
     async with _mem.lock:
         if rec is not None:
             rec["status"] = verdict

@@ -310,7 +310,11 @@ async def test_text_only_legacy_agent_can_be_cancelled(image_gateway):
 
 async def test_followup_image_context_respects_budget_without_duplicating_text(image_gateway):
     harness, sid, provider = image_gateway
-    provider.window = 18000
+    # Fixture budget needs headroom over the prompt: automatic skill context
+    # legitimately grows as skills are added (bounded injection), so a window
+    # tuned to an older skill catalog would spuriously trip the guard. The
+    # test's real assertions (budget respected, no text duplication) are below.
+    provider.window = 19000
     original = "chart " * 3330
     response = await harness.call(
         "prompt.submit", {"sessionId": sid, "text": original, "images": [png()]}

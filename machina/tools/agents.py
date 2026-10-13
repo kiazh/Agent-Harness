@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import logging
 import uuid
 from contextvars import ContextVar
@@ -66,6 +67,7 @@ async def delegate(agent: str, task: str) -> str:
     """Delegate *task* to *agent* and return its response."""
     from machina.core.orchestrator import (
         AgentNotFoundError,
+        Orchestrator,
         delegation_deadline,
         delegation_depth,
         orchestrator,
@@ -73,6 +75,48 @@ async def delegate(agent: str, task: str) -> str:
 
     if not task.strip():
         raise ToolError("task must not be empty")
+    # Zero-cost name validation before any child/session/provider work.
+    # Unknown names (e.g. skill-like ecc-* hallucinations) fail here with
+    # fuzzy suggestions; no session is created and no provider is touched.
+    # The roster is DB-free (builtin + file definitions); harness-<slug>
+    # profile scopes are valid targets resolved via _profile_scope.
+    try:
+        from machina.core.agent_def import frozen_roster
+
+        _names = frozen_roster()
+    except Exception:
+        _names = []
+    try:
+        from machina.memory.user_profile import PROFILE_ID_RE
+
+        _scope_pattern = rf"harness-({PROFILE_ID_RE})"
+    except Exception:
+        _scope_pattern = r"harness-([a-z0-9][a-z0-9-]{0,39})"
+    try:
+        import re as _scope_re
+
+        _is_profile_scope = bool(_scope_re.fullmatch(_scope_pattern, agent or ""))
+        if agent not in _names and not _is_profile_scope:
+            # DB-stored custom agents are not in the frozen roster: one
+            # lookup before rejecting so valid saved agents still delegate.
+            # Hallucinated names still fail here with zero child work.
+            try:
+                from machina.core.agent_def import agent_registry as _registry
+
+                _known = await _registry.get(agent)
+            except Exception:
+                _known = None
+            if _known is None:
+                _suggestions = difflib.get_close_matches(agent, _names, n=3, cutoff=0.5)
+                _msg = f"no agent named {agent!r}."
+                if _suggestions:
+                    _msg += f" Did you mean: {', '.join(_suggestions)}?"
+                _msg += " Use list_agents to see available agents."
+                raise ToolError(_msg)
+    except ToolError:
+        raise
+    except Exception as _e:
+        raise ToolError(f"delegation failed: {_e}") from None
     parent_session_id = current_session_id.get()
     from_agent = "delegate-tool"
     if parent_session_id is not None:
@@ -87,7 +131,9 @@ async def delegate(agent: str, task: str) -> str:
         parent_authority = None
     # Let the orchestrator own the deadline so a timed-out child can return
     # its usage receipt after cancellation drains the child's provider work.
-    deadline = asyncio.get_running_loop().time() + 60
+    # The orchestrator constant is authoritative (120s); clip to any
+    # inherited shorter deadline.
+    deadline = asyncio.get_running_loop().time() + Orchestrator.DELEGATION_TIMEOUT_SECONDS
     inherited_deadline = delegation_deadline.get()
     deadline_token = delegation_deadline.set(
         min(deadline, inherited_deadline) if inherited_deadline is not None else deadline
@@ -114,16 +160,20 @@ async def delegate(agent: str, task: str) -> str:
 
     label = (
         "failed"
-        if result.status == "error"
+        if result.status in ("error", "failed")
         else "waiting for approval"
         if result.status == "waiting_approval"
         else "responded"
     )
-    return DelegationToolResult(
+    receipt = DelegationToolResult(
         f"[{agent} {label}]\n{result.response}",
         needs_approval=getattr(result, "needs_approval", []),
         tokens_used=getattr(result, "tokens", 0),
     )
+    # Typed failure for the parent loop (never prose scanning): agent.py marks
+    # tool outcome failed via getattr(result, "is_error").
+    receipt.is_error = label == "failed"
+    return receipt
 
 
 @registry.register(

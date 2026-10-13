@@ -17,16 +17,66 @@ from dataclasses import dataclass
 from typing import Any
 
 from machina.core.assembler import get_token_count
+from machina.core.checkpoint import (
+    CHECKPOINT_VERSION,
+    CompactionCheckpoint,
+    build_checkpoint,
+    effective_instruction,
+    extract_checkpoint,
+    validate_checkpoint,
+)
 from machina.core.models import ContextChunk
 
 __all__ = [
+    "CompactionCheckpoint",
     "CompressionConfig",
     "CompressionResult",
     "ContextCompressor",
     "RollingCompaction",
+    "build_checkpoint",
+    "effective_instruction",
+    "extract_checkpoint",
+    "validate_checkpoint",
 ]
 
 logger = logging.getLogger(__name__)
+
+# Checkpoint trio lives in machina.core.checkpoint (moves-only extraction);
+# re-exported here so existing import paths keep working.
+
+
+def _checkpoint_chunk(
+    session_id: uuid.UUID, agent_id: str, checkpoint: dict[str, Any]
+) -> ContextChunk:
+    """Build a bounded checkpoint chunk for non-LLM compression paths."""
+    validated = validate_checkpoint(checkpoint)
+    lines = [
+        f"objective: {validated['objective']}",
+        f"artifact: {validated['expected_artifact']}",
+        f"constraints: {'; '.join(validated['constraints']) or '(none)'}",
+        f"read-only scope: {validated['read_only_scope'] or '(none)'}",
+    ]
+    for f in validated["findings"]:
+        lines.append(f"finding ({f['count']}): {f['finding']}")
+    if validated["unresolved_questions"]:
+        lines.append("open: " + "; ".join(validated["unresolved_questions"]))
+    lines.append(f"next: {validated['next_action']}")
+    lines.append("Latest explicit user instruction overrides this checkpoint.")
+    content = "\n".join(lines)
+    return ContextChunk(
+        id=uuid.uuid4(),
+        session_id=session_id,
+        agent_id=agent_id,
+        chunk_type="compression_summary",
+        payload={
+            "content": content,
+            "original_count": 0,
+            "original_tokens": 0,
+            "checkpoint": validated,
+            "checkpoint_version": CHECKPOINT_VERSION,
+        },
+        token_count=get_token_count(content),
+    )
 
 
 def _run_awaitable(awaitable: Any) -> Any:
@@ -104,6 +154,7 @@ class ContextCompressor:
         session_id: uuid.UUID,
         agent_id: str,
         llm_provider: Any = None,
+        checkpoint: dict[str, Any] | None = None,
     ) -> CompressionResult:
         """Compress a list of context chunks.
 
@@ -117,6 +168,9 @@ class ContextCompressor:
         runs summarization inline; when called from async code prefer
         :meth:`acompress` which awaits directly without blocking the loop
         (AH-011).
+
+        When *checkpoint* is given it is validated (incomplete rejected)
+        and persisted alongside the free-form summary.
         """
         if not chunks:
             return CompressionResult(
@@ -147,13 +201,17 @@ class ContextCompressor:
                 method="none",
             )
 
+        checked_checkpoint = validate_checkpoint(checkpoint) if checkpoint is not None else None
+
         recent_chunks, old_chunks = self._split_preserve_recent(chunks, preserve_count)
 
         # Compress old chunks
         if self.config.llm_summarize and llm_provider is not None:
             try:
                 compressed = _run_awaitable(
-                    self._llm_summarize(old_chunks, session_id, agent_id, llm_provider)
+                    self._llm_summarize(
+                        old_chunks, session_id, agent_id, llm_provider, checked_checkpoint
+                    )
                 )
                 method = "llm_summarize"
             except Exception:
@@ -175,6 +233,10 @@ class ContextCompressor:
 
         # Combine: compressed old chunks + preserved recent chunks
         all_compressed = compressed + recent_chunks
+        if checked_checkpoint is not None and method != "llm_summarize":
+            all_compressed = [
+                _checkpoint_chunk(session_id, agent_id, checked_checkpoint)
+            ] + all_compressed
         compressed_tokens = sum(c.token_count for c in all_compressed)
         if compressed_tokens == 0:
             compressed_tokens = sum(get_token_count(str(c.payload)) for c in all_compressed)
@@ -196,6 +258,7 @@ class ContextCompressor:
         session_id: uuid.UUID,
         agent_id: str,
         llm_provider: Any = None,
+        checkpoint: dict[str, Any] | None = None,
     ) -> CompressionResult:
         """Async compression (AH-011): awaits LLM summarization directly.
 
@@ -225,10 +288,11 @@ class ContextCompressor:
                 method="none",
             )
         recent_chunks, old_chunks = self._split_preserve_recent(chunks, preserve_count)
+        checked_checkpoint = validate_checkpoint(checkpoint) if checkpoint is not None else None
         if self.config.llm_summarize and llm_provider is not None:
             try:
                 compressed = await self._llm_summarize(
-                    old_chunks, session_id, agent_id, llm_provider
+                    old_chunks, session_id, agent_id, llm_provider, checked_checkpoint
                 )
                 method = "llm_summarize"
             except Exception:
@@ -246,6 +310,10 @@ class ContextCompressor:
                 compressed = old_chunks
                 method = "none"
         all_compressed = compressed + recent_chunks
+        if checked_checkpoint is not None and method != "llm_summarize":
+            all_compressed = [
+                _checkpoint_chunk(session_id, agent_id, checked_checkpoint)
+            ] + all_compressed
         compressed_tokens = sum(c.token_count for c in all_compressed)
         if compressed_tokens == 0:
             compressed_tokens = sum(get_token_count(str(c.payload)) for c in all_compressed)
@@ -382,6 +450,7 @@ class ContextCompressor:
         session_id: uuid.UUID,
         agent_id: str,
         llm_provider: Any,
+        checkpoint: dict[str, Any] | None = None,
     ) -> list[ContextChunk]:
         """Use LLM to summarize older context chunks.
 
@@ -427,16 +496,20 @@ class ContextCompressor:
             stamps = [c.created_at for c in chunks if c.created_at is not None]
             if stamps:
                 summary_kwargs["created_at"] = max(stamps)
+            payload: dict[str, Any] = {
+                "content": summary_text,
+                "original_count": len(chunks),
+                "original_tokens": sum(c.token_count for c in chunks),
+            }
+            if checkpoint is not None:
+                payload["checkpoint"] = validate_checkpoint(checkpoint)
+                payload["checkpoint_version"] = CHECKPOINT_VERSION
             summary_chunk = ContextChunk(
                 id=uuid.uuid4(),
                 session_id=session_id,
                 agent_id=agent_id,
                 chunk_type="compression_summary",
-                payload={
-                    "content": summary_text,
-                    "original_count": len(chunks),
-                    "original_tokens": sum(c.token_count for c in chunks),
-                },
+                payload=payload,
                 token_count=get_token_count(summary_text),
                 **summary_kwargs,
             )
@@ -692,6 +765,31 @@ class ContextCompressor:
         chunk_type = chunk.chunk_type
         payload = chunk.payload
 
+        if (
+            chunk_type == "compression_summary"
+            and isinstance(payload, dict)
+            and "checkpoint" in payload
+        ):
+            try:
+                cp = validate_checkpoint(payload["checkpoint"])
+                lines = [
+                    f"[Checkpoint] objective: {cp['objective']}",
+                    f"artifact: {cp['expected_artifact']}",
+                    f"constraints: {'; '.join(cp['constraints']) or '(none)'}",
+                    f"read-only scope: {cp['read_only_scope'] or '(none)'}",
+                ]
+                for f in cp["findings"]:
+                    lines.append(f"finding ({f['count']}): {f['finding']}")
+                if cp["unresolved_questions"]:
+                    lines.append("open: " + "; ".join(cp["unresolved_questions"]))
+                lines.append(f"next: {cp['next_action']}")
+                lines.append("Latest explicit user instruction overrides this checkpoint.")
+                base = str(payload.get("content", ""))
+                if base:
+                    lines.append(base[:200])
+                return "\n".join(lines)
+            except Exception:
+                pass
         if chunk_type == "tool_call":
             tool = payload.get("tool", "unknown")
             args = payload.get("args", {})
