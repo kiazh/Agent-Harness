@@ -62,9 +62,10 @@ async def test_crawl_max_pages_bounds_fetches(monkeypatch, stubs):
     fetch = AsyncMock(side_effect=lambda url, **kw: root if url.endswith("/") else _page())
     monkeypatch.setattr(crawl_module, "fetch_page_html", fetch)
 
-    await crawl_module.web_crawl("https://example.com/", max_pages=3, max_depth=2)
+    response = await crawl_module.web_crawl("https://example.com/", max_pages=3, max_depth=2)
 
     assert fetch.await_count == 3
+    assert "Stopped early" in response, "truncation by bounds is reported, never silent"
 
 
 async def test_crawl_reuses_already_indexed_pages_without_reindex(monkeypatch, stubs):

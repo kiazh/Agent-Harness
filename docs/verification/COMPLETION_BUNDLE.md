@@ -190,3 +190,19 @@ Found by running the system live (all numbers observed, not estimated):
   terminal-interpreter resolution friction on this host). Six explicit caveats in the report
   (model mapping best-effort, cache-read asymmetry, ledger-vs-audit deltas, small N, single
   machine, synthetic scope).
+- **Adversarial review + hardening (BLOCK → fixes)** — an independent three-persona hostile
+  review of this wave returned **BLOCK** with two demonstrated criticals, both fixed:
+  (C1) the 0f1277a `pattern` check was bounded in pattern *length* but not in *matching time* —
+  a 6-char `(a+)+$` froze the event loop on a 31-char value. Matching now runs through the
+  `regex` engine with a 50 ms per-match timeout and a 250 ms per-call budget (ContextVar,
+  covers propertyNames fan-out); exhaustion fails the call closed. `regex` is a declared
+  dependency.
+  (C2) the consolidation fix covered only the CLI: gateway turns, API streaming, scheduler jobs,
+  and delegated children closed the session provider before extraction ran, so those sessions
+  silently never consolidated. All four close paths now join the agent's consolidation/learning
+  tasks (bounded) before closing the provider.
+  Also fixed: (W1) the drain is cancellation-safe and catches mid-drain scheduling; (W2) the
+  head-to-head runner's post-timeout pipe read is bounded (a detached grandchild cannot hang
+  it); (W3) the schema-conformance SQLite skip is file-scoped so Postgres `?` operators remain
+  covered; (N1) `web_crawl` now reports "Stopped early" when bounds cut a crawl short.
+  Full suite after the wave: **3,469 passed, 0 failed**.

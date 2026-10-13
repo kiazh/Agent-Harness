@@ -344,19 +344,26 @@ async def _stream_session(
                 # 3. Claim release: independent outer finally, always runs.
                 # 4. Auto-compaction: fire-and-forget, never blocks [DONE].
                 try:
-                    _learning = (
-                        tuple(getattr(agent, "_learning_tasks", ())) if agent is not None else ()
+                    _optional = (
+                        (
+                            tuple(getattr(agent, "_learning_tasks", ()))
+                            + tuple(getattr(agent, "_consolidation_tasks", ()))
+                        )
+                        if agent is not None
+                        else ()
                     )
-                    if _learning:
+                    if _optional:
                         _record_stage("joining_optional_work")
-                        # Bounded join: learning reviews must never block
-                        # normal answer completion indefinitely.
+                        # Bounded join: learning reviews and consolidation
+                        # (which shares the session provider) must never block
+                        # normal answer completion indefinitely, but they must
+                        # finish before the provider closes below.
                         try:
-                            _, pending = await asyncio.wait(_learning, timeout=2)
+                            _, pending = await asyncio.wait(_optional, timeout=2)
                             for _t in pending:
                                 _t.cancel()
                         except (TimeoutError, asyncio.CancelledError, Exception):
-                            for _t in _learning:
+                            for _t in _optional:
                                 try:
                                     if not _t.done():
                                         _t.cancel()

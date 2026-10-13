@@ -1093,17 +1093,22 @@ class Gateway:
                 # 2. Provider close: bounded with timeout.
                 # 3. Claim release: independent outer finally, always runs.
                 try:
-                    _learning = (
-                        tuple(getattr(agent, "_learning_tasks", ())) if agent is not None else ()
+                    _optional = (
+                        (
+                            tuple(getattr(agent, "_learning_tasks", ()))
+                            + tuple(getattr(agent, "_consolidation_tasks", ()))
+                        )
+                        if agent is not None
+                        else ()
                     )
-                    if _learning:
+                    if _optional:
                         self._record_stage(turn_id, "joining_optional_work", session_id=sid)
                         try:
-                            _, pending = await asyncio.wait(_learning, timeout=2)
+                            _, pending = await asyncio.wait(_optional, timeout=2)
                             for _t in pending:
                                 _t.cancel()
                         except (TimeoutError, asyncio.CancelledError, Exception):
-                            for _t in _learning:
+                            for _t in _optional:
                                 try:
                                     if not _t.done():
                                         _t.cancel()

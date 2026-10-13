@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from machina.core.background_tasks import join_agent_background_tasks
 from machina.core.cron import next_cron_time
 from machina.db.connection import db, parse_command_count
 from machina.observability.diagnostics import record_failure
@@ -945,6 +946,14 @@ class JobRunner:
                 # bounded join, never closes injected/shared clients, never
                 # masks the primary outcome. Claim release runs in the
                 # outer run_due_once finally regardless.
+                # Consolidation shares the agent provider; join it (bounded)
+                # before any close so extraction never calls a closed client.
+                if agent is not None:
+                    try:
+                        await join_agent_background_tasks(agent)
+                    except Exception as _boundary_error:
+                        # Optional fallback preserves the primary outcome; report no payload.
+                        record_failure("scheduler._execute", _boundary_error)
                 if owns_provider:
                     try:
                         from machina.core.agent_factory import close_agent_provider

@@ -161,7 +161,18 @@ def run_cmd(
             stdout, stderr = proc.communicate(timeout=10)
         except subprocess.TimeoutExpired:
             _kill_group(proc, signal.SIGKILL)
-            stdout, stderr = proc.communicate()
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                # A detached grandchild can hold the pipes open forever; the
+                # harness cap must not be defeated by a runner that never
+                # returns. Close our ends and move on.
+                for stream in (proc.stdout, proc.stderr):
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+                stdout, stderr = "", ""
     return {
         "cmd": [str(part) for part in cmd],
         "exit_code": proc.returncode,

@@ -13,8 +13,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import re
+import time
+from contextvars import ContextVar
 from typing import Any
+
+import regex
 
 from machina.connectors.models import (
     MAX_SCHEMA_DEPTH,
@@ -25,6 +28,16 @@ from machina.connectors.models import (
 )
 
 MAX_ARGS_BYTES = 65_536
+# Untrusted server schemas may carry hostile regexes: the classic nested
+# quantifier ("(a+)+$") backtracks exponentially and a length bound on the
+# PATTERN does not bound MATCHING time, so matching runs through the `regex`
+# engine with a per-match timeout plus a per-call budget (enforced across
+# propertyNames fan-out via a ContextVar). Exhausting either fails closed.
+_PATTERN_TIMEOUT_SECONDS = 0.05
+_PATTERN_TOTAL_BUDGET_SECONDS = 0.25
+_pattern_deadline: ContextVar[float | None] = ContextVar(
+    "connector_pattern_deadline", default=None
+)
 
 # Schema keywords the validator understands. Anything else fails closed —
 # silently discarding constraints would change what was approved.
@@ -172,9 +185,24 @@ def _validate(schema: Any, value: Any, depth: int, path: str) -> None:
             f"unsupported schema keywords at {path or 'root'}: {sorted(unknown)}"
         )
     if "pattern" in schema and isinstance(value, str):
+        deadline = _pattern_deadline.get()
+        remaining = (
+            _PATTERN_TIMEOUT_SECONDS if deadline is None else deadline - time.monotonic()
+        )
+        if remaining <= 0:
+            raise ConnectorToolError(f"pattern time budget exhausted at {path or 'root'}")
         try:
-            matched = re.search(schema["pattern"], value) is not None
-        except re.error:
+            matched = (
+                regex.search(
+                    schema["pattern"], value, timeout=min(_PATTERN_TIMEOUT_SECONDS, remaining)
+                )
+                is not None
+            )
+        except TimeoutError:
+            raise ConnectorToolError(
+                f"pattern check exceeded its time budget at {path or 'root'}"
+            ) from None
+        except regex.error:
             raise ConnectorToolError(f"invalid schema pattern at {path or 'root'}") from None
         if not matched:
             raise ConnectorToolError(f"string does not match pattern at {path or 'root'}")
@@ -282,7 +310,11 @@ def validate_arguments(remote_name: str, args: dict[str, Any], schema: dict[str,
         if args:
             raise ConnectorToolError(f"{remote_name} declares no parameters but got arguments")
         return
-    _validate(schema, args, 0, "")
+    token = _pattern_deadline.set(time.monotonic() + _PATTERN_TOTAL_BUDGET_SECONDS)
+    try:
+        _validate(schema, args, 0, "")
+    finally:
+        _pattern_deadline.reset(token)
 
 
 def classify_tool(

@@ -126,13 +126,21 @@ async def test_fresh_schema_fks_indexes_and_projections(db_pool):
 def static_queries():
     """Complete literal SQL passed to the database, excluding dynamic builders.
 
-    SQLite-dialect statements are skipped: ``?`` placeholders can never compile
-    against PostgreSQL, so they are never production schema SQL (the research
-    runner reads OpenCode's sqlite ledger through the sqlite3 module).
+    SQLite-dialect statements are skipped per source file: a file that uses
+    the sqlite3 module may contain ``?`` placeholders and SQLite-only syntax,
+    which can never compile against PostgreSQL. The skip is file-scoped so a
+    Postgres file using JSONB ``?`` operators is still scanned.
     """
     root = Path(__file__).resolve().parents[1] / "machina"
     for path in root.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        sqlite_dialect = "sqlite3" in source
+
+        def postgres_candidate(query: str) -> bool:
+            if sqlite_dialect and "?" in query:
+                return False
+            return bool(re.match(r"\s*(SELECT|INSERT|UPDATE|DELETE)\b", query, re.I))
         constants = {}
         for assignment in tree.body:
             if isinstance(assignment, ast.Assign):
@@ -168,20 +176,14 @@ def static_queries():
                         break
                 else:
                     query = "".join(pieces)
-                    if "?" not in query and re.match(
-                        r"\s*(SELECT|INSERT|UPDATE|DELETE)\b", query, re.I
-                    ):
+                    if postgres_candidate(query):
                         yield path.name + ":" + str(node.lineno), query
                 continue
             try:
                 query = ast.literal_eval(argument)
             except (ValueError, TypeError):
                 continue
-            if (
-                isinstance(query, str)
-                and "?" not in query
-                and re.match(r"\s*(SELECT|INSERT|UPDATE|DELETE)\b", query, re.I)
-            ):
+            if isinstance(query, str) and postgres_candidate(query):
                 yield path.name + ":" + str(node.lineno), query
 
 

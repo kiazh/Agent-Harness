@@ -147,6 +147,31 @@ def test_real_world_schema_keywords_are_enforced_bounded():
         validate_arguments("t", "x", {"type": "string", "pattern": "a" * 201})
 
 
+def test_hostile_patterns_are_time_bounded():
+    """Nested quantifiers must not freeze the event loop (adversarial C1)."""
+    import time as _time
+
+    schema = {"type": "object", "properties": {"x": {"type": "string", "pattern": "(a+)+$"}}}
+    started = _time.monotonic()
+    with pytest.raises(ConnectorToolError):
+        validate_arguments("t", {"x": "a" * 30 + "!"}, schema)
+    assert _time.monotonic() - started < 2.0, "pattern matching must be time-bounded"
+    # A per-call budget bounds propertyNames fan-out on hostile schemas too.
+    many = {
+        "type": "object",
+        "propertyNames": {"type": "string", "pattern": "(a+)+$"},
+    }
+    started = _time.monotonic()
+    with pytest.raises(ConnectorToolError):
+        validate_arguments("t", {f"a{i}!" : 1 for i in range(200)}, many)
+    assert _time.monotonic() - started < 3.0
+    # Benign patterns still match and reject normally.
+    ok = {"type": "object", "properties": {"x": {"type": "string", "pattern": "^[a-z]+$"}}}
+    validate_arguments("t", {"x": "abc"}, ok)
+    with pytest.raises(ConnectorToolError):
+        validate_arguments("t", {"x": "ABC"}, ok)
+
+
 def test_validation_combinators():
     def prop(branches):
         return {"type": "object", "properties": {"v": branches}}

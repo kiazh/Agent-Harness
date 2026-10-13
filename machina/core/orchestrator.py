@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from machina.core.agent import ReActAgent
 from machina.core.agent_def import AgentDef, agent_registry
 from machina.core.assembler import PromptAssembler, get_token_count, truncate_to_tokens
+from machina.core.background_tasks import join_agent_background_tasks
 from machina.core.config import config
 from machina.core.context import context_manager
 from machina.core.session import session_manager
@@ -375,6 +376,14 @@ class Orchestrator:
             except Exception as _boundary_error:
                 # Optional fallback preserves the primary outcome; report no payload.
                 record_failure("orchestrator.delegate", _boundary_error)
+            # Consolidation shares the agent provider; join it (bounded)
+            # before any close so extraction never calls a closed client.
+            if agent is not None:
+                try:
+                    await join_agent_background_tasks(agent)
+                except Exception as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("orchestrator.delegate", _boundary_error)
             # AH-AUDIT-026: shared owner-aware cleanup contract (bounded;
             # custom test factories inject shared agents that stay open).
             if getattr(self, "_owns_factory_agents", False) and agent is not None:

@@ -102,6 +102,7 @@ async def web_crawl(url: str, max_pages: int = 5, max_depth: int = 1, same_host:
     seen = {redact_secrets(start).text}
     lines = [f"Crawl of '{start}':"]
     attempted = saved = failures = 0
+    skipped_links = False
 
     while queue and attempted < page_budget and time.monotonic() < deadline:
         page, depth = queue.popleft()
@@ -160,6 +161,7 @@ async def web_crawl(url: str, max_pages: int = 5, max_depth: int = 1, same_host:
             if wants_links:
                 for link in _extract_links(html, page):
                     if attempted + len(queue) >= page_budget:
+                        skipped_links = True
                         break
                     link_host = (urlparse(link).hostname or "").lower()
                     if same_host and link_host != start_host:
@@ -173,6 +175,10 @@ async def web_crawl(url: str, max_pages: int = 5, max_depth: int = 1, same_host:
             failures += 1
             logger.info("web crawl page failed (%s): %s", page, error)
 
+    if skipped_links or queue:
+        lines.append(
+            "\nStopped early: crawl bounds were reached before every discovered page was fetched."
+        )
     if not saved:
         raise ToolError(f"Web crawl found no pages that could be fetched and saved for '{start}'.")
     if failures:
