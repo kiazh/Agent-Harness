@@ -106,3 +106,22 @@ async def test_join_agent_background_tasks_bounded():
     await asyncio.sleep(0.05)
     assert quick.done() and not quick.cancelled()
     assert stall.cancelled()
+
+
+async def test_join_agent_cancellation_settles_before_propagate():
+    """A cancelled join must settle tasks before CancelledError propagates
+    (round-3 NEW-2: the provider close cannot race a live extraction)."""
+    agent = SimpleNamespace(_consolidation_tasks=set(), _learning_tasks=set())
+    stall = asyncio.get_running_loop().create_task(asyncio.sleep(30))
+    agent._consolidation_tasks.add(stall)
+
+    join = asyncio.get_running_loop().create_task(
+        background_tasks.join_agent_background_tasks(agent, timeout=30)
+    )
+    await asyncio.sleep(0.05)
+    join.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await join
+
+    await asyncio.sleep(0.05)
+    assert stall.cancelled(), "cancelled join still settles pending tasks first"

@@ -76,14 +76,19 @@ async def drain_background_tasks(timeout: float = 5.0) -> int:
     return len(scheduled) + len(late)
 
 
-async def join_agent_background_tasks(agent: object, timeout: float = 2.0) -> int:
+async def join_agent_background_tasks(
+    agent: object, timeout: float = 2.0, settle_grace: float = 1.0
+) -> int:
     """Bounded join of one agent's consolidation/learning tasks before close.
 
     Turn-close paths (gateway, API streaming, scheduler jobs, delegated
     children) close the session provider at turn end; consolidation shares
     that provider, so without this join its extraction calls a closed client
     and the session silently never consolidates. Bounded and never raises
-    beyond cancellation (leftovers are cancelled and given a settle window).
+    beyond cancellation: on cancellation the leftovers are cancelled and given
+    ``settle_grace`` seconds to stop touching the DB before the exception
+    propagates. Turn-close callers keep ``timeout + settle_grace`` under the
+    turn-completion deadline even for cancellation-resistant tasks.
     """
     tasks = [
         task
@@ -99,5 +104,7 @@ async def join_agent_background_tasks(agent: object, timeout: float = 2.0) -> in
     try:
         await asyncio.wait(tasks, timeout=timeout)
     finally:
-        await _cancel_and_settle([task for task in tasks if not task.done()])
+        await _cancel_and_settle(
+            [task for task in tasks if not task.done()], grace=settle_grace
+        )
     return len(tasks)

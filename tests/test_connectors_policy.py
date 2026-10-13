@@ -207,6 +207,18 @@ def test_pattern_counts_within_budget_still_match():
         validate_arguments("t", {"x": "aaaaaa"}, nested)
 
 
+@pytest.mark.parametrize("pattern", ["^a{²}$", "^a{①}$", "^x{١٠٠}y$"])
+def test_non_ascii_brace_content_follows_the_engines_literal_treatment(pattern):
+    """Unicode 'digits' are not repetition counts to the engine (it compiles
+    them as literals); the screen must scan ASCII digits only so nothing
+    escapes the ConnectorToolError contract (round-3 NEW-5)."""
+    schema = {"type": "object", "properties": {"x": {"type": "string", "pattern": pattern}}}
+    try:
+        validate_arguments("t", {"x": "a"}, schema)
+    except ConnectorToolError:
+        pass  # fail-closed is acceptable; an unhandled ValueError escape is not
+
+
 def test_real_world_repetition_patterns_validate():
     """Real MCP schema patterns (self-hosted Firecrawl) must never be
     false-rejected by the count screen: high bounds in the hundreds are

@@ -90,6 +90,7 @@ _TYPE_NAMES = ("string", "number", "integer", "boolean", "object", "array", "nul
 # level stays cheap (<=10k nodes per count), while astronomically large
 # counts and any NESTED counted pair (whose product explodes) fail closed.
 _MAX_REPETITION_COUNT = 10_000
+_ASCII_DIGITS = "0123456789"
 
 
 def _screen_pattern_budget(pattern: str) -> None:
@@ -121,13 +122,13 @@ def _screen_pattern_budget(pattern: str) -> None:
             quantifies_a_counted_group = popped
         elif char == "{":
             cursor = index + 1
-            while cursor < length and pattern[cursor].isdigit():
+            while cursor < length and pattern[cursor] in _ASCII_DIGITS:
                 cursor += 1
             low_text = pattern[index + 1 : cursor]
             high_text = ""
             if cursor < length and pattern[cursor] == ",":
                 end = cursor + 1
-                while end < length and pattern[end].isdigit():
+                while end < length and pattern[end] in _ASCII_DIGITS:
                     end += 1
                 high_text = pattern[cursor + 1 : end]
                 cursor = end

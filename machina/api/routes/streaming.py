@@ -347,34 +347,16 @@ async def _stream_session(
                 # 2. Provider close: bounded with timeout.
                 # 3. Claim release: independent outer finally, always runs.
                 # 4. Auto-compaction: fire-and-forget, never blocks [DONE].
-                _optional: tuple = ()
                 try:
-                    _optional = (
-                        (
-                            tuple(getattr(agent, "_learning_tasks", ()))
-                            + tuple(getattr(agent, "_consolidation_tasks", ()))
-                        )
-                        if agent is not None
-                        else ()
-                    )
-                    if _optional:
+                    if agent is not None:
                         _record_stage("joining_optional_work")
-                        # Bounded join: learning reviews and consolidation
-                        # (which shares the session provider) must never block
-                        # normal answer completion indefinitely, but they must
-                        # finish before the provider closes below.
-                        try:
-                            _, pending = await asyncio.wait(_optional, timeout=2)
-                            for _t in pending:
-                                _t.cancel()
-                        except (TimeoutError, Exception):
-                            for _t in _optional:
-                                try:
-                                    if not _t.done():
-                                        _t.cancel()
-                                except Exception as _boundary_error:
-                                    # Optional fallback preserves the primary outcome; report no payload.
-                                    record_failure("app.create_app", _boundary_error)
+                        # Shared helper: bounded, settles before propagating, and
+                        # timeout + settle_grace stays under the turn-completion
+                        # deadline even for cancellation-resistant tasks.
+                        await join_agent_background_tasks(agent, timeout=1.7, settle_grace=0.35)
+                except (TimeoutError, Exception) as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("app.create_app", _boundary_error)
                 finally:
                     # Claim release in independent outer finally so provider
                     # close errors or cancellation cannot skip it (H-02).

@@ -21,7 +21,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from machina import __version__
-from machina.core.background_tasks import drain_background_tasks
+from machina.core.background_tasks import drain_background_tasks, join_agent_background_tasks
 from machina.core.config import config
 from machina.core.context import context_manager
 from machina.core.models import Session
@@ -1092,30 +1092,16 @@ class Gateway:
                 # 1. Learning tasks: bounded join, then cancel leftovers.
                 # 2. Provider close: bounded with timeout.
                 # 3. Claim release: independent outer finally, always runs.
-                _optional: tuple = ()
                 try:
-                    _optional = (
-                        (
-                            tuple(getattr(agent, "_learning_tasks", ()))
-                            + tuple(getattr(agent, "_consolidation_tasks", ()))
-                        )
-                        if agent is not None
-                        else ()
-                    )
-                    if _optional:
+                    if agent is not None:
                         self._record_stage(turn_id, "joining_optional_work", session_id=sid)
-                        try:
-                            _, pending = await asyncio.wait(_optional, timeout=2)
-                            for _t in pending:
-                                _t.cancel()
-                        except (TimeoutError, Exception):
-                            for _t in _optional:
-                                try:
-                                    if not _t.done():
-                                        _t.cancel()
-                                except Exception as _boundary_error:
-                                    # Optional fallback preserves the primary outcome; report no payload.
-                                    record_failure("server._run_turn", _boundary_error)
+                        # Shared helper: bounded, settles before propagating, and
+                        # timeout + settle_grace stays under the turn-completion
+                        # deadline even for cancellation-resistant tasks.
+                        await join_agent_background_tasks(agent, timeout=1.7, settle_grace=0.35)
+                except (TimeoutError, Exception) as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("server._run_turn", _boundary_error)
                 finally:
                     # Claim release in independent outer finally.
                     try:
