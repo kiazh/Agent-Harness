@@ -19,6 +19,7 @@ from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from machina.core.background_tasks import drain_background_tasks
 from machina.core.cleanup import cancel_and_join as _bounded_join
 
 logger = logging.getLogger(__name__)
@@ -239,6 +240,14 @@ class RuntimeServices:
                     cancellation = e
                 except Exception as error:
                     logger.warning("audit shutdown failed (%s)", type(error).__name__)
+                try:
+                    await drain_background_tasks(
+                        timeout=min(0.1 if cancellation is not None else 5, timeout)
+                    )
+                except asyncio.CancelledError as e:
+                    cancellation = e
+                except Exception as error:
+                    logger.warning("background drain failed (%s)", type(error).__name__)
                 try:
                     from machina.db.connection import db
 

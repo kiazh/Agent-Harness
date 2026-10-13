@@ -25,6 +25,7 @@ from machina.cli import output
 from machina.cli.growth import app as growth_app
 from machina.cli.launcher import launch_ui
 from machina.cli.output import console
+from machina.core.background_tasks import drain_background_tasks
 from machina.core.config import SECRET_KEYS, config
 from machina.core.context import context_manager
 from machina.core.session import session_manager
@@ -211,6 +212,14 @@ def chat(
                 )
             output.muted(f"Session ID: {session.id}")
         finally:
+            # Fire-and-forget consolidation/review tasks need the live
+            # provider AND a live pool — drain them before either closes, or
+            # they die mid-flight and CLI-session memories never consolidate.
+            # Bounded, never raises.
+            try:
+                await drain_background_tasks(timeout=10.0)
+            except Exception as _drain_error:
+                logger.debug("background drain failed (%s)", _drain_error)
             try:
                 if agent is not None:
                     from machina.core.agent_factory import close_agent_provider

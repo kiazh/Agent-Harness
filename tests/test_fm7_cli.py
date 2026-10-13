@@ -154,6 +154,58 @@ def test_memory_search_query_markup_renders_literally(monkeypatch: pytest.Monkey
     assert "weird [red]query" in result.output
 
 
+# ─── Shutdown drain: consolidation must finish before the pool closes ────────
+
+
+def test_chat_drains_background_tasks_before_db_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI chat finally-block drains consolidation/review tasks before
+    db.close(); the shutdown race died with asyncpg InterfaceError."""
+    import machina.cli as cli
+
+    calls: list[str] = []
+
+    class _FakeAgent:
+        provider = SimpleNamespace(model="stub-model")
+
+        async def run_stream(self, session_id, message, verbose=False):
+            return
+            yield  # pragma: no cover — makes this an async generator
+
+    fake_session = SimpleNamespace(id=uuid.uuid4(), provider="deepseek")
+
+    monkeypatch.setattr(cli.db, "connect", AsyncMock())
+    monkeypatch.setattr(cli.db, "initialize_runtime_schema", AsyncMock())
+
+    async def fake_close():
+        calls.append("db.close")
+
+    monkeypatch.setattr(cli.db, "close", fake_close)
+    monkeypatch.setattr(cli.session_manager, "create", AsyncMock(return_value=fake_session))
+    monkeypatch.setattr(
+        "machina.core.agent_factory.build_agent_for_session",
+        AsyncMock(return_value=_FakeAgent()),
+    )
+
+    async def fake_provider_close(agent, timeout: float = 5.0) -> None:
+        calls.append("provider.close")
+
+    monkeypatch.setattr("machina.core.agent_factory.close_agent_provider", fake_provider_close)
+
+    async def fake_drain(timeout: float = 5.0) -> int:
+        calls.append("drain")
+        return 0
+
+    monkeypatch.setattr(cli, "drain_background_tasks", fake_drain)
+
+    result = runner.invoke(cli.app, ["chat", "hello"])
+
+    assert result.exit_code == 0, result.output
+    # Drain first: consolidation needs the live provider AND the live pool.
+    assert calls == ["drain", "provider.close", "db.close"], (
+        "drain must complete before the provider and the pool close"
+    )
+
+
 def test_delete_session_title_markup_renders_literally(monkeypatch: pytest.MonkeyPatch) -> None:
     import machina.cli as cli
 

@@ -18,6 +18,12 @@ from typing import Any
 from rich.console import Console
 
 from machina.core.assembler import PromptAssembler
+from machina.core.background_tasks import (
+    consolidation_inflight as _consolidation_inflight,
+)
+from machina.core.background_tasks import (
+    pending_learning_reviews as _pending_learning_reviews,
+)
 from machina.core.config import config
 from machina.core.context import context_manager
 from machina.core.exceptions import (
@@ -202,10 +208,7 @@ _STORED_TOOL_RESULT_CHARS = 65536
 
 
 MAX_PENDING_LEARNING_REVIEWS = 16
-_pending_learning_reviews: set[asyncio.Task] = set()
-# Shared per-session consolidation single-flight (LP-14): concurrent agent
-# instances working one session never re-extract the same range.
-_consolidation_inflight: dict[str, asyncio.Task] = {}
+# Task registries live in core.background_tasks (imported above, same objects).
 
 # Per-tool execution timeouts. Delegation-style tools fan out to sub-agents
 # and legitimately run long; everything else must answer quickly to keep

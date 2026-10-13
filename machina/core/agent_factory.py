@@ -148,6 +148,8 @@ async def build_agent_for_session(
         allowed_tools = None
         agent_id = session.agent_id
 
+    llm = get_provider(provider=provider_name, model=model)
+
     # Shared dependencies (lazy, never eager cloud instantiation).
     memory_retriever = None
     memory_consolidator = None
@@ -162,7 +164,10 @@ async def build_agent_for_session(
         try:
             from machina.memory.consolidator import MemoryConsolidator
 
-            memory_consolidator = MemoryConsolidator()
+            # Extraction is an LLM job: the consolidator must carry the
+            # session provider, or every consolidation fails with
+            # "no LLM provider available for memory extraction".
+            memory_consolidator = MemoryConsolidator(llm_provider=llm)
         except Exception:
             memory_consolidator = None
 
@@ -181,7 +186,6 @@ async def build_agent_for_session(
         else:
             allowed_tools = [t for t in allowed_tools if t in parent_tools]
 
-    llm = get_provider(provider=provider_name, model=model)
     from machina.soulspec.adapters import MachinaAdapter
 
     agent = ReActAgent(

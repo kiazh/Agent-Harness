@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from machina import __version__
+from machina.core.background_tasks import drain_background_tasks
 from machina.core.config import config
 from machina.core.context import context_manager
 from machina.core.models import Session
@@ -367,6 +368,12 @@ class Gateway:
             except (asyncio.CancelledError, Exception) as _boundary_error:
                 record_failure("server.close", _boundary_error)
         if self._db_ready and self._owns_db:
+            # Agent background work (consolidation/learning reviews) must
+            # finish before the pool closes; bounded, never raises.
+            try:
+                await drain_background_tasks()
+            except (TimeoutError, asyncio.CancelledError, Exception) as _boundary_error:
+                record_failure("server.close", _boundary_error)
             from machina.observability.audit import audit_persistence
 
             try:
