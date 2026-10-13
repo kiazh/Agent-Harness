@@ -51,7 +51,7 @@ jobs:
       MACHINA_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/machina_test
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
