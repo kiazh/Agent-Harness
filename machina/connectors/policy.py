@@ -29,6 +29,15 @@ MAX_ARGS_BYTES = 65_536
 # silently discarding constraints would change what was approved.
 _SUPPORTED_KEYWORDS = frozenset(
     {
+        # Inert dialect/annotation keywords emitted by real MCP servers
+        # (draft-07 "$schema" from FastMCP/pydantic, "$id", "$comment",
+        # "examples"): they change no validation semantics and are ignored.
+        # "$ref" stays unsupported — reference resolution is different
+        # semantics; fail closed until it is implemented.
+        "$schema",
+        "$id",
+        "$comment",
+        "examples",
         "type",
         "properties",
         "required",

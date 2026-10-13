@@ -110,6 +110,21 @@ def test_validation_fails_closed_on_unknown_keywords_and_depth():
         validate_arguments("t", big, {"type": "object"})
 
 
+def test_validation_tolerates_inert_annotations_from_real_servers():
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$id": "https://example.test/tools/crawl",
+        "$comment": "generated schema",
+        "examples": [{"url": "https://example.com"}],
+        "type": "object",
+        "properties": {"url": {"type": "string"}},
+        "required": ["url"],
+    }
+    validate_arguments("firecrawl__firecrawl_crawl", {"url": "https://example.com"}, schema)
+    with pytest.raises(ConnectorToolError):
+        validate_arguments("t", {"url": "x"}, {**schema, "patternProperties": {}})
+
+
 def test_validation_combinators():
     def prop(branches):
         return {"type": "object", "properties": {"v": branches}}
