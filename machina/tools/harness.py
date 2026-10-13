@@ -33,6 +33,7 @@ async def harness_status() -> str:
         growth = await growth_store.get(agent_id)
         rsi = await growth_store.rsi_status(agent_id)
         installed = _installed_inventory()
+        persona = await _persona_summary(agent_id, growth["notes"])
         return {
             "read_only": True,
             "session": {
@@ -42,6 +43,7 @@ async def harness_status() -> str:
             },
             "configuration": configuration(session),
             "persona_description": config.get("persona_description"),
+            "effective_persona": persona,
             "learning": {
                 "notes": growth["notes"],
                 "note_count": len(growth["notes"]),
@@ -158,3 +160,44 @@ def _provenance_of(registry, skill) -> str:
         if isinstance(source, str) and source.startswith("https://github.com/"):
             return f"url:{source}"
     return "local"
+
+
+async def _persona_summary(agent_id: str, notes: dict) -> dict:
+    """Bounded, owned identity status; failure is never mistaken for no persona."""
+    try:
+        from machina.core.agent_def import agent_registry
+        from machina.core.config import config
+        from machina.soulspec.adapters import MachinaAdapter
+        from machina.soulspec.runtime import resolve_persona
+
+        definition = await agent_registry.get(agent_id)
+        if definition is None:
+            return {"available": False}
+        spec = MachinaAdapter.to_soulspec(definition)
+        effective = resolve_persona(
+            spec,
+            requested_style=config.get("persona_description")
+            or (spec.persona.requested_style if spec.persona else ""),
+            notes=notes,
+            growth_enabled=bool(
+                config.get("memory_enabled") and config.get("personality_growth_enabled")
+            ),
+        )
+        p = effective.persona
+        return {
+            "available": True,
+            "format": "SoulSpec",
+            "agent_id": agent_id,
+            "name": p.name[:100],
+            "source": definition.source,
+            "values_count": len(p.values),
+            "traits_count": len(p.traits),
+            "voice": {"tone": str(p.voice.tone)[:100], "style": str(p.voice.style)[:100]}
+            if p.voice
+            else None,
+            "human_style_set": bool(p.requested_style),
+            "active_learned_notes": len(p.learned_notes),
+            "learning_enabled": effective.learning_enabled,
+        }
+    except Exception:
+        return {"available": False}

@@ -13,9 +13,8 @@ import yaml
 
 from machina.core.agent_def import AgentDef
 
-# Unique sentinel object for an explicitly empty tool allowlist.
-# Using a dedicated object (not a string) prevents collision with real tool names.
-_NO_TOOLS_SENTINEL = object()
+# Reserved tool name: the registry rejects registration, and JSON preserves it.
+_NO_TOOLS_SENTINEL = "__no_tools__"
 
 _LICENSES = {
     "Apache-2.0",
@@ -199,6 +198,7 @@ class SoulSpec:
     config: SoulSpec.Config | None = None
     package_manifest: dict[str, Any] = field(default_factory=dict, repr=False)
     package_files: dict[str, bytes] = field(default_factory=dict, repr=False)
+    learning_enabled: bool = field(default=False, repr=False)
 
     # ─── Nested dataclasses ──────────────────────────────────────────────
 
@@ -228,6 +228,8 @@ class SoulSpec:
         traits: list[SoulSpec.PersonaTrait] = field(default_factory=list)
         voice: SoulSpec.Voice | None = None
         system_prompt: str = ""
+        requested_style: str = ""
+        learned_notes: dict[str, str] = field(default_factory=dict)
 
     @dataclass
     class Workflow:
@@ -247,6 +249,7 @@ class SoulSpec:
     class Permissions:
         allowed_tools: list[str] = field(default_factory=list)
         denied_tools: list[str] = field(default_factory=list)
+        deny_all: bool = False
 
     @dataclass
     class Config:
@@ -254,6 +257,7 @@ class SoulSpec:
         max_iterations: int | None = None
         context_budget: int | None = None
         permissions: SoulSpec.Permissions | None = None
+        provider: str | None = None
 
     # ─── Constructors ────────────────────────────────────────────────────
 
@@ -274,17 +278,59 @@ class SoulSpec:
         soul_text = package_files[manifest["files"]["soul"]].decode("utf-8")
         if not soul_text.strip():
             raise ValueError("SOUL.md is empty")
-        return cls(
-            name=manifest["name"],
-            version=manifest["version"],
-            persona=cls.Persona(
-                name=manifest["displayName"],
-                description=manifest["description"],
-                system_prompt=soul_text,
-            ),
-            package_manifest=manifest,
-            package_files=package_files,
-        )
+        extension = manifest.get("x-machina")
+        if extension is not None:
+            if not isinstance(extension, dict) or extension.get("version") != 1:
+                raise ValueError("unsupported Machina persona extension")
+            if not isinstance(extension.get("soulSpec"), dict):
+                raise ValueError("Machina extension requires a SoulSpec object")
+            try:
+                spec = cls.from_dict(extension["soulSpec"])
+            except (KeyError, TypeError, AttributeError) as exc:
+                raise ValueError("invalid Machina persona extension") from exc
+            if spec.name != manifest["name"]:
+                raise ValueError("persona extension must match package ownership name")
+        else:
+            spec = cls(
+                name=manifest["name"],
+                version=manifest["version"],
+                persona=cls.Persona(
+                    name=manifest["displayName"],
+                    description=manifest["description"],
+                    system_prompt=soul_text,
+                ),
+            )
+            if "allowedTools" in manifest:
+                allowed = manifest["allowedTools"]
+                spec.config = cls.Config(
+                    permissions=cls.Permissions(allowed_tools=allowed, deny_all=not allowed)
+                )
+            spec.skills = [
+                cls.Skill(name=item["name"]) for item in manifest.get("recommendedSkills", [])
+            ]
+        spec.package_manifest = manifest
+        spec.package_files = package_files
+        if extension is not None and soul_text.strip() != spec.render_prompt().strip():
+            raise ValueError(
+                "SOUL.md disagrees with the structured Machina persona; re-export the package"
+            )
+        if extension is not None and "allowedTools" in manifest:
+            effective_tools = spec.to_agent_def().tools
+            declared = manifest["allowedTools"]
+            already_restricted = (
+                set(effective_tools) == set(declared)
+                if declared
+                else _NO_TOOLS_SENTINEL in effective_tools
+            )
+            if not already_restricted:
+                from machina.soulspec.merge import SoulSpecMerger
+
+                spec.config = spec.config or cls.Config()
+                spec.config.permissions = SoulSpecMerger._merge_permissions(
+                    spec.config.permissions,
+                    cls.Permissions(allowed_tools=declared, deny_all=not declared),
+                )
+        return spec
 
     def write_package(
         self,
@@ -314,11 +360,21 @@ class SoulSpec:
             "license": license if license is not None else source.get("license", "MIT"),
             "tags": tags if tags is not None else source.get("tags", []),
             "category": category if category is not None else source.get("category", "general"),
-            "files": source.get("files", {"soul": "SOUL.md"}),
+            "files": (source.get("files") or {"soul": "SOUL.md"}),
+            "x-machina": {"version": 1, "soulSpec": self.to_dict()},
         }
+        effective_tools = self.to_agent_def().tools
+        if effective_tools:
+            manifest["allowedTools"] = [
+                tool for tool in effective_tools if tool != _NO_TOOLS_SENTINEL
+            ]
+        else:
+            manifest.pop("allowedTools", None)
         references = _validate_manifest(manifest)
         output_files = dict(self.package_files)
-        output_files[manifest["files"]["soul"]] = self.persona.system_prompt.encode("utf-8")
+        portable = deepcopy(self)
+        portable.learning_enabled = False
+        output_files[manifest["files"]["soul"]] = portable.render_prompt().encode("utf-8")
         for relative in references.values():
             if relative not in output_files:
                 raise ValueError(f"missing package file: {relative}")
@@ -349,9 +405,20 @@ class SoulSpec:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SoulSpec:
         """Create SoulSpec from a plain dict."""
+        if (
+            not isinstance(data, dict)
+            or not isinstance(data.get("name"), str)
+            or not data["name"].strip()
+        ):
+            raise ValueError("SoulSpec requires a non-empty name")
         persona = None
         if data.get("persona"):
             p = data["persona"]
+            if not isinstance(p, dict) or any(
+                not isinstance(p.get(key, ""), str)
+                for key in ("name", "description", "system_prompt", "requested_style")
+            ):
+                raise ValueError("persona fields must be strings")
             voice = None
             if p.get("voice"):
                 voice = cls.Voice(
@@ -371,7 +438,16 @@ class SoulSpec:
                 ],
                 voice=voice,
                 system_prompt=p.get("system_prompt", ""),
+                requested_style=p.get("requested_style", ""),
+                learned_notes=p.get("learned_notes", {}),
             )
+
+        if persona:
+            from machina.core.config import validate_value
+            from machina.soulspec.runtime import validate_notes
+
+            persona.requested_style = validate_value("persona_description", persona.requested_style)
+            persona.learned_notes = validate_notes(persona.learned_notes)
 
         workflow = [
             cls.Workflow(
@@ -400,12 +476,25 @@ class SoulSpec:
             c = data["config"]
             permissions = None
             if c.get("permissions"):
+                policy = c["permissions"]
+                if (
+                    not isinstance(policy, dict)
+                    or type(policy.get("deny_all", False)) is not bool
+                    or any(
+                        not isinstance(policy.get(key, []), list)
+                        or any(not isinstance(tool, str) for tool in policy.get(key, []))
+                        for key in ("allowed_tools", "denied_tools")
+                    )
+                ):
+                    raise ValueError("invalid persona tool permissions")
                 permissions = cls.Permissions(
                     allowed_tools=c["permissions"].get("allowed_tools", []),
                     denied_tools=c["permissions"].get("denied_tools", []),
+                    deny_all=c["permissions"].get("deny_all", False),
                 )
             config = cls.Config(
                 model=c.get("model"),
+                provider=c.get("provider"),
                 max_iterations=c.get("max_iterations", 10),
                 context_budget=c.get("context_budget", 8000),
                 permissions=permissions,
@@ -445,6 +534,10 @@ class SoulSpec:
                     if self.persona.voice.style is not None
                     else "concise",
                 }
+            if self.persona.requested_style:
+                p["requested_style"] = self.persona.requested_style
+            if self.persona.learned_notes:
+                p["learned_notes"] = dict(self.persona.learned_notes)
             if self.persona.system_prompt:
                 p["system_prompt"] = self.persona.system_prompt
             result["persona"] = p
@@ -471,6 +564,7 @@ class SoulSpec:
         if self.config:
             c: dict[str, Any] = {
                 "model": self.config.model,
+                "provider": self.config.provider,
                 "max_iterations": self.config.max_iterations,
                 "context_budget": self.config.context_budget,
             }
@@ -478,6 +572,7 @@ class SoulSpec:
                 c["permissions"] = {
                     "allowed_tools": self.config.permissions.allowed_tools,
                     "denied_tools": self.config.permissions.denied_tools,
+                    "deny_all": self.config.permissions.deny_all,
                 }
             result["config"] = c
         return result
@@ -506,17 +601,50 @@ class SoulSpec:
                     else list(permissions.allowed_tools)
                 )
             tools = [t for t in tools if t not in permissions.denied_tools]
-            if not tools and (permissions.allowed_tools or permissions.denied_tools):
+            if permissions.deny_all or (
+                not tools and (permissions.allowed_tools or permissions.denied_tools)
+            ):
                 # AgentDef uses [] to mean every tool; a private sentinel keeps
                 # an explicitly empty effective allowlist empty at runtime.
                 tools = [_NO_TOOLS_SENTINEL]
         return AgentDef(
             name=self.name,
+            soul_spec=self.to_storage_dict(),
             description=self.persona.description if self.persona else "",
             system_prompt=system_prompt,
             tools=tools,
             model=self.config.model if self.config else None,
+            provider=self.config.provider if self.config else None,
             max_iterations=self.config.max_iterations
             if self.config and self.config.max_iterations is not None
             else 10,
         )
+
+    def render_prompt(self, *, can_learn: bool = False, rsi_choice: dict | None = None) -> str:
+        from machina.soulspec.runtime import render_persona
+
+        return render_persona(self, can_learn=can_learn, rsi_choice=rsi_choice)
+
+    def to_storage_dict(self) -> dict[str, Any]:
+        import base64
+
+        return {
+            "spec": self.to_dict(),
+            "manifest": deepcopy(self.package_manifest),
+            "files": {
+                name: base64.b64encode(content).decode("ascii")
+                for name, content in self.package_files.items()
+            },
+        }
+
+    @classmethod
+    def from_storage_dict(cls, data: dict[str, Any]) -> SoulSpec:
+        import base64
+
+        spec = cls.from_dict(data["spec"])
+        spec.package_manifest = deepcopy(data.get("manifest", {}))
+        spec.package_files = {
+            name: base64.b64decode(content, validate=True)
+            for name, content in data.get("files", {}).items()
+        }
+        return spec

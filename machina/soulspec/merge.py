@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 from machina.soulspec.schema import SoulSpec
 
 
@@ -19,6 +21,7 @@ class SoulSpecMerger:
     @staticmethod
     def merge(base: SoulSpec, override: SoulSpec) -> SoulSpec:
         """Merge override into base, returning a new SoulSpec."""
+        base, override = deepcopy(base), deepcopy(override)
         # Scalar fields: override wins
         name = override.name if override.name else base.name
         version = override.version if override.version is not None else base.version
@@ -42,6 +45,16 @@ class SoulSpecMerger:
             workflow=workflow,
             skills=skills,
             config=config,
+            package_manifest={
+                **base.package_manifest,
+                **override.package_manifest,
+                "files": {
+                    **base.package_manifest.get("files", {}),
+                    **override.package_manifest.get("files", {}),
+                },
+            },
+            package_files={**base.package_files, **override.package_files},
+            learning_enabled=base.learning_enabled or override.learning_enabled,
         )
 
     @staticmethod
@@ -86,6 +99,8 @@ class SoulSpecMerger:
             traits=traits,
             voice=voice,
             system_prompt=system_prompt,
+            requested_style=override.requested_style or base.requested_style,
+            learned_notes={**base.learned_notes, **override.learned_notes},
         )
 
     @staticmethod
@@ -164,6 +179,7 @@ class SoulSpecMerger:
 
         return SoulSpec.Config(
             model=override.model if override.model else base.model,
+            provider=override.provider if override.provider else base.provider,
             max_iterations=override.max_iterations
             if override.max_iterations is not None
             else base.max_iterations,
@@ -203,4 +219,9 @@ class SoulSpecMerger:
         # Union of denied_tools
         denied = sorted(set(base.denied_tools) | set(override.denied_tools))
 
-        return SoulSpec.Permissions(allowed_tools=allowed, denied_tools=denied)
+        deny_all = (
+            base.deny_all
+            or override.deny_all
+            or bool(base_allowed and override_allowed and not allowed)
+        )
+        return SoulSpec.Permissions(allowed_tools=allowed, denied_tools=denied, deny_all=deny_all)

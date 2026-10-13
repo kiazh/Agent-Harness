@@ -44,6 +44,7 @@ class AgentDef:
     provider: str | None = None
     max_iterations: int = 10
     source: str = "db"
+    soul_spec: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -190,6 +191,8 @@ class AgentRegistry:
             self._file_definitions_cache = {}
             self._file_definitions_cache_time = now
             return self._file_definitions_cache
+        from machina.soulspec.schema import SoulSpec
+
         definitions: dict[str, AgentDef] = {}
         for path in sorted((*directory.glob("*.yaml"), *directory.glob("*.yml"))):
             try:
@@ -213,6 +216,19 @@ class AgentRegistry:
                         raise ValueError(f"{key} must be a string")
                 if name in BUILTIN_AGENTS:
                     raise ValueError("cannot replace a built-in agent")
+                if "persona" in data:
+                    if any(
+                        key in data
+                        for key in ("tools", "model", "provider", "max_iterations", "system_prompt")
+                    ):
+                        raise ValueError(
+                            "SoulSpec YAML must use workflow/config/persona instead of legacy fields"
+                        )
+                    structured = dict(data, name=name)
+                    definition = SoulSpec.from_dict(structured).to_agent_def()
+                    definition.source = "yaml"
+                    definitions[name] = definition
+                    continue
                 definitions[name] = AgentDef(
                     name=name,
                     description=data.get("description", ""),
@@ -223,10 +239,16 @@ class AgentRegistry:
                     max_iterations=iterations,
                     source="yaml",
                 )
-            except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
+            except (
+                OSError,
+                UnicodeError,
+                yaml.YAMLError,
+                ValueError,
+                KeyError,
+                TypeError,
+                AttributeError,
+            ) as exc:
                 logger.warning("Skipping agent definition %s: %s", path, exc)
-        from machina.soulspec.schema import SoulSpec
-
         for manifest in sorted(directory.glob("*/soul.json")):
             try:
                 spec = SoulSpec.from_package(manifest.parent)
@@ -244,7 +266,7 @@ class AgentRegistry:
     async def get(self, name: str) -> AgentDef | None:
         row = await db.fetchrow(
             """
-            SELECT name, description, system_prompt, tools, model, provider, max_iterations, source
+            SELECT name, description, system_prompt, tools, model, provider, max_iterations, source, soul_spec
             FROM agents WHERE name = $1
             """,
             name,
@@ -295,7 +317,7 @@ class AgentRegistry:
     async def list(self) -> list[AgentDef]:
         rows = await db.fetch(
             """
-            SELECT name, description, system_prompt, tools, model, provider, max_iterations, source
+            SELECT name, description, system_prompt, tools, model, provider, max_iterations, source, soul_spec
             FROM agents ORDER BY name
             """
         )
@@ -307,10 +329,14 @@ class AgentRegistry:
 
     async def save(self, agent: AgentDef) -> AgentDef:
         """Insert or update a stored agent definition."""
-        row = await db.fetchrow(
-            """
-            INSERT INTO agents (name, description, system_prompt, tools, model, provider, max_iterations, source)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'db')
+        return await self.save_on_connection(agent, db)
+
+    async def save_on_connection(
+        self, agent: AgentDef, connection, *, identity_only: bool = False
+    ) -> AgentDef:
+        query = """
+            INSERT INTO agents (name, description, system_prompt, tools, model, provider, max_iterations, source, soul_spec)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'db', $8::jsonb)
             ON CONFLICT (name) DO UPDATE SET
                 description = EXCLUDED.description,
                 system_prompt = EXCLUDED.system_prompt,
@@ -318,9 +344,23 @@ class AgentRegistry:
                 model = EXCLUDED.model,
                 provider = EXCLUDED.provider,
                 max_iterations = EXCLUDED.max_iterations,
+                soul_spec = COALESCE(EXCLUDED.soul_spec, agents.soul_spec),
                 updated_at = now()
-            RETURNING name, description, system_prompt, tools, model, provider, max_iterations, source
-            """,
+            RETURNING name, description, system_prompt, tools, model, provider, max_iterations, source, soul_spec
+            """
+        if identity_only:
+            query = """
+            INSERT INTO agents (name, description, system_prompt, tools, model, provider, max_iterations, source, soul_spec)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'db', $8::jsonb)
+            ON CONFLICT (name) DO UPDATE SET
+                description = EXCLUDED.description,
+                system_prompt = EXCLUDED.system_prompt,
+                soul_spec = EXCLUDED.soul_spec,
+                updated_at = now()
+            RETURNING name, description, system_prompt, tools, model, provider, max_iterations, source, soul_spec
+            """
+        row = await connection.fetchrow(
+            query,
             agent.name,
             agent.description,
             agent.system_prompt,
@@ -328,6 +368,7 @@ class AgentRegistry:
             agent.model,
             agent.provider,
             agent.max_iterations,
+            json.dumps(agent.soul_spec) if agent.soul_spec is not None else None,
         )
         return self._row_to_def(row)
 
@@ -350,6 +391,9 @@ class AgentRegistry:
             provider=row["provider"],
             max_iterations=row["max_iterations"],
             source=row["source"],
+            soul_spec=json.loads(row["soul_spec"])
+            if isinstance(row.get("soul_spec"), str)
+            else row.get("soul_spec"),
         )
 
 

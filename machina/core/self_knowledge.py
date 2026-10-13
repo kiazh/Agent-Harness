@@ -14,7 +14,7 @@ from machina.core.session_mode import MODES
 from machina.memory.persona import EmotionTopology
 
 FEATURES = {
-    "persona": "persona_description sets tone (/persona). Independently, persona_memory_enabled adds fact interpretations and emotion-weighted recall using persona_default_emotion, even without a tone description; retrieval settings, not feelings.",
+    "persona": "SoulSpec unifies identity, /persona tone (persona_description), owned lessons and RSI guidance. persona_memory_enabled adds fact interpretations and emotion-weighted recall via persona_default_emotion; retrieval settings, not feelings.",
     "growth": "Per-agent preferences, style and verified lessons persist across sessions/models (learn_personality; /growth). empty notes mean no notes currently saved, not a missing feature.",
     "rsi": "RSI adapts retrieval, relevant skill ranks, allowed-tool order and approach from weak automatic execution outcomes even with zero human ratings. Agent-written persona trials separately need three human-rated episodes to stabilize or roll back. /growth inspects revisions/evidence. No model weights, code rewriting or permission expansion; no fixed number of turns guarantees improvement.",
     "memory": "remember/recall retrieve facts; session_recall searches conversations, not implementation documentation. RAG searches explicitly indexed documents.",

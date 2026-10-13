@@ -223,7 +223,7 @@ the project does not install or start an exporter automatically.
 
 ### Persona, growth and RSI
 
-`/persona` saves the requested tone and character as the installation default. Learned notes belong to the agent's profile and persist across sessions. `/growth` exposes evidence and controls; the model can save durable preferences using `learn_personality`.
+SoulSpec supplies the authored identity, values, traits and voice through one shared runtime resolver. `/persona` saves the requested tone and character as the installation default. Learned notes belong to the agent's profile and persist across sessions. `/growth` exposes evidence and controls; the model can save durable preferences using `learn_personality`.
 
 “RSI” here means adapting runtime preferences, retrieval, strategies and capability ranking from execution evidence and human ratings. It **does not train model weights or autonomously rewrite the harness**. Agent-written persona changes undergo a human-rated trial; direct human teaching establishes a stable revision. Automatic outcomes cannot promote a persona trial. See [personality growth](docs/PERSONALITY_GROWTH.md).
 
@@ -503,7 +503,7 @@ training jobs or require research dependencies.
 | Memory retention | Scoring, consolidation and reversible forgetting/archive behavior | Retrieval/maintenance mechanisms, separate from chat generation |
 | Shared identity | Memory provenance, validation and quarantine | Integrity checks for exchanged memories |
 | Persona retrieval | Persona-aware memory scoring and emotion topology | Retrieval interpretation, not a model's private emotional state |
-| SoulSpec | Manifest/package handling, adapters and permission merging | Interoperability utilities; no certification claim |
+| SoulSpec | Manifest/package handling, adapters and permission merging | Unified runtime identity, human style and owned learning; no certification claim |
 | LoCoMo / identity evaluation | Evaluation harnesses and scenarios | Live accuracy studies need authorized provider calls and budgets |
 | Native vs. LangGraph | Workflow trial and benchmark modules | Optional comparison; native execution remains the default |
 

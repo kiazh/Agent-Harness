@@ -283,6 +283,7 @@ class BaseReActAgent:
         memory_consolidator: MemoryConsolidator | None = None,
         rag_pipeline: RAGPipeline | None = None,
         allowed_tools: list[str] | None = None,
+        soul_spec: dict | None = None,
     ) -> None:
         self.provider = provider or get_provider()
         # Unbounded tool calls: the ReAct loop runs until the model stops
@@ -291,6 +292,19 @@ class BaseReActAgent:
         self.max_iterations = max_iterations
         self.agent_id = agent_id
         self.system_prompt = system_prompt or SYSTEM_PROMPT
+        from machina.soulspec.schema import SoulSpec
+
+        self.soul_spec = (
+            SoulSpec.from_storage_dict(soul_spec)
+            if soul_spec is not None
+            else SoulSpec(
+                name=agent_id,
+                persona=SoulSpec.Persona(name=agent_id, system_prompt=self.system_prompt),
+            )
+        )
+        if self.soul_spec.persona is None:
+            self.soul_spec.persona = SoulSpec.Persona(name=agent_id)
+        self.soul_spec.persona.system_prompt = self.system_prompt
         self.memory_retriever = memory_retriever or MemoryRetriever(store=memory_store)
         self.memory_consolidator = memory_consolidator
         self.rag_pipeline = rag_pipeline
@@ -601,7 +615,7 @@ class BaseReActAgent:
         growth_enabled = (
             include_memory and memory_enabled and config.get("personality_growth_enabled")
         )
-        growth_prompt = ""
+        growth_notes = None
         growth_state = "skipped"
         retrieve_memory = True
         if growth_enabled:
@@ -615,15 +629,11 @@ class BaseReActAgent:
                     ),
                     2,
                 )
-                growth_prompt = await asyncio.wait_for(
-                    growth_store.prompt(
-                        self.agent_id,
-                        can_learn=self.allowed_tools is None
-                        or "learn_personality" in self.allowed_tools,
-                        notes=decision.get("notes"),
-                    ),
-                    2,
-                )
+                growth_notes = decision.get("notes")
+                if growth_notes is None:
+                    growth_notes = (await asyncio.wait_for(growth_store.get(self.agent_id), 2))[
+                        "notes"
+                    ]
                 _growth_episode.set(decision["id"])
                 _rsi_choice.set(decision.get("rsi", {}))
                 growth_state = "active"
@@ -689,7 +699,19 @@ class BaseReActAgent:
         except Exception as e:
             logger.warning("Archived context retrieval failed: %s", e)
 
-        system_prompt = self.system_prompt
+        from machina.soulspec.runtime import resolve_persona
+
+        effective = resolve_persona(
+            self.soul_spec,
+            requested_style=config.get("persona_description")
+            or self.soul_spec.persona.requested_style,
+            notes=growth_notes,
+            growth_enabled=growth_state == "active",
+        )
+        system_prompt = effective.render_prompt(
+            can_learn=self.allowed_tools is None or "learn_personality" in self.allowed_tools,
+            rsi_choice=_rsi_choice.get() or {},
+        )
         from machina.core.self_knowledge import capability_context
 
         system_prompt += capability_context(
@@ -697,18 +719,6 @@ class BaseReActAgent:
             tool_names={tool.name for tool in self._tool_defs()},
             growth_state=growth_state,
         )
-        persona_description = config.get("persona_description")
-        if persona_description:
-            system_prompt += (
-                "\n\nUser-requested persona (tone and character):\n"
-                + json.dumps(persona_description, ensure_ascii=False)
-                + "\nApply this persona to your conversational style. Preserve your core role, "
-                "safety rules and tool permissions. Adapt learned style within this requested persona."
-            )
-        system_prompt += growth_prompt
-        from machina.memory.rsi import strategy_context
-
-        system_prompt += strategy_context(_rsi_choice.get() or {})
         from machina.core.assembler import get_token_count
         from machina.skills.runtime import automatic_skill_context
 

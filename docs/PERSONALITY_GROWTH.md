@@ -45,6 +45,53 @@ machina growth import-policy memory-policy.json --session <session-id>
 
 Gateway methods are `growth.get`, `growth.teach`, `growth.feedback`, `growth.forget`, `growth.installPolicy` and `growth.rollback`, all requiring `sessionId`. They use existing gateway authentication and the same authenticated HTTP `/rpc` dispatch. This is agent-scoped persistence in the existing shared local account model, not separate per-user isolation. Use distinct agents for distinct personalities/users.
 
+## SoulSpec identity and the effective persona
+
+The shared agent loop compiles one effective persona every turn: authored SoulSpec
+identity and companion markdown, the current `/persona` style, owned learned
+preferences/lessons, and bounded RSI strategy guidance. Structured values, traits,
+voice, workflows and recommended skills survive registry storage and fresh agent
+construction. Legacy definitions use the same resolver. Recommendations only
+reference available skills; they do not install skills or grant tool access.
+
+`/persona` is the installation-wide human style override. Clearing it restores the
+SoulSpec voice and any style explicitly imported with that package. `/growth`
+teaching, forgetting and rollback affect agent-owned lessons and retrieval policy;
+they do not roll back the authored identity. Disabling growth stops learned
+context and RSI injection while keeping the authored identity and human style.
+
+Export and import use the selected session's agent ownership key:
+
+```sh
+machina growth export-soul ./my-soul --session <session-id>
+machina growth export-soul ./my-soul-with-lessons --session <session-id> --include-learned
+machina growth import-soul ./my-soul --session <session-id>
+machina growth import-soul ./my-soul-with-lessons --session <session-id> --restore-learned
+```
+
+Default export includes authored identity and effective human style, excluding
+learned notes. The explicit flags include/restore a bounded learned-note snapshot;
+restoration creates a human revision and replaces that agent's existing notes
+atomically with identity import. Chat history, episodes and ephemeral RSI choices
+are not exported. Export files can contain authored text and deliberately included
+preferences, so review them before sharing. Import preserves the current agent's
+ownership key, tools, provider and model, including concurrent permission changes.
+Other agents' notes are unchanged. A running agent uses the imported identity after
+fresh construction or session resume; style and growth edits apply on each turn.
+
+Packages contain readable `SOUL.md`, standard manifest/resource files and an
+`x-machina` extension carrying the structured representation. Machina rejects a
+package when its readable identity conflicts with that representation; re-export
+after changing the structured source. Ordinary packages without the extension
+load their markdown identity and declared tool constraints. Companion identity,
+style and agent markdown are declarative context; bundled scripts never execute.
+This integration makes no Soul Spec certification claim.
+
+Structured YAML definitions use `persona`, `workflow`, `skills` and `config`.
+Legacy flat YAML remains supported; mixing legacy execution fields with structured
+persona fields is rejected to prevent losing tool constraints. Runtime schema
+initialization adds the structured snapshot column without replacing legacy data.
+
 ## What learns
 
 The existing `MemoryPolicy` and offline `GroupRelativeTrainer` retain their six-action research API. Live `RetrievalPolicy` masks the policy to `retrieve` and `noop`, then samples whether to run automatic long-term memory search. A retrieval-biased cold start searches on approximately 92% of turns. Explicit recall tools and persistent personality notes remain available regardless of the sampled decision.
@@ -72,7 +119,7 @@ Notes are limited to 500 characters each and 2,400 characters total, including k
 
 RSI defaults on. Set `rsi_enabled: false` (or `MACHINA_RSI_ENABLED=false`) to stop collecting operational evidence and applying RSI routing/strategy adaptation. Existing personality notes and explicit human memory feedback remain available. Human management still versions existing RSI history so an older trial cannot undo a later human choice.
 
-Set `personality_growth_enabled` or `memory_enabled` to false to stop automatic growth, personality injection, decisions, teaching, feedback and policy installation. Inspection, export, explicit removal and restoration remain available. Turning it off preserves learned state for later use; existing explicit remember/recall tools retain their original behavior.
+Set `personality_growth_enabled` or `memory_enabled` to false to stop automatic growth, personality injection, decisions, teaching, feedback and policy installation. Inspection, identity export/import, explicit removal and rollback remain available. Learned-note export/import flags require growth to be enabled. Turning it off preserves learned state for later use; existing explicit remember/recall tools retain their original behavior.
 
 This implements recursive runtime improvement across the shared agent loop used by CLI, gateway/TUI, HTTP, jobs and delegation. It does not train LLM weights or rewrite/deploy application code. Learned procedural skill proposals retain their existing review workflow. The [design](archive/plans/PERSONA_RSI_DESIGN.md) and [implementation/evidence plan](archive/plans/PERSONA_RSI_PLAN.md) describe the boundaries and checks.
 

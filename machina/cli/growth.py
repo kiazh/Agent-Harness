@@ -20,7 +20,7 @@ def _execute(session_id, operation):
     async def run():
         await db.connect()
         try:
-            await db.initialize_growth_schema()
+            await db.initialize_runtime_schema()
             session = await _resolve_session(session_id)
             result = await operation(growth_store, session)
             console.print_json(json.dumps(result))
@@ -39,7 +39,14 @@ def show(session: str = typer.Option(None, "--session", "-s")):
     """Show learned notes, policy weights and recent decision IDs."""
 
     async def inspect(store, current):
+        from machina.soulspec.lifecycle import effective_persona
+
+        try:
+            persona = (await effective_persona(current.agent_id)).to_dict()
+        except ValueError as exc:
+            persona = {"available": False, "reason": str(exc)}
         return {
+            "persona": persona,
             "growth": await store.get(current.agent_id),
             "episodes": await store.episodes(current.agent_id, current.id),
             "rsi": await store.rsi_status(current.agent_id),
@@ -122,3 +129,41 @@ def export_policy(path: Path, session: str = typer.Option(None, "--session", "-s
         return {"exported": str(path)}
 
     _execute(session, export)
+
+
+@app.command("export-soul")
+def export_soul(
+    path: Path,
+    session: str = typer.Option(None, "--session", "-s"),
+    include_learned: bool = typer.Option(False, "--include-learned"),
+):
+    """Export the session's effective SoulSpec persona; lessons require opt-in."""
+
+    async def export(store, current):
+        from machina.soulspec.lifecycle import export_persona
+
+        await export_persona(current.agent_id, path, include_learned=include_learned)
+        return {"exported": str(path), "included_learned": include_learned}
+
+    _execute(session, export)
+
+
+@app.command("import-soul")
+def import_soul(
+    path: Path,
+    session: str = typer.Option(None, "--session", "-s"),
+    restore_learned: bool = typer.Option(False, "--restore-learned"),
+):
+    """Import identity into this agent; keep ownership and permissions unchanged."""
+
+    async def install(store, current):
+        from machina.soulspec.lifecycle import import_persona
+
+        await import_persona(current.agent_id, path, restore_learned=restore_learned)
+        return {
+            "imported": str(path),
+            "agent_id": current.agent_id,
+            "restored_learned": restore_learned,
+        }
+
+    _execute(session, install)

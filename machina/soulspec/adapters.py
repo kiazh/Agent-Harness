@@ -13,7 +13,7 @@ except ImportError:  # pragma: no cover - sentinel always defined
 
 def _visible_tools(tools: list) -> list[str]:
     """Return only real tool names, filtering out the no-tools sentinel."""
-    return [t for t in tools if isinstance(t, str) and t is not _NO_TOOLS_SENTINEL]
+    return [t for t in tools if isinstance(t, str) and t != _NO_TOOLS_SENTINEL]
 
 
 class MachinaAdapter:
@@ -22,6 +22,26 @@ class MachinaAdapter:
     @staticmethod
     def to_soulspec(agent_def: AgentDef) -> SoulSpec:
         """Convert AgentDef to SoulSpec."""
+        if agent_def.soul_spec is not None:
+            spec = SoulSpec.from_storage_dict(agent_def.soul_spec)
+            spec.name = agent_def.name
+            if spec.persona is not None:
+                spec.persona.system_prompt = agent_def.system_prompt
+                spec.persona.description = agent_def.description
+            current = spec.to_agent_def()
+            if current.model != agent_def.model or current.provider != agent_def.provider:
+                spec.config = spec.config or SoulSpec.Config()
+                spec.config.model = agent_def.model
+                spec.config.provider = agent_def.provider
+            if current.tools != agent_def.tools:
+                spec.config = spec.config or SoulSpec.Config()
+                spec.config.permissions = SoulSpec.Permissions(
+                    allowed_tools=_visible_tools(agent_def.tools),
+                    deny_all=_NO_TOOLS_SENTINEL in agent_def.tools,
+                )
+                for workflow in spec.workflow:
+                    workflow.tools = _visible_tools(agent_def.tools)
+            return spec
         persona = SoulSpec.Persona(
             name=agent_def.name,
             description=agent_def.description,
@@ -29,7 +49,11 @@ class MachinaAdapter:
         )
         config = SoulSpec.Config(
             model=agent_def.model,
+            provider=agent_def.provider,
             max_iterations=agent_def.max_iterations,
+            permissions=SoulSpec.Permissions(deny_all=True)
+            if _NO_TOOLS_SENTINEL in agent_def.tools
+            else None,
         )
         visible = _visible_tools(list(agent_def.tools) if agent_def.tools else [])
         return SoulSpec(
@@ -57,6 +81,8 @@ class ClaudeCodeAdapter:
         sections.append(f"# {spec.name}")
         if spec.persona and spec.persona.description:
             sections.append(f"\n{spec.persona.description}\n")
+
+        sections.append(spec.render_prompt())
 
         # Persona
         if spec.persona:
@@ -123,6 +149,8 @@ class CodexAdapter:
         sections.append(f"# AGENTS.md — {spec.name}")
         if spec.persona and spec.persona.description:
             sections.append(f"\n> {spec.persona.description}\n")
+
+        sections.append(spec.render_prompt())
 
         # Persona
         if spec.persona:

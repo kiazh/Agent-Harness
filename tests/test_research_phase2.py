@@ -323,7 +323,12 @@ def test_soulspec_v05_package_preserves_manifest_and_declared_files(tmp_path):
     spec = SoulSpec.from_package(source)
     destination = tmp_path / "destination"
     spec.write_package(destination)
-    assert json.loads((destination / "soul.json").read_text(encoding="utf-8")) == manifest
+    exported = json.loads((destination / "soul.json").read_text(encoding="utf-8"))
+    extension = exported.pop("x-machina")
+    assert exported == manifest
+    assert extension["soulSpec"] == spec.to_dict()
+    assert SoulSpec.from_package(destination).to_dict() == spec.to_dict()
+    assert "Be careful." in (destination / "SOUL.md").read_text()
     assert (destination / "IDENTITY.md").read_bytes() == b"Identity\r\n"
     assert (destination / "examples/good.md").read_bytes() == b"Example\r\n"
 

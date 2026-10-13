@@ -38,7 +38,12 @@ def test_informational_questions_do_not_invent_an_action_strategy():
 async def test_paused_and_cancelled_turns_do_not_record_rsi_success(
     db_pool, monkeypatch, streaming
 ):
-    from machina.core.agent import BaseReActAgent, _growth_episode, instrument_run, instrument_stream
+    from machina.core.agent import (
+        BaseReActAgent,
+        _growth_episode,
+        instrument_run,
+        instrument_stream,
+    )
     from machina.core.models import AgentResponse, StreamEvent
     from machina.memory.growth import GrowthStore
 
@@ -130,21 +135,24 @@ async def test_agent_records_evidence_and_reuses_routing_after_restart(
         from machina.memory.growth import growth_store
 
         await growth_store.teach(owner, "style", "tone", "Snapshot tone")
-        original_prompt = growth_store.prompt
+        original_decide = growth_store.begin
         changed = False
 
-        async def concurrent_prompt(agent_id, **kwargs):
+        async def concurrent_decide(agent_id, *args, **kwargs):
+            decision = await original_decide(agent_id, *args, **kwargs)
             nonlocal changed
             if not changed:
                 changed = True
                 await growth_store.teach(owner, "style", "tone", "Later tone")
-            return await original_prompt(agent_id, **kwargs)
+            return decision
 
-        monkeypatch.setattr(growth_store, "prompt", concurrent_prompt)
+        monkeypatch.setattr(growth_store, "begin", concurrent_decide)
     tool = "skill_read" if scenario == "manual_skill" else "list_files"
     if scenario == "manual_skill":
         # This test must attribute the manual read, independently of auto-loading.
-        monkeypatch.setattr("machina.skills.runtime.automatic_skill_context", lambda *args, **kwargs: "")
+        monkeypatch.setattr(
+            "machina.skills.runtime.automatic_skill_context", lambda *args, **kwargs: ""
+        )
     if scenario == "failed_command":
         import sys
 

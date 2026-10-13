@@ -182,6 +182,8 @@ async def build_agent_for_session(
             allowed_tools = [t for t in allowed_tools if t in parent_tools]
 
     llm = get_provider(provider=provider_name, model=model)
+    from machina.soulspec.adapters import MachinaAdapter
+
     agent = ReActAgent(
         provider=llm,
         agent_id=agent_id,
@@ -190,6 +192,9 @@ async def build_agent_for_session(
         memory_consolidator=memory_consolidator,
         rag_pipeline=rag_pipeline,
         allowed_tools=allowed_tools,
+        soul_spec=MachinaAdapter.to_soulspec(definition).to_storage_dict()
+        if definition is not None
+        else None,
     )
     # Mark ownership so callers close only providers they created (AH-023).
     agent._owns_provider = True  # type: ignore[attr-defined]
