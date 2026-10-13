@@ -49,6 +49,7 @@ from machina.core.prompt import (
 from machina.core.provider import LLMProvider, audit_log, get_provider
 from machina.core.session import Session, session_manager
 from machina.core.session_mode import turn_scope
+from machina.core.turn_flow import collect_pauses, stagnation_step, stopped_response
 from machina.core.usage import usage_store
 from machina.memory.consolidator import MemoryConsolidator
 from machina.memory.retriever import MemoryRetriever
@@ -720,6 +721,7 @@ class BaseReActAgent:
             _rsi_choice.get() or {},
             _rsi_skills.get(),
             {tool.name for tool in self._tool_defs()},
+            triage=getattr(self, "_last_triage", None),  # advisory; None = unchanged
         )
         prompt = assemble_turn_prompt(
             assembler,
@@ -1739,12 +1741,7 @@ class ReActAgent(BaseReActAgent):
             await self._flush_pending_chunks(pending_chunks)
             batch = tool_calls_made[batch_start:]
             total_tokens += sum(entry.get("delegated_tokens", 0) for entry in batch)
-            pauses = [
-                pause
-                for entry in batch
-                for pause in (entry.get("needs_approvals") or [entry.get("needs_approval")])
-                if isinstance(pause, dict) and pause.get("request_id")
-            ]
+            pauses = collect_pauses(batch)
             if pauses:
                 return AgentResponse(
                     content="Waiting for approval.",
@@ -1753,23 +1750,20 @@ class ReActAgent(BaseReActAgent):
                     iterations=iteration + 1,
                     needs_approval=pauses,
                 )
-            # S3.1(d) BEGIN stagnation hook (revert: delete block; stagnation-only, never a cap)
-            try:
-                from machina.controller import wiring as _s3wh
-
-                _s3_progress_history, _s3_stop = _s3wh.check_stagnation(_s3_progress_history, batch)
-                _s3_text = _s3wh.stagnation_content(_s3_stop, len(tool_calls_made), tool_calls_made) if _s3_stop is not None else ""
-            except Exception:
-                _s3_stop = None
-                _s3_text = ""
-            if _s3_stop is not None:
-                logger.warning("s3 stagnation stop: %s", _s3_stop)
-                audit_log("agent_stagnation_stop", session_id=str(session_id), reason=_s3_stop)
-                await self._flush_pending_chunks(pending_chunks)
-                await _s3wh.record_stagnation_state(session_manager, session_id, _s3_stop, _s3_text, tool_calls_made)
+            # S3.1(d) stagnation hook: shared batch tail (turn_flow owns the
+            # guarded wiring access; stagnation-only, never a cap).
+            _s3_progress_history, _s3_text = await stagnation_step(
+                _s3_progress_history,
+                batch,
+                tool_calls_made,
+                session_id=session_id,
+                session_manager=session_manager,
+                audit=audit_log,
+                flush=lambda: self._flush_pending_chunks(pending_chunks),
+            )
+            if _s3_text is not None:
                 self._schedule_memory_consolidation(session_id)
-                return AgentResponse(content=_s3_text, outcome="failed", tool_calls=tool_calls_made, tokens_used=total_tokens, iterations=iteration + 1)
-            # S3.1(d) END stagnation hook
+                return stopped_response(_s3_text, tool_calls_made, total_tokens, iteration + 1)
             iteration += 1
 
     @instrument_stream
@@ -2017,12 +2011,7 @@ class ReActAgent(BaseReActAgent):
                 raise
             batch = tool_calls_made[batch_start:]
             total_tokens += sum(entry.get("delegated_tokens", 0) for entry in batch)
-            pauses = [
-                pause
-                for entry in batch
-                for pause in (entry.get("needs_approvals") or [entry.get("needs_approval")])
-                if isinstance(pause, dict) and pause.get("request_id")
-            ]
+            pauses = collect_pauses(batch)
             if pauses:
                 yield StreamEvent(
                     type="done",
@@ -2035,22 +2024,22 @@ class ReActAgent(BaseReActAgent):
                     ),
                 )
                 return
-            # S3.1(d) BEGIN stream stagnation hook (revert: delete block; stagnation-only, never a cap)
-            try:
-                from machina.controller import wiring as _s3wh
-
-                _s3_progress_history, _s3_stop = _s3wh.check_stagnation(_s3_progress_history, batch)
-                _s3_text = _s3wh.stagnation_content(_s3_stop, len(tool_calls_made), tool_calls_made) if _s3_stop is not None else ""
-            except Exception:
-                _s3_stop = None
-                _s3_text = ""
-            if _s3_stop is not None:
-                logger.warning("s3 stagnation stop: %s", _s3_stop)
-                audit_log("agent_stagnation_stop", session_id=str(session_id), reason=_s3_stop)
-                await self._flush_pending_chunks(pending_chunks)
-                await _s3wh.record_stagnation_state(session_manager, session_id, _s3_stop, _s3_text, tool_calls_made)
+            # S3.1(d) stream stagnation hook: shared batch tail (turn_flow owns
+            # the guarded wiring access; stagnation-only, never a cap).
+            _s3_progress_history, _s3_text = await stagnation_step(
+                _s3_progress_history,
+                batch,
+                tool_calls_made,
+                session_id=session_id,
+                session_manager=session_manager,
+                audit=audit_log,
+                flush=lambda: self._flush_pending_chunks(pending_chunks),
+            )
+            if _s3_text is not None:
                 self._schedule_memory_consolidation(session_id)
-                yield StreamEvent(type="done", response=AgentResponse(content=_s3_text, outcome="failed", tool_calls=tool_calls_made, tokens_used=total_tokens, iterations=iteration + 1))
+                yield StreamEvent(
+                    type="done",
+                    response=stopped_response(_s3_text, tool_calls_made, total_tokens, iteration + 1),
+                )
                 return
-            # S3.1(d) END stream stagnation hook
             iteration += 1

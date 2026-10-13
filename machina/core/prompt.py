@@ -13,6 +13,13 @@ callers can run sectioned-token diagnostics
 (:func:`prompt_section_tokens`, compatible with
 ``machina.core.execution_context.count_prompt_sections``) without changing the
 assembled prompt text.
+
+One addition on top of the moves: :func:`build_system_prompt` takes an
+optional ``triage`` task class and appends a bounded, deterministic workflow
+hint for the two classes that have one (``learn-directory``, ``debug``).
+Hints are advisory prompt text only — never enforcement, never tool forcing,
+never a provider call; any other class (and ``triage=None``) leaves the
+assembled text byte-identical (pinned by ``tests/test_v2_triage_hints.py``).
 """
 
 from __future__ import annotations
@@ -286,6 +293,23 @@ def build_skill_section(
     )
 
 
+# V2 triage-driven methodology hints (advisory text only, deterministic per
+# class, no provider calls, no tool forcing). Bounded: <= 60 tokens each
+# (pinned by tests/test_v2_triage_hints.py).
+_TRIAGE_HINTS: dict[str, str] = {
+    "learn-directory": (
+        "Workflow hint: this looks like directory learning — call learn_directory "
+        "on the target path first and ground your plan in its digest (hotspots, "
+        "entry points, tests) before proposing or making changes."
+    ),
+    "debug": (
+        "Workflow hint: this looks like debugging — reproduce, minimise, "
+        "hypothesise, then fix with a regression test that fails without the "
+        "change."
+    ),
+}
+
+
 def build_system_prompt(
     soul_spec,
     allowed_tools: list[str] | None,
@@ -297,11 +321,19 @@ def build_system_prompt(
     rsi_choice: dict,
     activated,
     tool_names: set[str],
+    *,
+    triage: str | None = None,
 ) -> str:
-    """Full system prompt: persona + capability + skills (verbatim composition).
+    """Full system prompt: persona + capability + skills (+ triage hint).
 
     Calls the per-section builders in the exact order ``_prepare_context``
-    used, so the assembled text is byte-identical to the inline version.
+    used, so the assembled text is byte-identical to the inline version for
+    every triage label without a hint — and for ``triage=None``.
+
+    ``triage`` is the advisory task class recorded by the controller wiring
+    hook. A matching hint (deterministic, <= 60 tokens) is appended after the
+    skill section; it is prompt text only, never enforcement and never a new
+    model call.
     """
     _role, persona_text = build_persona_section(
         soul_spec, allowed_tools, growth_notes, growth_state, rsi_choice or {}
@@ -317,7 +349,11 @@ def build_system_prompt(
         activated,
         system_base,
     )
-    return system_base + skill_text
+    composed = system_base + skill_text
+    hint = _TRIAGE_HINTS.get(triage) if triage else None
+    if hint:
+        composed = f"{composed}\n\n{hint}"
+    return composed
 
 
 def assemble_turn_prompt(

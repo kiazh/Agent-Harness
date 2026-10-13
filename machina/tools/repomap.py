@@ -133,13 +133,13 @@ def _format_digest(repomap: RepoMap, cache_label: str) -> str:
     largest = sorted(m.loc_by_file.items(), key=lambda kv: (-kv[1], kv[0]))[:_TOP_MODULES]
     lines.append(f"largest modules ({len(m.loc_by_file)} total):")
     lines.extend(f"  {loc:>7}  {rel.replace(os.sep, '/')}" for rel, loc in largest)
-    hubs = sorted(
-        _fan_in(m.import_edges, _local_names(m)).items(), key=lambda kv: (-kv[1], kv[0])
-    )[:_TOP_HUBS]
+    hubs = sorted(_fan_in(m.import_edges, _local_names(m)).items(), key=lambda kv: (-kv[1], kv[0]))[
+        :_TOP_HUBS
+    ]
     lines.append("import hubs (fan-in): " + (", ".join(f"{mod}={n}" for mod, n in hubs) or "none"))
-    out_degree = sorted(
-        m.import_edges.items(), key=lambda kv: (-len(kv[1]), kv[0])
-    )[:_TOP_OUT_DEGREE]
+    out_degree = sorted(m.import_edges.items(), key=lambda kv: (-len(kv[1]), kv[0]))[
+        :_TOP_OUT_DEGREE
+    ]
     lines.append(
         "most imports (out-degree): "
         + (", ".join(f"{mod}={len(imports)}" for mod, imports in out_degree) or "none")
