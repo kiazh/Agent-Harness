@@ -145,6 +145,7 @@ Type `/` for commands. Management commands open pickers or forms; `?` on empty i
 - Streaming agent execution through the CLI, TUI/gateway and HTTP API, with cancellation, session ownership and bounded cleanup.
 - Persistent conversations, context compaction, memory search and document retrieval. Semantic retrieval needs embedding configuration; keyword retrieval is available without it.
 - File, shell, web, memory and document tools, subject to the permission broker and the selected execution backend.
+- Deterministic directory learning: the read-only `learn_directory` tool builds a bounded, cached repository digest (totals, largest modules, entry points, tests, import hubs) with **no model calls**; repeat calls are served from the content-hash cache.
 - **42 curated ECC skills**, bundled offline and selected by task evidence. Relevant excerpts are disclosed progressively rather than injecting the entire library into each prompt.
 - **71 ECC subagents** plus the existing `harness`, `researcher` and `coder` roles. Only the selected role's instructions enter its delegated context. [Integration details and tool limitations](docs/ECC_AGENTS.md).
 - Scheduling, usage accounting and configurable session/agent budgets.
@@ -237,7 +238,7 @@ Shell syntax such as `&&`, `;` and pipes is supported through the shared shell p
 
 ### Context and token limits
 
-Prompt capacity follows the selected model/provider's context-window metadata or a conservative fallback, reserving space for output. There is no default cumulative turn-token cutoff; usage is still recorded. Optional session/agent usage limits and provider output limits are separate. The legacy `context_budget` setting is retained for compatibility and does not set a turn spend cap. A million-token window applies only when the selected serving reports that capacity.
+Prompt capacity follows the selected model/provider's context-window metadata or a conservative fallback, reserving space for output. There is no default cumulative turn-token cutoff; usage is still recorded. Optional session/agent usage limits and provider output limits are separate. The legacy `context_budget` setting is retained for compatibility and does not set a turn spend cap. A million-token window applies only when the selected serving reports that capacity. An opt-in prompt-cache pilot (`prompt_cache_enabled`, default off) can mark stable-prefix breakpoints for Anthropic-family models; it stays off until validated against live providers.
 
 ### MCP scope
 
@@ -397,6 +398,7 @@ Important settings include `DATABASE_URL`, `MACHINA_PROVIDER`, `MACHINA_MODEL`, 
 | `MACHINA_USAGE_AGENT_TOKEN_LIMIT` / `MACHINA_USAGE_AGENT_REQUEST_LIMIT` | Optional agent usage budgets | `0` = unlimited |
 | `MACHINA_CONTEXT_BUDGET` | Legacy compatibility setting | Does not impose a cumulative turn-token cap |
 | `MACHINA_MAX_TOKENS` | Requested provider response length | `4096`; separate from prompt capacity |
+| `MACHINA_PROMPT_CACHE_ENABLED` | Prompt-cache breakpoints pilot (Anthropic / OpenRouter-anthropic only; payloads are byte-identical when off) | `false`; awaiting live-provider validation |
 | `MACHINA_MAX_ITERATIONS` | Deprecated; the agent loop is unbounded (no iteration cap) | Ignored |
 | `MACHINA_TURN_TIMEOUT` | Turn deadline in seconds | `300` |
 | `SEARXNG_URL` | Optional SearXNG search endpoint; blank uses DuckDuckGo | blank |
@@ -482,11 +484,21 @@ the [wire contract](communications/ui-gateway-protocol.md).
 
 ```bash
 cp .env.example .env
-# Replace example keys with your own values before starting.
+# Replace example keys with your own values before starting; generate a real
+# API key (e.g. `openssl rand -hex 32`). The server refuses to start while
+# MACHINA_API_KEY is still the .env.example placeholder.
 docker compose up --build
 ```
 
 Compose runs the **HTTP backend**, not the terminal UI. It provisions an isolated database volume, leaves the database port unpublished and binds the API to `127.0.0.1:8000`. Review credentials, volumes and the [operations guide](OPERATIONS.md) before deployment. Docker execution has not been verified on this review machine; CI builds and smoke-checks the image.
+
+Build the terminal sandbox image on the host when using `terminal_sandbox=docker` or `sandbox` mode:
+
+```bash
+docker build -f Dockerfile.sandbox -t machina-tool-sandbox:latest .
+```
+
+Sandbox execution needs the host Docker daemon, so it is unavailable inside the Compose deployment by design (the app container has neither the CLI nor the daemon socket; absence fails closed instead of silently degrading to host execution).
 
 Document retrieval has a reproducible source-level quality baseline and evaluation command; see [RAG quality review](docs/verification/RAG_QUALITY_REVIEW.md).
 
@@ -552,14 +564,21 @@ To run those groups locally, use `python -m pytest -m ui_integration` or
 
 ### Recorded verification
 
-The 2026-10-12 candidate review (HEAD `8c96fe3` with the working tree under
-review) recorded **2,478 backend tests passed, 5 skipped**, with
-**82.12% coverage**. Standalone UI checks with the real gateway integration
-enabled recorded **326 passed, 0 failed, 0 skipped**. Ruff and package checks
-passed; Bandit reported zero medium/high findings. These are dated results
-for that checkout — re-run the commands above before trusting them for a
-later commit or any other platform. Commands, fixture scope and pending hosted
-CI/Docker gates are in [release readiness](docs/verification/RELEASE_READINESS.md).
+The 2026-10-13 remediation program (incident fixes, security hardening, delegation
+correctness, retrieval faithfulness, deterministic-first routing) recorded
+**3,434 backend tests passed, 0 failed, 1 skipped, 1 xfailed** (exact command in the
+[completion bundle](docs/verification/COMPLETION_BUNDLE.md)), with standalone UI
+checks at **337 passed, 0 failed, 6 skipped** including the real-gateway integration
+group. Fixture-replay metrics, before/after token measurements and the full
+artifact/commit record are in the completion bundle; remaining uncertainties and
+operator-level deferrals are listed there as well.
+
+The earlier 2026-10-12 candidate review (HEAD `8c96fe3`) recorded **2,478 backend
+tests passed, 5 skipped**, with **82.12% coverage**, and **326 UI tests passed**.
+These are dated results for their respective checkouts — re-run the commands above
+before trusting them for a later commit or any other platform. Commands, fixture
+scope and pending hosted CI/Docker gates are in
+[release readiness](docs/verification/RELEASE_READINESS.md).
 
 ## Project structure
 
@@ -593,7 +612,7 @@ Machina/
 ├── communications/       # versioned UI/gateway protocol
 ├── install.sh            # source installer
 ├── Dockerfile            # HTTP backend image
-├── Dockerfile.sandbox    # separate terminal execution image
+├── Dockerfile.sandbox    # terminal execution image (host daemon; built by CI)
 ├── docker-compose.yml    # HTTP backend + pgvector database
 ├── pyproject.toml        # Python dependencies, packaging and verification settings
 └── uv.lock               # Python resolver lock
@@ -610,6 +629,8 @@ Machina/
 | Database unavailable | Verify `DATABASE_URL`, service reachability and credentials, then run `machina init` |
 | pgvector or pg_trgm missing | Use the pgvector image or install matching extensions; schema creation requires appropriate privileges |
 | API returns missing-key / authentication error | Set `MACHINA_API_KEY` server-side and send Bearer or `X-API-Key` credentials |
+| API refuses to start | `MACHINA_API_KEY` is still the `.env.example` placeholder; generate a real key (`openssl rand -hex 32`) — the server fails closed rather than run behind a public value |
+| Sandbox mode unavailable | Requires the host Docker daemon and a built `Dockerfile.sandbox` image (`docker build -f Dockerfile.sandbox -t machina-tool-sandbox:latest .`); inside Compose it is unavailable by design |
 | Provider returns unauthorized / model unavailable | Use that provider's own key and a model it currently serves; check `/provider`, `/models` and `/keys` |
 | A session already has a running turn | Cancel/wait for completion before retrying; do not submit competing turns |
 | Response or tool times out | Inspect the recorded outcome; uncertain external side effects must be checked before retrying |
@@ -631,6 +652,7 @@ credentials or private tool output into issue reports.
 
 - [Operations, migrations, backup and rollback](OPERATIONS.md)
 - [Security model and limitations](SECURITY.md)
+- [Completion bundle — 2026-10-13 remediation record](docs/verification/COMPLETION_BUNDLE.md)
 - [Release notes](CHANGELOG.md) and [release checklist](docs/verification/RELEASE_READINESS.md)
 - [Feature implementation ledger](FEATURE_LEDGER.md)
 - [Historical plans and snapshots](docs/archive/) (superseded; live docs above take precedence)
