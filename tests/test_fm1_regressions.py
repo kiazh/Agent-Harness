@@ -275,27 +275,31 @@ async def test_stateful_initialize_requires_token_but_bare_handshake_is_free(mon
 # ─── W5: bounded resume history ─────────────────────────────────────────────
 
 
-async def test_session_resume_history_is_bounded_like_rest(monkeypatch):
-    """W5: resume history is capped at the newest 200 chunks.
+async def test_session_resume_history_is_bounded(monkeypatch):
+    """W5: resume history is capped at the newest MAX_RESUME_HISTORY_CHUNKS.
 
     Pre-fix: ``get_transcript_chunks`` (no LIMIT) was fully serialized into
-    the response.
+    the response. The bound must stay ABOVE 200 — an earlier fix pinned
+    "resume reads beyond 200 chunks" (test_transcript_export) — so it is set
+    at 1000 and asserted against a larger transcript.
     """
     from machina.core.context import context_manager
     from machina.core.session import session_manager
+    from machina.gateway.server import MAX_RESUME_HISTORY_CHUNKS
 
     monkeypatch.delenv("MACHINA_GATEWAY_TOKEN", raising=False)
+    total = MAX_RESUME_HISTORY_CHUNKS + 100
     session = Session(id=uuid.uuid4())
-    # Newest first: index 0 is "m-299", index 299 is "m-0".
+    # Newest first: index 0 is "m-<total-1>", index total-1 is "m-0".
     chunks = [
         ContextChunk(
             id=uuid.uuid4(),
             session_id=session.id,
             agent_id="harness",
             chunk_type="user_message",
-            payload={"content": f"m-{299 - index}"},
+            payload={"content": f"m-{total - 1 - index}"},
         )
-        for index in range(300)
+        for index in range(total)
     ]
     monkeypatch.setattr(session_manager, "get", AsyncMock(return_value=session))
     monkeypatch.setattr(
@@ -307,9 +311,10 @@ async def test_session_resume_history_is_bounded_like_rest(monkeypatch):
     result = await gw._session_resume({"sessionId": str(session.id)})
 
     history = result["history"]
-    assert len(history) == 200, f"resume returned {len(history)} history entries"
-    assert history[0]["content"] == "m-100", "the OLDEST retained entry is wrong"
-    assert history[-1]["content"] == "m-299", "the newest entry must be retained"
+    assert len(history) == MAX_RESUME_HISTORY_CHUNKS
+    # Oldest retained entry: the (MAX-1)-th newest chunk of the input.
+    assert history[0]["content"] == f"m-{total - MAX_RESUME_HISTORY_CHUNKS}"
+    assert history[-1]["content"] == f"m-{total - 1}", "newest entry must be retained"
 
 
 # ─── W8: embedded HTTP gateway never inherits the stdio token ───────────────

@@ -59,7 +59,12 @@ CLAIM_RENEW_INTERVAL_SECONDS = 30.0
 CANCEL_JOIN_TIMEOUT_SECONDS = 0.1
 # W5: bound session.resume history like the REST session endpoint
 # (machina/api/routes/sessions.py reads context chunks with limit=200).
-MAX_RESUME_HISTORY_CHUNKS = 200
+# RF4-W5: session.resume must not serialize an unbounded transcript, but the
+# bound must not re-introduce the historical "resume truncated at 200" bug
+# (pinned deliberately by test_resume_reads_beyond_two_hundred_chunks).
+# 1000 keeps the payload bounded while preserving that contract; the DB-side
+# fetch still full-scan (residual noted by FM1 for the context.py owner).
+MAX_RESUME_HISTORY_CHUNKS = 1000
 # W4: initialize may carry these keys without a token — the bare handshake.
 # Any other key (model/provider/mode today, future state mutations) requires
 # the auth token when one is configured.
