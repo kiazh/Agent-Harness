@@ -163,7 +163,7 @@ def test_hostile_patterns_are_time_bounded():
     }
     started = _time.monotonic()
     with pytest.raises(ConnectorToolError):
-        validate_arguments("t", {f"a{i}!" : 1 for i in range(200)}, many)
+        validate_arguments("t", {f"a{i}!": 1 for i in range(200)}, many)
     assert _time.monotonic() - started < 3.0
     # Benign patterns still match and reject normally.
     ok = {"type": "object", "properties": {"x": {"type": "string", "pattern": "^[a-z]+$"}}}
@@ -205,6 +205,27 @@ def test_pattern_counts_within_budget_still_match():
     nested = {"type": "object", "properties": {"x": {"type": "string", "pattern": "^(a{2}){3}$"}}}
     with pytest.raises(ConnectorToolError, match="nested"):
         validate_arguments("t", {"x": "aaaaaa"}, nested)
+
+
+def test_real_world_repetition_patterns_validate():
+    """Real MCP schema patterns (self-hosted Firecrawl) must never be
+    false-rejected by the count screen: high bounds in the hundreds are
+    legitimate; the screen rejects nested pairs and astronomical counts."""
+    real_world = [
+        ("^[A-Za-z0-9._:-]{1,128}$", "example-host:8080"),
+        (
+            r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$",
+            "docs.python.org",
+        ),
+        (
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}"
+            "-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+            "0193f6c5-1234-7890-abcd-1234567890ab",
+        ),
+    ]
+    for pattern, value in real_world:
+        schema = {"type": "object", "properties": {"x": {"type": "string", "pattern": pattern}}}
+        validate_arguments("t", {"x": value}, schema)
 
 
 def test_validation_combinators():

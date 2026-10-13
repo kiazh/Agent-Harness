@@ -35,9 +35,7 @@ MAX_ARGS_BYTES = 65_536
 # propertyNames fan-out via a ContextVar). Exhausting either fails closed.
 _PATTERN_TIMEOUT_SECONDS = 0.05
 _PATTERN_TOTAL_BUDGET_SECONDS = 0.25
-_pattern_deadline: ContextVar[float | None] = ContextVar(
-    "connector_pattern_deadline", default=None
-)
+_pattern_deadline: ContextVar[float | None] = ContextVar("connector_pattern_deadline", default=None)
 
 # Schema keywords the validator understands. Anything else fails closed —
 # silently discarding constraints would change what was approved.
@@ -87,9 +85,11 @@ _TYPE_NAMES = ("string", "number", "integer", "boolean", "object", "array", "nul
 # The regex engine unrolls counted repetitions at COMPILE time and its
 # timeout only covers matching, so `a{100000000}` (12 chars) or nested
 # `(a{10000}){10000}` freeze compilation synchronously on the event loop.
-# Counts are bounded and counted repetitions may not nest; over-budget
-# patterns fail closed with an explicit error.
-_MAX_REPETITION_COUNT = 100
+# Counts are bounded well above real-world schema patterns (e.g.
+# `^[A-Za-z0-9._:-]{1,128}$`, host masks use {1,128}/{0,61}) so a single
+# level stays cheap (<=10k nodes per count), while astronomically large
+# counts and any NESTED counted pair (whose product explodes) fail closed.
+_MAX_REPETITION_COUNT = 10_000
 
 
 def _screen_pattern_budget(pattern: str) -> None:
@@ -139,9 +139,7 @@ def _screen_pattern_budget(pattern: str) -> None:
                 ):
                     raise ConnectorToolError("pattern repetition count too large")
                 if quantifies_a_counted_group:
-                    raise ConnectorToolError(
-                        "nested counted repetitions are not supported"
-                    )
+                    raise ConnectorToolError("nested counted repetitions are not supported")
                 if group_stack:
                     group_stack[-1] = True
                 index = cursor
@@ -253,9 +251,7 @@ def _validate(schema: Any, value: Any, depth: int, path: str) -> None:
         )
     if "pattern" in schema and isinstance(value, str):
         deadline = _pattern_deadline.get()
-        remaining = (
-            _PATTERN_TIMEOUT_SECONDS if deadline is None else deadline - time.monotonic()
-        )
+        remaining = _PATTERN_TIMEOUT_SECONDS if deadline is None else deadline - time.monotonic()
         if remaining <= 0:
             raise ConnectorToolError(f"pattern time budget exhausted at {path or 'root'}")
         try:

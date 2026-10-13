@@ -588,6 +588,26 @@ before trusting them for a later commit or any other platform. Commands, fixture
 scope and pending hosted CI/Docker gates are in
 [release readiness](docs/verification/RELEASE_READINESS.md).
 
+### End-to-end acceptance gate
+
+Acceptance evidence is the recorded E2E gate, not unit-test counts: every
+feature or "fixed" claim must be proved by a journey that asserts observable
+end state on real components (PostgreSQL rows, indexed RAG chunks, tool and
+API outcomes) and writes its proof to `docs/verification/proofs/`. Run:
+
+```bash
+python tools/e2e_gate.py                  # j1..j5; j4 skips when Firecrawl is down
+python tools/e2e_gate.py --journeys j1,j5 # cheap real subset
+python tools/e2e_gate.py --json /tmp/e2e.json
+```
+
+Journeys j1–j5 cover memory consolidation roundtrip, live web research and
+web crawl into session RAG, the self-hosted Firecrawl MCP path, and a CLI
+smoke check. Exit code is non-zero on any failure; every run writes
+`<UTC date>-e2e-gate.json`/`.md` under `docs/verification/proofs/`. Policy,
+proof rules and the three adversarial pre-merge personas are in the
+[E2E protocol](docs/verification/E2E_PROTOCOL.md).
+
 ## Project structure
 
 ```text
