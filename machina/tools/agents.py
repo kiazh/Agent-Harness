@@ -59,11 +59,24 @@ async def active_agent_scope() -> tuple[str, uuid.UUID]:
                 "type": "string",
                 "description": "A complete, standalone description of the task",
             },
+            "expected_output": {
+                "type": "string",
+                "description": "Free-text description of the required result shape",
+            },
+            "expected_artifact_path": {
+                "type": "string",
+                "description": "Workspace-relative file the child must produce",
+            },
         },
         "required": ["agent", "task"],
     },
 )
-async def delegate(agent: str, task: str) -> str:
+async def delegate(
+    agent: str,
+    task: str,
+    expected_output: str | None = None,
+    expected_artifact_path: str | None = None,
+) -> str:
     """Delegate *task* to *agent* and return its response."""
     from machina.core.orchestrator import (
         AgentNotFoundError,
@@ -117,6 +130,17 @@ async def delegate(agent: str, task: str) -> str:
         raise
     except Exception as _e:
         raise ToolError(f"delegation failed: {_e}") from None
+    # S1 contract params (dspy-Signature discipline: typed optional inputs,
+    # explicit outputs). Validation is pre-launch: zero child work on escape.
+    if expected_artifact_path is not None:
+        if not isinstance(expected_artifact_path, str) or not expected_artifact_path.strip():
+            raise ToolError("expected_artifact_path must be a non-empty string")
+        try:
+            from machina.tools.file import resolve_path as _resolve_contract_path
+
+            _resolve_contract_path(expected_artifact_path)
+        except ValueError as _e:
+            raise ToolError(f"{_e}") from _e
     parent_session_id = current_session_id.get()
     from_agent = "delegate-tool"
     if parent_session_id is not None:
@@ -139,6 +163,13 @@ async def delegate(agent: str, task: str) -> str:
         min(deadline, inherited_deadline) if inherited_deadline is not None else deadline
     )
     try:
+        # Optional output-contract kwargs are forwarded only when set, so
+        # contract-free calls keep the exact legacy call shape.
+        _contract_kwargs: dict = {}
+        if expected_output is not None:
+            _contract_kwargs["expected_output"] = expected_output
+        if expected_artifact_path is not None:
+            _contract_kwargs["expected_artifact_path"] = expected_artifact_path
         result = await orchestrator.delegate(
             agent,
             task,
@@ -146,6 +177,7 @@ async def delegate(agent: str, task: str) -> str:
             parent_session_id=parent_session_id,
             _hop_count=delegation_depth.get() + 1,
             authority=parent_authority,
+            **_contract_kwargs,
         )
     except AgentNotFoundError as e:
         raise ToolError(f"{e}. Use list_agents to see available agents.") from None

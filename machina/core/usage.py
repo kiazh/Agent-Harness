@@ -209,6 +209,19 @@ class UsageStore:
                     ancestor_sessions,
                     ancestor_agents,
                 )
+        # S2 observe-only hook: attribute the reservation to the active turn
+        # span. Accounting above is untouched; failures here never propagate.
+        try:
+            from machina.observability.traces import note_reserve as _trace_note_reserve
+
+            _trace_note_reserve(
+                row["id"],
+                model=model,
+                reserved_tokens=reserved,
+                provider=provider,
+            )
+        except Exception:
+            pass
         return row["id"]
 
     async def finish(
@@ -256,6 +269,23 @@ class UsageStore:
             accounted,
             model,
         )
+        # S2 observe-only hook: record the exact persisted figures onto the
+        # owning turn span. Only rows actually written are attributed.
+        # Accounting above is untouched; failures here never propagate.
+        try:
+            from machina.observability.traces import note_finish as _trace_note_finish
+
+            if parse_command_count(result) > 0:
+                _trace_note_finish(
+                    reservation_id,
+                    prompt_tokens=prompt if known else None,
+                    completion_tokens=completion if known else None,
+                    accounted_tokens=accounted,
+                    failed=failed,
+                    model=model,
+                )
+        except Exception:
+            pass
         return parse_command_count(result) > 0
 
     async def summary(self, session_id: uuid.UUID, agent_id: str) -> dict[str, Any]:

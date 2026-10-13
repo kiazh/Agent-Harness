@@ -663,6 +663,19 @@ class Gateway:
         owned_token = self._turn_tokens.get(sid)
         registered_turn = self._turns.get(sid)
         self._record_stage(turn_id, "turn_started", session_id=sid)
+        # S2 observe-only hook: open the turn span (never gates execution).
+        try:
+            from machina.core.intent import classify_task as _trace_classify
+
+            from machina.observability.traces import start_turn as _trace_start_turn
+
+            try:
+                _trace_task_class = _trace_classify(text)
+            except Exception:
+                _trace_task_class = ""
+            _trace_start_turn(turn_id, session_id=sid, task_class=_trace_task_class)
+        except Exception:
+            pass
 
         def emit(event_type: str, **fields: Any) -> None:
             self._write(
@@ -687,6 +700,22 @@ class Gateway:
             if turn_id in self._turn_finished:
                 return
             self._turn_finished.add(turn_id)
+            # S2 observe-only hook: close the turn span (never gates execution).
+            try:
+                from machina.observability.traces import end_turn as _trace_end_turn
+
+                if cancelled:
+                    _trace_end_turn(turn_id, status="cancelled", stop_reason="cancelled")
+                elif final is None:
+                    _trace_end_turn(turn_id, status="error", stop_reason="error")
+                else:
+                    _trace_end_turn(
+                        turn_id,
+                        status="ok",
+                        stop_reason=str(getattr(final, "outcome", "") or "completed"),
+                    )
+            except Exception:
+                pass
             try:
                 from machina.memory.redaction import redact_secrets as _redact
 
@@ -875,6 +904,13 @@ class Gateway:
                 emit("error", message="session not found")
                 complete()
                 return
+            # S2 observe-only hook: attribute the agent id (never gates execution).
+            try:
+                from machina.observability.traces import set_turn_attributes as _trace_set_attrs
+
+                _trace_set_attrs(turn_id, agent_id=getattr(session, "agent_id", ""))
+            except Exception:
+                pass
             try:
                 from machina.core.agent_factory import build_agent_for_session
             except Exception:

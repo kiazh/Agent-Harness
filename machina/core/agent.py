@@ -45,6 +45,7 @@ from machina.core.prompt import (
 )
 from machina.core.provider import LLMProvider, audit_log, get_provider
 from machina.core.session import Session, session_manager
+from machina.core.session_mode import turn_scope
 from machina.core.usage import usage_store
 from machina.memory.consolidator import MemoryConsolidator
 from machina.memory.retriever import MemoryRetriever
@@ -94,7 +95,10 @@ def instrument_run(func):
         start = time.monotonic()
         with span("agent.run", agent_id=self.agent_id, session_id=str(session_id)):
             try:
-                response = await func(self, session_id, user_message, verbose, **kwargs)
+                # S3.1(a) BEGIN turn-scope (revert: delete this block; diagnostics-free cost seam, no verdict change)
+                with turn_scope():
+                    response = await func(self, session_id, user_message, verbose, **kwargs)
+                # S3.1(a) END turn-scope
             except Exception:
                 metrics.record_error("agent.run")
                 raise
@@ -113,17 +117,21 @@ def instrument_stream(func):
     @wraps(func)
     async def wrapper(self, session_id, user_message, verbose=True, **kwargs):
         start = time.monotonic()
+        # S3.1(a) BEGIN stream turn-scope (revert: delete 3-line block; cost seam only)
+        _s3cm = turn_scope()
+        # S3.1(a) END stream turn-scope
         with span("agent.run_stream", agent_id=self.agent_id, session_id=str(session_id)):
             try:
-                async for event in func(self, session_id, user_message, verbose, **kwargs):
-                    if event.type == "done":
-                        if event.response is not None and not event.response.needs_approval:
-                            await self._complete_growth(event.response, session_id=session_id)
-                        metrics.record_latency("agent.run", (time.monotonic() - start) * 1000)
-                        metrics.increment_counter("agent.run.calls")
-                        session = await session_manager.get(session_id)
-                        await plugin_registry.dispatch("post_agent_run", session, event.response)
-                    yield event
+                with _s3cm:
+                    async for event in func(self, session_id, user_message, verbose, **kwargs):
+                        if event.type == "done":
+                            if event.response is not None and not event.response.needs_approval:
+                                await self._complete_growth(event.response, session_id=session_id)
+                            metrics.record_latency("agent.run", (time.monotonic() - start) * 1000)
+                            metrics.increment_counter("agent.run.calls")
+                            session = await session_manager.get(session_id)
+                            await plugin_registry.dispatch("post_agent_run", session, event.response)
+                        yield event
             except Exception:
                 metrics.record_error("agent.run")
                 raise
@@ -214,6 +222,10 @@ _TOOL_TIMEOUT_DEFAULT = 30.0
 # Independent tool calls in one assistant message run concurrently, capped so a
 # model that emits a large batch cannot spawn unbounded subprocesses / queries.
 _MAX_PARALLEL_TOOLS = 8
+
+
+# S3 wiring helpers live in machina/controller/wiring.py (stdlib-only module level; all machina imports deferred).
+# Each hook below imports them in a guarded try/except so any import failure skips silently and turns proceed.
 
 
 def _is_rate_limit_error(exc: BaseException) -> bool:
@@ -332,6 +344,14 @@ class BaseReActAgent:
 
         Retries once on transient errors (502, 503, 504) with a 1s delay.
         """
+        # S3.1(b) BEGIN section-token log (revert: delete block; diagnostics only)
+        try:
+            from machina.controller import wiring as _s3w
+
+            _s3w.log_section_tokens(messages, tools)
+        except Exception:
+            pass
+        # S3.1(b) END section-token log
         last_exception: Exception | None = None
         for attempt in range(2):  # 1 initial + 1 retry
             try:
@@ -382,6 +402,14 @@ class BaseReActAgent:
         Yields StreamEvent objects as they arrive from the provider.
         Retries once on transient errors (502, 503, 504) with a 1s delay.
         """
+        # S3.1(b) BEGIN stream section-token log (revert: delete block; diagnostics only)
+        try:
+            from machina.controller import wiring as _s3w
+
+            _s3w.log_section_tokens(messages, tools)
+        except Exception:
+            pass
+        # S3.1(b) END stream section-token log
         last_exception: Exception | None = None
         for attempt in range(2):  # 1 initial + 1 retry
             emitted = False
@@ -1535,6 +1563,15 @@ class ReActAgent(BaseReActAgent):
     ) -> AgentResponse:
         """Run the ReAct loop for a user message."""
         audit_log("agent_run_start", session_id=str(session_id), agent_id=self.agent_id)
+        # S3.1(c)+S3.2 BEGIN turn-start advisory (revert: delete block; recorded/logged only, never breaks turn)
+        try:
+            from machina.controller import wiring as _s3w
+
+            _s3w.record_triage(self, user_message)
+            _s3w.log_complexity(self, user_message)
+        except Exception:
+            pass
+        # S3.1(c)+S3.2 END turn-start advisory
         pending_chunks: list[dict[str, Any]] = []
         session, messages = await self._prepare_context(
             session_id,
@@ -1551,6 +1588,9 @@ class ReActAgent(BaseReActAgent):
         tool_calls_made = []
 
         iteration = 0
+        # S3.1(d) BEGIN progress history (revert: delete 2 lines; unbounded loop unchanged)
+        _s3_progress_history: list = []
+        # S3.1(d) END progress history
         while True:
             if verbose:
                 console.print(f"[dim]Iteration {iteration + 1}[/dim]")
@@ -1701,6 +1741,23 @@ class ReActAgent(BaseReActAgent):
                     iterations=iteration + 1,
                     needs_approval=pauses,
                 )
+            # S3.1(d) BEGIN stagnation hook (revert: delete block; stagnation-only, never a cap)
+            try:
+                from machina.controller import wiring as _s3wh
+
+                _s3_progress_history, _s3_stop = _s3wh.check_stagnation(_s3_progress_history, batch)
+                _s3_text = _s3wh.stagnation_content(_s3_stop, len(tool_calls_made)) if _s3_stop is not None else ""
+            except Exception:
+                _s3_stop = None
+                _s3_text = ""
+            if _s3_stop is not None:
+                logger.warning("s3 stagnation stop: %s", _s3_stop)
+                audit_log("agent_stagnation_stop", session_id=str(session_id), reason=_s3_stop)
+                pending_chunks.append({"session_id": session_id, "agent_id": self.agent_id, "chunk_type": "assistant_message", "payload": {"content": f"[stagnation stop] {_s3_stop}"}, "token_count": len(_s3_stop) // 4})
+                await self._flush_pending_chunks(pending_chunks)
+                self._schedule_memory_consolidation(session_id)
+                return AgentResponse(content=_s3_text, outcome="failed", tool_calls=tool_calls_made, tokens_used=total_tokens, iterations=iteration + 1)
+            # S3.1(d) END stagnation hook
             iteration += 1
 
     @instrument_stream
@@ -1722,6 +1779,15 @@ class ReActAgent(BaseReActAgent):
         - type="done": final AgentResponse available in .response
         """
         audit_log("agent_run_stream_start", session_id=str(session_id), agent_id=self.agent_id)
+        # S3.1(c)+S3.2 BEGIN stream turn-start advisory (revert: delete block; recorded/logged only, never breaks turn)
+        try:
+            from machina.controller import wiring as _s3w
+
+            _s3w.record_triage(self, user_message)
+            _s3w.log_complexity(self, user_message)
+        except Exception:
+            pass
+        # S3.1(c)+S3.2 END stream turn-start advisory
         pending_chunks: list[dict[str, Any]] = []
         session, messages = await self._prepare_context(
             session_id,
@@ -1744,6 +1810,9 @@ class ReActAgent(BaseReActAgent):
         tool_calls_made = []
 
         iteration = 0
+        # S3.1(d) BEGIN stream progress history (revert: delete 2 lines; unbounded loop unchanged)
+        _s3_progress_history: list = []
+        # S3.1(d) END stream progress history
         while True:
             if verbose:
                 console.print(f"[dim]Iteration {iteration + 1}[/dim]")
@@ -1954,4 +2023,22 @@ class ReActAgent(BaseReActAgent):
                     ),
                 )
                 return
+            # S3.1(d) BEGIN stream stagnation hook (revert: delete block; stagnation-only, never a cap)
+            try:
+                from machina.controller import wiring as _s3wh
+
+                _s3_progress_history, _s3_stop = _s3wh.check_stagnation(_s3_progress_history, batch)
+                _s3_text = _s3wh.stagnation_content(_s3_stop, len(tool_calls_made)) if _s3_stop is not None else ""
+            except Exception:
+                _s3_stop = None
+                _s3_text = ""
+            if _s3_stop is not None:
+                logger.warning("s3 stagnation stop: %s", _s3_stop)
+                audit_log("agent_stagnation_stop", session_id=str(session_id), reason=_s3_stop)
+                pending_chunks.append({"session_id": session_id, "agent_id": self.agent_id, "chunk_type": "assistant_message", "payload": {"content": f"[stagnation stop] {_s3_stop}"}, "token_count": len(_s3_stop) // 4})
+                await self._flush_pending_chunks(pending_chunks)
+                self._schedule_memory_consolidation(session_id)
+                yield StreamEvent(type="done", response=AgentResponse(content=_s3_text, outcome="failed", tool_calls=tool_calls_made, tokens_used=total_tokens, iterations=iteration + 1))
+                return
+            # S3.1(d) END stream stagnation hook
             iteration += 1

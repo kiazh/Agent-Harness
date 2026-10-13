@@ -220,8 +220,3 @@ def automatic_skill_context(
         if activated is not None:
             activated.append(skill.name)
     return result
-
-
-def matching_skill_catalog(query: str) -> str:
-    """Compatibility wrapper for callers of the original catalog helper."""
-    return automatic_skill_context(query)

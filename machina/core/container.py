@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from machina.core.context import ContextManager, context_manager
 from machina.core.provider import LLMProvider, get_provider
@@ -15,10 +16,31 @@ from machina.memory.retriever import MemoryRetriever
 from machina.memory.scorer import ImportanceScorer
 from machina.memory.store import MemoryStore
 from machina.rag.pipeline import RAGPipeline
-from machina.skills.registry import SkillRegistry, skill_registry
 from machina.tools.base import ToolRegistry, registry
 
+if TYPE_CHECKING:
+    # Service-locator edge note: the skills registry is resolved lazily
+    # (see _resolve_skill_registry) so that importing this module never
+    # executes machina.skills itself at import time.
+    from machina.skills.registry import SkillRegistry
+
 __all__ = ["Container"]
+
+
+def _resolve_skill_registry(*, shared: bool) -> SkillRegistry:
+    """Resolve a skill registry without an import-time edge to ``machina.skills``.
+
+    Imported inside the function (not at module level) so importing
+    ``machina.core.container`` never executes ``machina.skills`` itself;
+    initialization order is unchanged.
+
+    Args:
+        shared: when True return the global singleton (production wiring);
+            when False construct a fresh registry (testing isolation).
+    """
+    from machina.skills.registry import SkillRegistry, skill_registry
+
+    return skill_registry if shared else SkillRegistry()
 
 
 @dataclass
@@ -43,7 +65,9 @@ class Container:
     _session_manager: SessionManager = field(default_factory=SessionManager)
     _context_manager: ContextManager = field(default_factory=ContextManager)
     _tool_registry: ToolRegistry = field(default_factory=ToolRegistry)
-    _skill_registry: SkillRegistry = field(default_factory=SkillRegistry)
+    _skill_registry: SkillRegistry = field(
+        default_factory=lambda: _resolve_skill_registry(shared=False)
+    )
     _usage_store: UsageStore = field(default_factory=UsageStore)
 
     # Memory singletons
@@ -73,7 +97,7 @@ class Container:
             _session_manager=session_manager,
             _context_manager=context_manager,
             _tool_registry=registry,
-            _skill_registry=skill_registry,
+            _skill_registry=_resolve_skill_registry(shared=True),
             _usage_store=usage_store,
         )
 

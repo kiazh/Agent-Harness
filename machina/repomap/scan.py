@@ -6,6 +6,8 @@ import ast
 import os
 from dataclasses import dataclass, field
 
+from machina.repomap.cache import ContentHashCache
+
 DEFAULT_EXCLUDE_DIRS = frozenset(
     {
         ".git",
@@ -75,11 +77,9 @@ def _local_module(root: str, rel: str) -> str:
     return mod.replace(os.sep, ".")
 
 
-def build_repomap(root: str, cache: object | None = None) -> RepoMap:
+def build_repomap(root: str, cache: ContentHashCache | None = None) -> RepoMap:
     """Single bounded pass over ``root``. Repeat runs with the same cache object
     (or same cache file) perform zero file reads: ``files_scanned == 0``."""
-    from machina.repomap.cache import ContentHashCache  # local import: avoid cycle
-
     if cache is None:
         cache = ContentHashCache()
     assert isinstance(cache, ContentHashCache)

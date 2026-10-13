@@ -30,6 +30,7 @@ import threading as _threading
 import uuid
 from contextlib import asynccontextmanager
 
+from machina.core.metrics import metrics
 from machina.observability.diagnostics import record_failure
 
 TURN_TTL_SECONDS = 360
@@ -79,6 +80,21 @@ def _local_owner(session_id: object) -> dict | None:
 def _local_reset_for_tests() -> None:
     with _guard:
         _local_claims.clear()
+
+
+def _note_lock_contention(site: str) -> None:
+    """Observe a stale-mutex release race (control flow unchanged).
+
+    A RuntimeError from lock.release() means another task already released
+    (or stole) the mutex: benign contention that was previously swallowed
+    silently. Semantics are identical — the exception is still absorbed —
+    but each claim/release site now counts its races.
+    """
+    try:
+        metrics.increment_counter("turns.lock_release_contention")
+        metrics.increment_counter(f"turns.lock_release_contention.{site}")
+    except Exception:
+        pass
 
 
 def _session_lock(session_id: uuid.UUID) -> asyncio.Lock:
@@ -205,7 +221,7 @@ async def _acquire_or_steal(
     try:
         lock.release()
     except RuntimeError:
-        pass
+        _note_lock_contention("acquire_steal")
     await lock.acquire()
     return True
 
@@ -242,13 +258,6 @@ async def renew_turn(
         return await _db_renew(session_id, token, ttl_s)
     except Exception:
         return False
-
-
-async def renew_mutation(
-    session_id: uuid.UUID, token: str | None, ttl_s: int = MUTATION_TTL_SECONDS
-) -> bool:
-    """Renew a live mutation claim (AH-AUDIT-013). False on loss/expiry."""
-    return await renew_turn(session_id, token, ttl_s=ttl_s)
 
 
 async def owns_claim(session_id: uuid.UUID, token: str | None) -> bool:
@@ -303,7 +312,7 @@ async def try_begin_turn(
                 try:
                     lock.release()
                 except RuntimeError:
-                    pass
+                    _note_lock_contention("begin_turn_claim_busy")
                 return None
             if not _local_try_claim(session_id, "turn", owner):
                 # A live DB claim is ours, so any local entry is stale
@@ -319,7 +328,7 @@ async def try_begin_turn(
                     try:
                         lock.release()
                     except RuntimeError:
-                        pass
+                        _note_lock_contention("begin_turn_stale_conflict")
                     return None
             return owner
         # DB-less: the local registry IS the claim (either kind blocks).
@@ -327,14 +336,14 @@ async def try_begin_turn(
             try:
                 lock.release()
             except RuntimeError:
-                pass
+                _note_lock_contention("begin_turn_local_busy")
             return None
         return owner
     except Exception:
         try:
             lock.release()
         except RuntimeError:
-            pass
+            _note_lock_contention("begin_turn_error_cleanup")
         _local_release(session_id, owner)
         raise
 
@@ -364,7 +373,7 @@ async def end_turn(session_id: uuid.UUID, token: str | None) -> bool:
                     try:
                         lock.release()
                     except RuntimeError:
-                        pass
+                        _note_lock_contention("end_turn_release")
         return ok
     # DB-less: the token-gated local registry is the claim.
     mine = _local_release(session_id, token)
@@ -374,7 +383,7 @@ async def end_turn(session_id: uuid.UUID, token: str | None) -> bool:
             try:
                 lock.release()
             except RuntimeError:
-                pass
+                _note_lock_contention("end_turn_local_release")
         return True
     return False
 
@@ -423,7 +432,7 @@ async def begin_mutation(session_id: uuid.UUID, *, ttl_s: int = MUTATION_TTL_SEC
                 try:
                     lock.release()
                 except RuntimeError:
-                    pass
+                    _note_lock_contention("begin_mutation_claim_busy")
                 return None
             if not _local_try_claim(session_id, "mutation", owner):
                 stale = _local_owner(session_id)
@@ -436,21 +445,21 @@ async def begin_mutation(session_id: uuid.UUID, *, ttl_s: int = MUTATION_TTL_SEC
                     try:
                         lock.release()
                     except RuntimeError:
-                        pass
+                        _note_lock_contention("begin_mutation_stale_conflict")
                     return None
             return owner
         if not _local_try_claim(session_id, "mutation", owner):
             try:
                 lock.release()
             except RuntimeError:
-                pass
+                _note_lock_contention("begin_mutation_local_busy")
             return None
         return owner
     except Exception:
         try:
             lock.release()
         except RuntimeError:
-            pass
+            _note_lock_contention("begin_mutation_error_cleanup")
         _local_release(session_id, owner)
         raise
 
@@ -470,7 +479,7 @@ async def end_mutation(session_id: uuid.UUID, token: str | None) -> bool:
                 try:
                     lock.release()
                 except RuntimeError:
-                    pass
+                    _note_lock_contention("end_mutation_release")
         return ok
     mine = _local_release(session_id, token)
     if mine:
@@ -479,7 +488,7 @@ async def end_mutation(session_id: uuid.UUID, token: str | None) -> bool:
             try:
                 lock.release()
             except RuntimeError:
-                pass
+                _note_lock_contention("end_mutation_local_release")
         return True
     return False
 

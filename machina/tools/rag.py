@@ -69,13 +69,6 @@ async def get_rag_pipeline() -> RAGPipeline:
     return _rag_pipeline
 
 
-def reset_rag_pipeline_for_tests() -> None:
-    """Drop the shared instance (tests only)."""
-    global _rag_pipeline, _rag_pipeline_cohere
-    _rag_pipeline = None
-    _rag_pipeline_cohere = None
-
-
 @registry.register(
     name="index_document",
     description="Index a document into the RAG pipeline for semantic search. Supports .txt, .md, .py, .js, .ts, .json, .yaml, .csv, .html, and more.",

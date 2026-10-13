@@ -25,6 +25,7 @@ import { AppShell } from "./components/AppShell.ts";
 import { OutputStore, OutputViewer, type OutputRecord } from "./components/OutputViewer.ts";
 import { AnimationCoordinator } from "./design/motion.ts";
 import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features/index.ts";
+import { guardSubmit } from "./commandDispatch.ts";
 import { type AskTextOptions, PROFILE_ID_RE, type OAuthProgressHandle, type OAuthProgressOptions } from "./features/types.ts";
 import type { GatewayClient } from "./gateway.ts";
 import { copyText as copyClipboardText } from "./clipboard.ts";
@@ -708,15 +709,17 @@ export class App implements FeatureHost {
             return;
         }
 		const inFlight = this.current && this.inFlight.has(this.current.id);
-		if (inFlight && !command) {
-			this.transcript.addNotice("The previous turn is still finishing. Try again shortly.", "warning");
-			this.tui.requestRender();
-			return;
-		}
-		if (inFlight && command && CONFLICTING_COMMANDS.has(command.name)) {
-			this.transcript.addNotice("Stop the running reply before changing this session.", "warning");
-			this.tui.requestRender();
-			return;
+		switch (guardSubmit(command, Boolean(inFlight))) {
+			case "turn-busy":
+				this.transcript.addNotice("The previous turn is still finishing. Try again shortly.", "warning");
+				this.tui.requestRender();
+				return;
+			case "stop-first":
+				this.transcript.addNotice("Stop the running reply before changing this session.", "warning");
+				this.tui.requestRender();
+				return;
+			case "allow":
+				break;
 		}
 
         let draft: ReturnType<ImageDraft["prepare"]>;
@@ -1258,17 +1261,3 @@ function message(error: unknown): string {
 function turnIdentity(event: GatewayEvent): string {
 	return event.turnId;
 }
-
-/**
- * Commands that mutate the in-flight session or start new work and must wait
- * for the running turn (AH-031). Everything else (/sessions, /new, /exit,
- * /help, /status, …) stays usable during a turn.
- */
-const CONFLICTING_COMMANDS = new Set([
-	"compress",
-	"delete",
-	"fork",
-	"rename",
-	"goal",
-	"delegate",
-]);

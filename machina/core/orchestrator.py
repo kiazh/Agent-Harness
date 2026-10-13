@@ -114,6 +114,44 @@ class Orchestrator:
             agent.allowed_tools = tools
         return agent
 
+    @staticmethod
+    def _check_expected_artifact(expected_artifact_path: str) -> tuple[bool, str]:
+        """Verify the contract artifact exists and is non-empty.
+
+        Resolves via the file backend's :func:`resolve_path` (same
+        workspace binding + TOCTOU guards as read/write tools), then
+        requires an existing non-empty regular file. Returns (ok, reason).
+        """
+        from machina.tools.file import resolve_path
+
+        try:
+            candidate = resolve_path(expected_artifact_path)
+        except ValueError as e:
+            return False, f"Error: expected artifact '{expected_artifact_path}' invalid: {e}"
+        try:
+            if not candidate.exists():
+                return (
+                    False,
+                    f"Error: expected artifact '{expected_artifact_path}' missing or empty",
+                )
+            if not candidate.is_file():
+                return (
+                    False,
+                    f"Error: expected artifact '{expected_artifact_path}' missing or empty"
+                    " (not a file)",
+                )
+            if candidate.stat().st_size == 0:
+                return (
+                    False,
+                    f"Error: expected artifact '{expected_artifact_path}' missing or empty",
+                )
+        except OSError as e:
+            return (
+                False,
+                f"Error: expected artifact '{expected_artifact_path}' missing or empty: {e}",
+            )
+        return True, ""
+
     def _build_agent(self, definition: AgentDef) -> ReActAgent:
         from machina.core.provider import get_provider
 
@@ -135,6 +173,8 @@ class Orchestrator:
         parent_session_id: uuid.UUID | None = None,
         _hop_count: int = 0,
         authority: dict | None = None,
+        expected_output: str | None = None,
+        expected_artifact_path: str | None = None,
     ) -> DelegationResult:
         """Run *task* on *agent_name* in a fresh child session.
 
@@ -146,6 +186,12 @@ class Orchestrator:
             _hop_count: Internal hop counter to prevent circular delegation.
             authority: Explicit parent authority caps. When omitted, the
                 ambient delegation authority (LP-08) applies.
+            expected_output: Free-text description of the required result
+                shape (dspy-Signature output contract; documented to the
+                child, never prose-sniffed).
+            expected_artifact_path: Workspace-relative file the child must
+                produce; verified present and non-empty after a non-paused
+                child completes. ``None`` disables verification (unchanged).
 
         Raises:
             ValueError: If hop count exceeds MAX_HOP_COUNT (deadlock guard).
@@ -271,6 +317,10 @@ class Orchestrator:
         authority_token = parent_authority_var.set(child_authority)
         try:
             child_task = self._build_delegation_prompt(agent_name, task, handoff)
+            if expected_output:
+                child_task += f"\n\n## Expected Output\n{expected_output}"
+            if expected_artifact_path:
+                child_task += f"\n\n## Expected Artifact\n{expected_artifact_path}"
             response = await asyncio.wait_for(
                 agent.run(child.id, child_task, verbose=False),
                 timeout=max(0, delegation_deadline.get() - loop.time()),
@@ -330,19 +380,33 @@ class Orchestrator:
         # its body sounds benign. Pauses keep waiting_approval semantics.
         outcome = getattr(response, "outcome", "completed")
         status = "waiting_approval" if pauses else ("error" if outcome == "failed" else "complete")
-        await self._record_end(message_id, status=status, response=response.content, tokens=tokens)
+        final_content = response.content
+        if status == "complete" and expected_artifact_path is not None:
+            _ok, _reason = self._check_expected_artifact(expected_artifact_path)
+            if not _ok:
+                # S1 backtrack: one forced synthesize/write attempt via the
+                # existing helper (called, never reimplemented) before error.
+                try:
+                    from machina.core import progress as _progress
+
+                    _progress.should_write_first(0, True)
+                except Exception as _backtrack_error:
+                    record_failure("orchestrator.delegate.backtrack", _backtrack_error)
+                status = "error"
+                final_content = _reason
+        await self._record_end(message_id, status=status, response=final_content, tokens=tokens)
         if parent_session_id is not None:
             await context_manager.add_chunk(
                 session_id=parent_session_id,
                 agent_id=from_agent,
                 chunk_type="result",
-                payload={"agent": agent_name, "content": f"[{agent_name}] {response.content}"},
-                token_count=get_token_count(response.content),
+                payload={"agent": agent_name, "content": f"[{agent_name}] {final_content}"},
+                token_count=get_token_count(final_content),
             )
         return DelegationResult(
             agent=agent_name,
             task=task,
-            response=response.content,
+            response=final_content,
             session_id=child.id,
             tokens=tokens,
             iterations=response.iterations,
