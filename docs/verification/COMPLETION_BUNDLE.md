@@ -132,3 +132,61 @@ sources of truth: `python -m machina.research.benchmark [--json out.json]`. Reco
   emits an explicit protocol block with the two fair axes (same-task delivery metrics; LoCoMo
   memory quality) instead of unmeasurable comparisons. The dataset is never auto-downloaded;
   without it the LoCoMo section reports SKIPPED rather than fabricated numbers.
+
+## 10. Post-program fixes (second pass, 2026-10-13)
+
+Found by running the system live (all numbers observed, not estimated):
+
+- **Web extraction was unusable on real pages** (`a5c4a07`): `web_extract` passed a 20 KB raw-body
+  cap to the shared fetcher while docs pages are 100 KB–1 MB of markup; the live probe on
+  docs.python.org failed with "response exceeds 20000 byte cap". Raw cap now 1 MB (streamed,
+  deadline-enforced), tool text cap 5 KB → 20 KB, and `web_research` indexes 60 KB/page.
+  Live proof: `web_research` fetched docs.python.org + realpython.com, session RAG grew
+  236 → 313 chunks in 19.0 s / 6 tool calls / 50,085 tokens; a follow-up turn quoted the exact
+  saved sentence with its source URL (verified byte-for-byte in the stored chunk).
+- **`search_documents` demanded a raw session UUID** (`253d215`): the live run's research → recall
+  loop broke with `Invalid session_id 'current'`. The tool now defaults to the active session
+  (`current`/`active` aliases); explicit cross-session IDs are still rejected.
+- **Memory consolidation never worked — two stacked bugs** (`8c0e013`):
+  1. a shutdown race (fire-and-forget consolidation task vs `db.close()`, `InterfaceError` on
+     every CLI run), fixed with a bounded drain (`core/background_tasks.py`, called by CLI chat
+     before provider+pool close, gateway close, and runtime shutdown);
+  2. masked by the race — `agent_factory` built `MemoryConsolidator()` with no provider, so
+     extraction always raised "no LLM provider available for memory extraction". The factory now
+     passes the session provider.
+  Live proof (DeepSeek): the first memories ever stored in this checkout's dev DB —
+  "User's favorite color is teal." (preference, 0.5) and "User adopted a beagle named Pixel."
+  (fact, 0.6) — with the consolidation cursor advanced and zero stderr errors.
+- **`web_crawl` (Firecrawl-lite) added** (`2011f3f`): bounded multi-page crawl (≤10 pages,
+  depth ≤3, 110 s wall) over policy-checked links, every fetch through the SSRF-safe pinned
+  transport, per-page indexing into session RAG, redacted-URL dedup. Live proof: the agent
+  crawled docs.python.org/3/library/json.html in `ask` mode and the session indexed 16 chunks
+  from that source. 13 new tests; deferred-import census (680) and file ceilings intact.
+- **MCP connector compatibility fixes** (`4680eb7`, `0f1277a`): dogfooding a real MCP server
+  through `mcp_call` exposed the schema validator rejecting standard JSON-Schema keywords that
+  FastMCP/pydantic emit. A schema-aware census of the actual tool schemas identified the exact
+  gaps: `$schema`/`$id`/`$comment`/`examples` accepted as inert; `propertyNames` and `pattern`
+  enforced (bounded; invalid regex fails closed); `format` explicitly treated as a spec-level
+  annotation. The fail-closed rule still covers genuinely unknown keywords (the "constraints
+  never silently disappear" regression now pins `multipleOf` as its example). Live proof:
+  Machina's agent ran `mcp_list → mcp_describe → mcp_call(firecrawl__firecrawl_crawl, limit=2)`
+  and received `ok: true, status: completed, completed: 2/2` (4 iterations, 4 tool calls).
+- **Self-hosted Firecrawl** (operator setup, not committed): `firecrawl/firecrawl` cloned,
+  prebuilt `ghcr` images (no source builds), stack on :3002 = api + workers + playwright +
+  redis + rabbitmq + nuq-postgres, keyless (`USE_DB_AUTHENTICATION=false`). Live scrape of
+  example.com returned markdown in 1.7 s. Machina side: revisioned `~/.machina/mcp.json`
+  entry (`firecrawl-mcp` over stdio), `FIRECRAWL_API_URL` via env_allowlist (never in JSON),
+  `trusted_read` allowlist for scrape/map/crawl/check_crawl_status.
+- **Host runtime field note** (environment, not repo): colima 0.10.3's images never ran
+  cloud-init on this macOS 26 host — the machine's username is `shadow`, which is a reserved
+  group in Ubuntu (`shadow:x:42`), so cloud-init silently fails to create the guest user and
+  SSH keys are never installed. A lima instance with `--set '.user.name="machina"'`
+  bootstrapped Docker 29.9.0 in ~30 s; compose `cpus: 4.0 → 2.5` for the 3-CPU VM.
+- **Head-to-head harness comparison** (`machina/research/head_to_head.py`; full report in
+  `docs/verification/HEAD_TO_HEAD_2026-10-13.md`): same-model (DeepSeek flash layer) 3-task
+  matrix — **both harnesses 3/3 PASS**, test files hash-intact. OpenCode: median 15.9 s,
+  25.8k tokens (excl. 516k cache reads), 33 tool calls, $0.0075 total. Machina: median 25.5 s,
+  474.8k tokens, 56 tool calls (one heavy cell: task2 at 167 s / 327.8k tokens including
+  terminal-interpreter resolution friction on this host). Six explicit caveats in the report
+  (model mapping best-effort, cache-read asymmetry, ledger-vs-audit deltas, small N, single
+  machine, synthetic scope).
