@@ -51,6 +51,27 @@ async def test_rag_tool_allows_its_own_session(monkeypatch):
         current_agent_id.reset(owner_token)
 
 
+async def test_rag_tool_defaults_to_the_active_session(monkeypatch):
+    """Omitted / 'current' session IDs resolve to the active session, not an error."""
+    session = uuid.uuid4()
+    owner_token = current_agent_id.set("owner")
+    session_token = current_session_id.set(session)
+    monkeypatch.setattr("machina.tools.agents.db.fetchval", AsyncMock(return_value="owner"))
+    pipeline = AsyncMock()
+    pipeline.search.return_value = []
+    monkeypatch.setattr(rag, "get_rag_pipeline", AsyncMock(return_value=pipeline))
+    try:
+        assert "No results" in await rag.search_documents("query")
+        assert "No results" in await rag.search_documents("query", "current")
+        assert "No results" in await rag.search_documents("query", "ACTIVE")
+        assert pipeline.search.await_count == 3
+        for call in pipeline.search.await_args_list:
+            assert call.kwargs["session_id"] == session
+    finally:
+        current_session_id.reset(session_token)
+        current_agent_id.reset(owner_token)
+
+
 @pytest.mark.parametrize("name", [".env", ".env.local", ".npmrc", "id_rsa", ".git/config"])
 def test_rag_loader_rejects_private_files(tmp_path, name):
     path = tmp_path / name

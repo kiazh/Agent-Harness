@@ -139,7 +139,10 @@ async def index_document(
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "Search query"},
-            "session_id": {"type": "string", "description": "Session ID to search within"},
+            "session_id": {
+                "type": "string",
+                "description": "Session ID to search within; omit (or pass 'current') for the active session",
+            },
             "top_k": {
                 "type": "integer",
                 "minimum": 1,
@@ -147,26 +150,32 @@ async def index_document(
                 "description": "Number of results to return (1–10, default: 5)",
             },
         },
-        "required": ["query", "session_id"],
+        "required": ["query"],
     },
 )
 async def search_documents(
     query: str,
-    session_id: str,
+    session_id: str = "",
     top_k: int = 5,
 ) -> str:
     """Search indexed documents using hybrid search.
 
     Combines PostgreSQL full-text (keyword) and dense vector (semantic) search with RRF fusion.
+    ``session_id`` defaults to the caller's active session; ``current`` and
+    ``active`` are accepted aliases. Explicit IDs must belong to the active
+    session — cross-session reads stay rejected.
     """
-    try:
-        sid = uuid.UUID(session_id)
-    except ValueError:
-        raise ValidationError(f"Invalid session_id '{session_id}'") from None
-
     _, owned_session = await active_agent_scope()
-    if sid != owned_session:
-        raise ToolError("document session does not belong to the active agent session")
+    target = str(session_id or "").strip()
+    if target and target.lower() not in ("current", "active"):
+        try:
+            sid = uuid.UUID(target)
+        except ValueError:
+            raise ValidationError(f"Invalid session_id '{session_id}'") from None
+        if sid != owned_session:
+            raise ToolError("document session does not belong to the active agent session")
+    else:
+        sid = owned_session
 
     if type(top_k) is not int or not 1 <= top_k <= 10:
         raise ValidationError("top_k must be an integer between 1 and 10")
