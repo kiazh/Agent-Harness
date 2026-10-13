@@ -224,7 +224,11 @@ class Container:
         SessionManager.reset()
         ContextManager.reset()
         ToolRegistry.reset()
-        SkillRegistry.reset()
+        # Reset the shared registry singleton via the existing lazy resolver
+        # (no new import site: _resolve_skill_registry owns the deferred
+        # skills.registry import). SkillRegistry is TYPE_CHECKING-only at
+        # module level, so a bare SkillRegistry.reset() raises NameError.
+        type(_resolve_skill_registry(shared=True)).reset()
 
         # Replace our references with the fresh global singletons
         from machina.core.context import context_manager as fresh_context_manager

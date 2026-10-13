@@ -16,14 +16,18 @@ Nothing here changes prompts, delegation, ranking, or loop bounds:
   ``machina/core/progress.py``. Stagnation is not an iteration cap: it fires
   only when K consecutive rounds add no new coverage AND no artifact bytes.
 
-Mapping rule (single source of truth, see :func:`target_bytes`):
-only RETRIEVAL-family tools are stagnation-eligible (target=primary
-query/path id, bytes=0 always — reads add no artifact bytes, so progress
-comes only from new-target coverage). Every other tool (writes, file reads,
-terminal, delegate, skill bodies, unknown shapes) defaults conservative
-non-stagnant (bytes=1): re-execution there is often legitimate
-(verify-after-write, polling, retries) and the agent loop must stay
-UNBOUNDED — see tests/test_comprehensive.py::TestReActAgent::test_agent_unbounded_tool_calls
+Mapping rule (single source of truth, see :func:`target_bytes` and
+:data:`_TARGET_KEYS`):
+only RETRIEVAL-family tools are stagnation-eligible (target=joined
+identifying args in ``_TARGET_KEYS`` — e.g. web_extract→url,
+search_files→pattern|path, web_search→query — bytes=0 always; reads add no
+artifact bytes, so progress comes only from new-target coverage). Distinct
+URLs/patterns/queries are therefore NEW coverage and can never trip the
+stagnation stop. Every other tool (writes, file reads, terminal, delegate,
+skill bodies, unknown shapes) defaults conservative non-stagnant (bytes=1):
+re-execution there is often legitimate (verify-after-write, polling,
+retries) and the agent loop must stay UNBOUNDED — see
+tests/test_comprehensive.py::TestReActAgent::test_agent_unbounded_tool_calls
 (12 identical read_file rounds must run to completion). Unknown shapes can
 therefore never force a stop.
 
@@ -55,7 +59,26 @@ _ELIGIBLE = frozenset(
         "list_agents",
     }
 )
-_KEYS = ("query", "path", "command", "task", "question", "text", "target", "file", "name")
+
+# Per-tool target extraction (single source of truth). Distinct calls MUST
+# yield distinct targets or legitimate multi-item loops read as stagnant:
+# web_extract on distinct URLs or search_files for distinct patterns is NEW
+# coverage every round (wave-2 audit regression: a generic key list lacked
+# "url" and let "path" shadow "pattern", stopping real research at ~4 calls).
+# Keys listed for a tool are joined (e.g. "pattern|path"), so a difference in
+# ANY listed key counts as new coverage. Tools with no identifying args
+# present fall back to the tool name: repeated identical status reads
+# (harness_status/list_agents) are genuinely stagnant.
+_TARGET_KEYS: dict[str, tuple[str, ...]] = {
+    "session_recall": ("query",),
+    "recall": ("query",),
+    "search_documents": ("query",),
+    "search_files": ("pattern", "path"),
+    "skill_list": ("query",),
+    "web_search": ("query",),
+    "web_extract": ("url",),
+    "web_research": ("query", "url"),
+}
 
 
 def log_section_tokens(messages: Any, tools: Any) -> None:
@@ -100,14 +123,13 @@ def target_bytes(tool: Any, args: Any, preview: Any, outcome: Any) -> tuple[str,
     try:
         name = str(tool or "unknown")
         argv = args if isinstance(args, dict) else {}
-        if name in _ELIGIBLE:
-            if name == "session_recall_window":
-                return (f"{argv.get('session_id', '')}:{argv.get('chunk_id', '')}" or name, 0)
-            for key in _KEYS:
-                if argv.get(key):
-                    return (str(argv[key])[:500], 0)
-            return (name, 0)
-        return (name, 1)
+        if name not in _ELIGIBLE:
+            return (name, 1)
+        if name == "session_recall_window":
+            return (f"{argv.get('session_id', '')}:{argv.get('chunk_id', '')}" or name, 0)
+        keys = _TARGET_KEYS.get(name, ())
+        parts = [str(argv[k]) for k in keys if argv.get(k)]
+        return ("|".join(parts)[:500] if parts else name, 0)
     except Exception:
         return (str(tool or "unknown"), 1)
 

@@ -219,6 +219,75 @@ def test_stagnation_mapping_rule():
     assert wiring.target_bytes("write_file", {"path": "f"}, "ok", "completed")[1] == 1
 
 
+def test_stagnation_targets_distinct_per_tool_arguments():
+    """Wave-2 audit regression: distinct URLs/patterns must be distinct targets.
+
+    The generic key list lacked "url" and let "path" shadow "pattern", so
+    distinct-URL web_extract and distinct-pattern search_files loops read as
+    stagnant and stopped at K — killing legitimate multi-page research.
+    """
+    from machina.controller import wiring
+
+    a = wiring.target_bytes("web_extract", {"url": "https://a.example"}, "", "completed")
+    b = wiring.target_bytes("web_extract", {"url": "https://b.example"}, "", "completed")
+    assert a != b and a[1] == 0 and b[1] == 0
+    # Identical repeat still collapses (stagnation remains detectable).
+    assert wiring.target_bytes("web_extract", {"url": "https://a.example"}, "", "completed") == a
+
+    p1 = wiring.target_bytes("search_files", {"pattern": "alpha", "path": "."}, "", "completed")
+    p2 = wiring.target_bytes("search_files", {"pattern": "beta", "path": "."}, "", "completed")
+    assert p1 != p2
+    # Same pattern in a different subtree is new coverage too.
+    p3 = wiring.target_bytes("search_files", {"pattern": "alpha", "path": "src"}, "", "completed")
+    assert p3 != p1
+
+
+def test_distinct_url_and_pattern_loops_never_stagnate():
+    """Full mapping fold: 7 rounds of new URLs/patterns must never stop."""
+    from machina.controller import wiring
+
+    hist: list = []
+    for i in range(6):
+        hist, stop = wiring.check_stagnation(
+            hist,
+            [{"tool": "web_extract", "args": {"url": f"https://page-{i}.example"},
+              "result_preview": "", "outcome": "completed"}],
+        )
+        assert stop is None, f"stop fired at round {i}: {stop}"
+    hist, stop = wiring.check_stagnation(
+        hist,
+        [{"tool": "web_extract", "args": {"url": "https://page-6.example"},
+          "result_preview": "", "outcome": "completed"}],
+    )
+    assert stop is None
+
+    hist2: list = []
+    for i in range(6):
+        hist2, stop = wiring.check_stagnation(
+            hist2,
+            [{"tool": "search_files", "args": {"pattern": f"needle{i}", "path": "."},
+              "result_preview": "", "outcome": "completed"}],
+        )
+        assert stop is None, f"search_files stop fired at round {i}: {stop}"
+
+
+def test_identical_url_loop_still_stagnates_at_k():
+    """The fix must not weaken stagnation: identical repeats halt at exactly K."""
+    from machina.controller import wiring
+
+    hist: list = []
+    stop = None
+    for _ in range(8):
+        hist, stop = wiring.check_stagnation(
+            hist,
+            [{"tool": "web_extract", "args": {"url": "https://same.example"},
+              "result_preview": "", "outcome": "completed"}],
+        )
+        if stop:
+            break
+    assert stop is not None
+
+
 def _recall_responseAR(query):
     return LLMResponse(
         content="",
