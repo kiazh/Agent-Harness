@@ -11,9 +11,9 @@ scores on memory/RAG/recall paths:
 
 Polluters share query terms with HIGH raw scores; the real instruction has
 a LOW raw score — naive ranking fails faithfulness, demotion logic rescues
-it. Baselines are recorded in test_eval_baseline_recorded; recall tuning in
-session_recall.py is allowed ONLY on eval improvement with zero regressions
-in test_recall_filters / test_session_recall.
+it. E3 acceptance gates faithfulness >= 0.5 with relevancy pinned at 1.0.
+recall tuning in session_recall.py is allowed ONLY on eval improvement with
+zero regressions in test_recall_filters / test_session_recall.
 """
 
 from __future__ import annotations
@@ -211,17 +211,21 @@ async def test_recall_path_eval(monkeypatch):
     assert _mean(scores, 1) == 1.0  # faithfulness: catalog demotion rescues the instruction
 
 
-async def test_memory_path_eval_baseline(monkeypatch):
+async def test_memory_path_eval(monkeypatch):
     scores = await _eval_memory(monkeypatch)
-    # Baseline (recorded, not gated): keyword overlap ranks polluters first.
+    # E3 acceptance (FM5): authority demotion makes the real instruction
+    # outrank catalog/echo polluters. Relevancy must stay perfect.
     assert _mean(scores, 0) == 1.0
+    assert _mean(scores, 1) >= 0.5
     print(f"\n[eval] memory relevancy={_mean(scores, 0):.2f} faithfulness={_mean(scores, 1):.2f}")
 
 
-async def test_rag_path_eval_baseline():
+async def test_rag_path_eval():
     scores = await _eval_rag()
-    # Baseline (recorded, not gated): pipeline preserves retrieval order.
+    # E3 acceptance (FM5): _finish_search applies the same demotion after
+    # (rank-only) fusion. Relevancy must stay perfect.
     assert _mean(scores, 0) == 1.0
+    assert _mean(scores, 1) >= 0.5
     print(f"\n[eval] rag relevancy={_mean(scores, 0):.2f} faithfulness={_mean(scores, 1):.2f}")
 
 
@@ -237,4 +241,6 @@ async def test_eval_baseline_recorded(monkeypatch):
     print(f"\n[eval-baseline] {report}")
     assert report["recall"] == {"relevancy": 1.0, "faithfulness": 1.0}
     assert report["memory"]["relevancy"] == 1.0
+    assert report["memory"]["faithfulness"] >= 0.5
     assert report["rag"]["relevancy"] == 1.0
+    assert report["rag"]["faithfulness"] >= 0.5

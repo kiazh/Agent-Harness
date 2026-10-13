@@ -51,6 +51,8 @@ def test_uninstall_ask_yes_to_all_deletes_files(tmp_path: Path, monkeypatch) -> 
 
     fake_root = tmp_path / "checkout"
     (fake_root / ".venv").mkdir(parents=True)
+    # FM7 W3: checkout deletion now requires a real source-tree marker.
+    (fake_root / ".git").mkdir()
     fake_env = tmp_path / ".env"
     fake_env.write_text("DATABASE_URL=postgres://x\n", encoding="utf-8")
     home = tmp_path / "home"
@@ -219,6 +221,8 @@ def test_uninstall_full_yes_to_all_removes_everything(tmp_path: Path, monkeypatc
 
     fake_root = tmp_path / "checkout"
     (fake_root / ".venv").mkdir(parents=True)
+    # FM7 W3: checkout deletion now requires a real source-tree marker.
+    (fake_root / ".git").mkdir()
     fake_env = tmp_path / ".env"
     fake_env.write_text(
         "DATABASE_URL=postgresql://u:p@localhost:5432/machina\n", encoding="utf-8"

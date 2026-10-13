@@ -9,13 +9,17 @@ errors and missing usage keep the conservative reservation.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any
 
 from machina.core.assembler import get_token_count
 from machina.core.config import config
 from machina.core.exceptions import DatabaseError, UsageBudgetExceededError, ValidationError
+from machina.core.metrics import metrics
 from machina.db.lazy import LazyDb, parse_command_count
+
+logger = logging.getLogger(__name__)
 
 db = LazyDb()
 
@@ -272,10 +276,11 @@ class UsageStore:
         # S2 observe-only hook: record the exact persisted figures onto the
         # owning turn span. Only rows actually written are attributed.
         # Accounting above is untouched; failures here never propagate.
+        written = parse_command_count(result) > 0
         try:
             from machina.observability.traces import note_finish as _trace_note_finish
 
-            if parse_command_count(result) > 0:
+            if written:
                 _trace_note_finish(
                     reservation_id,
                     prompt_tokens=prompt if known else None,
@@ -286,7 +291,22 @@ class UsageStore:
                 )
         except Exception:
             pass
-        return parse_command_count(result) > 0
+        if not written:
+            # M2-partner: the WHERE status='reserved' guard means another
+            # path (cleanup, duplicate finish, clobber) already closed this
+            # reservation. Surface the lost finish — warning + counter, never
+            # raise, so the boolean contract and conservative accounting hold.
+            logger.warning(
+                "usage finish lost reservation %s: no reserved row "
+                "(already finished, cleaned up, or clobbered)",
+                reservation_id,
+            )
+            try:
+                metrics.increment_counter("usage.finish_lost")
+            except Exception:
+                # Observe-only: a broken metrics sink must never break accounting.
+                pass
+        return written
 
     async def summary(self, session_id: uuid.UUID, agent_id: str) -> dict[str, Any]:
         limits = _limits()

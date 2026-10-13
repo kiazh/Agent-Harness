@@ -25,7 +25,7 @@ from machina.cli import output
 from machina.cli.growth import app as growth_app
 from machina.cli.launcher import launch_ui
 from machina.cli.output import console
-from machina.core.config import config
+from machina.core.config import SECRET_KEYS, config
 from machina.core.context import context_manager
 from machina.core.session import session_manager
 from machina.db.connection import db
@@ -392,7 +392,7 @@ def sessions_search(
             sessions = await session_manager.search(query, limit=limit)
 
             if not sessions:
-                console.print(f"[yellow]No sessions found for '{query}'[/yellow]")
+                console.print(f"[yellow]No sessions found for '{escape(query)}'[/yellow]")
                 return
 
             output.sessions_table(sessions)
@@ -519,7 +519,8 @@ def delete(
 
             if not force:
                 console.print(
-                    f"[yellow]About to delete session {session_id} ({session.title or 'untitled'})[/yellow]"
+                    f"[yellow]About to delete session {session_id} "
+                    f"({escape(session.title or 'untitled')})[/yellow]"
                 )
                 console.print("[yellow]This will permanently remove all context chunks.[/yellow]")
                 confirm = typer.confirm("Are you sure?")
@@ -799,13 +800,15 @@ def hub(
             raise typer.Exit(1)
         results = hub.search(query)
         if not results:
-            console.print(f"[yellow]No skills found for '{query}'[/yellow]")
+            console.print(f"[yellow]No skills found for '{escape(query)}'[/yellow]")
             return
-        console.print(f"[bold]Search results for '{query}' ({len(results)}):[/bold]")
+        console.print(f"[bold]Search results for '{escape(query)}' ({len(results)}):[/bold]")
         for s in results:
-            console.print(f"\n  [cyan]{s['name']}[/cyan] — {s.get('description', '')[:80]}")
             console.print(
-                f"    Author: {s.get('author', 'unknown')} | Tags: {', '.join(s.get('tags', []))}"
+                f"\n  [cyan]{escape(str(s.get('name', '')))}[/cyan] — {escape(str(s.get('description', ''))[:80])}"
+            )
+            console.print(
+                f"    Author: {escape(str(s.get('author', 'unknown')))} | Tags: {escape(', '.join(str(t) for t in s.get('tags', [])))}"
             )
 
     elif action == "publish":
@@ -1168,7 +1171,7 @@ def serve(
         output.error(f"Failed to start server: {e}")
         raise typer.Exit(1) from None
 
-    console.print(f"[green]Server ready at {url}[/green]")
+    console.print(f"[green]Starting server at {url}[/green]")
     console.print("[dim]Press Ctrl+C to stop[/dim]")
     console.print()
 
@@ -1200,13 +1203,19 @@ def config_set(
     persist: bool = typer.Option(False, "--persist", "-p", help="Save to config file"),
 ):
     """Set a configuration value."""
+    if key.lower() in SECRET_KEYS:
+        console.print(f"[red]'{escape(key)}' is a secret; secrets never go into config.[/red]")
+        console.print(
+            "[dim]Use `machina setup` or the UI's /keys command to store it in .env.[/dim]"
+        )
+        raise typer.Exit(1)
     if key not in config.to_dict():
-        console.print(f"[red]Unknown config key: {key}[/red]")
+        console.print(f"[red]Unknown config key: {escape(key)}[/red]")
         console.print(f"[dim]Available keys: {', '.join(config.to_dict().keys())}[/dim]")
         raise typer.Exit(1)
 
     config.set(key, value, persist=persist)
-    console.print(f"[green]Set {key} = {value}[/green]")
+    console.print(f"[green]Set {key} = {escape(str(value))}[/green]")
     if persist:
         console.print("[dim]Config saved to file.[/dim]")
 
@@ -1255,10 +1264,10 @@ def memory_search(
             results = await retriever.retrieve(query=query)
 
             if not results:
-                console.print(f"[yellow]No memories found for '{query}'[/yellow]")
+                console.print(f"[yellow]No memories found for '{escape(query)}'[/yellow]")
                 return
 
-            console.print(f"[bold]Search results for '{query}'[/bold]")
+            console.print(f"[bold]Search results for '{escape(query)}'[/bold]")
             for i, rm in enumerate(results, 1):
                 m = rm.memory
                 console.print(
@@ -1492,24 +1501,26 @@ def user_profile_cmd(
 
             console.print("[bold]User Profile[/bold]")
             console.print(f"  ID: {profile.id}")
-            console.print(f"  User ID: {profile.user_id}")
-            console.print(f"  Display Name: {profile.display_name or '(none)'}")
+            console.print(f"  User ID: {escape(profile.user_id)}")
+            console.print(
+                f"  Display Name: {escape(profile.display_name) if profile.display_name else '(none)'}"
+            )
             console.print(f"  Interactions: {profile.interaction_count}")
             console.print(f"  Created: {profile.created_at.strftime('%Y-%m-%d %H:%M')}")
 
             if profile.preferences:
                 console.print("\n  [bold]Preferences:[/bold]")
                 for key, value in profile.preferences.items():
-                    console.print(f"    {key}: {value}")
+                    console.print(f"    {escape(str(key))}: {escape(str(value))}")
 
             if profile.topics:
                 console.print("\n  [bold]Top Topics:[/bold]")
                 for topic, count in profile.get_top_topics():
-                    console.print(f"    {topic}: {count}")
+                    console.print(f"    {escape(str(topic))}: {count}")
 
             if profile.last_topics:
                 console.print("\n  [bold]Recent Topics:[/bold]")
-                console.print(f"    {', '.join(profile.last_topics[:5])}")
+                console.print(f"    {escape(', '.join(profile.last_topics[:5]))}")
         finally:
             await db.close()
 
@@ -1531,13 +1542,15 @@ def user_profile_update(
 
             profile = await user_profile_store.get_by_user_id(user_id)
             if not profile:
-                console.print(f"[red]User profile not found for '{user_id}'[/red]")
+                console.print(f"[red]User profile not found for '{escape(user_id)}'[/red]")
                 raise typer.Exit(1)
 
             profile.set_preference(key, value)
             updated = await user_profile_store.update_preferences(profile.id, profile.preferences)
             if updated:
-                console.print(f"[green]Updated {key} = {value} for {user_id}[/green]")
+                console.print(
+                    f"[green]Updated {escape(key)} = {escape(value)} for {escape(user_id)}[/green]"
+                )
             else:
                 console.print("[red]Failed to update profile[/red]")
                 raise typer.Exit(1)
@@ -1588,6 +1601,19 @@ def user_profile_list(
 def _uninstall_app_root() -> Path:
     """Checkout root this ``machina`` binary was installed from."""
     return Path(__file__).resolve().parent.parent.parent
+
+
+def _is_source_checkout(path: Path) -> bool:
+    """True when *path* is a source tree, not an install directory.
+
+    Only a tree carrying VCS metadata or the project manifest may be called
+    a checkout and deleted wholesale; a pip ``site-packages`` directory must
+    never be offered as one.
+    """
+    try:
+        return (path / ".git").exists() or (path / "pyproject.toml").is_file()
+    except OSError:
+        return False
 
 
 def _filter_path_entries(path_value: str, remove: list[str]) -> str:
@@ -1749,7 +1775,9 @@ def uninstall():
 
     Asks one yes/no question per item (PATH registration, virtualenv, .env,
     local config, docker container, Postgres database, Homebrew postgres,
-    checkout) and removes everything you confirm.
+    checkout) and removes everything you confirm. The checkout question only
+    appears for a real source tree (``.git`` or ``pyproject.toml``); a pip
+    install directory is never deleted wholesale.
     """
     app_root = _uninstall_app_root()
     venv_dir = app_root / ".venv"
@@ -1802,7 +1830,16 @@ def uninstall():
         if has_brew_pg
         else False
     )
-    delete_checkout = typer.confirm(f"Delete the whole checkout ({app_root})?", default=False)
+    # Checkout deletion is only offered for a real source tree; site-packages
+    # (or any other install directory) is never a "checkout" to remove.
+    delete_checkout = False
+    if _is_source_checkout(app_root):
+        delete_checkout = typer.confirm(f"Delete the whole checkout ({app_root})?", default=False)
+    else:
+        output.muted(
+            f"Checkout deletion skipped: {app_root} is not a source checkout "
+            "(no .git or pyproject.toml)."
+        )
     if not remove_path and not any(
         (
             remove_venv,
@@ -1916,17 +1953,22 @@ def uninstall():
     # 4. Checkout last — the running `machina` binary lives inside it, so on
     # Windows the delete can fail with a file lock. Report leftovers + manual cmd.
     if delete_checkout:
-        try:
-            shutil.rmtree(app_root, ignore_errors=False)
-            output.status_line("Checkout", f"deleted {app_root}", "success")
-        except Exception as e:  # noqa: BLE001 — locked running exe on Windows
-            output.error(f"Could not delete checkout {app_root}: {e}")
-            if os.name == "nt":
-                console.print(
-                    f'[dim]Close this terminal, then run: Remove-Item -Recurse -Force "{app_root}"[/dim]'
-                )
-            else:
-                console.print(f'[dim]Then run: rm -rf "{app_root}"[/dim]')
+        if not _is_source_checkout(app_root):
+            output.error(
+                f"Refusing to delete {app_root}: no .git or pyproject.toml (not a source checkout)."
+            )
+        else:
+            try:
+                shutil.rmtree(app_root, ignore_errors=False)
+                output.status_line("Checkout", f"deleted {app_root}", "success")
+            except Exception as e:  # noqa: BLE001 — locked running exe on Windows
+                output.error(f"Could not delete checkout {app_root}: {e}")
+                if os.name == "nt":
+                    console.print(
+                        f'[dim]Close this terminal, then run: Remove-Item -Recurse -Force "{app_root}"[/dim]'
+                    )
+                else:
+                    console.print(f'[dim]Then run: rm -rf "{app_root}"[/dim]')
 
     console.print()
     output.success("Uninstall complete. Open a new terminal for the PATH change to take effect.")

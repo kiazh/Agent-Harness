@@ -259,7 +259,16 @@ class RecursiveCharacterTextSplitter:
         return chunks
 
     def _apply_overlap(self, chunks: list[Chunk]) -> list[Chunk]:
-        """Apply overlap between consecutive chunks."""
+        """Apply overlap between consecutive chunks.
+
+        The overlap window is cut at the LAST matching separator (max idx),
+        so the emitted prefix is a clean suffix of the previous chunk
+        starting at the boundary nearest the end of the window. Applying
+        overlap never increases the chunk count: when the merged text would
+        exceed the hard limit, the overlap is trimmed to fit and the current
+        chunk is preserved whole — the old overflow branch emitted duplicate
+        fragments of the previous chunk instead of delivering overlap.
+        """
         if len(chunks) <= 1:
             return chunks
 
@@ -273,43 +282,73 @@ class RecursiveCharacterTextSplitter:
 
             # Tail slice of previous chunk as overlap (handles prev <= overlap).
             overlap_text = prev_text[max(0, len(prev_text) - overlap_chars) :]
-            # Find the last good break point so overlap starts at a boundary.
-            for sep in ["\n\n", "\n", ". ", " "]:
+            # Cut the overlap window at the LAST matching separator (max idx)
+            # so the overlap is a boundary-aligned suffix of the previous
+            # chunk rather than whatever separator comes first in priority.
+            best_idx = -1
+            for sep in ("\n\n", "\n", ". ", " "):
                 idx = overlap_text.rfind(sep)
-                if idx >= 0:
-                    # Keep the separator at the start of the overlap.
-                    overlap_text = overlap_text[idx:]
-                    break
-            merged = overlap_text + current_text if overlap_text else current_text
+                if idx > best_idx:
+                    best_idx = idx
+            if best_idx >= 0:
+                # Keep the separator at the start of the overlap.
+                overlap_text = overlap_text[best_idx:]
 
-            # Post-merge size check: split if merged exceeds chunk_size
-            # Preserve metadata boundaries: copy source metadata with overlap offset.
             base_meta = dict(chunks[i].metadata)
             base_meta["overlap_offset"] = max(0, len(prev_text) - len(overlap_text))
-            if len(merged) > max_chars:
-                # Split the merged text into pieces that fit within max_chars
-                for j in range(0, len(merged), max_chars):
-                    piece = merged[j : j + max_chars]
-                    if piece:
-                        piece_meta = dict(base_meta)
-                        piece_meta["overlap_piece"] = j // max_chars
-                        result.append(
-                            Chunk(
-                                text=piece,
-                                metadata=piece_meta,
-                                token_count=self._estimate_tokens(piece),
-                            )
+
+            if len(current_text) >= max_chars:
+                # Current chunk already fills the hard limit: emit it with a
+                # boundary-aligned hard split. No overlap is appended (there
+                # is no room) and nothing is duplicated.
+                for piece_idx, piece in enumerate(self._hard_split(current_text, max_chars)):
+                    piece_meta = dict(base_meta)
+                    piece_meta["overlap_piece"] = piece_idx
+                    result.append(
+                        Chunk(
+                            text=piece,
+                            metadata=piece_meta,
+                            token_count=self._estimate_tokens(piece),
                         )
-            else:
-                result.append(
-                    Chunk(
-                        text=merged,
-                        metadata=dict(base_meta),
-                        token_count=self._estimate_tokens(merged),
                     )
+                continue
+
+            # Trim the overlap (never the current text) so the merged chunk
+            # respects the hard limit without duplicating content.
+            room = max_chars - len(current_text)
+            if len(overlap_text) > room:
+                overlap_text = overlap_text[-room:] if room > 0 else ""
+            merged = overlap_text + current_text if overlap_text else current_text
+            result.append(
+                Chunk(
+                    text=merged,
+                    metadata=dict(base_meta),
+                    token_count=self._estimate_tokens(merged),
                 )
+            )
 
         return result
+
+    @staticmethod
+    def _hard_split(text: str, max_chars: int) -> list[str]:
+        """Split *text* into pieces ≤ max_chars, preferring separator cuts."""
+        pieces: list[str] = []
+        start = 0
+        while start < len(text):
+            end = min(start + max_chars, len(text))
+            if end < len(text):
+                cut = -1
+                cut_len = 0
+                for sep in ("\n\n", "\n", ". ", " "):
+                    idx = text.rfind(sep, start + 1, end)
+                    if idx > cut:
+                        cut = idx
+                        cut_len = len(sep)
+                if cut > start:
+                    end = cut + cut_len
+            pieces.append(text[start:end])
+            start = end
+        return [piece for piece in pieces if piece]
 
     def _estimate_tokens(self, text: str) -> int:
         """Estimate token count (1 token ≈ 4 chars)."""

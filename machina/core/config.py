@@ -150,7 +150,6 @@ DEFAULTS: dict[str, Any] = {
     "memory_consolidation_enabled": True,
     "auto_compaction_enabled": True,
     "eviction_max_tokens": 0,
-    "compaction_check_enabled": True,
 }
 
 # Map config keys to their legacy environment variable names
@@ -337,9 +336,13 @@ class Config:
     memory_consolidation_enabled: bool = True
     auto_compaction_enabled: bool = True
     eviction_max_tokens: int = 0
-    compaction_check_enabled: bool = True
+    # n4: compaction_check_enabled was dead config surface (no production
+    # reader); it was removed rather than kept as a misleading toggle.
 
-    # Per-session overrides (not persisted to file)
+    # Per-session overrides (not persisted to file).
+    # n4 note: no production code writes this dict — tests exercise the
+    # precedence path by setting it directly. Wiring a per-session setter
+    # would need a real caller; until then it stays as documented surface.
     _session_overrides: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def get(self, key: str) -> Any:

@@ -145,9 +145,12 @@ class MemoryApprovalGate:
                 redactions,
             )
 
-        # Step 2: Create pending entry
+        # Step 2: Create pending entry. An empty embedding is not a usable
+        # vector ("[]" would be stored as an invalid vector literal) — treat
+        # it exactly like None (N13).
         pending_id = uuid.uuid4()
         now = datetime.now(UTC)
+        embedding_str = embedding_to_str(embedding) if embedding else None
 
         await db.execute(
             """
@@ -169,7 +172,7 @@ class MemoryApprovalGate:
             now,
             explicitly_important,
             base_strength,
-            embedding_to_str(embedding) if embedding is not None else None,
+            embedding_str,
         )
 
         pending = PendingMemory(

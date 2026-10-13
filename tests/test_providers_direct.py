@@ -371,6 +371,8 @@ async def test_anthropic_complete_sends_thinking_when_effort_set():
 class _MockStreamResponse:
     def __init__(self, lines):
         self._lines = lines
+        self.status_code = 200
+        self.headers = {}
 
     def raise_for_status(self):
         pass

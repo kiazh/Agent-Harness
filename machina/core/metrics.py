@@ -223,11 +223,30 @@ class MetricsCollector:
         with self._lock:
             return self._errors.get(operation, 0)
 
+    @staticmethod
+    def _error_family(operation: str) -> tuple[str, str]:
+        """Both spellings of one operation family.
+
+        Callers record call *totals* under ``<op>.calls`` (record_llm_call,
+        record_db_call, timed) or under the bare ``<op>`` (increment_counter),
+        while errors are recorded under the bare ``<op>``. Resolving both
+        spellings at read time keeps totals and errors in the same key family
+        without changing any caller's key contract.
+        """
+        base = operation.removesuffix(".calls")
+        return base, f"{base}.calls"
+
     def get_error_rate(self, operation: str) -> float:
-        """Get error rate for an operation (0.0 to 1.0)."""
+        """Get error rate for an operation (0.0 to 1.0).
+
+        Totals and errors are aggregated across the operation's key family
+        (``<op>`` and ``<op>.calls``), so a rate for a caller-recorded
+        operation reflects real errors instead of a bare-counter divide-by-0.
+        """
+        base, calls_key = self._error_family(operation)
         with self._lock:
-            total = self._counters.get(operation, 0)
-            errors = self._errors.get(operation, 0)
+            total = self._counters.get(base, 0) + self._counters.get(calls_key, 0)
+            errors = self._errors.get(base, 0) + self._errors.get(calls_key, 0)
         return errors / total if total > 0 else 0.0
 
     def get_token_usage(self, session_id: str) -> dict[str, int]:

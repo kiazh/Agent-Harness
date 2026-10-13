@@ -9,7 +9,9 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator, Callable
+from contextlib import nullcontext
 from contextvars import ContextVar
+from datetime import UTC, datetime
 from functools import wraps
 from typing import Any
 
@@ -24,6 +26,7 @@ from machina.core.exceptions import (
     SessionNotFoundError,
     UsageBudgetExceededError,
 )
+from machina.core.images import IMAGE_TOKEN_RESERVE, validate_images
 from machina.core.metrics import metrics
 from machina.core.models import AgentResponse, LLMResponse, StreamEvent, ToolDefinition
 from machina.core.prompt import (
@@ -243,6 +246,20 @@ def _is_transient_error(exc: BaseException) -> bool:
     return status in (502, 503, 504)
 
 
+def _tool_outcome(item: dict[str, Any]) -> str:
+    """Truthful per-call outcome label: a needs-approval pause is ``"paused"``."""
+    preview = str(item.get("result") or "")
+    if item.get("_needs_approval") or item.get("_needs_approvals"):
+        return "paused"
+    if item.get("_denied") or preview.startswith("Permission denied:"):
+        return "denied"
+    if item.get("_outcome_unknown"):
+        return "outcome_unknown"
+    if item.get("_failed") or preview.startswith("Error:"):
+        return "failed"
+    return "completed"
+
+
 class BaseReActAgent:
     """Base class for ReAct agents — Template Method pattern.
 
@@ -322,15 +339,14 @@ class BaseReActAgent:
             return []
 
         try:
-            results = await self.rag_pipeline.search(
-                query=query,
-                session_id=session_id,
-                top_k=5,
-                rerank=True,
+            results = await asyncio.wait_for(
+                self.rag_pipeline.search(query=query, session_id=session_id, top_k=5, rerank=True),
+                timeout=15,
             )
             self._last_rag_mode = "ready" if results else "empty-index"
             return [(r.chunk, r.score) for r in results]
         except Exception as e:
+            self._last_rag_mode = "unavailable"
             logger.warning("RAG retrieval failed: %s", e)
             return []
 
@@ -537,8 +553,6 @@ class BaseReActAgent:
         Raises:
             ValueError: If the session is not found.
         """
-        from machina.core.images import IMAGE_TOKEN_RESERVE, validate_images
-
         images = validate_images(images or [])
         submitted_visual_tokens = len(images) * IMAGE_TOKEN_RESERVE
         payload = {"content": user_message}
@@ -687,9 +701,8 @@ class BaseReActAgent:
         retrieved_chunks.extend(rag_chunks)
 
         try:
-            retrieved_chunks.extend(
-                await context_manager.search_archive_text(session_id, user_message)
-            )
+            _archive_hits = context_manager.search_archive_text(session_id, user_message)
+            retrieved_chunks.extend(await asyncio.wait_for(_archive_hits, timeout=5))
         except Exception as e:
             logger.warning("Archived context retrieval failed: %s", e)
 
@@ -794,6 +807,12 @@ class BaseReActAgent:
         instead of being inserted immediately. The caller is responsible for
         flushing them via ``context_manager.add_chunks_batch``.
         """
+        # S3.3 BEGIN tool-trace hook (revert: delete 4-line block; observe-only)
+        try:
+            from machina.controller import wiring as _s3trace
+        except Exception:
+            _s3trace = None
+        # S3.3 END tool-trace hook
         # ── Phase A: parse and validate the whole batch ─────────────────────
         planned: list[dict[str, Any]] = []
         for idx, tc in enumerate(response.tool_calls):
@@ -1111,7 +1130,10 @@ class BaseReActAgent:
 
             async def _bounded(item: dict[str, Any]) -> dict[str, Any]:
                 async with semaphore:
-                    await _run_one(item)
+                    with _s3trace.trace_tool_call(item) if _s3trace else nullcontext() as _trace:
+                        await _run_one(item)
+                        if _trace is not None:
+                            _trace.finish(_tool_outcome(item))
                 return item
 
             tasks = [asyncio.create_task(_bounded(item)) for item in runnable]
@@ -1149,6 +1171,8 @@ class BaseReActAgent:
                     for _pause_c in _pauses_c:
                         if not isinstance(_pause_c, dict) or not _pause_c.get("request_id"):
                             continue
+                        if _s3trace is not None:
+                            _s3trace.record_approval_pause(_pause_c)
                         yield StreamEvent(
                             type="needs_approval",
                             content=str(_pause_c.get("request_id", "")),
@@ -1287,13 +1311,7 @@ class BaseReActAgent:
                 "tool": tool_name,
                 "args": tool_args,
                 "result_preview": result_str[:200],
-                "outcome": "denied"
-                if item.get("_denied") or result_str.startswith("Permission denied:")
-                else "outcome_unknown"
-                if item.get("_outcome_unknown")
-                else "failed"
-                if item.get("_failed") or result_str.startswith("Error:")
-                else "completed",
+                "outcome": _tool_outcome(item),
             }
             # AH-AUDIT-022: typed pause marker travels with the entry so
             # schedulers/transports never parse prose to detect pauses.
@@ -1400,8 +1418,6 @@ class BaseReActAgent:
         of being skipped or duplicated.
         """
         try:
-            from datetime import UTC
-
             session = await session_manager.get(session_id)
             cursor = (session.state or {}).get("mem_consolidated_up_to") if session else None
             since = None
@@ -1412,14 +1428,10 @@ class BaseReActAgent:
                         text = (
                             since_time[:-1] + "+00:00" if since_time.endswith("Z") else since_time
                         )
-                        from datetime import datetime as _dt
-
-                        since_time = _dt.fromisoformat(text)
+                        since_time = datetime.fromisoformat(text)
                         if since_time.tzinfo is None:
                             since_time = since_time.replace(tzinfo=UTC)
-                    import uuid as _uuid
-
-                    since = (since_time, _uuid.UUID(str(cursor["id"])))
+                    since = (since_time, uuid.UUID(str(cursor["id"])))
                 except Exception:
                     since = None
             try:
@@ -1746,15 +1758,15 @@ class ReActAgent(BaseReActAgent):
                 from machina.controller import wiring as _s3wh
 
                 _s3_progress_history, _s3_stop = _s3wh.check_stagnation(_s3_progress_history, batch)
-                _s3_text = _s3wh.stagnation_content(_s3_stop, len(tool_calls_made)) if _s3_stop is not None else ""
+                _s3_text = _s3wh.stagnation_content(_s3_stop, len(tool_calls_made), tool_calls_made) if _s3_stop is not None else ""
             except Exception:
                 _s3_stop = None
                 _s3_text = ""
             if _s3_stop is not None:
                 logger.warning("s3 stagnation stop: %s", _s3_stop)
                 audit_log("agent_stagnation_stop", session_id=str(session_id), reason=_s3_stop)
-                pending_chunks.append({"session_id": session_id, "agent_id": self.agent_id, "chunk_type": "assistant_message", "payload": {"content": f"[stagnation stop] {_s3_stop}"}, "token_count": len(_s3_stop) // 4})
                 await self._flush_pending_chunks(pending_chunks)
+                await _s3wh.record_stagnation_state(session_manager, session_id, _s3_stop, _s3_text, tool_calls_made)
                 self._schedule_memory_consolidation(session_id)
                 return AgentResponse(content=_s3_text, outcome="failed", tool_calls=tool_calls_made, tokens_used=total_tokens, iterations=iteration + 1)
             # S3.1(d) END stagnation hook
@@ -2028,15 +2040,15 @@ class ReActAgent(BaseReActAgent):
                 from machina.controller import wiring as _s3wh
 
                 _s3_progress_history, _s3_stop = _s3wh.check_stagnation(_s3_progress_history, batch)
-                _s3_text = _s3wh.stagnation_content(_s3_stop, len(tool_calls_made)) if _s3_stop is not None else ""
+                _s3_text = _s3wh.stagnation_content(_s3_stop, len(tool_calls_made), tool_calls_made) if _s3_stop is not None else ""
             except Exception:
                 _s3_stop = None
                 _s3_text = ""
             if _s3_stop is not None:
                 logger.warning("s3 stagnation stop: %s", _s3_stop)
                 audit_log("agent_stagnation_stop", session_id=str(session_id), reason=_s3_stop)
-                pending_chunks.append({"session_id": session_id, "agent_id": self.agent_id, "chunk_type": "assistant_message", "payload": {"content": f"[stagnation stop] {_s3_stop}"}, "token_count": len(_s3_stop) // 4})
                 await self._flush_pending_chunks(pending_chunks)
+                await _s3wh.record_stagnation_state(session_manager, session_id, _s3_stop, _s3_text, tool_calls_made)
                 self._schedule_memory_consolidation(session_id)
                 yield StreamEvent(type="done", response=AgentResponse(content=_s3_text, outcome="failed", tool_calls=tool_calls_made, tokens_used=total_tokens, iterations=iteration + 1))
                 return

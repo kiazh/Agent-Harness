@@ -72,6 +72,13 @@ _PATTERNS: list[RedactionPattern] = [
         pattern=re.compile(r"sk-[a-zA-Z0-9]{20,}"),
         replacement="[REDACTED_OPENAI_KEY]",
     ),
+    # OpenAI project/service-account/admin keys (dash-separated segments are
+    # not covered by the classic sk- pattern).
+    RedactionPattern(
+        name="openai_project_key",
+        pattern=re.compile(r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}"),
+        replacement="[REDACTED_OPENAI_KEY]",
+    ),
     RedactionPattern(
         name="anthropic_api_key",
         pattern=re.compile(r"sk-ant-[a-zA-Z0-9\-_]{20,}"),
@@ -88,6 +95,18 @@ _PATTERNS: list[RedactionPattern] = [
         name="openrouter_api_key",
         pattern=re.compile(r"sk-or-[a-zA-Z0-9_-]{20,}"),
         replacement="[REDACTED_OPENROUTER_KEY]",
+    ),
+    # Google API keys
+    RedactionPattern(
+        name="google_api_key",
+        pattern=re.compile(r"AIza[0-9A-Za-z_-]{20,}"),
+        replacement="[REDACTED_GOOGLE_KEY]",
+    ),
+    # Stripe live secret keys
+    RedactionPattern(
+        name="stripe_live_key",
+        pattern=re.compile(r"sk_live_[A-Za-z0-9]{20,}"),
+        replacement="[REDACTED_STRIPE_KEY]",
     ),
     # Bearer tokens
     RedactionPattern(
@@ -209,6 +228,17 @@ _PATTERNS: list[RedactionPattern] = [
         ),
         replacement=r"\1=[REDACTED_SECRET]",
     ),
+    # Quoted key: value assignments whose identifier ends in "key"
+    # (api_key, openai_key, access-key, "service_key": ...). The unquoted
+    # pattern above misses quoted values containing non-alphanumerics.
+    RedactionPattern(
+        name="generic_quoted_key",
+        pattern=re.compile(
+            r"\b((?:[A-Za-z0-9]+[_.-])?key)['\"]?\s*[=:]\s*(['\"])([^'\"\n]{8,})\2",
+            re.IGNORECASE,
+        ),
+        replacement=r"\1=[REDACTED_KEY]",
+    ),
 ]
 
 
@@ -251,6 +281,25 @@ class SecretRedactor:
                     return m.group(0)
 
                 new_text = rp.pattern.sub(_cc_repl, redacted)
+                if new_text != redacted:
+                    redactions.append(rp.name)
+                    redacted = new_text
+                continue
+            if rp.name == "aws_secret_key_bare":
+                # Tightened heuristic (RF7-F1): a bare 40-char token must
+                # look like a generated AWS-style secret — mixed lower,
+                # upper, and digits. Plain 40-char hex digests (commit
+                # hashes) and single-case runs are left alone.
+                def _aws_repl(m: re.Match[str]) -> str:
+                    token = m.group(0)
+                    classes = (
+                        any(c.islower() for c in token),
+                        any(c.isupper() for c in token),
+                        any(c.isdigit() for c in token),
+                    )
+                    return rp.replacement if all(classes) else token
+
+                new_text = rp.pattern.sub(_aws_repl, redacted)
                 if new_text != redacted:
                     redactions.append(rp.name)
                     redacted = new_text
@@ -372,8 +421,11 @@ MAX_BUFFERED_PEM = 32 * 1024
 # like whole-string recognition does.
 _PARTIAL_RES: tuple[re.Pattern[str], ...] = (
     re.compile(r"sk-[A-Za-z0-9]{0,200}$"),
+    re.compile(r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{0,200}$"),
     re.compile(r"sk-ant-[A-Za-z0-9\-_]{0,200}$"),
     re.compile(r"sk-or-[A-Za-z0-9\-_]{0,200}$"),
+    re.compile(r"sk_live_[A-Za-z0-9]{0,200}$"),
+    re.compile(r"AIza[0-9A-Za-z_-]{0,200}$"),
     re.compile(r"ghp_[A-Za-z0-9]{0,36}$"),
     re.compile(r"gho_[A-Za-z0-9]{0,36}$"),
     re.compile(r"ghs_[A-Za-z0-9]{0,36}$"),
@@ -386,6 +438,17 @@ _PARTIAL_RES: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"(?:secret|token|api_key|apikey|access_key|cohere_api_key|aws_secret_access_key|aws_secret_key)"
         r"\s*[=:]\s*['\"]?[A-Za-z0-9\-_/+=]{0,300}$",
+        re.IGNORECASE,
+    ),
+    # Quoted key: value assignments (RF7-F1): hold from the identifier so a
+    # value split across deltas is never emitted partially. Two stages: the
+    # assignment head (key / key" / key: / key: ) and the quoted value tail.
+    re.compile(
+        r"\b(?:[A-Za-z0-9]+[_.-])?key['\"]?\s*[=:]?\s*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:[A-Za-z0-9]+[_.-])?key['\"]?\s*[=:]\s*['\"][^'\"\n]{0,300}$",
         re.IGNORECASE,
     ),
     re.compile(r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^@\s]{0,300}$"),
@@ -431,8 +494,13 @@ _UNANCHORED: tuple[re.Pattern[str], ...] = tuple(
 # into a bare secret. Ordinary words flush immediately.
 _LEADS = (
     "sk-",
+    "sk-proj-",
+    "sk-svcacct-",
+    "sk-admin-",
+    "sk_live_",
     "sk-ant-",
     "sk-or-",
+    "aiza",
     "ghp_",
     "gho_",
     "ghs_",

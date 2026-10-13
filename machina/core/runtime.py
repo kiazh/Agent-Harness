@@ -139,13 +139,39 @@ class RuntimeServices:
             return self.status()
 
     async def refresh(self) -> dict[str, Any]:
-        """Recompute capabilities after configuration changes."""
+        """Recompute capabilities after configuration changes.
+
+        m7: also the reconnect point. startup() may have latched "unavailable"
+        while the database was down; a refresh retries the connection (and
+        the runtime schema upgrade) instead of staying degraded forever.
+        """
         async with self._lock:
             report = dict(getattr(self, "_last_report", {}))
             try:
                 from machina.db.connection import db
 
-                report["db"] = "ready" if db.connected else "unavailable"
+                if not db.connected:
+                    try:
+                        await db.connect()
+                    except Exception as error:
+                        logger.warning(
+                            "Runtime refresh could not connect to the database (%s)",
+                            type(error).__name__,
+                        )
+                if db.connected:
+                    try:
+                        await db.initialize_runtime_schema()
+                        report["db"] = "ready"
+                        report["personality_growth"] = "ready"
+                    except Exception as error:
+                        logger.warning(
+                            "Runtime schema upgrade failed (%s)", type(error).__name__
+                        )
+                        report["db"] = "unavailable: runtime schema upgrade failed"
+                        report["personality_growth"] = "unavailable"
+                        await db.close()
+                else:
+                    report["db"] = "unavailable"
             except Exception:
                 report["db"] = "unavailable"
             report.update(await asyncio.to_thread(_detect_providers))

@@ -18,6 +18,9 @@ export interface TurnSummary {
 }
 
 export class Transcript {
+	/** Hard bound on retained transcript blocks; older blocks are dropped. */
+	private static readonly MAX_BLOCKS = 2000;
+
 	private readonly container: Container;
 	/** Shown while waiting for the model; removed as soon as output arrives. */
 	private readonly spinner: Component & { start(): void; stop(): void; setMessage?(message: string): void };
@@ -31,6 +34,8 @@ export class Transcript {
 	private assistantSub: AnimationSubscription | undefined;
 	/** Terminal delivery guard: a repeated completion for this turn is inert. */
 	private lastCompletedTurn: string | undefined;
+	/** One-time disclosure that the oldest scrollback was dropped. */
+	private trimNotice: Notice | undefined;
 
 	constructor(
 		container: Container,
@@ -48,7 +53,7 @@ export class Transcript {
 	}
 
 	addComponent(component: Component): void {
-		this.container.addChild(component);
+		this.retain(component);
 	}
 
 	pauseForApproval(): void {
@@ -56,15 +61,44 @@ export class Transcript {
 	}
 
 	addUser(text: string): void {
-		this.container.addChild(new UserTurn(text));
+		this.retain(new UserTurn(text));
 	}
 
 	addNotice(text: string, kind: NoticeKind = "info"): void {
-		this.container.addChild(new Notice(text, kind));
+		this.retain(new Notice(text, kind));
 	}
 
 	addMarkdown(text: string): void {
-		this.container.addChild(new AssistantTurn(text));
+		this.retain(new AssistantTurn(text));
+	}
+
+	/**
+	 * Append one retained block, then enforce the scrollback bound. Trimming
+	 * never touches the spinner, the active assistant block, or the single
+	 * trim disclosure; the oldest other block is dropped first.
+	 */
+	private retain(component: Component): void {
+		this.container.addChild(component);
+		this.enforceScrollbackCap();
+	}
+
+	private enforceScrollbackCap(): void {
+		const children = this.container.children;
+		if (children.length <= Transcript.MAX_BLOCKS) return;
+		if (!this.trimNotice) {
+			this.trimNotice = new Notice(
+				"Scrollback trimmed — earlier output was removed to bound memory.",
+				"warning",
+			);
+		}
+		if (!children.includes(this.trimNotice)) children.unshift(this.trimNotice);
+		while (children.length > Transcript.MAX_BLOCKS) {
+			const index = children.findIndex(
+				(child) => child !== this.spinner && child !== this.trimNotice && child !== this.current,
+			);
+			if (index === -1) break;
+			children.splice(index, 1);
+		}
 	}
 
 	clear(): void {
@@ -74,6 +108,8 @@ export class Transcript {
 		this.container.clear();
 		this.current = undefined;
 		this.displayed = "";
+		this.wroteText = false;
+		this.trimNotice = undefined;
 		this.tools.clear();
 		this.lastCompletedTurn = undefined;
 	}
@@ -103,13 +139,13 @@ export class Transcript {
 	replay(history: HistoryEntry[]): void {
 		for (const entry of history) {
 			if (entry.role === "user") this.addUser(entry.content);
-			else if (entry.role === "assistant") this.container.addChild(new AssistantTurn(entry.content));
+			else if (entry.role === "assistant") this.retain(new AssistantTurn(entry.content));
 			else if (entry.role === "tool") {
 				// Historical text carries no typed outcome metadata: neutral
 				// recorded output, never an inferred success or failure.
 				const card = new ToolTurn(entry.tool ?? "tool", {}, this.activity);
 				card.settle({ text: entry.content, backendTruncated: false, locallyTruncated: false }, "historical");
-				this.container.addChild(card);
+				this.retain(card);
 			} else this.addNotice(entry.content);
 		}
 	}
@@ -130,7 +166,7 @@ export class Transcript {
 			if (!this.current) {
 				this.current = new AssistantTurn("", this.activity);
 				this.current.setStreaming(true);
-				this.container.addChild(this.current);
+				this.retain(this.current);
 				this.assistantSub = this.coordinator?.subscribe("assistant:stream", ACTIVITY_INTERVAL_MS);
 			}
 			this.current.append(event.text);
@@ -143,7 +179,7 @@ export class Transcript {
 			this.current = undefined; // text after the tool starts a new block
 			const card = new ToolTurn(event.name, event.args, this.activity);
 			this.tools.set(event.id, card);
-			this.container.addChild(card);
+			this.retain(card);
 			if (this.coordinator) {
 				this.toolSubs.get(event.id)?.stop();
 				this.toolSubs.set(event.id, this.coordinator.subscribe(`tool:${event.id}`, ACTIVITY_INTERVAL_MS));
@@ -211,7 +247,7 @@ export class Transcript {
 			// the current text block to the canonical content so discarded
 			// raw deltas are never exposed alongside it.
 			if (!this.wroteText && event.text) {
-				this.container.addChild(new AssistantTurn(event.text));
+				this.retain(new AssistantTurn(event.text));
 				this.displayed = event.text;
 			} else if (event.text && event.text !== this.displayed) {
 				if (event.text.startsWith(this.displayed)) {
@@ -224,7 +260,7 @@ export class Transcript {
 					this.current.setText(event.text);
 					this.displayed = event.text;
 				} else {
-					this.container.addChild(new AssistantTurn(event.text));
+					this.retain(new AssistantTurn(event.text));
 					this.displayed = event.text;
 				}
 			}

@@ -110,7 +110,10 @@ class _RpcGateway:
         # assignment below — never across ``handle_line`` — so concurrent RPCs
         # are not serialized behind one long-lived handler.
         self._id_lock = self._lock
-        self._gateway = Gateway(self._capture, owns_db=False)
+        # W8: explicit embedded-gateway signal — never inherit the stdio
+        # MACHINA_GATEWAY_TOKEN. The HTTP boundary already enforces API-key
+        # auth; inheriting the token would 401 every /api/v1/rpc call.
+        self._gateway = Gateway(self._capture, owns_db=False, inherit_env_token=False)
         self._gateway._db_ready = db.connected
 
     def _capture(self, frame: dict[str, Any]) -> None:

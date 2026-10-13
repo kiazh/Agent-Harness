@@ -1,6 +1,10 @@
 """Memory retriever — hybrid search with re-ranking.
 
 Pipeline: dense vector search + sparse keyword search → merge → re-rank → top-K
+
+Ranking contract (FM5 W1/W3): relevance is primary. Keyword matches are
+scored as a *fraction* of query keywords, catalog/echo content is demoted
+(never dropped), and recency/importance only break ties.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from typing import Any
 from machina.core.provider import LLMProvider
 from machina.core.usage import usage_store
 from machina.db.lazy import LazyDb
+from machina.memory.authority import CATALOG_DEMOTION_FACTOR, authority_tier
 from machina.memory.models import MemoryEntry, RetrievedMemory
 from machina.memory.persona import EmotionTopology, PersonaMemoryStore
 from machina.memory.store import MemoryStore, memory_store
@@ -35,6 +40,15 @@ SPARSE_WEIGHT = 0.3
 
 # Minimum similarity threshold for dense results
 MIN_SIMILARITY_THRESHOLD = 0.3
+
+# Bound keyword extraction so the sparse SQL stays bounded (mirrors the
+# 16-term cap in machina.core.text_search.build_or_tsquery).
+MAX_KEYWORDS = 16
+
+# Candidate over-fetch factor: the sparse query selects by match count before
+# the SQL LIMIT and leaves headroom for Python-side authority demotion.
+SPARSE_OVERFETCH = 8
+SPARSE_FETCH_CEILING = 256
 
 
 class MemoryRetriever:
@@ -109,6 +123,11 @@ class MemoryRetriever:
     ) -> list[RetrievedMemory]:
         """Retrieve relevant memories for a query.
 
+        Ranking (FM5 W1/W3): candidates are ordered by demoted relevance
+        first (keyword match fraction / dense similarity), with catalog and
+        recall-echo content demoted by ``CATALOG_DEMOTION_FACTOR``. Recency
+        and importance only break ties; they never outrank relevance.
+
         Args:
             query: The search query text.
             agent_id: Filter by agent ID.
@@ -116,6 +135,10 @@ class MemoryRetriever:
             date_range: Optional (start, end) datetime tuple.
             query_embedding: Pre-computed embedding for the query. If None,
                 only sparse keyword search is performed.
+            session_id: Re-rank call attribution only. It is passed to the
+                LLM re-ranker for usage accounting and does **not** scope or
+                filter retrieval — memories are agent-scoped, not
+                session-scoped. (N1)
             emotion: Explicit emotional state. When None, the configured
                 ``persona_default_emotion`` is used.
             persona_id: Persona filter for persona memories. Defaults to
@@ -310,6 +333,11 @@ class MemoryRetriever:
 
         Uses to_tsvector/plainto_tsquery for efficient indexed text search
         instead of ILIKE which causes full table scans.
+
+        Candidate selection (FM5 W2): rows are ordered by keyword match count
+        (relevance) *before* the LIMIT, not by importance. A bounded
+        over-fetch leaves headroom for Python-side authority demotion, so a
+        high-importance catalog can never pre-truncate a real instruction.
         """
         # Extract keywords from query (simple tokenization)
         keywords = self._extract_keywords(query)
@@ -335,10 +363,13 @@ class MemoryRetriever:
         # as well: queries that are a prefix of a longer indexed token
         # (e.g. a session tag with a random suffix) must still hit.
         like_conditions = []
+        like_param_idxs = []
         for kw in keywords:
             like_conditions.append(f"content ILIKE ${param_idx}")
+            like_param_idxs.append(param_idx)
             params.append(f"%{kw}%")
             param_idx += 1
+        fts_param_idx = param_idx
         conditions.append(
             f"(to_tsvector('english', content) @@ plainto_tsquery('english', ${param_idx})"
             f" OR ({' OR '.join(like_conditions)}))"
@@ -348,21 +379,34 @@ class MemoryRetriever:
 
         where_clause = " AND ".join(conditions) if conditions else "TRUE"
 
-        params.append(limit)
+        # Relevance expression: number of query keywords present. This exact
+        # per-keyword count orders candidates before importance/tiebreaks.
+        match_expr = " + ".join(
+            f"(CASE WHEN content ILIKE ${idx} THEN 1 ELSE 0 END)" for idx in like_param_idxs
+        )
+        fetch_limit = min(max(limit * SPARSE_OVERFETCH, 32), SPARSE_FETCH_CEILING)
+        params.append(fetch_limit)
         rows = await db.fetch(
             f"""
             SELECT id, session_id, agent_id, content, category, importance,
                    created_at, last_accessed, access_count, embedding,
-                   explicitly_important, base_strength
+                   explicitly_important, base_strength,
+                   ({match_expr}) AS keyword_matches
             FROM memories
             WHERE {where_clause}
-            ORDER BY importance DESC, created_at DESC
+            ORDER BY keyword_matches DESC,
+                     ts_rank(
+                         to_tsvector('english', content),
+                         plainto_tsquery('english', ${fts_param_idx})
+                     ) DESC,
+                     importance DESC, created_at DESC
             LIMIT ${param_idx}
             """,  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
             *params,
         )
 
-        # Score based on keyword match count
+        # Score is the normalized keyword match fraction, recomputed in Python
+        # so mocked stores and DB rows rank identically.
         results: list[tuple[MemoryEntry, float]] = []
         for row in rows:
             entry = self.store._row_to_entry(row)
@@ -379,10 +423,13 @@ class MemoryRetriever:
     ) -> list[RetrievedMemory]:
         """Merge dense and sparse results, deduplicating by memory ID.
 
-        Combined score = DENSE_WEIGHT * dense_score + SPARSE_WEIGHT * sparse_score,
-        multiplied by the Ebbinghaus forgetting strength (retrieval-weight
-        mode: high-importance / recently-accessed memories rank higher;
-        decayed memories rank lower but remain retrievable until evicted).
+        Combined relevance = DENSE_WEIGHT * dense_score + SPARSE_WEIGHT *
+        sparse_score (both normalized to [0, 1]). Catalog/recall-echo content
+        is then demoted by ``CATALOG_DEMOTION_FACTOR`` — never dropped.
+
+        Sort order (FM5 W1/W3): demoted relevance first, then authority tier,
+        then recency, then importance, then Ebbinghaus strength. Recency and
+        importance are tiebreakers only; they never outrank relevance.
         """
         from machina.memory.forgetting import ForgettingModel
 
@@ -390,22 +437,14 @@ class MemoryRetriever:
         merged: dict[uuid.UUID, RetrievedMemory] = {}
 
         for entry, score in dense_results:
-            try:
-                weight = _forgetting.current_strength(entry)
-            except Exception:
-                weight = 1.0
             merged[entry.id] = RetrievedMemory(
                 memory=entry,
-                score=score * DENSE_WEIGHT * max(0.05, min(weight, 2.0)),
+                score=max(0.0, min(1.0, float(score))) * DENSE_WEIGHT,
                 source="dense",
             )
 
         for entry, score in sparse_results:
-            try:
-                weight = _forgetting.current_strength(entry)
-            except Exception:
-                weight = 1.0
-            sparse_score = score * SPARSE_WEIGHT * max(0.05, min(weight, 2.0))
+            sparse_score = max(0.0, min(1.0, float(score))) * SPARSE_WEIGHT
             if entry.id in merged:
                 # Memory found in both — combine scores
                 existing = merged[entry.id]
@@ -418,8 +457,33 @@ class MemoryRetriever:
                     source="sparse",
                 )
 
-        # Sort by score descending
-        return sorted(merged.values(), key=lambda rm: rm.score, reverse=True)
+        # Authority demotion: catalog/echo content keeps its evidence but
+        # cannot occupy the top slots over a real instruction.
+        for rm in merged.values():
+            if authority_tier(rm.memory.content) != 0:
+                rm.score *= CATALOG_DEMOTION_FACTOR
+
+        def _rank_key(rm: RetrievedMemory) -> tuple:
+            memory = rm.memory
+            reference = memory.last_accessed or memory.created_at
+            try:
+                timestamp = reference.timestamp() if reference else 0.0
+            except Exception:
+                timestamp = 0.0
+            try:
+                strength = _forgetting.current_strength(memory)
+            except Exception:
+                strength = 1.0
+            return (
+                -rm.score,
+                authority_tier(memory.content),
+                -timestamp,
+                -memory.importance,
+                -strength,
+            )
+
+        # Sort by rank key (relevance primary; recency/importance tiebreak)
+        return sorted(merged.values(), key=_rank_key)
 
     async def _rerank(
         self,
@@ -614,7 +678,7 @@ Return ONLY the JSON array, no other text."""
             "their",
         }
 
-        # Tokenize and filter
+        # Tokenize and filter (bounded: see MAX_KEYWORDS)
         tokens = re.findall(r"\b[a-zA-Z]+\b", query.lower())
         keywords = [t for t in tokens if len(t) > 2 and t not in stop_words]
-        return keywords
+        return keywords[:MAX_KEYWORDS]

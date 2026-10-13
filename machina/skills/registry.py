@@ -1,11 +1,26 @@
-"""Skill system — registry, SKILL.md parser, trigger matching, telemetry, curator, hub."""
+"""Skill system — registry, SKILL.md parser, trigger matching, telemetry, curator, hub.
+
+Injection scanning is BEST-EFFORT. :meth:`SkillParser._scan_injection`
+normalizes common evasion encodings before matching the known injection
+patterns: NFKC folding (fullwidth/compatibility forms), invisible characters
+(zero-width joiners/spaces, soft hyphen, word joiner, BOM), homoglyph
+lookalikes (Cyrillic/Greek), letter-spacing collapse, leetspeak digit/symbol
+substitution, whitespace and split-word evasion, and unlabeled base64 blobs.
+Novel encodings, paraphrase, and semantically equivalent attacks are not
+guaranteed to be caught — this filter is one layer of defense, never a
+security boundary. Skill installs still require human review elsewhere.
+"""
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
 import re
+import threading
+import unicodedata
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,12 +31,123 @@ import yaml
 from machina.observability.diagnostics import record_failure
 from machina.skills.ports import SkillSource
 
+try:  # POSIX advisory locks for cross-process telemetry merges.
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX platforms
+    fcntl = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 # Defaults are anchored to the project root, not the current directory, so the
 # same skills are found no matter where `machina` is launched. Override with env vars.
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _LEGACY_INSTALL_BUILD_RE = re.compile(r"[a-z0-9_-]+\.install-[0-9]+-[0-9a-f]{8}")
+
+# ─── best-effort injection-scan normalization ───────────────────────────────
+# The scanner below is deliberately normalization-based, not semantic. These
+# helpers collapse the encodings that defeat a raw regex: invisible separators,
+# compatibility/fullwidth forms, homoglyphs, letter spacing, leetspeak, split
+# words, and base64-wrapped payloads. None of it makes the scan complete.
+
+_INVISIBLE_TRANSLATION = dict.fromkeys(
+    map(ord, "\u200b\u200c\u200d\u200e\u200f\u00ad\u2060\ufeff"), None
+)
+
+# Common Cyrillic/Greek lookalikes that NFKC leaves untouched. Applied after
+# casefold(), so only the lowercase forms are needed.
+_HOMOGLYPH_FOLD = str.maketrans(
+    {
+        # Cyrillic
+        "а": "a",
+        "в": "b",
+        "е": "e",
+        "к": "k",
+        "м": "m",
+        "н": "h",
+        "о": "o",
+        "р": "p",
+        "с": "c",
+        "т": "t",
+        "у": "y",
+        "х": "x",
+        "і": "i",
+        "ј": "j",
+        "ѕ": "s",
+        "һ": "h",
+        "ԛ": "q",
+        "ԝ": "w",
+        # Greek
+        "α": "a",
+        "ε": "e",
+        "ι": "i",
+        "κ": "k",
+        "ν": "v",
+        "ο": "o",
+        "ρ": "p",
+        "σ": "s",
+        "τ": "t",
+        "υ": "u",
+        "χ": "x",
+        "μ": "m",
+        "ω": "w",
+    }
+)
+
+_LEET_FOLD = str.maketrans(
+    {"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s"}
+)
+
+# Runs of single alphanumerics separated by whitespace/punctuation, e.g.
+# "i g n o r e" or "i-g-n-o-r-e". The joined text is scan-only.
+_SPACED_RUN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Za-z0-9][\s._\-]+){2,}[A-Za-z0-9](?![A-Za-z0-9])"
+)
+_SPACED_SEPARATOR_RE = re.compile(r"[\s._\-]+")
+_WHITESPACE_RE = re.compile(r"\s+")
+_BASE64_BLOB_RE = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
+
+
+def _fold_for_scan(text: str) -> str:
+    """Normalize compatibility forms, invisibles, homoglyphs, and leetspeak."""
+    folded = unicodedata.normalize("NFKC", text)
+    folded = folded.translate(_INVISIBLE_TRANSLATION)
+    folded = folded.translate(_HOMOGLYPH_FOLD)
+    folded = folded.translate(_LEET_FOLD)
+    return folded.casefold()
+
+
+def _collapse_spaced_letters(text: str) -> str:
+    """Join runs of letter-spaced characters ("i g n o r e" -> "ignore")."""
+    return _SPACED_RUN_RE.sub(lambda match: _SPACED_SEPARATOR_RE.sub("", match.group(0)), text)
+
+
+def _decoded_base64_payloads(text: str) -> list[str]:
+    """Decode unlabeled base64 blobs that yield printable ASCII text.
+
+    Only blobs longer than 40 characters that are valid base64 and decode to
+    printable ASCII are returned; everything else (keys, hashes, binaries) is
+    ignored.
+    """
+    payloads: list[str] = []
+    for match in _BASE64_BLOB_RE.finditer(text):
+        blob = match.group(0)
+        if len(blob) <= 40:
+            continue
+        candidate = blob + "=" * (-len(blob) % 4)
+        try:
+            data = base64.b64decode(candidate, validate=True)
+        except ValueError:
+            continue
+        if len(data) < 8:
+            continue
+        try:
+            payload = data.decode("ascii")
+        except UnicodeDecodeError:
+            continue
+        if not all(char.isprintable() or char in "\r\n\t" for char in payload):
+            continue
+        payloads.append(payload)
+    return payloads
 
 
 def default_skills_dir() -> Path:
@@ -86,47 +212,93 @@ class Skill:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+# Prompt-injection pattern sources. The compact variants replace `\s+` with
+# `\s*` and are matched against whitespace-stripped text so split words
+# ("ig nore", "ignoreprevious") are still caught.
+_INJECTION_PATTERN_SOURCES = (
+    r"ignore\s+(all\s+)?previous\s+instructions",
+    r"disregard\s+(all\s+)?prior\s+instructions",
+    r"forget\s+(all\s+)?previous\s+instructions",
+    r"system\s*:\s*(you\s+are|ignore|disregard|forget|override)",
+    r"<\s*system\s*>",
+    r"reveal\s+(your\s+|the\s+)?(system|developer|hidden|secret)\s*(prompt|message|instruction)",
+    r"bypass\s+(safety|safe|guardrail|filter|restriction)",
+    r"jailbreak",
+    r"exfiltrat\w*",
+    r"system\s+prompt",
+    r"developer\s+message",
+    r"decode\s+base64|base64\s+decode|from\s*base64",
+    r"override\s+(safety|guardrail|instruction|system)",
+)
+_INJECTION_PATTERNS = tuple(
+    re.compile(source, re.IGNORECASE) for source in _INJECTION_PATTERN_SOURCES
+)
+_INJECTION_COMPACT_PATTERNS = tuple(
+    re.compile(source.replace(r"\s+", r"\s*"), re.IGNORECASE)
+    for source in _INJECTION_PATTERN_SOURCES
+)
+
+
 class SkillParser:
     """Parse SKILL.md files with YAML frontmatter."""
 
     # Maximum allowed content size (1 MB) to prevent memory exhaustion
     MAX_CONTENT_SIZE = 1_000_000
 
-    # Patterns that may indicate prompt injection attempts
-    # These are targeted to reduce false positives on legitimate content
-    _PROMPT_INJECTION_PATTERNS = [
-        re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.IGNORECASE),
-        re.compile(r"disregard\s+(all\s+)?prior\s+instructions", re.IGNORECASE),
-        re.compile(r"forget\s+(all\s+)?previous\s+instructions", re.IGNORECASE),
-        re.compile(r"system\s*:\s*(you\s+are|ignore|disregard|forget|override)", re.IGNORECASE),
-        re.compile(r"<\s*system\s*>", re.IGNORECASE),
-        re.compile(
-            r"reveal\s+(your\s+|the\s+)?(system|developer|hidden|secret)\s*(prompt|message|instruction)",
-            re.IGNORECASE,
-        ),
-        re.compile(r"bypass\s+(safety|safe|guardrail|filter|restriction)", re.IGNORECASE),
-        re.compile(r"jailbreak", re.IGNORECASE),
-        re.compile(r"exfiltrat\w*", re.IGNORECASE),
-        re.compile(r"system\s+prompt", re.IGNORECASE),
-        re.compile(r"developer\s+message", re.IGNORECASE),
-        re.compile(r"decode\s+base64|base64\s+decode|from\s*base64", re.IGNORECASE),
-        re.compile(r"override\s+(safety|guardrail|instruction|system)", re.IGNORECASE),
-    ]
+    # Patterns that may indicate prompt injection attempts. These are targeted
+    # to reduce false positives on legitimate content, and the scan below is
+    # documented as BEST-EFFORT: normalization catches common evasions, but it
+    # cannot prove content is safe.
+    _PROMPT_INJECTION_PATTERNS = _INJECTION_PATTERNS
 
     @staticmethod
     def _scan_injection(text: str) -> None:
-        for pattern in SkillParser._PROMPT_INJECTION_PATTERNS:
-            if pattern.search(text or ""):
-                raise ValueError(
-                    f"Skill content contains potential prompt injection pattern "
-                    f"(matched: {pattern.pattern[:30]}...)"
-                )
+        """Best-effort scan for known injection patterns in common encodings.
+
+        The raw text and normalization variants (NFKC, invisibles stripped,
+        homoglyph/leet folded, letter-spacing collapsed, whitespace removed,
+        and decoded base64 payloads) are matched against the known patterns.
+        Evasions outside this set, and paraphrase, are not guaranteed to be
+        caught; callers must not treat a pass as proof of safety.
+        """
+        original = text or ""
+        variants = [original]
+        folded = _fold_for_scan(original)
+        if folded != original:
+            variants.append(folded)
+        collapsed = _collapse_spaced_letters(folded)
+        if collapsed != folded:
+            variants.append(collapsed)
+        variants.extend(
+            compact
+            for candidate in list(variants)
+            if (compact := _WHITESPACE_RE.sub("", candidate)) and compact != candidate
+        )
+        for decoded in _decoded_base64_payloads(original):
+            variants.append(decoded)
+            variants.append(_fold_for_scan(decoded))
+        for candidate in variants:
+            compact = _WHITESPACE_RE.sub("", candidate)
+            for pattern in _INJECTION_PATTERNS:
+                if pattern.search(candidate):
+                    raise ValueError(
+                        f"Skill content contains potential prompt injection pattern "
+                        f"(matched: {pattern.pattern[:30]}...)"
+                    )
+            for pattern in _INJECTION_COMPACT_PATTERNS:
+                if pattern.search(compact):
+                    raise ValueError(
+                        f"Skill content contains potential prompt injection pattern "
+                        f"(matched: {pattern.pattern[:30]}...)"
+                    )
 
     @staticmethod
     def _validate_metadata(name: Any, description: Any, triggers: Any) -> None:
         """Reject malformed metadata before search or prompt catalog use."""
-        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", name):
-            raise ValueError("skill name must be a short alphanumeric slug")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{2,79}", name):
+            raise ValueError(
+                "skill name must be a short alphanumeric slug of at least 3 characters"
+            )
         if not isinstance(description, str) or len(description) > 1000:
             raise ValueError("skill description must be a string of at most 1000 characters")
         if (
@@ -181,11 +353,7 @@ class SkillParser:
             metadata: dict[str, Any] = yaml.safe_load(yaml_text) or {}
         except yaml.YAMLError as exc:
             # Graceful fallback: log and use defaults
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "Failed to parse YAML frontmatter in %s: %s", path, exc
-            )
+            logger.warning("Failed to parse YAML frontmatter in %s: %s", path, exc)
             metadata = {}
 
         if not isinstance(metadata, dict):
@@ -247,6 +415,11 @@ class SkillRegistry(SkillSource):
         # reload semantics (out-of-band edits are still picked up) without
         # paying for a full parse on every call.
         self._signature_cache: tuple | None = None
+        # Merge-on-write bookkeeping: counters this instance has already
+        # accounted for on disk. New increments are the delta over the
+        # baseline, so a concurrent instance's writes are never overwritten.
+        self._telemetry_baseline: dict[str, tuple[int, int]] = {}
+        self._telemetry_lock = threading.Lock()
 
     def _invalidate(self) -> None:
         """Mark the parsed skill cache stale so the next load_all() re-reads."""
@@ -287,35 +460,115 @@ class SkillRegistry(SkillSource):
             if not isinstance(data, dict):
                 return
             for name, telemetry in data.items():
-                if name in self._skills:
+                if name in self._skills and isinstance(telemetry, dict):
                     skill = self._skills[name]
                     skill.usage_count = telemetry.get("usage_count", 0)
                     skill.view_count = telemetry.get("view_count", 0)
                     last_activity = telemetry.get("last_activity_at")
                     if last_activity:
                         skill.last_activity_at = datetime.fromisoformat(last_activity)
+                    self._telemetry_baseline[name] = (skill.usage_count, skill.view_count)
         except (json.JSONDecodeError, OSError, ValueError):
             logger.warning("Failed to load telemetry", exc_info=True)
 
+    @contextmanager
+    def _telemetry_file_lock(self):
+        """Serialize telemetry writers in-process and across processes."""
+        lock_file = self._telemetry_file.with_name(self._telemetry_file.name + ".lock")
+        with self._telemetry_lock:
+            try:
+                descriptor = os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o600)
+            except OSError:
+                descriptor = None
+            try:
+                if descriptor is not None and fcntl is not None:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX)
+                yield
+            finally:
+                if descriptor is not None:
+                    try:
+                        if fcntl is not None:
+                            fcntl.flock(descriptor, fcntl.LOCK_UN)
+                    finally:
+                        os.close(descriptor)
+
+    @staticmethod
+    def _nonneg(value: Any) -> int:
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+    @staticmethod
+    def _latest_activity(existing: Any, current: datetime | None) -> str | None:
+        previous: datetime | None = None
+        if isinstance(existing, str):
+            try:
+                previous = datetime.fromisoformat(existing)
+            except ValueError:
+                previous = None
+        if previous is not None and previous.tzinfo is None:
+            previous = previous.replace(tzinfo=UTC)
+        if current is not None and current.tzinfo is None:
+            current = current.replace(tzinfo=UTC)
+        if current is None:
+            current = previous
+        elif previous is not None and previous > current:
+            current = previous
+        return current.isoformat() if isinstance(current, datetime) else None
+
     def _save_telemetry(self) -> None:
-        """Persist telemetry data to JSON file."""
-        telemetry: dict[str, Any] = {}
-        for name, skill in self._skills.items():
-            telemetry[name] = {
-                "usage_count": skill.usage_count,
-                "view_count": skill.view_count,
-                "last_activity_at": (
-                    skill.last_activity_at.isoformat() if skill.last_activity_at else None
-                ),
-            }
+        """Persist telemetry with merge-on-write under an advisory file lock.
+
+        Two registries sharing a skills directory each hold their own in-memory
+        counters. Under ``fcntl.flock`` this writer re-reads the latest file,
+        adds only the increments accumulated since this instance last observed
+        the file (its baseline), and atomically replaces the file via a
+        same-directory temp file plus ``os.replace``. Concurrent increments are
+        merged instead of lost, and a crash mid-write cannot truncate the live
+        telemetry.
+        """
         try:
             self._telemetry_file.parent.mkdir(parents=True, exist_ok=True)
-            self._telemetry_file.write_text(json.dumps(telemetry, indent=2), encoding="utf-8")
+            with self._telemetry_file_lock():
+                self._write_merged_telemetry()
         except OSError:
             logger.warning("Failed to save telemetry", exc_info=True)
         if self._signature_cache is not None:
             # Only acknowledge our telemetry write, not concurrent source edits.
             self._signature_cache = (self._signature_cache[0], self._signature()[1])
+
+    def _write_merged_telemetry(self) -> None:
+        try:
+            existing = json.loads(self._telemetry_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, ValueError):
+            existing = {}
+        merged: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+        next_baseline: dict[str, tuple[int, int]] = {}
+        for name, skill in self._skills.items():
+            base_usage, base_view = self._telemetry_baseline.get(name, (0, 0))
+            prior = merged.get(name)
+            prior = prior if isinstance(prior, dict) else {}
+            merged[name] = {
+                "usage_count": max(self._nonneg(prior.get("usage_count")), base_usage)
+                + max(0, skill.usage_count - base_usage),
+                "view_count": max(self._nonneg(prior.get("view_count")), base_view)
+                + max(0, skill.view_count - base_view),
+                "last_activity_at": self._latest_activity(
+                    prior.get("last_activity_at"), skill.last_activity_at
+                ),
+            }
+            next_baseline[name] = (skill.usage_count, skill.view_count)
+        temp_file = self._telemetry_file.with_name(f"{self._telemetry_file.name}.{os.getpid()}.tmp")
+        try:
+            temp_file.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+            with open(temp_file, "rb") as handle:
+                os.fsync(handle.fileno())
+            os.replace(temp_file, self._telemetry_file)
+        except OSError:
+            try:
+                temp_file.unlink()
+            except OSError:
+                pass
+            raise
+        self._telemetry_baseline.update(next_baseline)
 
     def load_all(self, *, refresh: bool = False) -> None:
         """Load all skills from the skills directory (reload semantics, cached).
@@ -365,18 +618,23 @@ class SkillRegistry(SkillSource):
         return list(self._skills.values())
 
     def match_triggers(self, query: str) -> list[Skill]:
-        """Match query against skill triggers using word-boundary matching.
+        """Match query against skill triggers using whole-token boundaries.
 
-        A trigger matches only when it appears as a whole word in the query,
-        preventing false positives like trigger "cat" matching "concatenate".
+        A trigger matches only when it appears as a complete token in the
+        query, preventing false positives like trigger "cat" matching
+        "concatenate". The boundaries are explicit lookarounds rather than
+        ``\\b`` so triggers that do not end in a word character ("c++") match
+        symmetrically: "use c++ now" matches and "c++builder" does not.
         """
         matched = []
         for skill in self._skills.values():
             if not skill.enabled:
                 continue
             for trigger in skill.triggers:
-                # Use word-boundary regex for whole-word matching
-                pattern = re.compile(r"\b" + re.escape(trigger.lower()) + r"\b")
+                # Whole-token regex: neither flank may be a word character.
+                pattern = re.compile(
+                    r"(?<![A-Za-z0-9_])" + re.escape(trigger.lower()) + r"(?![A-Za-z0-9_])"
+                )
                 if pattern.search(query.lower()):
                     matched.append(skill)
                     break
@@ -535,6 +793,8 @@ class SkillRegistry(SkillSource):
             return None
 
         if description is not None:
+            if not isinstance(description, str) or len(description) > 1000:
+                raise ValueError("skill description must be a string of at most 1000 characters")
             SkillParser._scan_injection(description)
             skill.description = description
         if content is not None:
@@ -703,16 +963,26 @@ class SkillHub:
         return path
 
     def publish(self, name: str, author: str = "", tags: list[str] | None = None) -> dict[str, Any]:
-        """Publish a skill to the hub."""
+        """Publish a skill to the hub.
+
+        Disabled skills have no readable content; publishing one would write a
+        ``content: null`` entry that can never be installed, so it is refused
+        up front.
+        """
         skill = self.registry.get(name)
         if not skill:
             raise ValueError(f"Skill '{name}' not found")
+        content = self.registry.get_skill_content(skill.name)
+        if not isinstance(content, str) or not content:
+            raise ValueError(
+                f"Skill '{name}' is disabled or has no readable content; enable it before publishing"
+            )
 
         hub_entry = {
             "name": skill.name,
             "description": skill.description,
             "triggers": skill.triggers,
-            "content": self.registry.get_skill_content(skill.name),
+            "content": content,
             "version": skill.version,
             "author": author,
             "tags": tags or [],
@@ -756,10 +1026,17 @@ class SkillHub:
             raise ValueError(f"Skill '{name}' not found in hub")
 
         data = json.loads(hub_file.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"Skill '{name}' hub entry is not a JSON object")
+        content = data.get("content")
+        if not isinstance(content, str):
+            raise ValueError(
+                f"Skill '{name}' hub entry has no publishable content; publish it again"
+            )
         return self.registry.create_skill(
             name=data["name"],
             description=data.get("description", ""),
-            content=data.get("content", ""),
+            content=content,
             triggers=data.get("triggers", []),
             source=f"hub:{name}",
             source_type="hub",

@@ -32,6 +32,27 @@ def _int(params: dict[str, Any], key: str, default: int, lo: int, hi: int) -> in
     return value
 
 
+def _bool(params: dict[str, Any], key: str, *, default: bool = False) -> bool:
+    """Strict boolean parse.
+
+    N3: ``bool("false")`` is True, so truthiness coercion silently inverted
+    an explicit JSON string. Only real booleans (JSON true/false) and the
+    canonical string forms are accepted; anything else fails closed.
+    """
+    value = params.get(key, default)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+    raise RpcError(INVALID_PARAMS, f"{key} must be a boolean")
+
+
 def _uuid(params: dict[str, Any], key: str) -> uuid.UUID:
     """Parse a UUID param, accepting canonical, braced, and URN forms."""
     try:

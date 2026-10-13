@@ -377,6 +377,18 @@ class OAuthNetworkClient:
                     return response.status_code, response_headers, b"".join(chunks)
         except TimeoutError as exc:
             raise OAuthNetworkError("oauth request timed out") from exc
+        except Exception as exc:
+            # RF6-F3: httpx raises httpx.TimeoutException (an httpx.HTTPError),
+            # never the builtin TimeoutError, so it used to escape this bounded
+            # boundary as an INTERNAL_ERROR. Map every httpx transport failure
+            # to the bounded OAuth error contract.
+            try:
+                import httpx
+            except Exception:
+                raise
+            if isinstance(exc, httpx.HTTPError):
+                raise OAuthNetworkError("oauth request timed out") from exc
+            raise
 
     async def _fetch_json(
         self, url: str, *, max_bytes: int, deadline: float, extra_headers: dict | None = None

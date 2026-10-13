@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -218,8 +219,32 @@ class Database:
 
     @classmethod
     def reset(cls) -> None:
-        """Reset the global Database singleton to a fresh instance."""
+        """Reset the global Database singleton to a fresh instance.
+
+        RF2-N9: modules that bound the singleton at import time with
+        ``from machina.db.connection import db`` keep the replaced object and
+        silently diverge from the new one. Log every known stale holder so an
+        operator can see it; those modules must switch to
+        ``machina.db.lazy.LazyDb`` (or re-import after reset). audit.py is a
+        known holder owned elsewhere; this warning is the visibility seam.
+        """
         global db
+        previous = db
+        stale: list[str] = []
+        for name, module in list(sys.modules.items()):
+            if name == __name__ or module is None:
+                continue
+            try:
+                if getattr(module, "db", None) is previous:
+                    stale.append(name)
+            except Exception:
+                continue
+        if stale:
+            logger.warning(
+                "Database.reset(): %d module(s) still hold the replaced DB handle: %s",
+                len(stale),
+                ", ".join(sorted(stale)),
+            )
         db = cls()
 
 

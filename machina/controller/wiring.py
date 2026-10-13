@@ -5,7 +5,8 @@ points (each hook is delimited BEGIN/END there for independent revert).
 Nothing here changes prompts, delegation, ranking, or loop bounds:
 
 - :func:`log_section_tokens` — diagnostics-only per-section token log via
-  the existing prompt-section helpers (never mutates input).
+  the existing prompt-section helpers (never mutates input; performs no
+  JSON dump / tokenization unless DEBUG is enabled for this logger).
 - :func:`record_triage` — controller triage classification recorded on the
   agent (``agent._last_triage``), never enforced; any import failure is
   swallowed so turns always proceed.
@@ -15,6 +16,17 @@ Nothing here changes prompts, delegation, ranking, or loop bounds:
   — central per-tool (target, new_bytes) mapping + stagnation fold over
   ``machina/core/progress.py``. Stagnation is not an iteration cap: it fires
   only when K consecutive rounds add no new coverage AND no artifact bytes.
+- :func:`trace_tool_call` / :func:`record_approval_pause` — S3.3 observe-only
+  trace producers (wave-2 ``machina/observability/traces.py`` spans had no
+  production callers). A tracing failure degrades to a no-op and never gates
+  execution: the tool still runs and the turn still completes.
+- :func:`stagnation_evidence` / :func:`stagnation_state_fields` /
+  :func:`record_stagnation_state` — the forced write behind
+  :func:`stagnation_content`'s claim: a short evidence summary (tool counts,
+  no LLM call) persisted as session state. Session state is durable and is
+  NOT part of ``context.get_recent_context``, so the stop marker can never
+  re-enter the next turn's recent-context window (which cannot exclude
+  chunk types today).
 
 Mapping rule (single source of truth, see :func:`target_bytes` and
 :data:`_TARGET_KEYS`):
@@ -40,6 +52,9 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -82,8 +97,14 @@ _TARGET_KEYS: dict[str, tuple[str, ...]] = {
 
 
 def log_section_tokens(messages: Any, tools: Any) -> None:
-    """Log per-section token counts; read-only, never mutates input."""
+    """Log per-section token counts; read-only, never mutates input.
+
+    No-op unless DEBUG is enabled for this logger: the JSON dump plus
+    tokenization of messages+tools previously ran eagerly on EVERY LLM call.
+    """
     try:
+        if not logger.isEnabledFor(logging.DEBUG):
+            return
         from machina.core.prompt import prompt_section_tokens
 
         sections: dict[str, str] = {
@@ -116,6 +137,118 @@ def log_complexity(agent: Any, user_message: str) -> None:
         logger.debug("s3 complexity level=%s score=%s", out.get("level"), out.get("score"))
     except Exception:
         pass
+
+
+# ─── S3.3 observe-only trace producers ──────────────────────────────────────
+
+
+class _ToolTrace:
+    """Handle for one traced tool call; labels the spans at finish time."""
+
+    def __init__(self, tool: Any = None, delegation: Any = None) -> None:
+        self.tool = tool
+        self.delegation = delegation
+
+    def finish(self, outcome: str = "completed") -> None:
+        """Attach the truthful outcome/status; a tracing failure is a no-op."""
+        try:
+            if self.tool is not None:
+                self.tool.set(outcome=str(outcome or "completed"))
+            if self.delegation is not None:
+                self.delegation.set(status=str(outcome or "completed"))
+        except Exception:
+            pass
+
+
+def _enter_trace_span(stack: ExitStack, manager: Any) -> Any:
+    """Enter one observe-only span; failure degrades to a missing span."""
+    try:
+        return stack.enter_context(manager)
+    except Exception:
+        return None
+
+
+def _label_delegation_child(item: Any, span: Any) -> None:
+    """Attach the child session id when a delegated pause surfaced one."""
+    try:
+        if span is None or not isinstance(item, dict):
+            return
+        pauses = item.get("_needs_approvals") or [item.get("_needs_approval")]
+        child = next(
+            (
+                str(p.get("session_id"))
+                for p in pauses
+                if isinstance(p, dict) and p.get("session_id")
+            ),
+            "",
+        )
+        if child:
+            span.name = child
+            span.attributes["child_session_id"] = child
+    except Exception:
+        pass
+
+
+@contextmanager
+def trace_tool_call(item: Any) -> Iterator[_ToolTrace]:
+    """Child spans for one tool item: a tool span per call plus, for
+    ``delegate`` entries, a delegation span. Observe-only: any tracing
+    failure degrades to a no-op and never gates execution. The caller labels
+    the outcome via ``handle.finish(outcome)`` after execution."""
+    handle = _ToolTrace()
+    stack: ExitStack | None = None
+    try:
+        from machina.observability.traces import delegation_span, tool_span
+
+        name = str((item or {}).get("name") or "unknown") if isinstance(item, dict) else "unknown"
+        args = item.get("args") if isinstance(item, dict) else {}
+        stack = ExitStack()
+        handle.tool = _enter_trace_span(stack, tool_span(name, args))
+        if name == "delegate":
+            agent_name = str(args.get("agent") or "") if isinstance(args, dict) else ""
+            handle.delegation = _enter_trace_span(
+                stack, delegation_span("", child_agent=agent_name)
+            )
+    except Exception:
+        stack = None
+    if stack is None:
+        yield handle
+        return
+    try:
+        yield handle
+    except BaseException:
+        try:
+            stack.__exit__(*sys.exc_info())
+        except Exception:
+            pass
+        raise
+    else:
+        _label_delegation_child(item, handle.delegation)
+        try:
+            stack.__exit__(None, None, None)
+        except Exception:
+            pass
+
+
+def record_approval_pause(approval: Any) -> None:
+    """Observe-only approval span for one needs-approval pause; never raises."""
+    try:
+        from machina.observability.traces import approval_span
+
+        if not isinstance(approval, dict):
+            return
+        with approval_span(str(approval.get("request_id", ""))) as span:
+            if span is not None:
+                span.set(
+                    operation=str(approval.get("operation", "")),
+                    target=str(approval.get("target", "")),
+                    outcome="paused",
+                )
+    except Exception:
+        pass
+
+
+# ─── stagnation mapping + forced-write evidence ─────────────────────────────
 
 
 def target_bytes(tool: Any, args: Any, preview: Any, outcome: Any) -> tuple[str, int]:
@@ -154,6 +287,56 @@ def check_stagnation(history: Any, batch: Any) -> tuple[Any, str | None]:
         return (history, None)
 
 
-def stagnation_content(stop: str, n: int) -> str:
+def stagnation_evidence(tool_calls: Any) -> dict[str, int]:
+    """Counts by tool from ``tool_calls_made`` (the forced-write evidence)."""
+    counts: dict[str, int] = {}
+    try:
+        for entry in tool_calls or []:
+            if isinstance(entry, dict):
+                name = str(entry.get("tool") or "unknown")
+                counts[name] = counts.get(name, 0) + 1
+    except Exception:
+        pass
+    return dict(sorted(counts.items()))
+
+
+def stagnation_state_fields(stop: str, text: str, tool_calls: Any) -> dict[str, Any]:
+    """msgpack-safe session-state payload for one stagnation stop."""
+    entries = list(tool_calls or [])
+    return {
+        "stagnation_stop": {
+            "reason": str(stop),
+            "stop_text": str(text),
+            "tool_calls": len(entries),
+            "evidence": stagnation_evidence(entries),
+        }
+    }
+
+
+async def record_stagnation_state(
+    session_manager: Any, session_id: Any, stop: str, text: str, tool_calls: Any
+) -> None:
+    """Forced write (no LLM call): persist the stop reason + evidence as state.
+
+    The marker must not be written as a context chunk: chunks re-enter the
+    next turn's recent-context window and ``get_recent_context`` cannot
+    exclude chunk types. Session state is durable and never re-injected.
+    Never raises; a failed write leaves the turn's outcome unchanged.
+    """
+    try:
+        await session_manager.update_state_fields(
+            session_id, stagnation_state_fields(stop, text, tool_calls)
+        )
+    except Exception:
+        logger.debug("stagnation state write failed", exc_info=True)
+
+
+def stagnation_content(stop: str, n: int, tool_calls: Any = None) -> str:
     """Truthful stop text for a stagnation halt (no success claim, no cap language)."""
-    return f"{stop}\n\nStopped after {n} tool calls: no new file coverage and no artifact bytes for K consecutive rounds. Evidence above is preserved; forced synthesize/write attempt recorded."
+    evidence = stagnation_evidence(tool_calls)
+    summary = ", ".join(f"{name}×{count}" for name, count in evidence.items())
+    return (
+        f"{stop}\n\nStopped after {n} tool calls: no new file coverage and no artifact "
+        f"bytes for K consecutive rounds. Evidence summary recorded as session state "
+        f"({summary or 'no tool evidence'}); no further model call was made."
+    )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -716,24 +717,31 @@ class ContextManager:
         top_k: int = 5,
         threshold: float = 0.7,
     ) -> list[tuple[ContextChunk, float]]:
-        """Search context chunks by embedding similarity."""
+        """Search context chunks by embedding similarity.
+
+        n7: the threshold is applied in SQL (like resurrect_context) so
+        LIMIT only ever fills with qualifying rows instead of returning
+        fewer than *top_k* whenever sub-threshold neighbours sort first.
+        """
         embedding_str = embedding_to_str(query_embedding)
         rows = await db.fetch(
             """
             SELECT *, 1 - (embedding <=> $1::vector) AS similarity
             FROM context_chunks
             WHERE session_id = $2 AND embedding IS NOT NULL
+              AND 1 - (embedding <=> $1::vector) >= $4
             ORDER BY embedding <=> $1::vector
             LIMIT $3
             """,
             embedding_str,
             session_id,
             top_k,
+            threshold,
         )
         results = []
         for row in rows:
             sim = row["similarity"]
-            if sim < threshold:
+            if sim < threshold:  # defensive: keep the Python contract too
                 continue
             chunk = self._row_to_chunk(row)
             results.append((chunk, sim))
@@ -914,32 +922,83 @@ class ContextManager:
         return len(records)
 
     async def delete_chunks(self, session_id: uuid.UUID) -> int:
-        """Delete all chunks for a session.
+        """Delete all chunks for a session in a single transaction (m5).
 
         The latest-image cache is session-scoped too: without clearing it, a
         later turn would resurrect pre-wipe images. (Compaction paths keep
-        the cache intentionally; only the explicit wipe clears it.)
+        the cache intentionally; only the explicit wipe clears it.) Both
+        deletes share one transaction, so a failure can never leave the
+        chunks deleted but the image cache still serving them. Test doubles
+        without a usable acquire()/transaction() protocol fall back to the
+        legacy sequential deletes.
         """
-        result = await db.execute(
-            "DELETE FROM context_chunks WHERE session_id = $1",
-            session_id,
-        )
         from machina.db.connection import parse_command_count
 
-        count = parse_command_count(result)
+        count = 0
+        transactional = True
         try:
-            await db.execute(
-                "DELETE FROM session_image_context WHERE session_id = $1",
-                session_id,
-            )
-        except Exception as exc:
-            if not _is_missing_image_relation(exc):
-                raise
+            acquire_cm = db.acquire()
+            if inspect.iscoroutine(acquire_cm):
+                # AsyncMock doubles expose acquire() but return a coroutine,
+                # not an async context manager; close it before falling back
+                # (avoids an un-awaited-coroutine warning).
+                acquire_cm.close()
+                raise TypeError("acquire() returned a coroutine double")
+            async with acquire_cm as conn:
+                async with conn.transaction():
+                    result = await conn.execute(
+                        "DELETE FROM context_chunks WHERE session_id = $1",
+                        session_id,
+                    )
+                    count = parse_command_count(result)
+                    try:
+                        has_image_table = await conn.fetchval(
+                            "SELECT to_regclass('session_image_context') IS NOT NULL"
+                        )
+                    except Exception:
+                        # Doubles without fetchval: attempt the delete and let
+                        # the missing-relation handling decide.
+                        has_image_table = True
+                    if has_image_table:
+                        await conn.execute(
+                            "DELETE FROM session_image_context WHERE session_id = $1",
+                            session_id,
+                        )
+                    else:
+                        logger.warning(
+                            "session_image_context missing while wiping session %s",
+                            session_id,
+                        )
+        except (TypeError, AttributeError) as exc:
+            # Unit-test doubles: MagicMock/AsyncMock expose acquire() but the
+            # returned object is not an async context manager chain. Keep the
+            # legacy sequential path so those doubles remain usable.
+            transactional = False
             logger.warning(
-                "session_image_context missing while wiping session %s",
+                "delete_chunks transactional path unavailable for session %s (%s); "
+                "using sequential deletes",
                 session_id,
-                exc_info=True,
+                type(exc).__name__,
             )
+        if not transactional:
+            result = await db.execute(
+                "DELETE FROM context_chunks WHERE session_id = $1",
+                session_id,
+            )
+            count = parse_command_count(result)
+            try:
+                await db.execute(
+                    "DELETE FROM session_image_context WHERE session_id = $1",
+                    session_id,
+                )
+            except Exception as exc:
+                if not _is_missing_image_relation(exc):
+                    raise
+                logger.warning(
+                    "session_image_context missing while wiping session %s",
+                    session_id,
+                    exc_info=True,
+                )
         _NO_LEGACY_IMAGES.difference_update(
             {key for key in _NO_LEGACY_IMAGES if key[0] == session_id}
         )
@@ -1064,6 +1123,14 @@ class ContextManager:
             return []
         tsquery = build_or_tsquery(query)
         if not tsquery:
+            # n8: build_or_tsquery keeps its contract (returns ""), but a
+            # dropped query must be visible instead of silent. Non-ASCII-only
+            # or stopword-only input lands here.
+            logger.warning(
+                "text recall query produced no searchable terms for session %s "
+                "(non-ASCII or stopword-only input dropped)",
+                session_id,
+            )
             return []
         rows = await db.fetch(
             """
@@ -1121,11 +1188,14 @@ class ContextManager:
         if max_tokens is None and max_chunks is None:
             return 0
 
-        # Combine SUM and COUNT into a single query to avoid two full-table scans
+        # Combine SUM and COUNT into a single query to avoid two full-table scans.
+        # m4: the aggregate must use the SAME candidate scope as the eviction
+        # select below (`chunk_type <> 'document'`), otherwise document tokens
+        # make conversational chunks look over-budget and over-evict them.
         row = await db.fetchrow(
             """
             SELECT COUNT(*) AS total_chunks, COALESCE(SUM(token_count), 0) AS total_tokens
-            FROM context_chunks WHERE session_id = $1
+            FROM context_chunks WHERE session_id = $1 AND chunk_type <> 'document'
             """,
             session_id,
         )

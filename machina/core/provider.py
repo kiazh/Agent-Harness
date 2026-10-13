@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import datetime
 import hashlib
 import json
 import logging
@@ -14,6 +16,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
+from cachetools import TTLCache
 
 from machina.core.config import config
 from machina.core.exceptions import ProviderError, RateLimitError, ValidationError
@@ -37,6 +40,7 @@ __all__ = [
     "ProviderSpec",
     "REASONING_EFFORTS",
     "normalize_reasoning_effort",
+    "reload_rate_limiters",
 ]
 
 logger = logging.getLogger(__name__)
@@ -83,11 +87,16 @@ def _resolve_effort(explicit: str | None, instance_default: str | None = None) -
         return normalize_reasoning_effort(instance_default)
     try:
         return normalize_reasoning_effort(config.get("reasoning_effort"))
-    except ValidationError:
-        # A bad value in config.yaml should surface loudly at call time, not
-        # be silently swallowed — re-raise.
-        raise
-    except Exception:
+    except (ValidationError, ValueError) as exc:
+        # A bad value in config.yaml must not fail every call, but it must not
+        # vanish silently either: log what was ignored and use the provider
+        # default. Anything else (I/O, programming errors) propagates. The
+        # exception class is logged instead of its message because the record
+        # sanitizer strips exception text (it can echo config/prompt content).
+        logger.warning(
+            "Ignoring invalid reasoning_effort config value (%s); using provider default",
+            type(exc).__name__,
+        )
         return ""
 
 
@@ -271,15 +280,29 @@ def _quota_message(resp: httpx.Response, model: str) -> str:
 
 
 def _retry_delay(attempt: int, resp: httpx.Response | None, free: bool) -> float:
-    # Honor OpenRouter's Retry-After when present (seconds or HTTP date).
+    # Honor Retry-After when present: delta-seconds or an HTTP-date.
     if resp is not None:
+        raw = ""
         try:
-            ra = resp.headers.get("retry-after", "")
-            if ra and ra.strip().isdigit():
-                return min(float(ra.strip()), 60.0)
+            raw = (resp.headers.get("retry-after") or "").strip()
         except Exception as _boundary_error:
             # Optional fallback preserves the primary outcome; report no payload.
             record_failure("provider._retry_delay", _boundary_error)
+        if raw:
+            if raw.isdigit():
+                return min(float(raw), 60.0)
+            try:
+                from email.utils import parsedate_to_datetime
+
+                when = parsedate_to_datetime(raw)
+                if when is not None:
+                    if when.tzinfo is None:
+                        when = when.replace(tzinfo=datetime.UTC)
+                    delta = (when - datetime.datetime.now(datetime.UTC)).total_seconds()
+                    return min(max(delta, 0.0), 60.0)
+            except (TypeError, ValueError, OverflowError) as _boundary_error:
+                # Not a valid HTTP-date either — fall through to plain backoff.
+                record_failure("provider._retry_delay", _boundary_error)
     import random
 
     base = _FREE_BASE_DELAY if free else _RETRY_BASE_DELAY
@@ -364,6 +387,21 @@ async def _stream_with_retry(
         # Close the rejected response before waiting or opening another stream.
         logger.warning("429 rate limited (model=%s), retrying stream in %.1fs", model, delay)
         await asyncio.sleep(delay)
+
+
+def _stream_error_message(chunk: dict[str, Any], model: str) -> str:
+    """Human-readable message for an explicit mid-stream provider error frame.
+
+    OpenAI-compatible gateways sometimes send HTTP 200 and then an
+    ``{"error": ...}`` SSE frame instead of choices. Treating that as a benign
+    keep-alive would report a truncated stream as a successful completion.
+    """
+    error = chunk.get("error")
+    if isinstance(error, dict):
+        detail = error.get("message") or error.get("type") or str(error)
+    else:
+        detail = str(error)
+    return f"provider stream error for {model}: {detail}"
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +576,13 @@ class AsyncTokenBucket:
             await asyncio.sleep(wait_time)
 
 
+def _build_rate_limiter(calls_per_minute: int) -> AsyncTokenBucket:
+    """Construct one bucket from a per-minute budget (single source of truth)."""
+    if calls_per_minute < 0:
+        raise ValidationError("rate_limit_calls_per_minute must be non-negative")
+    return AsyncTokenBucket(rate=calls_per_minute / 60.0, capacity=calls_per_minute)
+
+
 def _get_rate_limiter(provider_key: str = "default") -> AsyncTokenBucket:
     """Return the shared rate limiter for *provider_key*.
 
@@ -546,12 +591,22 @@ def _get_rate_limiter(provider_key: str = "default") -> AsyncTokenBucket:
     """
     limiter = _RATE_LIMITERS.get(provider_key)
     if limiter is None:
-        calls_per_minute = int(config.get("rate_limit_calls_per_minute"))
-        if calls_per_minute < 0:
-            raise ValidationError("rate_limit_calls_per_minute must be non-negative")
-        limiter = AsyncTokenBucket(rate=calls_per_minute / 60.0, capacity=calls_per_minute)
+        limiter = _build_rate_limiter(int(config.get("rate_limit_calls_per_minute")))
         _RATE_LIMITERS[provider_key] = limiter
     return limiter
+
+
+def reload_rate_limiters() -> None:
+    """Rebuild every live rate-limit bucket from the current config.
+
+    Buckets are created lazily and then cached for the process lifetime, so a
+    runtime ``rate_limit_calls_per_minute`` change would otherwise never reach
+    providers that already made a call. Only existing buckets are replaced —
+    keys that never made a request are not materialized here.
+    """
+    calls_per_minute = int(config.get("rate_limit_calls_per_minute"))
+    for key in list(_RATE_LIMITERS):
+        _RATE_LIMITERS[key] = _build_rate_limiter(calls_per_minute)
 
 
 # Process-wide limiter buckets, keyed by provider name (see _get_rate_limiter).
@@ -559,10 +614,29 @@ _RATE_LIMITERS: dict[str, AsyncTokenBucket] = {}
 
 # ---------------------------------------------------------------------------
 # In-memory LLM response cache — eliminates duplicate POSTs from retries with
-# identical payloads. Keys include the provider and effective request, TTL 60s.
+# identical payloads. Keys include the provider, effective request, and caller
+# identity when one was supplied; entries are TTL- and size-bounded.
+#
+# Residual sharing: callers that pass neither session_id nor agent_id remain
+# identity-free, so two callers issuing the identical stateless request can
+# share one cached body. That is the pre-existing contract for stateless calls
+# (no usage reservation is attached to them either); accounting callers are
+# always scoped by identity.
 # ---------------------------------------------------------------------------
 _RESPONSE_CACHE_TTL = 60  # seconds
-_RESPONSE_CACHE: dict[str, tuple[float, Any]] = {}
+_RESPONSE_CACHE_MAXSIZE = 256
+_RESPONSE_CACHE: TTLCache = TTLCache(maxsize=_RESPONSE_CACHE_MAXSIZE, ttl=_RESPONSE_CACHE_TTL)
+
+
+def _caller_identity(session_id: uuid.UUID | None, agent_id: str | None) -> str | None:
+    """Cache-scoping discriminator derived from the accounting caller, if any.
+
+    A cached response bypasses reserve/finish, so serving one caller's answer
+    to a different caller would silently under-count usage for the second one.
+    """
+    if session_id is None and agent_id is None:
+        return None
+    return f"{agent_id or ''}:{session_id or ''}"
 
 
 def _cache_key(
@@ -570,31 +644,52 @@ def _cache_key(
     tools: list[ToolDefinition] | None,
     model: str,
     request: dict[str, Any] | None = None,
+    identity: str | None = None,
 ) -> str:
-    """Build a cache key from the request parameters."""
+    """Build a cache key from the request parameters and caller identity."""
     raw = json.dumps(
-        {"messages": messages, "tools": tools, "model": model, "request": request},
+        {
+            "messages": messages,
+            "tools": tools,
+            "model": model,
+            "request": request,
+            "identity": identity,
+        },
         sort_keys=True,
         default=str,
     )
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _copy_cached_response(value: Any) -> Any:
+    """Defensive copy so no caller can mutate shared cache state.
+
+    ``LLMResponse`` carries mutable containers (tool_calls list, raw dict,
+    usage dict); handing the stored object out would let one caller's edits
+    poison every later cache hit.
+    """
+    if isinstance(value, LLMResponse):
+        return LLMResponse(
+            content=value.content,
+            model=value.model,
+            usage=dict(value.usage or {}),
+            raw=copy.deepcopy(value.raw or {}),
+            tool_calls=copy.deepcopy(value.tool_calls or []),
+        )
+    return copy.deepcopy(value)
+
+
 def _cache_get(key: str) -> Any | None:
-    """Return cached response if present and not expired, else None."""
-    entry = _RESPONSE_CACHE.get(key)
-    if entry is None:
+    """Return a copy of the cached response if present, else None."""
+    value = _RESPONSE_CACHE.get(key)
+    if value is None:
         return None
-    ts, value = entry
-    if time.monotonic() - ts > _RESPONSE_CACHE_TTL:
-        del _RESPONSE_CACHE[key]
-        return None
-    return value
+    return _copy_cached_response(value)
 
 
 def _cache_put(key: str, value: Any) -> None:
-    """Store a response in the cache with the current timestamp."""
-    _RESPONSE_CACHE[key] = (time.monotonic(), value)
+    """Store an isolated copy of *value* in the TTL/size-bounded cache."""
+    _RESPONSE_CACHE[key] = _copy_cached_response(value)
 
 
 def _cache_clear() -> None:
@@ -691,6 +786,14 @@ class LLMProvider:
         """Embed a text string into a vector."""
         raise NotImplementedError
 
+    async def close(self) -> None:
+        """Release provider resources.
+
+        Base contract: a provider is always closable. Concrete transports
+        override this to close their HTTP client; resource-free providers
+        (and test doubles) inherit this no-op.
+        """
+
 
 # ---------------------------------------------------------------------------
 # OpenRouter provider
@@ -761,7 +864,13 @@ class OpenRouterProvider(LLMProvider):
         # Check cache before making any HTTP request
         if _is_free_model(model):
             payload["max_tokens"] = min(max_tokens, 1024)
-        ckey = _cache_key(messages, tools, f"openrouter:{model}", payload)
+        ckey = _cache_key(
+            messages,
+            tools,
+            f"openrouter:{model}",
+            payload,
+            _caller_identity(session_id, agent_id),
+        )
         cached = _cache_get(ckey)
         if cached is not None:
             logger.debug("cache hit for model=%s", model)
@@ -785,14 +894,14 @@ class OpenRouterProvider(LLMProvider):
         start = time.monotonic()
         candidates = [model]
         if _is_free_model(model):
-            # Shrink over-long requests: free tier 429s harder on big max_tokens.
-            payload["max_tokens"] = min(max_tokens, 1024)
+            # max_tokens was already clamped before the cache key was built.
             for fb in _FREE_FALLBACK_MODELS:
                 if fb != model and fb not in candidates:
                     candidates.append(fb)
         last_err: Exception | None = None
         data: dict[str, Any] | None = None
         used_model = model
+        cacheable = True
         for cand in candidates:
             payload["model"] = cand
             try:
@@ -801,6 +910,9 @@ class OpenRouterProvider(LLMProvider):
                 data = resp.json()
                 used_model = cand
                 if cand != model:
+                    # A fallback candidate's answer must not later masquerade
+                    # as the requested model (see N1 cache note below).
+                    cacheable = False
                     logger.info("free-tier fallback succeeded with model=%s", cand)
                     audit_log(
                         "llm_free_fallback", provider="openrouter", from_model=model, to_model=cand
@@ -824,6 +936,9 @@ class OpenRouterProvider(LLMProvider):
                         resp2.raise_for_status()
                         data = resp2.json()
                         used_model = cand
+                        # The answer was produced without the tools the cache
+                        # key covers, so it must not be cached under that key.
+                        cacheable = False
                         audit_log("llm_free_fallback_no_tools", provider="openrouter", model=cand)
                         break
                     except Exception as e2:
@@ -930,7 +1045,18 @@ class OpenRouterProvider(LLMProvider):
             raw=data,
             tool_calls=tool_calls,
         )
-        _cache_put(ckey, response)
+        if cacheable:
+            _cache_put(ckey, response)
+        else:
+            # N1: fallback-chain (or tools-stripped) answers are intentionally
+            # not cached. A cache hit must never present another model's answer
+            # under the requested model, and the next call should retry the
+            # requested model in case its quota has recovered.
+            logger.debug(
+                "not caching fallback response for requested model=%s (used %s)",
+                model,
+                used_model,
+            )
         return response
 
     async def stream_complete(
@@ -1020,6 +1146,12 @@ class OpenRouterProvider(LLMProvider):
                             chunk = json.loads(data)
                         except json.JSONDecodeError:
                             continue
+                        if not isinstance(chunk, dict):
+                            continue
+                        # An explicit error frame (HTTP 200 + SSE error body)
+                        # must fail the stream, not silently truncate it.
+                        if chunk.get("error"):
+                            raise ProviderError(_stream_error_message(chunk, resolved_model))
                         resolved_model = chunk.get("model") or resolved_model
                         # The usage chunk arrives with an empty choices list.
                         if chunk.get("usage"):
@@ -1116,6 +1248,8 @@ class OpenRouterProvider(LLMProvider):
                                     ch2 = json.loads(d2)
                                 except json.JSONDecodeError:
                                     continue
+                                if isinstance(ch2, dict) and ch2.get("error"):
+                                    raise ProviderError(_stream_error_message(ch2, resolved_model))
                                 resolved_model = ch2.get("model") or resolved_model
                                 if ch2.get("usage"):
                                     stream_usage = ch2["usage"]
@@ -1174,22 +1308,6 @@ class OpenRouterProvider(LLMProvider):
                 tool_calls=tool_calls,
             ),
         )
-
-    async def embed(self, text: str) -> list[float]:
-        """Embed using OpenRouter's embedding endpoint."""
-        resp = await self.client.post(
-            "/embeddings",
-            json={"model": "text-embedding-3-small", "input": text},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        # OpenRouter can return 200 with an error body or empty data list.
-        if not data.get("data") or not isinstance(data["data"], list):
-            raise ProviderError(f"OpenRouter embed returned no data: {data.get('error') or data}")
-        first = data["data"][0]
-        if not isinstance(first, dict) or "embedding" not in first:
-            raise ProviderError(f"OpenRouter embed response missing 'embedding' key: {first}")
-        return first["embedding"]
 
     async def close(self) -> None:
         # Close the shared client (it will be recreated if needed)
@@ -1256,7 +1374,13 @@ class OllamaProvider(LLMProvider):
             payload["think"] = think
 
         # Check cache before making any HTTP request
-        ckey = _cache_key(messages, tools, f"ollama:{model or self.model}", payload)
+        ckey = _cache_key(
+            messages,
+            tools,
+            f"ollama:{model or self.model}",
+            payload,
+            _caller_identity(session_id, agent_id),
+        )
         cached = _cache_get(ckey)
         if cached is not None:
             logger.debug("cache hit for ollama model=%s", model or self.model)
@@ -1301,7 +1425,7 @@ class OllamaProvider(LLMProvider):
             raise
 
         # Ollama can return 200 with an error body (e.g. model not found).
-        if "error" in data:
+        if isinstance(data, dict) and "error" in data:
             duration_ms = (time.monotonic() - start) * 1000
             metrics.record_llm_call(
                 session_id="",
@@ -1320,7 +1444,28 @@ class OllamaProvider(LLMProvider):
             raise ProviderError(f"Ollama error: {data['error']}")
 
         duration_ms = (time.monotonic() - start) * 1000
-        message = data["message"]
+        # A 200 body without a message (e.g. {"done": true}) must fail like the
+        # other providers instead of a bare KeyError that strands the usage
+        # reservation and bypasses metrics/audit.
+        message = data.get("message") if isinstance(data, dict) else None
+        if not isinstance(message, dict):
+            metrics.record_llm_call(
+                session_id="",
+                model=model or self.model,
+                duration_ms=duration_ms,
+                is_error=True,
+            )
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
+            audit_log(
+                "llm_call_error",
+                provider="ollama",
+                model=model or self.model,
+                error="no_message",
+            )
+            detail = data if isinstance(data, dict) else "empty response"
+            raise ProviderError(f"Ollama returned no message for {model or self.model}: {detail}")
+
         content = message.get("content", "")
         tool_calls = message.get("tool_calls", []) or []
 
@@ -1425,7 +1570,7 @@ class OllamaProvider(LLMProvider):
         tool_calls: list[dict] = []
 
         try:
-            async with self.client.stream("POST", "/api/chat", json=payload) as resp:
+            async with _stream_with_retry(self.client, "/api/chat", payload) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     if not line:
@@ -1433,7 +1578,17 @@ class OllamaProvider(LLMProvider):
                     try:
                         data = json.loads(line)
                     except json.JSONDecodeError:
+                        # Ollama streams NDJSON; stray keep-alive lines are
+                        # benign and must not fail the stream.
                         continue
+                    if not isinstance(data, dict):
+                        continue
+                    if data.get("error"):
+                        # Explicit error frame: fail honestly instead of
+                        # reporting a truncated stream as success.
+                        raise ProviderError(
+                            f"Ollama stream error for {model or self.model}: {data['error']}"
+                        )
 
                     message = data.get("message", {})
                     content = message.get("content", "")
@@ -1494,16 +1649,6 @@ class OllamaProvider(LLMProvider):
             ),
         )
 
-    async def embed(self, text: str) -> list[float]:
-        """Embed using Ollama's embedding endpoint."""
-        resp = await self.client.post(
-            f"{self.base_url}/api/embeddings",
-            json={"model": "nomic-embed-text", "prompt": text},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data["embedding"]
-
     async def close(self) -> None:
         # Close the shared client (it will be recreated if needed)
         await self.client.aclose()
@@ -1548,9 +1693,9 @@ class DirectProvider(LLMProvider):
             return {"reasoning_effort": effort}
         return {}
 
-    def _cache_key_for(self, messages, tools, model: str, request=None) -> str:
+    def _cache_key_for(self, messages, tools, model: str, request=None, identity=None) -> str:
         # Namespace by provider so identical model ids on two vendors can't collide.
-        return _cache_key(messages, tools, f"{self.spec.name}:{model}", request)
+        return _cache_key(messages, tools, f"{self.spec.name}:{model}", request, identity)
 
     async def complete(
         self,
@@ -1578,7 +1723,9 @@ class DirectProvider(LLMProvider):
         if tools:
             payload["tools"] = _tools_payload(tools)
 
-        ckey = self._cache_key_for(messages, tools, model, payload)
+        ckey = self._cache_key_for(
+            messages, tools, model, payload, _caller_identity(session_id, agent_id)
+        )
         cached = _cache_get(ckey)
         if cached is not None:
             logger.debug("cache hit for %s model=%s", self.spec.name, model)
@@ -1710,7 +1857,7 @@ class DirectProvider(LLMProvider):
         stream_usage: dict[str, int] = {}
         resolved_model = model
         try:
-            async with self.client.stream("POST", "/chat/completions", json=payload) as resp:
+            async with _stream_with_retry(self.client, "/chat/completions", payload) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: "):
@@ -1722,6 +1869,12 @@ class DirectProvider(LLMProvider):
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    if not isinstance(chunk, dict):
+                        continue
+                    if chunk.get("error"):
+                        # Explicit error frame: fail the stream honestly
+                        # instead of reporting a truncated success.
+                        raise ProviderError(_stream_error_message(chunk, resolved_model))
                     resolved_model = chunk.get("model") or resolved_model
                     # The usage chunk arrives with an empty choices list.
                     if chunk.get("usage"):
@@ -1982,7 +2135,13 @@ class AnthropicProvider(LLMProvider):
             messages, model, temperature, max_tokens, tools, reasoning_effort, False
         )
 
-        ckey = _cache_key(messages, tools, f"anthropic:{model}", payload)
+        ckey = _cache_key(
+            messages,
+            tools,
+            f"anthropic:{model}",
+            payload,
+            _caller_identity(session_id, agent_id),
+        )
         cached = _cache_get(ckey)
         if cached is not None:
             logger.debug("cache hit for anthropic model=%s", model)
@@ -2107,7 +2266,7 @@ class AnthropicProvider(LLMProvider):
         output_tokens = 0
         resolved_model = model
         try:
-            async with self.client.stream("POST", "/v1/messages", json=payload) as resp:
+            async with _stream_with_retry(self.client, "/v1/messages", payload) as resp:
                 resp.raise_for_status()
                 event_type = ""
                 async for line in resp.aiter_lines():
@@ -2120,6 +2279,16 @@ class AnthropicProvider(LLMProvider):
                         data = json.loads(line[6:])
                     except json.JSONDecodeError:
                         continue
+                    if not isinstance(data, dict):
+                        continue
+                    if event_type == "error" or data.get("type") == "error":
+                        # Anthropic can fail mid-stream via an explicit error
+                        # event; swallowing it would truncate the answer.
+                        error = data.get("error") or {}
+                        detail = error.get("message") if isinstance(error, dict) else str(error)
+                        raise ProviderError(
+                            f"Anthropic stream error for {resolved_model}: {detail or data}"
+                        )
                     if event_type == "message_start":
                         msg = data.get("message", {})
                         resolved_model = msg.get("model") or resolved_model

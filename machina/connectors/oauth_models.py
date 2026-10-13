@@ -58,6 +58,9 @@ OAUTH_GRANT_FILE_MAX_BYTES = 256 * 1024
 OAUTH_INDEX_MAX_BYTES = 1 * 1024 * 1024
 OAUTH_LOCK_SECONDS = 5.0
 OAUTH_MAX_OPERATIONS = 8
+# FM3-RF6-F2: bounded number of live preview callbacks (each holds a loopback
+# listener/FD until started, cancelled, expired, or swept).
+OAUTH_MAX_PREVIEWS = 8
 OAUTH_TERMINAL_RETENTION_SECONDS = 60.0
 OAUTH_REFRESH_SKEW_SECONDS = 60.0
 

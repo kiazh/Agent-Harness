@@ -10,6 +10,10 @@ from machina.core.intent import conversational
 from machina.skills.registry import Skill, SkillRegistry
 from machina.skills.runtime import _words
 
+#: Skill that anchors research-mode verification; never reused as the domain
+#: fallback, otherwise its stage label collapses onto "domain".
+_RESEARCH_ANCHOR = "ecc-deep-research"
+
 
 @dataclass
 class SkillWorkflow:
@@ -46,7 +50,10 @@ def _strong_match(skill: Skill, query: str) -> bool:
     """
     if skill.name.casefold() in query.casefold():
         return True
-    if any(re.search(r"\b" + re.escape(t) + r"\b", query, re.I) for t in skill.triggers):
+    if any(
+        re.search(r"(?<![A-Za-z0-9_])" + re.escape(t) + r"(?![A-Za-z0-9_])", query, re.I)
+        for t in skill.triggers
+    ):
         return True
     words = set(_words(query))
     if words & set(_words(skill.name.removeprefix("ecc-"))):
@@ -150,10 +157,12 @@ def plan_workflow(
             stages.append((stage, name))
 
     # Specific language/framework workflow anchors the plan; broad local triggers remain useful.
-    # Only strong matches anchor or specialize — weak overlap contributes nothing.
+    # Only strong matches anchor or specialize — weak overlap contributes nothing. In research
+    # mode the top match is the research stage's own anchor, so it must not also consume the
+    # "domain" label (which would collapse the stage labels onto one skill).
     domain = next(
         (s for s in strong if set(_words(s.name)) & _TECHNOLOGIES),
-        strong[0] if strong else None,
+        (strong[0] if strong and not (research and strong[0].name == _RESEARCH_ANCHOR) else None),
     )
     for technology in (
         "django",
@@ -188,7 +197,10 @@ def plan_workflow(
             s
             for s in strong
             if s.name.casefold() in query.casefold()
-            or any(re.search(r"\b" + re.escape(t) + r"\b", query, re.I) for t in s.triggers)
+            or any(
+                re.search(r"(?<![A-Za-z0-9_])" + re.escape(t) + r"(?![A-Za-z0-9_])", query, re.I)
+                for t in s.triggers
+            )
         ),
         None,
     )
@@ -216,7 +228,7 @@ def plan_workflow(
     elif research:
         for match in strong[:2]:
             add("research", match.name)
-        add("verify sources", "ecc-deep-research")
+        add("verify sources", _RESEARCH_ANCHOR)
     else:
         for match in strong[:3]:
             add("specialist", match.name)

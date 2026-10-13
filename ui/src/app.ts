@@ -16,7 +16,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { ArgumentAwareAutocompleteProvider } from "./autocomplete.ts";
-import { parseCommand } from "./commands.ts";
+import { parseCommand, splitSub } from "./commands.ts";
 import { ComposerBox, Footer, header, Picker, SecretForm, TextForm, ThinkingIndicator } from "./components.ts";
 import { Menu } from "./components/Menu.ts";
 import { OAuthProgress } from "./components/OAuthProgress.ts";
@@ -107,6 +107,8 @@ export class App implements FeatureHost {
 	private readonly inFlight = new Set<string>();
 	/** Per-session turn binding, provisional pre-RPC state and retired IDs. */
 	private readonly turns = new Map<string, SessionTurn>();
+	/** Switch recency (oldest first) for bounded per-session state. */
+	private readonly sessionRecency: string[] = [];
 	/** Timers for the local watchdog (diagnostic deadline, not ownership). */
 	private readonly inFlightTimers = new Map<string, NodeJS.Timeout>();
 	/** The session ID of the most recent in-flight turn (for cancel). */
@@ -146,6 +148,13 @@ export class App implements FeatureHost {
 	// time out and unlock while the server is still running the turn (which
 	// would surface as a confusing TURN_IN_PROGRESS on the next submit).
 	private static readonly IN_FLIGHT_TIMEOUT_MS = 300_000;
+
+	/**
+	 * Dormant per-session state (turn binding + token totals) for the last N
+	 * sessions visited. Older sessions are forgotten so a long-lived UI with
+	 * many sessions cannot grow its maps without bound.
+	 */
+	private static readonly MAX_RETAINED_SESSIONS = 50;
 
 	constructor(tui: TUI, client: GatewayClient, options: AppOptions = {}) {
 		this.tui = tui;
@@ -304,8 +313,9 @@ export class App implements FeatureHost {
 	switchTo(session: SessionInfo, history: HistoryEntry[]): void {
 		if (this.current) this.sessionTokensById.set(this.current.id, this.sessionTokens);
 		this.updateSession(session);
+		this.rememberSession(session.id);
 		this.transcript.clear();
-		this.transcriptView.addChild(header(this.version, this.headerInfo(session)));
+		this.transcript.addComponent(header(this.version, this.headerInfo(session)));
 		this.transcript.replay(history);
 		this.sessionTokens = this.sessionTokensById.get(session.id) ?? 0;
 		// Preserve the active turn's latest cumulative usage across switches
@@ -326,6 +336,27 @@ export class App implements FeatureHost {
 		}
 		this.current = session;
 		this.tui.requestRender();
+	}
+
+	/**
+	 * Mark a session as recently visited and prune dormant state once the
+	 * retained set exceeds MAX_RETAINED_SESSIONS. The visible session and any
+	 * session with a turn still in flight are never evicted: their events
+	 * still need to route.
+	 */
+	private rememberSession(sessionId: string): void {
+		const index = this.sessionRecency.indexOf(sessionId);
+		if (index !== -1) this.sessionRecency.splice(index, 1);
+		this.sessionRecency.push(sessionId);
+		while (this.sessionRecency.length > App.MAX_RETAINED_SESSIONS) {
+			const candidate = this.sessionRecency.find(
+				(id) => id !== this.current?.id && !this.inFlight.has(id),
+			);
+			if (candidate === undefined) break;
+			this.sessionRecency.splice(this.sessionRecency.indexOf(candidate), 1);
+			this.turns.delete(candidate);
+			this.sessionTokensById.delete(candidate);
+		}
 	}
 
 	pick(title: string, items: SelectItem[]): Promise<SelectItem | undefined> {		// Row budget follows the live viewport: title + filter + hint rows are
@@ -551,7 +582,7 @@ export class App implements FeatureHost {
 
 	banner(): void {
 		this.transcript.clear();
-		this.transcriptView.addChild(header(this.version, this.headerInfo(this.current)));
+		this.transcript.addComponent(header(this.version, this.headerInfo(this.current)));
 		this.tui.requestRender();
 	}
 
@@ -742,7 +773,10 @@ export class App implements FeatureHost {
 		this.editor.setText("");
 
 		// Never keep secrets in input history: /keys set carries a raw value.
-		const secret = command?.name === "keys" && command.args.startsWith("set");
+		// The subcommand is case-insensitive (splitSub lowercases it), matching
+		// the /keys dispatcher; a raw startsWith("set") check let "/KEYS SET"
+		// and "/keys Set" slip the secret into history.
+		const secret = command?.name === "keys" && splitSub(command.args)[0] === "set";
         if (!secret) this.editor.addToHistory(draft.text);
 		if (command) {
 			await runCommand(command, this);

@@ -1247,19 +1247,6 @@ class TestOpenRouterProvider:
             with pytest.raises(Exception, match="HTTP 429"):
                 await provider.complete(messages=[{"role": "user", "content": "hello"}])
 
-    async def test_embed_success(self, provider):
-        """Test successful embedding."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "data": [{"embedding": [0.1, 0.2, 0.3]}],
-        }
-        mock_response.raise_for_status = MagicMock()
-
-        with patch.object(provider.client, "post", return_value=mock_response):
-            embedding = await provider.embed("test text")
-            assert embedding == [0.1, 0.2, 0.3]
-
     async def test_close(self, provider):
         """Test closing the provider."""
         with patch.object(provider.client, "aclose", new=AsyncMock()) as mock_close:
@@ -1323,19 +1310,6 @@ class TestOllamaProvider:
                 tools=[ToolDefinition(name="test_tool", description="Test", parameters={})],
             )
             assert len(response.tool_calls) == 1
-
-    async def test_embed_success(self, provider):
-        """Test successful embedding."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "embedding": [0.1, 0.2, 0.3],
-        }
-        mock_response.raise_for_status = MagicMock()
-
-        with patch.object(provider.client, "post", return_value=mock_response):
-            embedding = await provider.embed("test text")
-            assert embedding == [0.1, 0.2, 0.3]
 
     async def test_close(self, provider):
         """Test closing the provider."""

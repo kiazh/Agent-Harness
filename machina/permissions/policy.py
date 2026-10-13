@@ -15,16 +15,6 @@ from pathlib import Path
 
 MODES = ("ask", "workspace", "sandbox", "full")
 
-# Capabilities requiring explicit approval even in full mode (product policy).
-CONFLICTING_CAPABILITIES = frozenset(
-    {
-        "credential_access",
-        "privilege_escalation",
-        "security_settings",
-        "destructive_system",
-    }
-)
-
 # Opaque execution: npm/pip/build/test scripts can run arbitrary code. Never
 # classify as harmless by name alone.
 OPAQUE_EXECUTABLES = frozenset(
@@ -126,10 +116,24 @@ def _sensitive_path(value: str, root: Path) -> bool:
             text = str(path)
     parts = [p.lower() for p in text.replace("\\", "/").split("/") if p]
     private_dirs = {".ssh", ".aws", ".gnupg", ".azure", ".kube"}
-    private_files = {".npmrc", ".pypirc", "id_rsa", "id_ed25519", "credentials"}
+    private_files = {
+        ".npmrc",
+        ".pypirc",
+        ".envrc",
+        ".git-credentials",
+        ".netrc",
+        "id_rsa",
+        "id_ed25519",
+        "credentials",
+    }
     if private_dirs.intersection(parts) or any(p in private_files for p in parts):
         return True
-    if any(p == ".env" or p.startswith(".env.") and p != ".env.example" for p in parts):
+    # Dotenv family (FM3-F9): exact ".env", any ".env.<suffix>" (except the
+    # documented ".env.example" template) plus any "*.env" file.
+    if any(
+        (p == ".env" or (p.startswith(".env.") and p != ".env.example") or p.endswith(".env"))
+        for p in parts
+    ):
         return True
     return any(
         parts[i : i + 2] in (["etc", "passwd"], ["etc", "shadow"]) for i in range(len(parts) - 1)
@@ -177,7 +181,8 @@ def _sensitive_capabilities(req: ActionRequest) -> list[str]:
         # Casefold components (RF3-F1): macOS/Windows filesystems are
         # case-insensitive, so ".GIT" aliases the real ".git"; the previous
         # case-sensitive check let unapproved hook/config writes through.
-        {p.lower() for p in Path(t).parts} & {".git", ".machina"} for t in paths
+        {p.lower() for p in Path(t).parts} & {".git", ".machina"}
+        for t in paths
     ):
         found.append("security_settings")
     if (
@@ -290,9 +295,11 @@ def normalize_request(req: ActionRequest) -> ActionRequest:
     return req
 
 
-def _inside_workspace(path: str) -> bool:
+def _inside_workspace(path: str, root: Path | None = None) -> bool:
+    """Request-bound containment: the approved workspace root, not the live global."""
     try:
-        return Path(path).resolve().is_relative_to(workspace_root())
+        base = root if root is not None else workspace_root()
+        return Path(path).resolve().is_relative_to(base)
     except Exception:
         return False
 
@@ -314,6 +321,10 @@ def _has_full_grant(grants: list[dict], req: ActionRequest) -> bool:
 def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
     """Policy decision without side effects. Grants checked by digest/scope."""
     grants = grants or []
+    # FM3-F7: containment is judged against the REQUEST-BOUND workspace root
+    # (the same root normalize_request resolved targets against), never the
+    # live global setting, which may have changed since the request was built.
+    req_root = Path(req.workspace_root).resolve() if req.workspace_root else workspace_root()
     if req.mode == "full" and _has_full_grant(grants, req):
         # Full mode is explicit no-approval authority for THIS session:
         # a live full-mode session grant allows everything, including
@@ -376,12 +387,12 @@ def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
         )
     # Default ask is risk-based: ordinary project edits and known tool reads
     # proceed. Sensitive actions were handled above in every mode.
-    if req.operation == "file.read" and all(_inside_workspace(t) for t in req.targets):
+    if req.operation == "file.read" and all(_inside_workspace(t, req_root) for t in req.targets):
         return Decision("allowed", "trusted project read", req)
     if (
         req.mode in ("ask", "workspace", "sandbox")
         and req.operation in ("file.read", "file.write")
-        and all(_inside_workspace(t) for t in req.targets)
+        and all(_inside_workspace(t, req_root) for t in req.targets)
     ):
         return Decision("allowed", "routine project file operation", req)
     if req.mode in ("ask", "workspace", "sandbox"):
@@ -413,12 +424,21 @@ def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
             if g.get("digest") != req.digest:
                 continue
             return Decision("allowed", "matching scoped grant", req)
-        if g.get("capability") in (req.operation, "session", "workspace"):
+        cap = str(g.get("capability") or "")
+        if cap == "session":
+            # FM3-F11: "session" capability is full-mode authority by
+            # construction. Never let a scope-less session grant blanket-pass
+            # every non-mutating operation; require the exact live-full-grant
+            # identity (mode + digest) instead.
+            if not (g.get("mode") == "full" and g.get("digest") == "full-mode-session"):
+                continue
+            return Decision("allowed", "full-mode session grant covers target", req)
+        if cap in (req.operation, "workspace"):
             return Decision("allowed", "scope grant covers target", req)
     if (
         req.operation in ("file.write", "process.exec")
         or req.targets
-        and not all(_inside_workspace(t) for t in req.targets)
+        and not all(_inside_workspace(t, req_root) for t in req.targets)
     ):
         return Decision("pending", "write/exec or out-of-scope access requires approval", req)
     return Decision("pending", "action requires approval", req)
@@ -539,7 +559,9 @@ def build_request(
 
             preview = _redact(content[:4000]).text
             if preview_len > 4000:
-                preview += f"\n… [truncated: showing 4000 of {preview_len} chars]"
+                # FM3-F4: display-only truncation, explicit hidden count; the
+                # digest above always binds the FULL payload.
+                preview += f"\n…(+{preview_len - 4000} chars)"
         except Exception:
             preview = ""
             preview_len = len(content)

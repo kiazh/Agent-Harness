@@ -138,28 +138,45 @@ def test_module_level_core_imports_only_shrink():
 
 def test_deferred_import_count_ratchet():
     # Ratchet history (guard-method census over machina/ only):
-    #   672 = baseline at guard creation (wave-1 landings).
-    #   677 = after wave-2 hook/isolation work. Every addition below was
-    #         reviewed and kept for fault isolation (a hook import that fails
-    #         must never break its host turn) or cycle avoidance:
+    #   658 = measured baseline at guard creation (the old 672 was a ceiling,
+    #         not the count; wave-1 landings).
+    #   677 = after wave-2 hook/isolation work: +19 total, itemized below.
+    #         An earlier revision of this table attributed -3 to session_mode,
+    #         but its deferred-import count did not change: the hoist that
+    #         entry referred to is agent.py's turn_scope import, kept at
+    #         module level (no cycle possible). The itemized deltas already
+    #         sum to +19 (6+4+4+2+2+1+1-1+0):
     #         agent.py +6 (S3 wiring hooks, guarded), controller/wiring.py +4
     #         (new, guarded by purity tests), gateway/server.py +4 / usage.py
     #         +2 / orchestrator.py +2 / tools/agents.py +1 (S1+S2 observe-only
     #         hooks), container.py +1 (locator decoupling), repomap/scan.py -1
     #         (cargo-cult deferred import removed), api/app.py -45 balanced by
-    #         api/routes/* +45 (split moved, not added), session_mode -3
-    #         (hoisted to top level: no cycle possible).
+    #         api/routes/* +45 (split moved, not added).
+    #   Wave-3 hotfix added +1 (permissions/broker.py guarded redaction
+    #   import); wave-4 removed -1 net (agent.py -3: datetime/uuid/images
+    #   hoisted to module level, +1 tool-trace hook; controller/wiring.py +2
+    #   trace/evidence helpers). Net since wave-2: -1, so cap stays 677.
     # Procedure: this number may only move with a delta table like the above
     # in this comment; silent growth fails the suite by design.
     total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))
     assert total <= 677, f"deferred (function-level) imports grew: {total} > 677"
 
 
+# God-file ceilings. Ratchets down, never up, except with a reviewed delta
+# table like the deferred-import ratchet above:
+#   core/provider.py 2212 -> 2381 (FM2 wave, audited fixes): response-cache
+#     identity isolation + TTL/size bound + defensive copies, stream 429
+#     retry parity for direct/anthropic/ollama, explicit mid-stream error
+#     frames, Ollama missing-message guard, fallback-chain cache skip,
+#     Retry-After HTTP-date, reasoning-effort config warning, runtime
+#     rate-limiter reload; offset by removing the dead embed implementations
+#     (-26) and a duplicated free-tier clamp (-1). No unreviewed growth may
+#     land on top of this.
 @pytest.mark.parametrize(
     "relative_path,ceiling",
     [
         ("core/agent.py", 2057),
-        ("core/provider.py", 2212),
+        ("core/provider.py", 2381),
         ("core/compression.py", 999),
     ],
 )

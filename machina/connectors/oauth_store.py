@@ -389,13 +389,19 @@ class OAuthCredentialStore:
                     current, current_gen, floor = _index_floor(index, key)
                     if expected_generation != floor:
                         raise ValueError("oauth generation mismatch; stale writer")
-                    if record.generation != floor + 1 and not (
-                        current is not None and record.generation == current_gen
-                    ):
-                        # New authority must advance generation; same-generation
-                        # rotation (token bytes only) is permitted.
-                        if record.generation <= floor:
-                            raise ValueError("oauth generation must advance")
+                    # RF6-F4: exactly one of
+                    #   advance:  generation == floor + 1
+                    #   rotation: same-generation token rotation on the live
+                    #             entry (record.generation == current_gen == floor)
+                    # Forward skips (floor + 2, ...) are stale/forked authority
+                    # and must never be committed.
+                    rotation = (
+                        current is not None
+                        and record.generation == current_gen
+                        and current_gen == floor
+                    )
+                    if record.generation != floor + 1 and not rotation:
+                        raise ValueError("oauth generation must advance by exactly one")
                     index["grants"][key] = {
                         "envelope": envelope_name,
                         "generation": record.generation,

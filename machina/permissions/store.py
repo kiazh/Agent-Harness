@@ -56,6 +56,11 @@ _last_durable: bool | None = None
 #   are human-paced, not hot-path), and session_mode.activate_durable_mode's
 #   raw-SQL revocation (which bypasses store.revoke_grants) invalidates
 #   explicitly at its own call site.
+# - Revocation bound (F12): a cache hit is re-validated for the cheap local
+#   `revoked` boolean and dropped if any entry is revoked, but a revocation
+#   performed by ANOTHER worker is only observed on the next broker turn —
+#   the cache is deliberately turn-scoped, so the worst-case staleness is one
+#   turn, never a durable grant lifetime. The pair tests lock this bound in.
 # - Fail-closed: durable read failures raise before anything is cached.
 # Deletion test: removing this cache only costs N SELECTs per turn — verdicts
 # are identical with it cold, which the pair tests lock in.
@@ -242,7 +247,13 @@ async def list_grants(session_id: str) -> list[dict]:
     turn = _current_turn()
     cache_key = (turn, str(session_id)) if turn else None
     if cache_key is not None and cache_key in _grant_cache:
-        return [dict(g) for g in _grant_cache[cache_key]]
+        cached = [dict(g) for g in _grant_cache[cache_key]]
+        # F12 cheap boolean: entries locally marked revoked are never served,
+        # even if a future write path forgot to invalidate the slice.
+        live = [g for g in cached if not g.get("revoked")]
+        if len(live) != len(cached):
+            _grant_cache.pop(cache_key, None)
+        return live
     try:
         recs = await db.fetch(
             f"""SELECT {GRANT_COLUMNS} FROM permission_grants
@@ -428,28 +439,36 @@ async def resolve_decision(request_id: str, verdict: str, principal: str) -> dic
     Returns the row, or None when already resolved/consumed/unknown.
     Agent principals are rejected (never approve themselves). DB failures
     raise explicitly.
+
+    F6: the in-memory record is advanced ONLY after the durable conditional
+    UPDATE confirms (or when the memory store is the sole authority). On a
+    lost race or a failed write, memory mirrors durable truth — or stays
+    pending — so a later DB outage cannot resurrect a denied/claimed verdict
+    through the memory fallback path.
     """
     global _last_durable
     if verdict not in ("approved", "denied", "expired", "cancelled"):
         raise ValueError(f"invalid verdict {verdict!r}")
     if _agent_principal(principal):
         return None
-    async with _mem.lock:
-        rec = _mem.approvals.get(request_id)
-        mem_ok = False
-        if rec is not None:
-            if rec["status"] == "pending" and not rec.get("consumed"):
-                if principal == rec.get("agent_id"):
-                    return None
-                rec["status"] = verdict
-                rec["resolved_at"] = time.time()
-                mem_ok = True
     db = await _db()
     if db is None:
-        _last_durable = False if rec is not None else _last_durable
-        if mem_ok:
-            invalidate_grant_cache((rec or {}).get("session_id"))
-        return rec if mem_ok else None
+        # Memory backend is the only authority: apply the same conditional
+        # transition under the lock.
+        rec = None
+        async with _mem.lock:
+            rec = _mem.approvals.get(request_id)
+            if rec is None or rec.get("status") != "pending" or rec.get("consumed"):
+                return None
+            if principal == rec.get("agent_id"):
+                return None
+            rec["status"] = verdict
+            rec["resolved_at"] = time.time()
+        _last_durable = False
+        invalidate_grant_cache((rec or {}).get("session_id"))
+        return rec
+    resolved = False
+    stale: tuple[str, bool] | None = None
     try:
         async with db.acquire() as conn:
             async with conn.transaction():
@@ -459,27 +478,42 @@ async def resolve_decision(request_id: str, verdict: str, principal: str) -> dic
                     request_id,
                 )
                 if row is None or row["status"] != "pending" or row["consumed"]:
+                    # Durable truth already differs: mirror it into memory
+                    # (fail closed) instead of the attempted verdict.
+                    if row is not None:
+                        stale = (str(row["status"]), bool(row["consumed"]))
+                elif principal == row["agent_id"]:
                     return None
-                if principal == row["agent_id"]:
-                    return None
-                updated = await conn.fetchrow(
-                    """UPDATE permission_approvals SET status = $2, resolved_at = now()
-                       WHERE request_id = $1 AND status = 'pending'
-                       RETURNING request_id, status""",
-                    request_id,
-                    verdict,
-                )
-                if updated is None:
-                    return None
+                else:
+                    updated = await conn.fetchrow(
+                        """UPDATE permission_approvals SET status = $2, resolved_at = now()
+                           WHERE request_id = $1 AND status = 'pending'
+                           RETURNING request_id, status""",
+                        request_id,
+                        verdict,
+                    )
+                    resolved = updated is not None
     except Exception:
         logger.exception("durable decision resolve failed")
         raise
+    if stale is not None:
+        async with _mem.lock:
+            rec = _mem.approvals.get(request_id)
+            if rec is not None:
+                rec["status"] = stale[0]
+                if stale[1]:
+                    rec["consumed"] = True
+        return None
+    if not resolved:
+        return None
     _last_durable = True
     # Decision writes invalidate the grant cache (session unknown on this
     # path without an extra read; decisions are human-paced, not hot-path).
     _grant_cache.clear()
     async with _mem.lock:
-        if rec is not None:
+        rec = _mem.approvals.get(request_id)
+        if rec is not None and not rec.get("consumed"):
+            # Only now, after the durable conditional UPDATE confirmed.
             rec["status"] = verdict
             rec["resolved_at"] = time.time()
     return {"request_id": request_id, "status": verdict}
@@ -490,22 +524,29 @@ async def claim_execution(request_id: str, *, digest: str, session_id: str) -> b
 
     approved → claimed, conditional on digest + session match. Exactly one
     claimer wins across workers; duplicates get False (no double effect).
+
+    F6: the memory record is advanced only after the durable conditional
+    UPDATE confirms. When the durable claim fails (lost race), memory is
+    marked consumed (fail closed) so an outage cannot replay through the
+    memory path; the memory path itself always re-verifies ``consumed``.
     """
     global _last_durable
-    async with _mem.lock:
-        rec = _mem.approvals.get(request_id)
-        mem_ok = (
-            rec is not None
-            and rec.get("status") == "approved"
-            and not rec.get("consumed")
-            and rec.get("digest") == digest
-            and rec.get("session_id") == str(session_id)
-        )
-        if mem_ok:
-            rec["status"] = "claimed"
-            rec["consumed"] = True
     db = await _db()
     if db is None:
+        rec = None
+        mem_ok = False
+        async with _mem.lock:
+            rec = _mem.approvals.get(request_id)
+            mem_ok = (
+                rec is not None
+                and rec.get("status") == "approved"
+                and not rec.get("consumed")
+                and rec.get("digest") == digest
+                and rec.get("session_id") == str(session_id)
+            )
+            if mem_ok:
+                rec["status"] = "claimed"
+                rec["consumed"] = True
         if rec is not None:
             _last_durable = False
         return bool(mem_ok)
@@ -525,6 +566,16 @@ async def claim_execution(request_id: str, *, digest: str, session_id: str) -> b
         logger.exception("durable execution claim failed")
         raise
     _last_durable = True
+    async with _mem.lock:
+        rec = _mem.approvals.get(request_id)
+        if rec is not None:
+            if ok and not rec.get("consumed"):
+                rec["status"] = "claimed"
+                rec["consumed"] = True
+            elif not ok:
+                # Conditional failure = the durable side did not confirm this
+                # claim (already claimed/changed). Fail closed in memory.
+                rec["consumed"] = True
     return ok
 
 

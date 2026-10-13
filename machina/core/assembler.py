@@ -36,18 +36,35 @@ class TokenCounter:
             except Exception:
                 self._encoding = None
 
+    def _encode_or_none(self, text: str) -> list[int] | None:
+        """Encode *text*, returning None when tiktoken rejects it.
+
+        Literal special-token spellings (e.g. ``<|endoftext|>``) are ordinary
+        user text, but tiktoken's default disallowed-special policy raises
+        ValueError for them. Returning None lets callers fall back to the
+        length heuristic instead of failing the turn (usage.py applies the
+        same conversion at its own call site).
+        """
+        if self._encoding is None:
+            return None
+        try:
+            return self._encoding.encode(text)
+        except ValueError:
+            return None
+
     def count(self, text: str) -> int:
         """Return the number of tokens in *text*."""
-        if self._encoding is not None:
-            return len(self._encoding.encode(text))
+        tokens = self._encode_or_none(text)
+        if tokens is not None:
+            return len(tokens)
         return len(text) // 4
 
     def truncate(self, text: str, max_tokens: int) -> str:
         """Return the longest prefix of *text* that fits in *max_tokens* tokens."""
         if max_tokens <= 0:
             return ""
-        if self._encoding is not None:
-            tokens = self._encoding.encode(text)
+        tokens = self._encode_or_none(text)
+        if tokens is not None:
             if len(tokens) <= max_tokens:
                 return text
             return self._encoding.decode(tokens[:max_tokens])
@@ -96,12 +113,13 @@ class PromptAssembler:
         def add(key: str, value: str, cap: int | None = None) -> None:
             if not value:
                 return
-            encoding = _token_counter._encoding
-            encoded = encoding.encode(value) if encoding is not None else None
+            # None when the value contains a literal special token; the
+            # char-based fallback below keeps assembly alive (m2).
+            encoded = _token_counter._encode_or_none(value)
 
             def prefix(tokens: int) -> str:
                 if encoded is not None:
-                    return encoding.decode(encoded[:tokens])
+                    return _token_counter._encoding.decode(encoded[:tokens])
                 return value[: tokens * 4]
 
             value_tokens = len(encoded) if encoded is not None else max(1, (len(value) + 3) // 4)

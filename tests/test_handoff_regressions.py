@@ -29,8 +29,12 @@ def test_streaming_equals_whole_recognition_all_formats_all_splits():
 
     secrets = [
         "sk-" + "A" * 24,
+        "sk-proj-" + "A1b2C3d4E5f6G7h8I9j0K1l2",
+        "sk-svcacct-" + "Z9y8X7w6V5u4T3s2R1q0P9o8",
         "sk-ant-abc123DEF456ghi789JKL0",
         "sk-or-xyz123ABC456def789GHI0jkl",
+        "sk_live_" + "a1B2c3D4e5F6g7H8i9J0",
+        "AIza" + "SyD-8kLm_2nOpQrSt3UvWx",
         "Bearer abcdef1234567890XYZ",
         "password=hunter2hunter2hunter2",
         "postgresql://bob:s3cret-pass_9@db:5432/app",
@@ -87,6 +91,7 @@ def test_streaming_redactor_char_at_a_time_and_partitions():
 
     secrets = [
         "sk-" + "B" * 24,
+        "sk-proj-" + "B1c2D3e4F5g6H7i8J9k0L1m2",
         "sk-ant-abc123DEF456ghi789JKL0",
         "sk-or-xyz123ABC456def789GHI0jkl",
         "ghp_" + "c" * 36,

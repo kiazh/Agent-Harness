@@ -850,8 +850,14 @@ def activate_plan(plan_detail: dict[str, Any], staged: Path, skills_dir: Path) -
                     os.replace(tmpdir, skills_dir / name.lower())
                 except OSError as exc:
                     raise RepoInstallError(f"could not install skill '{name}'") from exc
-                installed.append(name)
+                # Track the rename before any durability check so a failed
+                # directory sync still rolls the installed tree back.
                 committed.append(name)
+                try:
+                    _fsync_dir(skills_dir)
+                except OSError as exc:
+                    raise RepoInstallError(f"could not install skill '{name}'") from exc
+                installed.append(name)
         except RepoInstallError as exc:
             for done in committed:
                 target = skills_dir / done.lower()

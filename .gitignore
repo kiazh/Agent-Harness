@@ -66,6 +66,7 @@ verify_issues.py
 scripts/
 agents/
 skills/telemetry.json
+skills/telemetry.json.lock
 .skill-hub/
 .coverage
 .hypothesis/

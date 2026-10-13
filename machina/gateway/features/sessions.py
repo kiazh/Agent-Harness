@@ -8,6 +8,7 @@ from machina import services
 from machina.core.config import config
 from machina.core.context import context_manager
 from machina.core.context_windows import context_window_for
+from machina.core.provider import PROVIDERS
 from machina.core.session import session_manager
 from machina.core.session_recall import SessionRecall
 from machina.gateway.errors import INVALID_PARAMS, TURN_IN_PROGRESS, RpcError
@@ -76,24 +77,7 @@ async def session_set_model(gw: Gateway, params: dict[str, Any]) -> dict[str, An
     model = str(raw_model).strip() if raw_model is not None else None
     provider = str(raw_provider).strip().lower() if raw_provider is not None else None
     if (model is not None and (not model or len(model) > 200)) or (
-        provider is not None
-        and (
-            not provider
-            or len(provider) > 32
-            or provider
-            not in (
-                "openrouter",
-                "openai",
-                "anthropic",
-                "google",
-                "mistral",
-                "groq",
-                "together",
-                "deepseek",
-                "xai",
-                "ollama",
-            )
-        )
+        provider is not None and (not provider or len(provider) > 32 or provider not in PROVIDERS)
     ):
         raise RpcError(INVALID_PARAMS, "model or provider is invalid")
     if model is None and provider is None:

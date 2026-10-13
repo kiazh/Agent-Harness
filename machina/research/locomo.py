@@ -344,10 +344,17 @@ def _normalize_answer(text: Any) -> str:
 
     LoCoMo ground-truth answers are not always strings — a count or a year is
     a JSON number — so coerce to text first and treat ``None`` as empty.
+    Numeric values render with ``format(value, "g")``: ``str(2024.0)`` would
+    otherwise produce "2024.0", whose punctuation stripping mangles the year
+    into "20240". Booleans stay textual even though ``bool`` is an ``int``.
     """
     if text is None:
         return ""
-    text = str(text).lower()
+    if isinstance(text, (int, float)) and not isinstance(text, bool):
+        text = format(text, "g")
+    else:
+        text = str(text)
+    text = text.lower()
     text = re.sub(r"[^\w\s]", "", text)
     return " ".join(text.split())
 

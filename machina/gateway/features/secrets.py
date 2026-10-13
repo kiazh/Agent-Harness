@@ -27,6 +27,25 @@ MANAGED_ENV_KEYS: tuple[tuple[str, str], ...] = (
     ("MACHINA_MODEL", "Default model identifier"),
 )
 
+# RF4-W6: only catalogued provider keys and documented managed keys may be
+# written/cleared through the secrets menu. Control-plane names (PATH,
+# LD_PRELOAD, MACHINA_GATEWAY_TOKEN, MACHINA_ENV_FILE, ...) would let a UI
+# caller redirect subprocess loading or the gateway bootstrap itself.
+_ALLOWED_SECRET_KEYS: frozenset[str] = frozenset(
+    key for key, _description in (*PROVIDER_KEYS, *MANAGED_ENV_KEYS)
+)
+
+
+def _require_managed_key(key: str) -> str:
+    """Validate a key against the catalog allowlist, with a clear error."""
+    if key not in _ALLOWED_SECRET_KEYS:
+        supported = ", ".join(sorted(_ALLOWED_SECRET_KEYS))
+        raise RpcError(
+            INVALID_PARAMS,
+            f"{key} is not a managed secret key; supported keys: {supported}",
+        )
+    return key
+
 
 def _catalog() -> list[dict[str, Any]]:
     """Provider keys + managed env keys with live set/not-set status."""
@@ -69,6 +88,7 @@ async def secrets_set(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         key = _validate_key(raw_key)
     except ValueError as e:
         raise RpcError(INVALID_PARAMS, str(e)) from None
+    _require_managed_key(key)
     if any(character in value for character in ("\r", "\n", "\x00")):
         raise RpcError(INVALID_PARAMS, "secret value must not contain line breaks or NUL")
     value = value.strip()
@@ -103,6 +123,7 @@ async def secrets_clear(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         key = _validate_key(raw_key)
     except ValueError as e:
         raise RpcError(INVALID_PARAMS, str(e)) from None
+    _require_managed_key(key)
     # Persist first: a failed write must not report durable removal.
     try:
         if find_env_file().is_file():

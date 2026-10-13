@@ -1,9 +1,11 @@
 """Session-scoped CLI management of persistent personality and memory learning."""
 
 import json
+import uuid
 from pathlib import Path
 
 import typer
+from rich.markup import escape
 
 from machina.cli.output import console
 
@@ -71,9 +73,14 @@ def teach(kind: str, key: str, content: str, session: str = typer.Option(None, "
 @app.command()
 def feedback(episode: str, reward: float, session: str = typer.Option(None, "--session", "-s")):
     """Rate a completed memory decision (-1 to +1), once per turn."""
-    import uuid
-
-    episode_id = uuid.UUID(episode)
+    try:
+        episode_id = uuid.UUID(episode)
+    except ValueError:
+        console.print(
+            f"[yellow]Invalid episode id {escape(episode)}: expected a UUID "
+            "(see /growth show for decision ids).[/yellow]"
+        )
+        raise typer.Exit(1) from None
 
     async def rate(store, current):
         from machina.memory.growth import require_growth_enabled

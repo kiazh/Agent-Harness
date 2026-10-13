@@ -28,7 +28,10 @@ def action_for_tool(name: str, args: dict) -> dict:
         return {
             "operation": "file.write",
             "targets": [str(args.get("path", ""))],
-            "content": str(content)[:100000],
+            # FM3-F4: the FULL content is digested/authorized. Truncation (and
+            # its `…(+N chars)` marker) is display-only, applied by the
+            # preview/card builders, never before the digest is computed.
+            "content": str(content),
         }
     if name in ("list_files", "search_files"):
         return {"operation": "file.read", "targets": [str(args.get("path", "."))]}
@@ -55,7 +58,9 @@ def action_for_tool(name: str, args: dict) -> dict:
     if name in ("web_search", "web_extract", "web_research"):
         return {
             "operation": "network.fetch",
-            "network": [str(args.get("url", args.get("query", "")))[:300]],
+            # FM3-F4: the full URL/query is bound and digested; the card
+            # truncates for display with an explicit hidden-count marker.
+            "network": [str(args.get("url", args.get("query", "")))],
         }
     if name in ("delegate",):
         return {"operation": "delegate", "targets": [str(args.get("agent", ""))]}

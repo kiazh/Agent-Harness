@@ -29,6 +29,8 @@ from typing import Any
 from machina.memory.redaction import redact_secrets, redact_value
 
 __all__ = [
+    "MAX_LEDGER_ENTRIES_PER_TURN",
+    "MAX_RESERVATIONS",
     "MAX_SPANS_PER_TURN",
     "MAX_TURNS_RETAINED",
     "Span",
@@ -40,6 +42,7 @@ __all__ = [
     "clear_sinks",
     "current_turn_id",
     "delegation_span",
+    "dropped_reservations",
     "end_turn",
     "get_turn",
     "llm_span",
@@ -61,6 +64,12 @@ __all__ = [
 #: Max spans retained per turn (root turn span is never evicted). Overflow
 #: drops the oldest non-root spans and bumps ``TurnTrace.dropped_spans``.
 MAX_SPANS_PER_TURN = 500
+#: Max usage-ledger entries retained per turn. Overflow drops the oldest
+#: entries and bumps ``TurnTrace.ledger_dropped`` (same ring policy as spans).
+MAX_LEDGER_ENTRIES_PER_TURN = 500
+#: Max reservation→turn entries retained in the process map (FIFO). Overflow
+#: evicts the oldest reservation; late finishes for evicted ids are ignored.
+MAX_RESERVATIONS = 512
 #: Max finished/unfinished turns retained in the process registry (FIFO).
 MAX_TURNS_RETAINED = 128
 #: Max characters kept for a redacted tool-args preview.
@@ -123,6 +132,7 @@ class TurnTrace:
     spans: list[Span] = field(default_factory=list)
     dropped_spans: int = 0
     ledger: list[dict[str, Any]] = field(default_factory=list)
+    ledger_dropped: int = 0
     ended: bool = False
     _stack_depth: int = 0
 
@@ -137,6 +147,8 @@ _enabled: bool = True
 _TURNS: dict[str, TurnTrace] = {}
 #: reservation id (str) -> {turn_id, span_id, reserved_tokens, model}
 _RESERVATIONS: dict[str, dict[str, Any]] = {}
+#: Reservation entries evicted by the FIFO cap (late finishes are dropped).
+_reservations_dropped: int = 0
 _sinks: list[Callable[[str, dict[str, Any]], None]] = []
 
 _active_turn: ContextVar[str | None] = ContextVar("machina_trace_active_turn", default=None)
@@ -172,14 +184,20 @@ def clear_sinks() -> None:
 
 def reset_for_tests() -> None:
     """Clear registry, reservations, sinks, and context isolation state."""
-    global _enabled
+    global _enabled, _reservations_dropped
     _enabled = True
+    _reservations_dropped = 0
     _TURNS.clear()
     _RESERVATIONS.clear()
     del _sinks[:]
     _active_turn.set(None)
     _turn_stack.set(())
     _span_stack.set(())
+
+
+def dropped_reservations() -> int:
+    """Count reservation entries evicted by the FIFO cap in this process."""
+    return _reservations_dropped
 
 
 def _emit(event: str, payload: dict[str, Any]) -> None:
@@ -552,6 +570,7 @@ def note_reserve(
     Returns the span id, or None when tracing is off / no turn is active.
     Never raises; never affects accounting.
     """
+    global _reservations_dropped
     if not _enabled:
         return None
     try:
@@ -579,6 +598,12 @@ def note_reserve(
             "reserved_tokens": max(0, reserved),
             "model": str(model or "unknown"),
         }
+        # Bounded FIFO: a long-running process must not accumulate reservation
+        # entries forever. Late finishes for evicted ids are ignored (return
+        # False), which is the documented degrade for lost companions.
+        while len(_RESERVATIONS) > MAX_RESERVATIONS:
+            _RESERVATIONS.pop(next(iter(_RESERVATIONS)))
+            _reservations_dropped += 1
         _emit(
             "span_started",
             {"turn_id": turn.turn_id, "span_id": span.id, "kind": LLM},
@@ -637,6 +662,14 @@ def note_finish(
                 "model": str(model or entry.get("model") or "unknown"),
             }
         )
+        if len(turn.ledger) > MAX_LEDGER_ENTRIES_PER_TURN:
+            # Same bounded-ring policy as spans: drop the oldest entry and
+            # leave a marker on the root span and the report.
+            del turn.ledger[0]
+            turn.ledger_dropped += 1
+            root = turn.root
+            if root is not None:
+                root.attributes["ledger_dropped"] = turn.ledger_dropped
         span = next((s for s in turn.spans if s.id == entry["span_id"]), None)
         if span is not None:
             span.attributes.update(
@@ -721,6 +754,7 @@ def turn_report(turn_id: str) -> dict[str, Any] | None:
             "approval_waits": {"count": approval_count, "waited_ms_total": approval_waited_ms},
             "spans": len(turn.spans),
             "dropped_spans": turn.dropped_spans,
+            "ledger_dropped": turn.ledger_dropped,
         }
     except Exception:
         return None
@@ -758,8 +792,14 @@ def render_diagnostics(turn_id: str, *, max_chars: int = DIAGNOSTICS_MAX_CHARS) 
             text = redact_secrets(text).text
         except Exception:
             pass
+        max_chars = max(0, int(max_chars))
         if len(text) > max_chars:
-            text = text[: max(0, max_chars - 14)] + "…[truncated]"
+            marker = "…[truncated]"
+            if max_chars <= len(marker):
+                # Bounds below the marker length must still be honored exactly.
+                text = text[:max_chars]
+            else:
+                text = text[: max_chars - len(marker)] + marker
         return text
     except Exception:
         return f"trace {turn_id}: unavailable"

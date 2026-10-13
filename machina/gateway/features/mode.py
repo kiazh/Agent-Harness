@@ -11,7 +11,7 @@ from machina.observability.diagnostics import record_failure
 if TYPE_CHECKING:
     from machina.gateway.server import Gateway
 
-from machina.gateway.features._common import _str
+from machina.gateway.features._common import _bool, _str
 
 
 async def mode_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
@@ -66,7 +66,7 @@ async def mode_set(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     if scope == "global":
         # Explicit future-session default: global mutation is the point.
         # Existing sessions keep their explicit session overrides.
-        config.set("execution_mode", mode, persist=bool(params.get("persist", False)))
+        config.set("execution_mode", mode, persist=_bool(params, "persist"))
         return {"mode": mode, "scope": scope, "backend": _backend()}
 
     # Session-local activation: never touch the global default.

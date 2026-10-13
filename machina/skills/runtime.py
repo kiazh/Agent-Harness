@@ -83,7 +83,8 @@ class SkillIndex:
         ranked = []
         for skill, terms, name in zip(self.skills, self.docs, self.names, strict=True):
             triggered = skill.name.casefold() in query.casefold() or any(
-                re.search(r"\b" + re.escape(t) + r"\b", query, re.I) for t in skill.triggers
+                re.search(r"(?<![A-Za-z0-9_])" + re.escape(t) + r"(?![A-Za-z0-9_])", query, re.I)
+                for t in skill.triggers
             )
             raw_name = set(re.findall(r"[a-z0-9]+", skill.name.replace("golang", "go")))
             technologies = raw_name & _TECHNOLOGIES
@@ -207,6 +208,17 @@ def automatic_skill_context(
         if not content:
             continue
         excerpt = truncate_to_tokens(content, per_skill)
+        if not content.startswith(excerpt):
+            # A token cut can split a codepoint; the decoder then yields a
+            # replacement character, so the excerpt is not a real prefix of
+            # the content. Clamp to the prefix actually served — the
+            # continuation offset below is len(excerpt), and excerpt plus the
+            # continuation must tile the content without gaps or repeats.
+            limit = min(len(content), len(excerpt))
+            prefix_length = 0
+            while prefix_length < limit and content[prefix_length] == excerpt[prefix_length]:
+                prefix_length += 1
+            excerpt = content[:prefix_length]
         block = f"\n### {skill.name}\n{excerpt}\n"
         if len(excerpt) < len(content):
             if can_read:

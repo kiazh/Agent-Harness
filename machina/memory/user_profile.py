@@ -7,19 +7,22 @@ Persisted to the database via the user_profiles table.
 from __future__ import annotations
 
 import asyncio
+import importlib as _importlib
 import json
 import logging
+import sys as _sys
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-import importlib as _importlib
-import sys as _sys
-
 #: Profile ids usable for per-profile agent scopes (`harness-<slug>`).
 from machina.db.lazy import LazyDb
 from machina.memory.redaction import _default_redactor, redact_secrets
+from machina.observability.diagnostics import record_failure
+
+#: Fail-closed marker for values the redactor could not process.
+REDACTION_FAILED = "[REDACTION_FAILED]"
 
 
 # SEAM: leaf-core seam for machina.core.provider (audit_log). Deferred via
@@ -43,11 +46,17 @@ def profile_slug(user_id: str) -> str:
 
 
 def _clean_text(value: str) -> str:
-    """Redact secret-looking substrings from free-form profile text."""
+    """Redact secret-looking substrings from free-form profile text.
+
+    Fail-closed (W8): when the redactor raises, the raw value is never
+    returned (it may contain a secret); the marker is used instead and the
+    failure is recorded.
+    """
     try:
         return redact_secrets(value).text
-    except Exception:
-        return value
+    except Exception as e:
+        record_failure("user_profile._clean_text", e)
+        return REDACTION_FAILED
 
 
 def _clean_preference_keys(value: Any) -> Any:
@@ -65,12 +74,18 @@ def _clean_preference_keys(value: Any) -> Any:
 
 
 def _clean_preferences(preferences: dict[str, Any]) -> dict[str, Any]:
-    """Recursively redact secret-looking values in a preferences mapping."""
+    """Recursively redact secret-looking values in a preferences mapping.
+
+    Fail-closed (W8): if structured redaction raises, the raw mapping is
+    never stored; a marker entry is returned instead and the failure is
+    recorded.
+    """
     try:
         cleaned, _ = _default_redactor._redact_value(dict(preferences))
         return _clean_preference_keys(cleaned) if isinstance(cleaned, dict) else {}
-    except Exception:
-        return preferences
+    except Exception as e:
+        record_failure("user_profile._clean_preferences", e)
+        return {"_redaction_failed": REDACTION_FAILED}
 
 
 __all__ = [
@@ -133,12 +148,13 @@ class UserProfile:
             self.last_topics = self.last_topics[:10]
 
     def set_preference(self, key: str, value: Any) -> None:
-        """Set a preference key-value pair."""
+        """Set a preference key-value pair (fail-closed redaction, W8)."""
         key = _clean_text(key)
         try:
             cleaned, _ = _default_redactor._redact_value(value)
-        except Exception:
-            cleaned = value
+        except Exception as e:
+            record_failure("user_profile.set_preference", e)
+            cleaned = REDACTION_FAILED
         self.preferences[key] = _clean_preference_keys(cleaned)
         self.updated_at = datetime.now(UTC)
 
@@ -262,11 +278,53 @@ class UserProfileStore:
         user_id: str,
         display_name: str = "",
     ) -> UserProfile:
-        """Get existing profile or create a new one."""
+        """Get existing profile or create a new one.
+
+        Race-safe (N8): the pre-check is a fast path; when it misses, the
+        insert uses ``ON CONFLICT (user_id) DO NOTHING`` and, if another
+        writer won, re-reads and returns the existing row instead of
+        surfacing a unique-violation.
+        """
         profile = await self.get_by_user_id(user_id)
         if profile:
             return profile
-        return await self.create(user_id=user_id, display_name=display_name)
+        profile_id = uuid.uuid4()
+        now = datetime.now(UTC)
+        preferences_json = json.dumps(_clean_preferences({}))
+        row = await db.fetchrow(
+            """
+            INSERT INTO user_profiles (id, user_id, display_name, preferences, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $5)
+            ON CONFLICT (user_id) DO NOTHING
+            RETURNING id, user_id, display_name, preferences, interaction_count,
+                      topics, last_topics, created_at, updated_at
+            """,
+            profile_id,
+            _clean_text(user_id),
+            _clean_text(display_name),
+            preferences_json,
+            now,
+        )
+        if row is None:
+            # Lost the create race: return the winner.
+            row = await db.fetchrow(
+                """
+                SELECT id, user_id, display_name, preferences, interaction_count,
+                       topics, last_topics, created_at, updated_at
+                FROM user_profiles WHERE user_id = $1
+                """,
+                _clean_text(user_id),
+            )
+            if row is None:  # pragma: no cover - row deleted between statements
+                raise RuntimeError("user profile disappeared during create")
+            return self._row_to_profile(row)
+        profile = self._row_to_profile(row)
+        _core_symbol("machina.core.provider", "audit_log")(
+            "user_profile_create",
+            profile_id=str(profile.id),
+            user_id=profile.user_id,
+        )
+        return profile
 
     async def update_preferences(
         self,

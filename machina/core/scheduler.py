@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -41,9 +42,7 @@ def _pause_request_id(exc: PermissionError) -> str | None:
         linked = getattr(exc, "approval_request_id", None)
         if linked:
             return str(linked)
-        import re as _re
-
-        match = _re.search(r"request\s+([0-9a-fA-F-]{8,64})", str(exc))
+        match = re.search(r"request\s+([0-9a-fA-F-]{8,64})", str(exc))
         return match.group(1) if match else None
     except Exception:
         return None
@@ -524,6 +523,13 @@ class JobRunner:
         self._stopping = asyncio.Event()
         self._quarantined: set[asyncio.Task] = set()
         self._finalizers: set[asyncio.Task] = set()
+        # M3: lease-renewal tasks are owned here so shutdown can cancel them
+        # even when their quarantined effect resists cancellation.
+        self._leases: set[asyncio.Task] = set()
+        # Bounded budget for joining finalizers during stop(); effects get the
+        # established `_cancel_grace_seconds`, finalizers get this longer
+        # budget (a store.finish may be mid-round-trip).
+        self._shutdown_grace_seconds = 5.0
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -531,6 +537,13 @@ class JobRunner:
             self._task = asyncio.create_task(self._loop(), name="machina-job-runner")
 
     async def stop(self) -> None:
+        """Cancel the poll loop, then drain quarantined work bounded (M3).
+
+        Quarantined effects and their lease renewals are cancelled/joined
+        within a bounded window so a resistant effect cannot keep renewing a
+        lease after shutdown. Deferred `_finish_run` finalizers are given the
+        shutdown grace to settle lease release and outcome recording.
+        """
         self._stopping.set()
         if self._task is not None:
             self._task.cancel()
@@ -540,6 +553,36 @@ class JobRunner:
                 # Optional fallback preserves the primary outcome; report no payload.
                 record_failure("scheduler.stop", _boundary_error)
             self._task = None
+        await self._drain_quarantine()
+
+    async def _drain_quarantine(self) -> None:
+        """Cancel/join quarantined effects, their finalizers, and leases."""
+        quarantined = [t for t in list(self._quarantined) if not t.done()]
+        for task in quarantined:
+            task.cancel()
+        if quarantined:
+            # Cooperative tasks were already cancelled before quarantine;
+            # resistant ones are abandoned after this bounded wait.
+            await asyncio.wait(quarantined, timeout=self._cancel_grace_seconds)
+        # Let done-callbacks schedule their deferred _finish_run.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        finalizers = [t for t in list(self._finalizers) if not t.done()]
+        if finalizers:
+            _, pending = await asyncio.wait(
+                finalizers, timeout=self._shutdown_grace_seconds
+            )
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+        # Lease renewals outliving their run end here; _finish_run re-cancels
+        # idempotently for runs that terminate after shutdown.
+        leases = [t for t in list(self._leases) if not t.done()]
+        for task in leases:
+            task.cancel()
+        if leases:
+            await asyncio.gather(*leases, return_exceptions=True)
 
     async def _loop(self) -> None:
         while not self._stopping.is_set():
@@ -565,6 +608,8 @@ class JobRunner:
         claim_token = getattr(job, "claim_token", None)
         ownership_lost = asyncio.Event()
         lease_task = asyncio.create_task(self._keep_lease(job.id, claim_token, ownership_lost))
+        self._leases.add(lease_task)
+        lease_task.add_done_callback(self._leases.discard)
         exec_task: asyncio.Task | None = None
         loss_wait: asyncio.Task | None = None
         # AH-AUDIT-021: linked approval request when this run parks paused.
@@ -583,8 +628,26 @@ class JobRunner:
             if not done:
                 exec_task.cancel()
                 await asyncio.wait({exec_task}, timeout=self._cancel_grace_seconds)
-                error = f"job timed out after {RUN_LEASE_SECONDS}s"
-                logger.warning("Job %s (%s) timed out", job.name, job.id)
+                # m8: the timeout callback can win the race against a job
+                # that was just finishing. If the effect is done, was not
+                # cancelled, and raised nothing, it completed cleanly — do
+                # not record a timeout error for it.
+                if exec_task.done() and not exec_task.cancelled() and exec_task.exception() is None:
+                    logger.info(
+                        "Job %s (%s) finished as the timeout fired", job.name, job.id
+                    )
+                elif exec_task.done() and not exec_task.cancelled():
+                    exc = exec_task.exception()
+                    logger.error(
+                        "Job %s (%s) failed while the timeout was firing",
+                        job.name,
+                        job.id,
+                        exc_info=(type(exc), exc, exc.__traceback__),
+                    )
+                    error = f"{type(exc).__name__}: {exc}"
+                else:
+                    error = f"job timed out after {RUN_LEASE_SECONDS}s"
+                    logger.warning("Job %s (%s) timed out", job.name, job.id)
             elif loss_wait in done and not exec_task.done():
                 # Ownership lost while effects were active: cancel and join.
                 exec_task.cancel()

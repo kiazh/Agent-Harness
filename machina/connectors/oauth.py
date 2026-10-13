@@ -20,6 +20,7 @@ from machina.connectors.oauth_callback import LoopbackOAuthCallback
 from machina.connectors.oauth_models import (
     OAUTH_EXCHANGE_SECONDS,
     OAUTH_MAX_OPERATIONS,
+    OAUTH_MAX_PREVIEWS,
     OAUTH_OPERATION_TTL_SECONDS,
     OAUTH_PREVIEW_DISCOVERY_SECONDS,
     OAUTH_PREVIEW_TTL_SECONDS,
@@ -155,7 +156,10 @@ class OAuthCoordinator:
         if issuer is not None and (not isinstance(issuer, str) or len(issuer) > 2048):
             raise OAuthError("invalid issuer", reason="oauth_issuer_mismatch")
         async with self._lock:
-            # One pending preview per connector/session: replace older.
+            # FM3-RF6-F2: reap expired previews (stale loopback listeners/FDs)
+            # before creating another, then one pending preview per
+            # connector/session: replace older.
+            await self._sweep_previews_locked()
             for pid, prev in list(self._previews.items()):
                 if prev["connector_id"] == connector_id and prev["owner"] == owner:
                     await self._close_preview_locked(pid)
@@ -188,7 +192,16 @@ class OAuthCoordinator:
             reservation = {"port": settings.callback_port, "deadline": loop.time() + 5.0}
             if mode == "preregistered":
                 reservation["path"] = settings.callback_path
-            callback = await self._callback_factory.reserve(**reservation)
+            try:
+                callback = await self._callback_factory.reserve(**reservation)
+            except Exception as exc:
+                # FM3-RF6-F2: a busy fixed port / dead listener is a client
+                # configuration problem (INVALID_PARAMS at the gateway), never
+                # an unhandled INTERNAL_ERROR.
+                raise OAuthError(
+                    f"oauth callback listener unavailable: {exc}",
+                    reason="oauth_callback_invalid",
+                ) from exc
             redirect_uri = callback.redirect_uri
             snapshot = OAuthReviewSnapshot(
                 connector_id=config.id,
@@ -210,6 +223,14 @@ class OAuthCoordinator:
             preview_id = secrets.token_hex(8)
             expires_at = self._now() + timedelta(seconds=OAUTH_PREVIEW_TTL_SECONDS)
             async with self._lock:
+                await self._sweep_previews_locked()
+                # FM3-RF6-F2 cap: evict the oldest preview (closing its
+                # listener) instead of growing unboundedly.
+                while len(self._previews) >= OAUTH_MAX_PREVIEWS:
+                    oldest = next(iter(self._previews), None)
+                    if oldest is None:
+                        break
+                    await self._close_preview_locked(oldest)
                 self._previews[preview_id] = {
                     "connector_id": connector_id,
                     "owner": owner,
@@ -270,11 +291,28 @@ class OAuthCoordinator:
             except Exception:
                 pass
 
+    async def _sweep_previews_locked(self, *, protect: frozenset[str] | None = None) -> None:
+        """Close expired previews (stale loopback listeners).
+
+        ``protect`` keeps requested preview ids so the caller can raise its
+        specific expired-handle error instead of a generic not-found.
+        """
+        now = self._now()
+        for preview_id, prev in list(self._previews.items()):
+            if protect and preview_id in protect:
+                continue
+            expires_at = prev.get("expires_at")
+            if expires_at is not None and now > expires_at:
+                await self._close_preview_locked(preview_id)
+
     # ── start ───────────────────────────────────────────────────
     async def start(
         self, connector_id: str, owner: OAuthOwner, *, preview_id: str, digest: str
     ) -> dict[str, Any]:
         async with self._lock:
+            # FM3-RF6-F2: reap every expired preview except the requested one
+            # (which keeps its specific "preview expired" error below).
+            await self._sweep_previews_locked(protect=frozenset({preview_id}))
             prev = self._previews.get(preview_id)
             if prev is None or prev["connector_id"] != connector_id or prev["owner"] != owner:
                 raise OAuthError("preview not found", reason="oauth_operation_not_found")

@@ -199,7 +199,22 @@ class SessionManager:
                         unpacked = msgpack.unpackb(raw, raw=False)
                         if isinstance(unpacked, dict):
                             current = unpacked
+                        else:
+                            logger.warning(
+                                "Session %s state is not a mapping (%s); "
+                                "reinitializing state from the requested fields",
+                                session_id,
+                                type(unpacked).__name__,
+                            )
                     except Exception:
+                        # m6: never silently discard unreadable session state —
+                        # an operator must be able to see the corruption.
+                        logger.warning(
+                            "Corrupt state_msgpack for session %s; "
+                            "reinitializing state from the requested fields",
+                            session_id,
+                            exc_info=True,
+                        )
                         current = {}
                 merged = {**current, **fields}
                 await conn.execute(

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import stat
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -119,37 +121,45 @@ class Orchestrator:
         """Verify the contract artifact exists and is non-empty.
 
         Resolves via the file backend's :func:`resolve_path` (same
-        workspace binding + TOCTOU guards as read/write tools), then
-        requires an existing non-empty regular file. Returns (ok, reason).
+        workspace binding as read/write tools), then opens the resolved
+        path with the backend's O_NOFOLLOW guarded reader and validates the
+        descriptor (regular file, non-empty, dev/ino still matches the path).
+        This closes the wave-2 stat-then-swap TOCTOU window: a symlink or
+        swapped entry fails the guarded open instead of being stat'd through.
+        Returns (ok, reason).
         """
-        from machina.tools.file import resolve_path
+        from machina.tools.file import _open_secure_read, resolve_path
 
         try:
             candidate = resolve_path(expected_artifact_path)
         except ValueError as e:
             return False, f"Error: expected artifact '{expected_artifact_path}' invalid: {e}"
+        fd = None
         try:
-            if not candidate.exists():
-                return (
-                    False,
-                    f"Error: expected artifact '{expected_artifact_path}' missing or empty",
-                )
-            if not candidate.is_file():
+            fd = _open_secure_read(candidate)
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
                 return (
                     False,
                     f"Error: expected artifact '{expected_artifact_path}' missing or empty"
                     " (not a file)",
                 )
-            if candidate.stat().st_size == 0:
+            if st.st_size == 0:
                 return (
                     False,
                     f"Error: expected artifact '{expected_artifact_path}' missing or empty",
                 )
-        except OSError as e:
+        except (OSError, ValueError) as e:
             return (
                 False,
                 f"Error: expected artifact '{expected_artifact_path}' missing or empty: {e}",
             )
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
         return True, ""
 
     def _build_agent(self, definition: AgentDef) -> ReActAgent:
@@ -299,16 +309,26 @@ class Orchestrator:
                     "expires_at": inherited_grant.get("expires_at"),
                 }
             )
-        message_id = await self._record_start(parent_session_id, from_agent, agent_name, task)
-
         # Phase 4.5/6 + LP-08: same factory/accounting/cancellation pipeline
         # as normal turns. Child authority = definition ∩ parent caps, and the
         # broker enforces it at execution (not just on the stored agent).
+        # Build the agent BEFORE recording the start row (m3): a construction
+        # failure cannot leave a pending agent_messages row, and the fresh
+        # child session is archived best-effort so it is not orphaned.
         agent = None
-        if self._agent_factory is not None:
-            agent = self._agent_factory(definition)
-        else:
-            agent = await self._default_agent(definition, authority=child_authority)
+        try:
+            if self._agent_factory is not None:
+                agent = self._agent_factory(definition)
+            else:
+                agent = await self._default_agent(definition, authority=child_authority)
+        except BaseException:
+            try:
+                await session_manager.archive(child.id)
+            except Exception as _cleanup_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("orchestrator.delegate.build", _cleanup_error)
+            raise
+        message_id = await self._record_start(parent_session_id, from_agent, agent_name, task)
         depth_token = delegation_depth.set(_hop_count)
         loop = asyncio.get_running_loop()
         deadline_token = delegation_deadline.set(

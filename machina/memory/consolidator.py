@@ -5,6 +5,7 @@ Pipeline: raw chunks → LLM extraction → importance scoring → dedup → wri
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import uuid
@@ -12,6 +13,7 @@ import uuid
 from machina.core.context import context_manager
 from machina.core.models import ContextChunk
 from machina.core.provider import LLMProvider, audit_log
+from machina.db.lazy import LazyDb
 from machina.memory.models import MemoryEntry
 from machina.memory.scorer import ImportanceScorer
 from machina.memory.store import MemoryStore, memory_store
@@ -19,6 +21,8 @@ from machina.observability.diagnostics import record_failure
 from machina.plugins.registry import plugin_registry
 
 __all__ = ["ConsolidationResult", "MemoryConsolidator"]
+
+db = LazyDb()
 
 
 class ConsolidationResult:
@@ -136,12 +140,53 @@ class MemoryConsolidator:
         """Consolidate a session's context chunks into long-term memories.
 
         With *since*=(created_at, id) only newer chunks are extracted
-        (LP-14 cursor, ascending continuation); without it the recent
-        newest-first window is processed once and the caller records the
-        watermark. Returns a typed result — callers advance the durable
+        (LP-14 cursor, ascending continuation); without it the OLDEST
+        window is processed first (FM5 W6) so a first-run backlog larger
+        than one page stays reachable via subsequent ascending cursor
+        runs. Returns a typed result — callers advance the durable
         checkpoint ONLY from result.checkpoint (fully processed contiguous
         input), never from an optimistic attribute.
+
+        Cross-instance single-flight (FM5 W5): consolidations for one
+        session are serialized with a transaction-scoped PostgreSQL
+        advisory lock, so two processes cannot extract the same range
+        concurrently. When the database is unavailable the lock is skipped
+        (the caller's in-process single-flight still applies) and
+        consolidation proceeds.
         """
+        if not getattr(db, "connected", False):
+            return await self._consolidate_session_impl(session_id, agent_id, since)
+
+        entered_impl = False
+
+        async def _run_locked() -> ConsolidationResult:
+            nonlocal entered_impl
+            entered_impl = True
+            return await self._consolidate_session_impl(session_id, agent_id, since)
+
+        try:
+            async with db.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                        f"memory_consolidate:{session_id}",
+                    )
+                    return await _run_locked()
+        except Exception as e:
+            if entered_impl:
+                # The consolidation body itself failed: never re-run it
+                # (double extraction/writes) because the lock path raised.
+                raise
+            record_failure("consolidator.consolidate_session.lock", e)
+            return await self._consolidate_session_impl(session_id, agent_id, since)
+
+    async def _consolidate_session_impl(
+        self,
+        session_id: uuid.UUID,
+        agent_id: str,
+        since: tuple | None = None,
+    ) -> ConsolidationResult:
+        """Consolidation body; the caller owns any serialization lock."""
         # Step 0: Get context chunks (cursor-filtered when resuming).
         if since is not None:
             since_time, since_id = since
@@ -152,9 +197,23 @@ class MemoryConsolidator:
                 limit=MAX_CHUNKS_PER_CONSOLIDATION,
             )
         else:
-            chunks = await context_manager.get_chunks(
-                session_id, limit=MAX_CHUNKS_PER_CONSOLIDATION
-            )
+            # FM5 W6: oldest-first so the backlog drains in bounded pages.
+            try:
+                pending = context_manager.get_chunks_since(
+                    session_id,
+                    since_time=None,
+                    since_id=None,
+                    limit=MAX_CHUNKS_PER_CONSOLIDATION,
+                )
+            except AttributeError:
+                # Legacy context doubles without the since API.
+                pending = None
+            if pending is not None and inspect.isawaitable(pending):
+                chunks = await pending
+            else:
+                chunks = await context_manager.get_chunks(
+                    session_id, limit=MAX_CHUNKS_PER_CONSOLIDATION
+                )
         if not chunks:
             logger.debug("No chunks to consolidate for session %s", session_id)
             return ConsolidationResult("empty", [], None, 0)

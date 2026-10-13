@@ -5,23 +5,33 @@ import { resolvePrefix, shortId, when } from "../format.ts";
 import type { ContextResult, RecallResult, RecallWindowResult, ResumeResult, SessionListResult, SessionInfo, SessionResult } from "../protocol.ts";
 import { confirm, requireArgs, requireSession, type Command, type FeatureHost } from "./types.ts";
 
+/**
+ * Upper bound on cursor pages scanned by prefix resolution and pickers.
+ * A nextCursor that never ends (buggy or hostile gateway) must fail fast
+ * instead of looping forever.
+ */
+const MAX_LIST_PAGES = 100;
+
 async function resolveSessionId(host: FeatureHost, idOrPrefix: string): Promise<string> {
 	let wanted = idOrPrefix.trim().toLowerCase();
 	// Accept braced ({...}) and URN (urn:uuid:...) forms like Python's uuid.UUID.
 	if (wanted.startsWith("urn:uuid:")) wanted = wanted.slice("urn:uuid:".length);
 	if (wanted.startsWith("{") && wanted.endsWith("}")) wanted = wanted.slice(1, -1).trim();
 	if (/^[0-9a-f-]{36}$/.test(wanted)) return wanted;
-	// Paginate through all sessions: a prefix must resolve even when the
-	// matching session is older than the most recent page.
+	// Paginate through sessions: a prefix must resolve even when the
+	// matching session is older than the most recent page (bounded).
 	let cursor: string | undefined;
 	const ids: string[] = [];
-	for (;;) {
+	for (let page = 0; ; page++) {
 		const { sessions, nextCursor } = await host.request<SessionListResult & { nextCursor?: string }>("session.list", {
 			limit: 200,
 			...(cursor ? { cursor } : {}),
 		});
 		ids.push(...sessions.map((s) => s.id));
 		if (!nextCursor) break;
+		if (page + 1 >= MAX_LIST_PAGES) {
+			throw new Error(`Too many sessions to scan (${MAX_LIST_PAGES} pages); use a full id.`);
+		}
 		cursor = nextCursor;
 	}
 	return resolvePrefix(wanted, ids, "session");
@@ -177,11 +187,15 @@ export const sessionCommands: Command[] = [
 				const sessions: SessionInfo[] = [];
 				let cursor: string | undefined;
 				host.print("Loading sessions…", "plain");
-				do {
-					const page = await host.request<SessionListResult & { nextCursor?: string }>("session.list", { limit: 200, ...(cursor ? { cursor } : {}) });
-					sessions.push(...page.sessions);
-					cursor = page.nextCursor;
-				} while (cursor);
+				for (let page = 0; ; page++) {
+					const result = await host.request<SessionListResult & { nextCursor?: string }>("session.list", { limit: 200, ...(cursor ? { cursor } : {}) });
+					sessions.push(...result.sessions);
+					cursor = result.nextCursor;
+					if (!cursor) break;
+					if (page + 1 >= MAX_LIST_PAGES) {
+						throw new Error(`Too many sessions to scan (${MAX_LIST_PAGES} pages); use /delete <id>.`);
+					}
+				}
 				if (!sessions.length) {
 					host.print("No sessions to delete.", "plain");
 					return;

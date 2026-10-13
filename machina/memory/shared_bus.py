@@ -6,8 +6,6 @@ import uuid
 from dataclasses import dataclass
 from typing import Literal
 
-import asyncpg
-
 from machina.core.provider import audit_log
 from machina.db.connection import db, parse_command_count
 from machina.memory.identity import MemoryProvenance, identity_gate
@@ -121,34 +119,27 @@ class SharedMemoryBus:
                         )
                         target_id = copy.id
 
-                try:
-                    insert_result = await conn.execute(
-                        """
-                        INSERT INTO shared_memory_deliveries
-                            (source_memory_id, recipient_agent, target_memory_id, status, reason)
-                        VALUES ($1, $2, $3, $4, $5)
-                        ON CONFLICT (source_memory_id, recipient_agent) DO NOTHING
-                        """,
-                        source_memory_id,
-                        recipient_agent,
-                        target_id,
-                        status,
-                        reason,
-                    )
-                except asyncpg.exceptions.UniqueViolationError:
-                    # Lost the race: a concurrent deliver inserted first.
-                    existing = await conn.fetchrow(
-                        """
-                        SELECT source_memory_id, recipient_agent, target_memory_id, status, reason
-                        FROM shared_memory_deliveries
-                        WHERE source_memory_id = $1 AND recipient_agent = $2
-                        """,
-                        source_memory_id,
-                        recipient_agent,
-                    )
-                    return DeliveryReceipt(**dict(existing))
+                # Copy + receipt commit atomically: if the receipt insert
+                # fails, the copied memory rolls back with it. Concurrent
+                # deliveries for the same (source, recipient) serialize on
+                # the source-row FOR UPDATE lock above, and the PK/ON
+                # CONFLICT guard makes a duplicate receipt impossible.
+                insert_result = await conn.execute(
+                    """
+                    INSERT INTO shared_memory_deliveries
+                        (source_memory_id, recipient_agent, target_memory_id, status, reason)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (source_memory_id, recipient_agent) DO NOTHING
+                    """,
+                    source_memory_id,
+                    recipient_agent,
+                    target_id,
+                    status,
+                    reason,
+                )
                 if parse_command_count(insert_result) == 0:
-                    # ON CONFLICT DO NOTHING skipped the insert — re-SELECT winner.
+                    # ON CONFLICT DO NOTHING skipped the insert (a concurrent
+                    # delivery won) — return the winner's receipt.
                     existing = await conn.fetchrow(
                         """
                         SELECT source_memory_id, recipient_agent, target_memory_id, status, reason

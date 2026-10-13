@@ -45,7 +45,28 @@ _session_modes: dict[str, str] = {}
 # orchestrator delegate) via turn_scope(); resolve_effective_mode consults it
 # and falls back to the broker turn id when no explicit scope is active.
 # Broker per-guard immutable snapshots are untouched (separate seam).
-_turn_scope: ContextVar[dict[str, str] | None] = ContextVar("turn_mode_scope", default=None)
+#
+# M1: the ContextVar holds an immutable snapshot (copy-on-write). Child tasks
+# created inside the turn inherit the snapshot by reference, never a mutable
+# dict. Every invalidate_turn_mode() bumps a process-global generation; reads
+# only serve a snapshot written at the current generation, so a task holding
+# a pre-invalidation snapshot re-resolves instead of serving a stale mode
+# (even after the turn ended in its parent context).
+class _TurnModeSnapshot:
+    """Immutable per-context mode snapshot taken at ``generation``."""
+
+    __slots__ = ("generation", "modes")
+
+    def __init__(self, generation: int, modes: dict[str, str] | None = None) -> None:
+        self.generation = generation
+        self.modes = dict(modes or {})
+
+    def get(self, session_id: str) -> str | None:
+        return self.modes.get(session_id)
+
+
+_turn_scope: ContextVar[_TurnModeSnapshot | None] = ContextVar("turn_mode_scope", default=None)
+_turn_generation = 0
 
 # Implicit per-(turn, session) mode cache for callers running under a broker
 # turn without an explicit scope (transports set the turn id before agent.run).
@@ -73,7 +94,9 @@ def _turn_scope_manager() -> Iterator[None]:
 
 def begin_turn_scope() -> Token:
     """Enter a turn scope in the current task; pair with end_turn_scope."""
-    return _turn_scope.set({})
+    with _lock:
+        generation = _turn_generation
+    return _turn_scope.set(_TurnModeSnapshot(generation))
 
 
 def end_turn_scope(token: Token) -> None:
@@ -81,13 +104,25 @@ def end_turn_scope(token: Token) -> None:
     _turn_scope.reset(token)
 
 
+def _valid_turn_scope() -> _TurnModeSnapshot | None:
+    """Current context's snapshot, or None when absent/invalidated."""
+    scope = _turn_scope.get()
+    if scope is None:
+        return None
+    with _lock:
+        current = _turn_generation
+    return scope if scope.generation == current else None
+
+
 def peek_turn_mode(session_id: str | None) -> str | None:
     """Cached mode for this turn, or None when unresolved/uncached."""
     if not session_id:
         return None
-    scope = _turn_scope.get()
-    if scope is not None and str(session_id) in scope:
-        return scope[str(session_id)]
+    scope = _valid_turn_scope()
+    if scope is not None:
+        cached = scope.get(str(session_id))
+        if cached is not None:
+            return cached
     turn = _broker_turn()
     if turn:
         with _lock:
@@ -96,16 +131,19 @@ def peek_turn_mode(session_id: str | None) -> str | None:
 
 
 def invalidate_turn_mode(session_id: str | None) -> None:
-    """Drop cached mode for a session (any mode change must call this)."""
-    if not session_id:
-        return
-    sid = str(session_id)
-    scope = _turn_scope.get()
-    if scope is not None:
-        scope.pop(sid, None)
+    """Drop cached mode for a session (any mode change must call this).
+
+    Bumps the global turn-cache generation so snapshots inherited by child
+    tasks (possibly after the turn ended in the caller's context) can no
+    longer serve a stale mode.
+    """
+    global _turn_generation
+    sid = str(session_id) if session_id else None
     with _lock:
-        for key in [k for k in _implicit_modes if k[1] == sid]:
-            _implicit_modes.pop(key, None)
+        _turn_generation += 1
+        if sid:
+            for key in [k for k in _implicit_modes if k[1] == sid]:
+                _implicit_modes.pop(key, None)
 
 
 def _broker_turn() -> str:
@@ -133,7 +171,13 @@ def _cache_turn_mode(session_id: str, mode: str, *, durable: bool) -> None:
     sid = str(session_id)
     scope = _turn_scope.get()
     if scope is not None:
-        scope[sid] = mode
+        # Copy-on-write: replace the snapshot instead of mutating the object
+        # shared with child task contexts. A generation bump between checks
+        # means the inherited entries are stale: start from an empty base.
+        with _lock:
+            generation = _turn_generation
+            base = scope.modes if scope.generation == generation else {}
+            _turn_scope.set(_TurnModeSnapshot(generation, {**base, sid: mode}))
     turn = _broker_turn() if durable else ""
     if turn:
         with _lock:
@@ -199,9 +243,11 @@ async def resolve_effective_mode(session_id: str | None = None) -> str:
 
     sid = str(session_id) if session_id else None
     if sid is not None:
-        scope = _turn_scope.get()
-        if scope is not None and sid in scope:
-            return scope[sid]
+        scope = _valid_turn_scope()
+        if scope is not None:
+            cached = scope.get(sid)
+            if cached is not None:
+                return cached
         if scope is None and db.connected:
             turn = _broker_turn()
             if turn:
@@ -213,9 +259,7 @@ async def resolve_effective_mode(session_id: str | None = None) -> str:
     if not session_id or not db.connected:
         mode = get_effective_mode(session_id)
         if sid is not None:
-            scope = _turn_scope.get()
-            if scope is not None:
-                scope[sid] = mode
+            _cache_turn_mode(sid, mode, durable=False)
         return mode
     row = await db.fetchrow(
         "SELECT execution_mode FROM sessions WHERE id = $1", uuid.UUID(str(session_id))
@@ -279,7 +323,9 @@ async def activate_durable_mode(session_id: str, agent_id: str, mode: str) -> in
 
 def reset_for_tests() -> None:
     """Clear all session overrides (tests only)."""
+    global _turn_generation
     with _lock:
         _session_modes.clear()
         _implicit_modes.clear()
+        _turn_generation = 0
     _turn_scope.set(None)

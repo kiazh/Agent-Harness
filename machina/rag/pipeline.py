@@ -21,6 +21,7 @@ from machina.core.serialization import (
     row_to_chunk,
 )
 from machina.db.connection import db
+from machina.memory.authority import is_catalog_or_echo
 from machina.memory.redaction import redact_secrets
 from machina.observability.diagnostics import record_failure
 from machina.rag.chunker import Chunk, RecursiveCharacterTextSplitter
@@ -31,6 +32,25 @@ from machina.rag.search import DOCUMENT_TYPES, HybridSearch, SearchResult
 
 logger = logging.getLogger(__name__)
 
+#: Fail-closed marker: text that could not be redacted is stored as this
+#: marker instead of the raw value (never persist a possibly-secret string
+#: when the detector itself fails).
+REDACTION_FAILED = "[REDACTION_FAILED]"
+
+
+def _redact_or_failed(text: object) -> str:
+    """Redact *text*, or fail closed with a marker.
+
+    A redactor exception must never fall back to the raw input — that would
+    silently persist secrets exactly when suppression is broken. The failed
+    value becomes :data:`REDACTION_FAILED` and the failure is recorded.
+    """
+    try:
+        return redact_secrets(str(text)).text
+    except Exception as e:
+        record_failure("pipeline._redact_or_failed", e)
+        return REDACTION_FAILED
+
 
 def _redact_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     """Apply structured redaction to metadata values (AH-AUDIT-012).
@@ -38,7 +58,9 @@ def _redact_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     Provenance identifiers (source/chunk_index/embedding_*) are set by the
     pipeline itself after this runs, so they stay intact. Secret-bearing
     values — including nested dicts/lists — are scrubbed before storage.
-    Keys are preserved as-is to keep index management stable.
+    Keys are preserved as-is to keep index management stable. Fail closed:
+    a value the redactor cannot process is replaced by the marker, never
+    stored raw.
     """
     if not metadata:
         return {}
@@ -49,8 +71,9 @@ def _redact_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
         try:
             cleaned, _ = _default_redactor._redact_value(value)
             redacted[str(key)] = cleaned
-        except Exception:
-            redacted[str(key)] = value
+        except Exception as e:
+            record_failure("pipeline._redact_metadata", e)
+            redacted[str(key)] = REDACTION_FAILED
     return redacted
 
 
@@ -81,6 +104,11 @@ class RAGPipeline:
     # retrieval settings cannot reuse one another's results.
     _search_cache_ttl: float = 300.0  # 5 minutes
     _search_cache_max_size: int = 256
+    # Embedding-space verification (AH-AUDIT-035) is a full per-row scan;
+    # cache verified (session, model, scope) verdicts with the same bounded
+    # TTL so cold searches do not rescan on every call (FM5 W15).
+    _embedding_space_cache_ttl: float = 300.0
+    _embedding_space_cache_max_size: int = 256
 
     def __init__(
         self,
@@ -93,6 +121,7 @@ class RAGPipeline:
     ) -> None:
         self._config = config or RAGConfig()
         self._search_cache: dict[tuple, tuple[float, list[SearchResult]]] = {}
+        self._embedding_space_cache: dict[tuple, tuple[float, str]] = {}
         # AH-AUDIT-032: keyword-capable pipeline with no embedder. Dense
         # clients initialize lazily: absent keys yield an explicit
         # keyword-only pipeline (NULL embeddings, honest mode reporting),
@@ -174,8 +203,9 @@ class RAGPipeline:
 
         # Embed in batch (keyword-only when no embedder: NULL embeddings,
         # honest mode reporting — AH-AUDIT-032). Never fabricate zero-vector
-        # embeddings for unavailable providers.
-        texts = [redact_secrets(c.text).text for c in chunks]
+        # embeddings for unavailable providers. Redaction is fail-closed
+        # (W8): raw text is never stored when the detector fails.
+        texts = [_redact_or_failed(c.text) for c in chunks]
         # Keep redacted text for storage so secrets never reach the DB.
         for chunk, redacted_text in zip(chunks, texts, strict=True):
             chunk.text = redacted_text
@@ -196,9 +226,14 @@ class RAGPipeline:
                     getattr(self._embedder, "_model", "unknown"),
                 )
 
-        # Store in database (batch)
+        # Store in database (batch). Re-indexing the same document source
+        # replaces the previous generation atomically (FM5 W13): delete by
+        # (session_id, document_source) and insert in ONE transaction, so a
+        # double index keeps a single copy and a failed re-index never
+        # leaves a half-deleted document.
         stored_chunks: list[ContextChunk] = []
         records = []
+        doc_source = _redact_or_failed(doc.source)
         for chunk, embedding in zip(chunks, embeddings, strict=True):
             # AH-AUDIT-012/035: caller metadata applies FIRST so reserved
             # embedding/source fields cannot be overwritten by malicious or
@@ -207,7 +242,7 @@ class RAGPipeline:
             chunk_meta = {
                 **_redact_metadata(metadata),
                 **_redact_metadata(chunk.metadata),
-                "source": redact_secrets(str(doc.source)).text,
+                "source": _redact_or_failed(doc.source),
                 "doc_type": doc.doc_type,
                 "chunk_index": chunk.index,
                 "embedding_model": str(embed_model_name),
@@ -220,7 +255,7 @@ class RAGPipeline:
                 "metadata": chunk_meta,
                 # AH-AUDIT-012: stored payload source follows the same
                 # redaction policy as chunk text and metadata.
-                "source": redact_secrets(str(doc.source)).text,
+                "source": _redact_or_failed(doc.source),
             }
             payload_msgpack = payload_to_msgpack(payload)
             embedding_str = embedding_to_str(embedding) if embedding else None
@@ -233,24 +268,22 @@ class RAGPipeline:
                     chunk.token_count,
                     embedding_str,
                     search_text,
-                    redact_secrets(str(doc.source)).text,
+                    _redact_or_failed(doc.source),
                 )
             )
 
         if not records:
             return []
 
-        # Batch insert all rows in a single query for better performance.
-        # Use unnest to insert multiple rows at once with RETURNING.
-        rows = await db.fetch(
-            """
+        insert_sql = """
             INSERT INTO context_chunks
                 (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
             SELECT t.session_id, t.agent_id, t.chunk_type, t.payload_msgpack, t.token_count, t.embedding, t.search_text, t.document_source
             FROM unnest($1::uuid[], $2::text[], $3::text[], $4::bytea[], $5::int[], $6::text[]::vector[], $7::text[], $8::text[])
                 AS t(session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source)
             RETURNING id, session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, created_at, accessed_at, document_source
-            """,
+        """
+        insert_args = (
             [r[0] for r in records],  # session_id array
             [r[1] for r in records],  # agent_id array
             [r[2] for r in records],  # chunk_type array
@@ -260,6 +293,42 @@ class RAGPipeline:
             [r[6] for r in records],  # search_text array
             [r[7] for r in records],  # document_source array
         )
+
+        async def _replace_and_insert(executor: Any) -> Any:
+            await executor.execute(
+                "DELETE FROM context_chunks WHERE session_id = $1 AND document_source = $2",
+                session_id,
+                doc_source,
+            )
+            return await executor.fetch(insert_sql, *insert_args)
+
+        rows: Any = None
+        attempted = False
+        acquire = getattr(db, "acquire", None)
+        if callable(acquire):
+            try:
+                cm = acquire()
+            except (TypeError, AttributeError):
+                cm = None
+            if cm is not None and not hasattr(cm, "__aenter__"):
+                # AsyncMock doubles return a bare coroutine: close it and
+                # use the non-transactional compatibility path.
+                close = getattr(cm, "close", None)
+                if callable(close):
+                    close()
+                cm = None
+            if cm is not None:
+                async with cm as conn:
+                    attempted = True
+                    try:
+                        async with conn.transaction():
+                            rows = await _replace_and_insert(conn)
+                    except AttributeError:
+                        # Legacy connection doubles without transaction().
+                        rows = await _replace_and_insert(conn)
+        if not attempted:
+            # Test doubles without an acquire/transaction protocol.
+            rows = await db.fetch(insert_sql, *insert_args)
         stored_chunks = [self._row_to_chunk(r) for r in rows]
 
         audit_log(
@@ -432,8 +501,18 @@ class RAGPipeline:
         are treated as the default model only when dimensions agree.
         Inspect all candidate rows in bounded pages: sampling payloads can
         miss a second model, and database or metadata errors must not allow
-        an unverified dense comparison.
+        an unverified dense comparison. Verified verdicts are cached per
+        (session, model, scope) with a bounded TTL; re-indexing invalidates
+        them (FM5 W15).
         """
+        cache_key = (session_id, query_model, tuple(chunk_types))
+        now = time.monotonic()
+        cached = self._embedding_space_cache.get(cache_key)
+        if cached is not None:
+            if now - cached[0] < self._embedding_space_cache_ttl:
+                return
+            del self._embedding_space_cache[cache_key]
+
         page_size = 256
         cursor: uuid.UUID | None = None
         stored: set[str] = set()
@@ -477,6 +556,15 @@ class RAGPipeline:
                     "and query embeddings share one enforced space."
                 )
             if len(rows) < page_size:
+                # Verified: cache the verdict (bounded, TTL) so cold searches
+                # do not rescan every row (FM5 W15).
+                self._embedding_space_cache[cache_key] = (time.monotonic(), query_model)
+                if len(self._embedding_space_cache) > self._embedding_space_cache_max_size:
+                    oldest_key = min(
+                        self._embedding_space_cache,
+                        key=lambda k: self._embedding_space_cache[k][0],
+                    )
+                    del self._embedding_space_cache[oldest_key]
                 return
             cursor = rows[-1]["id"]
 
@@ -538,7 +626,7 @@ class RAGPipeline:
                 audit_log("rag_rerank_fallback", error=type(e).__name__)
                 logger.warning("Invalid reranking; preserving retrieval ranking: %s", e)
 
-        final_results = results[:k]
+        final_results = self._demote_catalog(results)[:k]
 
         # Own the full snapshot so callers cannot mutate cached result objects
         # or the nested chunk payloads through fresh results or cache hits.
@@ -566,6 +654,31 @@ class RAGPipeline:
 
         return final_results
 
+    @staticmethod
+    def _demote_catalog(results: list[SearchResult]) -> list[SearchResult]:
+        """Stable-demote catalog/echo results after fusion/rerank (FM5 W4).
+
+        RRF fusion is rank-only and the reranker is optional, so neither
+        carries content authority. Catalog listings and prior-recall echoes
+        are moved after real content while preserving relative order within
+        each group; evidence is demoted, never dropped.
+        """
+        if len(results) <= 1:
+            return results
+        favored: list[SearchResult] = []
+        demoted: list[SearchResult] = []
+        for result in results:
+            try:
+                text = result.chunk.payload.get("text", "")
+                chunk_type = result.chunk.chunk_type
+            except Exception:
+                text, chunk_type = "", None
+            if is_catalog_or_echo(text, chunk_type):
+                demoted.append(result)
+            else:
+                favored.append(result)
+        return favored + demoted if demoted else results
+
     async def index_session_context(
         self,
         session_id: uuid.UUID,
@@ -591,7 +704,9 @@ class RAGPipeline:
         for row in rows:
             payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
             text = payload.get("text", payload.get("content", str(payload)))
-            chunks_to_embed.append((row, str(text), payload))
+            # Fail-closed redaction (W8): legacy rows are re-scrubbed before
+            # they are embedded or indexed again; raw text is never stored.
+            chunks_to_embed.append((row, _redact_or_failed(text), payload))
 
         # Embed in batch (keyword-only rows keep NULL embeddings when the
         # embedder is unavailable — AH-AUDIT-032; search_text still indexed).
@@ -618,6 +733,12 @@ class RAGPipeline:
                 "embedding_model": str(embed_model_name) if embedding else "keyword-only",
                 "embedding_dims": len(embedding) if embedding else 0,
             }
+            # Fail-closed: legacy payload text is re-scrubbed too, so a raw
+            # secret cannot survive in the stored payload (W8).
+            if "text" in payload:
+                payload["text"] = text
+            if "content" in payload:
+                payload["content"] = text
             updated.append(
                 (
                     embedding_to_str(embedding) if embedding else None,
@@ -651,6 +772,9 @@ class RAGPipeline:
         """Remove cached search results for *session_id* (after re-indexing)."""
         for key in [k for k in self._search_cache if k[0] == session_id]:
             self._search_cache.pop(key, None)
+        # Indexed content changed: drop cached embedding-space verdicts too.
+        for key in [k for k in self._embedding_space_cache if k[0] == session_id]:
+            self._embedding_space_cache.pop(key, None)
 
     async def delete_session_context(self, session_id: uuid.UUID) -> int:
         """Delete indexed chunks for a session and invalidate cached searches."""

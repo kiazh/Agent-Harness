@@ -19,12 +19,17 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
+from pathlib import Path
 
 from machina.observability.diagnostics import record_failure
 from machina.permissions import store as _store
 from machina.permissions.policy import ActionRequest, Decision, decide
 
 logger = logging.getLogger(__name__)
+
+# Display/audit truncation bound (F4): the digest always binds the FULL value;
+# only rendered cards cut long network/query values, with an explicit counter.
+DISPLAY_VALUE_MAX = 300
 
 ApprovalHandler = Callable[[dict], Awaitable[str]]
 # Transport-provided human approver (TUI card / HTTP resolve). Never set to an
@@ -98,6 +103,9 @@ class PermissionBroker:
             if parent is not None:
                 if "tools" in parent and parent["tools"] is not None:
                     if req.tool and req.tool not in parent["tools"]:
+                        audit_permission_verdict(
+                            "denied", req, reason=f"tool {req.tool!r} outside parent authority"
+                        )
                         raise ApprovalDenied(
                             f"tool {req.tool!r} outside parent authority"
                         ) from None
@@ -113,11 +121,15 @@ class PermissionBroker:
                             and grant.get("digest") == "full-mode-session"
                             for grant in grants
                         ):
+                            audit_permission_verdict(
+                                "denied", req, reason="inherited full authority revoked or expired"
+                            )
                             raise ApprovalDenied("inherited full authority revoked or expired")
         except ApprovalDenied:
             raise
         except Exception as error:
             logger.error("parent authority evaluation failed (%s)", type(error).__name__)
+            audit_permission_verdict("denied", req, reason="parent authority unavailable")
             raise ApprovalDenied("parent authority unavailable") from None
         resume_id = resume_approval_var.get()
         if resume_id:
@@ -125,6 +137,9 @@ class PermissionBroker:
 
             record = await _store.get_approval(resume_id)
             if record is None or record.get("status") != "approved":
+                audit_permission_verdict(
+                    "denied", req, reason="approval already consumed or not approved"
+                )
                 raise ApprovalDenied("approval already consumed or not approved")
             if not matches_approval(req, record):
                 fresh = await _store.create_approval(req, principal="http")
@@ -135,6 +150,7 @@ class PermissionBroker:
                 raise ApprovalDenied("approval already consumed")
             req.approval_id = resume_id
             _stamp_execution(req)
+            audit_permission_verdict("allowed", req, reason="approval resumed")
             return req
         try:
             grants = await _store.list_grants(req.session_id) if req.session_id else []
@@ -146,14 +162,20 @@ class PermissionBroker:
             # Stamp the immutable execution snapshot: backends execute
             # exactly what was authorized, even if globals change next.
             _stamp_execution(req)
+            audit_permission_verdict("allowed", req, reason=decision.reason)
             return req
         if decision.verdict == "denied":
+            audit_permission_verdict("denied", req, reason=decision.reason)
             raise ApprovalDenied(decision.reason)
         # pending → human approval path (never agent self-approval).
         handler = _approval_handler.get()
         principal = _principal.get()
         if principal == req.agent_id or str(principal).startswith("agent:"):
+            audit_permission_verdict(
+                "denied", req, reason="agents cannot approve their own actions"
+            )
             raise ApprovalDenied("agents cannot approve their own actions")
+        audit_permission_verdict("pending", req, reason=decision.reason)
         if handler is None:
             return await self._guard_headless(req)
         return await self._guard_interactive(req, handler, principal)
@@ -172,6 +194,7 @@ class PermissionBroker:
             ):
                 req.approval_id = approved["request_id"]
                 _stamp_execution(req)
+                audit_permission_verdict("allowed", req, reason="approved action resumed")
                 return req
             current = await _store.get_approval(approved["request_id"])
             raise NeedsApproval(current or approved)
@@ -196,6 +219,9 @@ class PermissionBroker:
                 # proposal never resume — the user never saw the full
                 # action. Fail closed with explicit re-approval.
                 if not current.get("proposal_complete", bool(current.get("proposal"))):
+                    audit_permission_verdict(
+                        "denied", req, reason="legacy approval lacks a reviewable proposal"
+                    )
                     raise ApprovalDenied(
                         "legacy approval lacks a reviewable proposal; re-approval required"
                     ) from None
@@ -204,9 +230,11 @@ class PermissionBroker:
                 ):
                     req.approval_id = req.request_id
                     _stamp_execution(req)
+                    audit_permission_verdict("allowed", req, reason="approval resumed")
                     return req
                 current = await _store.get_approval(req.request_id)
                 raise NeedsApproval(current or {"request_id": req.request_id}) from None
+            audit_permission_verdict("denied", req, reason=f"approval already {state}")
             raise ApprovalDenied(f"approval already {state}") from None
         existing = await _store.find_pending(req.session_id, req.digest)
         if existing is not None:
@@ -231,20 +259,24 @@ class PermissionBroker:
         rec = await _store.get_approval(req.request_id)
         status = (rec or {}).get("status")
         if verdict != "approved" or status != "approved":
+            audit_permission_verdict("denied", req, reason=f"approval {verdict}")
             raise ApprovalDenied(f"approval {verdict}") from None
         # Material revalidation: digest at resolve time must match proposal.
         if rec.get("digest") != req.digest:
+            audit_permission_verdict("denied", req, reason="action changed after approval")
             raise ApprovalDenied("action changed after approval; re-approval required") from None
         # Execution claim: exactly one executor per approval (LP-01).
         if not await _store.claim_execution(
             req.request_id, digest=req.digest, session_id=req.session_id
         ):
+            audit_permission_verdict("denied", req, reason="approval already consumed")
             raise ApprovalDenied("approval already consumed by another execution") from None
         req.approval_id = req.request_id
         # No grant saved here: allow-once authorizes this execution only
         # (LP-03). Reusable authority is saved by the transport at resolve
         # time when the user explicitly chose a session/directory grant.
         _stamp_execution(req)
+        audit_permission_verdict("allowed", req, reason="approval granted")
         return req
 
     async def complete(self, request_id: str, outcome: str) -> bool:
@@ -284,6 +316,56 @@ def _stamp_execution(req: ActionRequest) -> None:
     )
 
 
+def _redacted(value: object) -> str:
+    """Best-effort secret redaction for DISPLAY and audit text.
+
+    Deferred import keeps this module importable without the memory package;
+    failures fall back to the raw string (never blocks authorization).
+    """
+    text = str(value)
+    try:
+        from machina.memory.redaction import redact_secrets
+
+        return redact_secrets(text).text
+    except Exception:
+        return text
+
+
+def _truncate_display(value: str, limit: int = DISPLAY_VALUE_MAX) -> str:
+    """Truncate attacker-influenced display text with an explicit hidden count."""
+    if len(value) <= limit:
+        return value
+    return f"{value[:limit]}…(+{len(value) - limit} chars)"
+
+
+def audit_permission_verdict(verdict: str, req: ActionRequest, *, reason: str = "") -> None:
+    """Emit a sanitized permission-verdict audit event (FM3-F8).
+
+    Emitted by the broker boundary on every decision it makes; exposed so the
+    agent loop can report verdicts observed outside :meth:`guard` without
+    importing core internals. Never raises: auditing must not alter the
+    authorization outcome.
+    """
+    try:
+        from machina.core.provider import audit_log
+
+        audit_log(
+            f"permission_{verdict}",
+            request_id=req.request_id,
+            session_id=req.session_id,
+            turn_id=req.turn_id,
+            agent_id=req.agent_id,
+            operation=req.operation,
+            tool=req.tool,
+            mode=req.mode,
+            # Digest prefix only: the full digest is security material.
+            digest_prefix=(req.digest or "")[:16],
+            reason=_redacted(reason),
+        )
+    except Exception:
+        logger.warning("permission verdict audit emission failed", exc_info=True)
+
+
 def _file_write_diff(req: ActionRequest) -> dict:
     """Best-effort reviewable diff for file writes (AH-AUDIT-004).
 
@@ -295,13 +377,10 @@ def _file_write_diff(req: ActionRequest) -> dict:
     try:
         if req.operation != "file.write" or not req.targets:
             return out
-        from machina.memory.redaction import redact_secrets as _redact
 
         current = ""
         try:
-            from pathlib import Path as _Path
-
-            p = _Path(req.targets[0])
+            p = Path(req.targets[0])
             if p.is_file() and p.stat().st_size <= 200_000:
                 current = p.read_text(encoding="utf-8", errors="replace")[:4000]
         except Exception:
@@ -309,7 +388,7 @@ def _file_write_diff(req: ActionRequest) -> dict:
         # RF3-F2: redact BEFORE diffing — the unified diff is display-only
         # (execution binds the digest), and diffing raw current leaked
         # secrets present in the existing file into the card/display.
-        redacted_current = _redact(current).text if current else ""
+        redacted_current = _redacted(current) if current else ""
         out["current_preview"] = redacted_current or "(new file)"
         proposed_preview = str(getattr(req, "content_preview", "") or "")
         if proposed_preview and current:
@@ -349,18 +428,14 @@ def _approval_view(req: ActionRequest, approval: dict) -> dict:
         durable = _store2.is_durable()
     except Exception:
         durable = None
+
     # RF3-F3: argv/targets/shell/network are attacker-influenced and can carry
     # credentials (e.g. `curl -H "Authorization: Bearer …"`). Redact the
-    # DISPLAY copies only; execution/digest identity stays exact.
-    try:
-        from machina.memory.redaction import redact_secrets as _redact2
-
-        def _red(value: object) -> str:
-            return _redact2(str(value)).text
-    except Exception:
-
-        def _red(value: object) -> str:
-            return str(value)
+    # DISPLAY copies only; execution/digest identity stays exact. F4: long
+    # network/query values truncate here with a hidden-count marker — the
+    # digest binds the full value.
+    def _red(value: object) -> str:
+        return _redacted(value)
 
     card: dict = {
         "request_id": req.request_id,
@@ -376,7 +451,7 @@ def _approval_view(req: ActionRequest, approval: dict) -> dict:
         "cwd": req.cwd,
         "targets": [_red(t) for t in (req.targets or [])],
         "capabilities": list(req.capabilities or []),
-        "network": [_red(n) for n in (req.network or [])],
+        "network": [_truncate_display(_red(n)) for n in (req.network or [])],
         "timeout": req.timeout,
         "content_digest": req.content_digest,
         "content_preview": req.content_preview,

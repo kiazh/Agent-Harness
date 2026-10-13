@@ -34,6 +34,10 @@ _SEMVER = re.compile(
 )
 
 
+# RF6-F6: every imported package file is bounded and must be UTF-8 text.
+_PACKAGE_FILE_MAX_BYTES = 256 * 1024
+
+
 def _package_file(root: Path, relative: str) -> Path:
     """Resolve a declared package file without allowing traversal or symlinks out."""
     if (
@@ -47,6 +51,23 @@ def _package_file(root: Path, relative: str) -> Path:
     if not result.is_relative_to(root):
         raise ValueError(f"package path escapes root: {relative!r}")
     return result
+
+
+def _read_package_file(path: Path, *, label: str) -> bytes:
+    """Read one package file under the size cap with UTF-8 validation."""
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise ValueError(f"package file unreadable: {label}") from error
+    if len(data) > _PACKAGE_FILE_MAX_BYTES:
+        raise ValueError(
+            f"package file exceeds size limit ({_PACKAGE_FILE_MAX_BYTES} bytes): {label}"
+        )
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"package file must be UTF-8 text: {label}") from error
+    return data
 
 
 def _validate_manifest(manifest: dict[str, Any]) -> dict[str, str]:
@@ -268,13 +289,16 @@ class SoulSpec:
         The older YAML format remains available through ``from_yaml``.
         """
         root = Path(directory).resolve()
-        manifest = json.loads(_package_file(root, "soul.json").read_text(encoding="utf-8"))
+        manifest_bytes = _read_package_file(_package_file(root, "soul.json"), label="soul.json")
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
         if not isinstance(manifest, dict):
             raise ValueError("soul.json must contain a JSON object")
         references = _validate_manifest(manifest)
         package_files = {}
         for relative in references.values():
-            package_files[relative] = _package_file(root, relative).read_bytes()
+            package_files[relative] = _read_package_file(
+                _package_file(root, relative), label=relative
+            )
         soul_text = package_files[manifest["files"]["soul"]].decode("utf-8")
         if not soul_text.strip():
             raise ValueError("SOUL.md is empty")
@@ -487,10 +511,22 @@ class SoulSpec:
                     )
                 ):
                     raise ValueError("invalid persona tool permissions")
+                allowed = policy.get("allowed_tools", [])
+                denied = policy.get("denied_tools", [])
+                deny_all = policy.get("deny_all", False)
+                if not allowed and denied and not deny_all:
+                    # RF6-F5: a denied-only list previously compiled to the
+                    # internal __no_tools__ sentinel (deny-everything), which
+                    # is almost never the author's intent. Fail loudly instead
+                    # of silently voiding every tool.
+                    raise ValueError(
+                        "permissions with denied_tools but no allowed_tools would deny "
+                        "every tool; list allowed_tools explicitly or set deny_all=true"
+                    )
                 permissions = cls.Permissions(
-                    allowed_tools=c["permissions"].get("allowed_tools", []),
-                    denied_tools=c["permissions"].get("denied_tools", []),
-                    deny_all=c["permissions"].get("deny_all", False),
+                    allowed_tools=allowed,
+                    denied_tools=denied,
+                    deny_all=deny_all,
                 )
             config = cls.Config(
                 model=c.get("model"),

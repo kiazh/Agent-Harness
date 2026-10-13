@@ -13,7 +13,6 @@ from machina.permissions.broker import (
     set_approval_handler,
 )
 from machina.permissions.policy import (
-    CONFLICTING_CAPABILITIES,
     MODES,
     ActionRequest,
     Decision,
@@ -24,7 +23,6 @@ from machina.permissions.policy import (
 __all__ = [
     "ActionRequest",
     "ApprovalDenied",
-    "CONFLICTING_CAPABILITIES",
     "Decision",
     "MODES",
     "NeedsApproval",

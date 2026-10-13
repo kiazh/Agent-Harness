@@ -19,9 +19,11 @@ class AuditPersistence:
         self._queue: asyncio.Queue[dict[str, Any] | None] | None = None
         self._task: asyncio.Task | None = None
         self._owners = 0
+        self._ever_started = False
 
     def start(self) -> None:
         self._owners += 1
+        self._ever_started = True
         if self._task is None or self._task.done():
             self._queue = asyncio.Queue(maxsize=self._max_pending)
             self._task = asyncio.create_task(self._run(self._queue), name="machina-audit-writer")
@@ -32,8 +34,21 @@ class AuditPersistence:
             self._task = None
             self._queue = None
 
+    def _drop(self, reason: str) -> None:
+        """Count and report an audit event that no running writer can accept."""
+        metrics.increment_counter("audit.queue.dropped")
+        if reason == "before-start":
+            metrics.increment_counter("audit.queue.dropped_before_start")
+            logger.error("Audit event dropped before the writer started; event was not persisted")
+        else:
+            metrics.increment_counter("audit.queue.dropped_shutdown")
+            logger.error(
+                "Audit event dropped during/after writer shutdown; event was not persisted"
+            )
+
     def submit(self, entry: dict[str, Any]) -> None:
         if self._task is None or self._task.done() or self._queue is None:
+            self._drop("shutdown" if self._ever_started else "before-start")
             return
         try:
             self._queue.put_nowait(entry)
