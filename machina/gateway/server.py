@@ -293,7 +293,16 @@ class Gateway:
         method = message["method"]
         if self._auth_token is not None and method != "initialize":
             token = params.get("token")
-            if not isinstance(token, str) or not secrets.compare_digest(token, self._auth_token):
+            # RF4-W3 hotfix: compare_digest raises TypeError on non-ASCII str
+            # operands; a malformed token must fail closed, never crash the
+            # stdio loop (the raise previously escaped all handler containment).
+            try:
+                token_ok = isinstance(token, str) and secrets.compare_digest(
+                    token, self._auth_token
+                )
+            except TypeError:
+                token_ok = False
+            if not token_ok:
                 logger.warning("Unauthorized attempt: method=%s", method)
                 self._send_error(rid, UNAUTHORIZED, "unauthorized")
                 return
@@ -962,9 +971,7 @@ class Gateway:
                     # otherwise fall back to the oldest open call with the
                     # same name (FIFO).
                     result_id = (
-                        getattr(event, "tool_call_id", None)
-                        or getattr(event, "tool_call_id", None)
-                        or getattr(event, "id", None)
+                        getattr(event, "tool_call_id", None) or getattr(event, "id", None)
                     )
                     match_id: str | None = None
                     if result_id is not None and str(result_id) in open_tools:
@@ -1067,13 +1074,35 @@ class Gateway:
                             logger.exception("Could not close turn provider for session %s", sid)
                 finally:
                     self._record_stage(turn_id, "releasing_ownership", session_id=sid)
+                    # RF4-C1 hotfix: stop renewal BEFORE release. A cancellation
+                    # delivered while releasing previously skipped the
+                    # _renew_stop.set() below, orphaning the renewal loop and
+                    # keeping an unreleased claim renewed forever (permanent
+                    # TURN_IN_PROGRESS lock until process restart).
+                    _renew_stop.set()
                     # Owner-token release on EVERY exit (success/failure/cancel/timeout).
                     # Stale-safe: only this turn's token clears its own claim.
                     try:
                         from machina.core.turns import end_turn as _end_turn
 
                         if owned_token:
-                            await _end_turn(session_id, owned_token)
+                            # Release is shielded so a cancellation delivered
+                            # mid-flight cannot orphan the claim: wait (bounded)
+                            # for the release to settle, then continue cleanup
+                            # and terminal emission instead of unwinding.
+                            _release = asyncio.ensure_future(_end_turn(session_id, owned_token))
+                            try:
+                                await asyncio.shield(_release)
+                            except asyncio.CancelledError:
+                                try:
+                                    await asyncio.wait_for(
+                                        asyncio.shield(_release), timeout=5.0
+                                    )
+                                except (TimeoutError, asyncio.CancelledError, Exception):
+                                    logger.warning(
+                                        "turn release did not settle within bound; "
+                                        "claim falls back to TTL expiry"
+                                    )
                         if self._turn_tokens.get(sid) == owned_token:
                             self._turn_tokens.pop(sid, None)
                     except Exception as _boundary_error:

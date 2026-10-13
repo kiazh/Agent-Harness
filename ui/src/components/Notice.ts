@@ -5,6 +5,7 @@ import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { NoticeKind } from "../features/types.ts";
 import { BLOCK_GAP } from "../design/tokens.ts";
 import { transcriptInset } from "../design/spacing.ts";
+import { sanitizeDisplay } from "../design/text.ts";
 import { theme } from "../theme.ts";
 
 export class Notice extends Text {
@@ -20,14 +21,18 @@ export class Notice extends Text {
 
 	/** Re-resolve theme colors (skins switch live; text was baked at construction). */
 	refreshSkin(): void {
+		// Untrusted content path (command output, recalled transcripts, MCP
+		// errors): strip terminal controls before display — same sanitizer
+		// UserTurn/ToolTurn/ApprovalCard already use (wave-3 hotfix).
+		const safe = sanitizeDisplay(this.raw);
 		const marked =
 			this.kind === "success"
-				? `✓ ${this.raw}`
+				? `✓ ${safe}`
 				: this.kind === "warning"
-					? `! ${this.raw}`
+					? `! ${safe}`
 					: this.kind === "error"
-						? `✗ ${this.raw}`
-						: this.raw;
+						? `✗ ${safe}`
+						: safe;
 		const style = {
 			info: theme.info,
 			plain: theme.text,

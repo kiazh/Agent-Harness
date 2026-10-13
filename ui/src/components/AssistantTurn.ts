@@ -2,6 +2,7 @@
 // only its one-cell heading marker animates while text is arriving.
 
 import { Markdown, type Component } from "@earendil-works/pi-tui";
+import { sanitizeDisplay } from "../design/text.ts";
 import { BLOCK_GAP } from "../design/tokens.ts";
 import { ACTIVITY_INTERVAL_MS, type ActivitySource } from "../design/motion.ts";
 import { markdownTheme } from "../theme.ts";
@@ -18,7 +19,11 @@ export class AssistantTurn implements Component {
 	constructor(text = "", activity?: ActivitySource) {
 		this.content = text;
 		this.activity = activity;
-		this.md = new Markdown(text, 0, 0, markdownTheme, { color: theme.text });
+		// Untrusted content path: assistant prose can echo repo files, web
+		// pages, model output. Sanitize the ASSEMBLED content (not per-delta)
+		// so a control sequence split across deltas cannot evade the filter
+		// (wave-3 hotfix; same sanitizer as UserTurn/ToolTurn/ApprovalCard).
+		this.md = new Markdown(sanitizeDisplay(text), 0, 0, markdownTheme, { color: theme.text });
 	}
 
 	setStreaming(active: boolean): void {
@@ -29,13 +34,13 @@ export class AssistantTurn implements Component {
 
 	append(delta: string): void {
 		this.content += delta;
-		this.md.setText(this.content);
+		this.md.setText(sanitizeDisplay(this.content));
 	}
 
 	/** Reconcile to canonical final text (replaces incompatible streamed content). */
 	setText(text: string): void {
 		this.content = text;
-		this.md.setText(this.content);
+		this.md.setText(sanitizeDisplay(this.content));
 	}
 
 	getText(): string {

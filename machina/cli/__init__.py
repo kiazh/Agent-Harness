@@ -1114,6 +1114,12 @@ def setup(
             target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
         else:
             target.write_text("# Machina environment (git-ignored)\n", encoding="utf-8")
+        # Secret file hygiene (wave-3 hotfix): the seed must be 0600 before
+        # any values land; without this an updates={} path leaves it 0644.
+        try:
+            os.chmod(target, 0o600)
+        except OSError:
+            pass
     if updates:
         set_env_values(updates, target)
         changed = ", ".join(sorted(updates))

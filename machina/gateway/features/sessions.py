@@ -44,7 +44,6 @@ async def session_delete(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
         return {"deleted": await session_manager.delete(session.id)}
     finally:
         await end_mutation(session.id, token)
-    return {"deleted": await session_manager.delete(session.id)}
 
 
 async def session_rename(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:

@@ -306,14 +306,18 @@ def _file_write_diff(req: ActionRequest) -> dict:
                 current = p.read_text(encoding="utf-8", errors="replace")[:4000]
         except Exception:
             current = ""
-        out["current_preview"] = _redact(current).text if current else "(new file)"
+        # RF3-F2: redact BEFORE diffing — the unified diff is display-only
+        # (execution binds the digest), and diffing raw current leaked
+        # secrets present in the existing file into the card/display.
+        redacted_current = _redact(current).text if current else ""
+        out["current_preview"] = redacted_current or "(new file)"
         proposed_preview = str(getattr(req, "content_preview", "") or "")
         if proposed_preview and current:
             import difflib as _difflib
 
             diff_lines = list(
                 _difflib.unified_diff(
-                    current.splitlines(),
+                    redacted_current.splitlines(),
                     proposed_preview.splitlines(),
                     fromfile="current",
                     tofile="proposed",
@@ -345,6 +349,19 @@ def _approval_view(req: ActionRequest, approval: dict) -> dict:
         durable = _store2.is_durable()
     except Exception:
         durable = None
+    # RF3-F3: argv/targets/shell/network are attacker-influenced and can carry
+    # credentials (e.g. `curl -H "Authorization: Bearer …"`). Redact the
+    # DISPLAY copies only; execution/digest identity stays exact.
+    try:
+        from machina.memory.redaction import redact_secrets as _redact2
+
+        def _red(value: object) -> str:
+            return _redact2(str(value)).text
+    except Exception:
+
+        def _red(value: object) -> str:
+            return str(value)
+
     card: dict = {
         "request_id": req.request_id,
         "session_id": req.session_id,
@@ -354,12 +371,12 @@ def _approval_view(req: ActionRequest, approval: dict) -> dict:
         "backend": req.backend,
         "operation": req.operation,
         "tool": req.tool,
-        "argv": list(req.argv or []),
-        "shell": req.shell,
+        "argv": [_red(a) for a in (req.argv or [])],
+        "shell": _red(req.shell),
         "cwd": req.cwd,
-        "targets": list(req.targets or []),
+        "targets": [_red(t) for t in (req.targets or [])],
         "capabilities": list(req.capabilities or []),
-        "network": list(req.network or []),
+        "network": [_red(n) for n in (req.network or [])],
         "timeout": req.timeout,
         "content_digest": req.content_digest,
         "content_preview": req.content_preview,

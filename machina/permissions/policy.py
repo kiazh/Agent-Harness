@@ -173,7 +173,12 @@ def _sensitive_capabilities(req: ActionRequest) -> list[str]:
         req.operation == "process.exec"
         and first in {"cp", "mv", "mkdir", "touch", "chmod", "chown", "tsc", "ruff"}
     )
-    if writes_paths and any(".git" in Path(t).parts or ".machina" in Path(t).parts for t in paths):
+    if writes_paths and any(
+        # Casefold components (RF3-F1): macOS/Windows filesystems are
+        # case-insensitive, so ".GIT" aliases the real ".git"; the previous
+        # case-sensitive check let unapproved hook/config writes through.
+        {p.lower() for p in Path(t).parts} & {".git", ".machina"} for t in paths
+    ):
         found.append("security_settings")
     if (
         first

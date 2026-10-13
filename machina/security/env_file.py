@@ -226,7 +226,20 @@ def set_env_values(
     target.parent.mkdir(parents=True, exist_ok=True)
     data = "\n".join(lines) + "\n"
     tmp = target.parent / (target.name + f".tmp.{os.getpid()}")
-    tmp.write_text(data, encoding="utf-8")
+    # Secret file hygiene (wave-3 hotfix): create the temp file 0600 so the
+    # os.replace below can never leave a world-readable .env behind (and
+    # repairs an existing 0644 file, e.g. after a legacy write). install.sh
+    # chmods 600 at install time; every subsequent write must preserve that.
+    fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as _tmp_file:
+            _tmp_file.write(data)
+    except BaseException:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
     try:
         try:
             import fcntl  # type: ignore
@@ -239,6 +252,10 @@ def set_env_values(
         except ImportError:
             pass
         os.replace(tmp, target)
+        try:
+            os.chmod(target, 0o600)
+        except OSError:
+            pass
     finally:
         try:
             if tmp.exists():
