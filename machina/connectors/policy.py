@@ -84,6 +84,72 @@ _SUPPORTED_KEYWORDS = frozenset(
 
 _TYPE_NAMES = ("string", "number", "integer", "boolean", "object", "array", "null")
 
+# The regex engine unrolls counted repetitions at COMPILE time and its
+# timeout only covers matching, so `a{100000000}` (12 chars) or nested
+# `(a{10000}){10000}` freeze compilation synchronously on the event loop.
+# Counts are bounded and counted repetitions may not nest; over-budget
+# patterns fail closed with an explicit error.
+_MAX_REPETITION_COUNT = 100
+
+
+def _screen_pattern_budget(pattern: str) -> None:
+    """Reject repetition counts that make compilation expand without bound."""
+    escaped = False
+    in_class = False
+    group_stack: list[bool] = []
+    quantifies_a_counted_group = False
+    index = 0
+    length = len(pattern)
+    while index < length:
+        char = pattern[index]
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif in_class:
+            if char == "]":
+                in_class = False
+        elif char == "[":
+            in_class = True
+        elif char == "(":
+            group_stack.append(False)
+            quantifies_a_counted_group = False
+        elif char == ")":
+            popped = group_stack.pop() if group_stack else False
+            if popped and group_stack:
+                group_stack[-1] = True
+            quantifies_a_counted_group = popped
+        elif char == "{":
+            cursor = index + 1
+            while cursor < length and pattern[cursor].isdigit():
+                cursor += 1
+            low_text = pattern[index + 1 : cursor]
+            high_text = ""
+            if cursor < length and pattern[cursor] == ",":
+                end = cursor + 1
+                while end < length and pattern[end].isdigit():
+                    end += 1
+                high_text = pattern[cursor + 1 : end]
+                cursor = end
+            if cursor < length and pattern[cursor] == "}" and (low_text or high_text):
+                low = int(low_text) if low_text else 0
+                high = int(high_text) if high_text else None
+                if low > _MAX_REPETITION_COUNT or (
+                    high is not None and high > _MAX_REPETITION_COUNT
+                ):
+                    raise ConnectorToolError("pattern repetition count too large")
+                if quantifies_a_counted_group:
+                    raise ConnectorToolError(
+                        "nested counted repetitions are not supported"
+                    )
+                if group_stack:
+                    group_stack[-1] = True
+                index = cursor
+            quantifies_a_counted_group = False
+        else:
+            quantifies_a_counted_group = False
+        index += 1
+
 
 def _check_schema(schema: Any, depth: int = 0) -> None:
     """Validate every schema branch before evaluating any call arguments."""
@@ -127,10 +193,11 @@ def _check_schema(schema: Any, depth: int = 0) -> None:
             raise ConnectorToolError("invalid schema items")
         for item in items if isinstance(items, list) else [items]:
             _check_schema(item, depth + 1)
-    if "pattern" in schema and (
-        not isinstance(schema["pattern"], str) or len(schema["pattern"]) > 200
-    ):
-        raise ConnectorToolError("invalid schema pattern")
+    if "pattern" in schema:
+        pattern = schema["pattern"]
+        if not isinstance(pattern, str) or len(pattern) > 200:
+            raise ConnectorToolError("invalid schema pattern")
+        _screen_pattern_budget(pattern)
     if "format" in schema and not isinstance(schema["format"], str):
         raise ConnectorToolError("invalid schema format")
     if "propertyNames" in schema:
@@ -198,6 +265,10 @@ def _validate(schema: Any, value: Any, depth: int, path: str) -> None:
                 )
                 is not None
             )
+        except (MemoryError, OverflowError):
+            raise ConnectorToolError(
+                f"pattern compilation exceeded its resource budget at {path or 'root'}"
+            ) from None
         except TimeoutError:
             raise ConnectorToolError(
                 f"pattern check exceeded its time budget at {path or 'root'}"

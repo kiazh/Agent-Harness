@@ -172,6 +172,41 @@ def test_hostile_patterns_are_time_bounded():
         validate_arguments("t", {"x": "ABC"}, ok)
 
 
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "a{100000000}",
+        "(a{10000}){10000}b",
+        "(?:a{20000}){20000}c",
+        "(a{50000}){50000}?",
+    ],
+)
+def test_pattern_compile_bombs_are_rejected(pattern):
+    """Counted repetitions expand at COMPILE time; the timeout cannot cover
+    that, so over-budget counts and nested counted repetitions fail closed
+    before any compile (re-verification NEW-1)."""
+    import time as _time
+
+    schema = {"type": "object", "properties": {"x": {"type": "string", "pattern": pattern}}}
+    started = _time.monotonic()
+    with pytest.raises(ConnectorToolError):
+        validate_arguments("t", {"x": "a"}, schema)
+    assert _time.monotonic() - started < 1.0
+
+
+def test_pattern_counts_within_budget_still_match():
+    within = {"type": "object", "properties": {"x": {"type": "string", "pattern": "^a{2,5}$"}}}
+    validate_arguments("t", {"x": "aaa"}, within)
+    with pytest.raises(ConnectorToolError):
+        validate_arguments("t", {"x": "aaaaaa"}, within)
+    grouped = {"type": "object", "properties": {"x": {"type": "string", "pattern": "^(ab){2}$"}}}
+    validate_arguments("t", {"x": "abab"}, grouped)
+    # Nested counted repetitions are refused explicitly, not by accident.
+    nested = {"type": "object", "properties": {"x": {"type": "string", "pattern": "^(a{2}){3}$"}}}
+    with pytest.raises(ConnectorToolError, match="nested"):
+        validate_arguments("t", {"x": "aaaaaa"}, nested)
+
+
 def test_validation_combinators():
     def prop(branches):
         return {"type": "object", "properties": {"v": branches}}

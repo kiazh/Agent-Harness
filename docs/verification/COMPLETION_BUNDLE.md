@@ -196,7 +196,11 @@ Found by running the system live (all numbers observed, not estimated):
   a 6-char `(a+)+$` froze the event loop on a 31-char value. Matching now runs through the
   `regex` engine with a 50 ms per-match timeout and a 250 ms per-call budget (ContextVar,
   covers propertyNames fan-out); exhaustion fails the call closed. `regex` is a declared
-  dependency.
+  dependency. A follow-up adversarial round found the engine expands counted repetitions at
+  *compile* time (no timeout covers compile): `a{100000000}` froze the loop with ~700 MB
+  growth. Counted repetitions are now screened before any compile — counts bounded at 100 and
+  nested counted repetitions refused, both failing closed — with MemoryError/OverflowError
+  mapped to connection errors as defense in depth.
   (C2) the consolidation fix covered only the CLI: gateway turns, API streaming, scheduler jobs,
   and delegated children closed the session provider before extraction ran, so those sessions
   silently never consolidated. All four close paths now join the agent's consolidation/learning

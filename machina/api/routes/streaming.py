@@ -20,6 +20,7 @@ from fastapi.responses import StreamingResponse
 
 from machina.api.routes.models import PromptRequest
 from machina.api.routes.shared import _redact_value, _serialize_event
+from machina.core.background_tasks import join_agent_background_tasks
 from machina.core.config import config
 from machina.core.exceptions import StaleOwnershipError
 from machina.core.models import StreamEvent
@@ -320,6 +321,9 @@ async def _stream_session(
                         if stream is not None:
                             await stream.aclose()
                         if agent is not None:
+                            # Consolidation shares the provider; join it (bounded)
+                            # before this retire-path close, like every other path.
+                            await join_agent_background_tasks(agent, timeout=1.0)
                             from machina.core.agent_factory import close_agent_provider
 
                             await close_agent_provider(agent)
@@ -343,6 +347,7 @@ async def _stream_session(
                 # 2. Provider close: bounded with timeout.
                 # 3. Claim release: independent outer finally, always runs.
                 # 4. Auto-compaction: fire-and-forget, never blocks [DONE].
+                _optional: tuple = ()
                 try:
                     _optional = (
                         (
@@ -362,7 +367,7 @@ async def _stream_session(
                             _, pending = await asyncio.wait(_optional, timeout=2)
                             for _t in pending:
                                 _t.cancel()
-                        except (TimeoutError, asyncio.CancelledError, Exception):
+                        except (TimeoutError, Exception):
                             for _t in _optional:
                                 try:
                                     if not _t.done():

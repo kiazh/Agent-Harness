@@ -158,15 +158,15 @@ def run_cmd(
         timed_out = True
         _kill_group(proc, signal.SIGTERM)
         try:
-            stdout, stderr = proc.communicate(timeout=10)
+            stdout, stderr = proc.communicate(timeout=3)
         except subprocess.TimeoutExpired:
             _kill_group(proc, signal.SIGKILL)
             try:
-                stdout, stderr = proc.communicate(timeout=5)
+                stdout, stderr = proc.communicate(timeout=2)
             except subprocess.TimeoutExpired:
                 # A detached grandchild can hold the pipes open forever; the
-                # harness cap must not be defeated by a runner that never
-                # returns. Close our ends and move on.
+                # harness cap (timeout + ~5s worst case) must not be defeated
+                # by a runner that never returns. Close our ends and move on.
                 for stream in (proc.stdout, proc.stderr):
                     try:
                         stream.close()

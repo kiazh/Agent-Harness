@@ -1092,6 +1092,7 @@ class Gateway:
                 # 1. Learning tasks: bounded join, then cancel leftovers.
                 # 2. Provider close: bounded with timeout.
                 # 3. Claim release: independent outer finally, always runs.
+                _optional: tuple = ()
                 try:
                     _optional = (
                         (
@@ -1107,7 +1108,7 @@ class Gateway:
                             _, pending = await asyncio.wait(_optional, timeout=2)
                             for _t in pending:
                                 _t.cancel()
-                        except (TimeoutError, asyncio.CancelledError, Exception):
+                        except (TimeoutError, Exception):
                             for _t in _optional:
                                 try:
                                     if not _t.done():
