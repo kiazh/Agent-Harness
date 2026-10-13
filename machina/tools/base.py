@@ -40,6 +40,7 @@ _UNCACHEABLE_TOOLS = frozenset(
         "mcp_call",
         "recall",
         "harness_status",
+        "learn_directory",
         "search_documents",
         "web_research",
         "list_agents",

@@ -115,6 +115,14 @@ DEFAULTS: dict[str, Any] = {
     "learning_review_max_per_session": 3,
     "rag_enabled": True,
     "streaming": True,
+    # PILOT (default off): attach Anthropic-style ephemeral prompt-cache
+    # breakpoints to the two stable-prefix ends — the final system content
+    # block and the last tool schema entry. Provider-dependent: honored by
+    # AnthropicProvider and by OpenRouter requests routed to Anthropic
+    # ("anthropic" in the model id); Direct providers and Ollama ignore it.
+    # Expected saving is unmeasured and bounded by each model's minimum
+    # cacheable prompt length plus real-turn prefix stability.
+    "prompt_cache_enabled": False,
     "theme": "codex",
     "history_size": 100,
     # API keys and service URLs
@@ -303,6 +311,7 @@ class Config:
     learning_review_max_per_session: int = 3
     rag_enabled: bool = True
     streaming: bool = True
+    prompt_cache_enabled: bool = False
     theme: str = "codex"
     history_size: int = 100
     # API keys and service URLs

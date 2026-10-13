@@ -743,6 +743,132 @@ def _tools_payload(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Prompt-cache breakpoints (E1 pilot — ``prompt_cache_enabled``, default OFF)
+#
+# The stable prefix (system prompt + tool schemas) is resent on every call.
+# When enabled, the two ends that bound it get an Anthropic-style ephemeral
+# ``cache_control`` marker: the final system content block and the last tool
+# schema entry. AnthropicProvider sends breakpoints natively; OpenRouter
+# passes them through only for models routed to Anthropic ("anthropic" in the
+# model id) — Direct providers and Ollama are untouched.
+#
+# Expected saving is not quantified here: it is bounded by the serving
+# model's minimum cacheable prompt length (~1k-4k tokens for current Claude
+# models), by real-turn prefix stability, and by the cache-write premium
+# until a prefix is read back within the TTL. It stays a pilot (default off)
+# until that is measured on real turns.
+# ---------------------------------------------------------------------------
+def _prompt_cache_breakpoints_enabled() -> bool:
+    """Read the pilot toggle live; invalid config degrades to disabled.
+
+    A bad value must never take provider calls down: without breakpoints the
+    request is still fully valid (same contract as ``reasoning_effort``).
+    """
+    try:
+        return bool(config.get("prompt_cache_enabled"))
+    except (ValidationError, ValueError) as exc:
+        logger.warning(
+            "Ignoring invalid prompt_cache_enabled config value (%s); "
+            "sending requests without cache breakpoints",
+            type(exc).__name__,
+        )
+        return False
+
+
+def _ephemeral_cache_control() -> dict[str, str]:
+    """Fresh Anthropic-style ephemeral breakpoint marker."""
+    return {"type": "ephemeral"}
+
+
+def _openrouter_anthropic_model(model: str | None) -> bool:
+    """Whether an OpenRouter model id routes to Anthropic for cache_control."""
+    return "anthropic" in (model or "").lower()
+
+
+def _mark_openrouter_system_breakpoint(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]] | None:
+    """Copy *messages* with an ephemeral breakpoint on the system tail.
+
+    Returns None when there is no non-empty system message to mark, so the
+    caller can leave the payload untouched. The caller's list and dicts are
+    never mutated: breakpoints belong to the wire payload only, not to the
+    caller's history.
+    """
+    last_system = -1
+    for index, message in enumerate(messages):
+        if message.get("role") == "system":
+            last_system = index
+    if last_system < 0:
+        return None
+    message = messages[last_system]
+    content = message.get("content")
+    if isinstance(content, str):
+        if not content:
+            return None
+        marked: Any = [
+            {"type": "text", "text": content, "cache_control": _ephemeral_cache_control()}
+        ]
+    elif isinstance(content, list) and content and isinstance(content[-1], dict):
+        # Already block-form: mark a copy of the final block.
+        marked = [
+            *content[:-1],
+            {**content[-1], "cache_control": _ephemeral_cache_control()},
+        ]
+    else:
+        return None
+    out = list(messages)
+    out[last_system] = {**message, "content": marked}
+    return out
+
+
+def _mark_last_tool_breakpoint(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Copy *tools* with an ephemeral breakpoint on the final entry."""
+    if not tools:
+        return tools
+    return [*tools[:-1], {**tools[-1], "cache_control": _ephemeral_cache_control()}]
+
+
+def _openrouter_wire_messages(
+    messages: list[dict[str, Any]], cache_breakpoints: bool
+) -> tuple[list[dict[str, Any]], bool]:
+    """Return ``(messages_for_wire, system_marked)`` for OpenRouter.
+
+    With breakpoints enabled the system tail is marked in a copied list;
+    the caller's history is never mutated. Disabled or unmarkable input is
+    returned unchanged so the OFF path stays byte-identical.
+    """
+    if not cache_breakpoints:
+        return messages, False
+    marked = _mark_openrouter_system_breakpoint(messages)
+    if marked is None:
+        return messages, False
+    return marked, True
+
+
+def _log_prompt_cache_breakpoints(
+    provider: str, model: str, *, system: bool, tools: bool
+) -> None:
+    """One debug line per call when breakpoints attach (pilot visibility).
+
+    The saving expectation is stated, not measured: benefit depends on the
+    serving model's minimum cacheable prompt length and real-turn prefix
+    stability (follow-up sizing), so no number is invented here.
+    """
+    if not (system or tools):
+        return
+    logger.debug(
+        "prompt cache breakpoints attached provider=%s model=%s system=%s tools=%s; "
+        "saving unmeasured (minimum cacheable prompt length and real-turn "
+        "prefix stability apply)",
+        provider,
+        model,
+        system,
+        tools,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Base provider
 # ---------------------------------------------------------------------------
 class LLMProvider:
@@ -849,17 +975,29 @@ class OpenRouterProvider(LLMProvider):
         await self._rate_limiter.acquire()
 
         model = model or self.model
+        cache_breakpoints = _prompt_cache_breakpoints_enabled() and _openrouter_anthropic_model(
+            model
+        )
+        wire_messages, system_marked = _openrouter_wire_messages(messages, cache_breakpoints)
         payload: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": wire_messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        tools_marked = False
         if tools:
-            payload["tools"] = _tools_payload(tools)
+            tool_payload = _tools_payload(tools)
+            if cache_breakpoints:
+                tool_payload = _mark_last_tool_breakpoint(tool_payload)
+                tools_marked = True
+            payload["tools"] = tool_payload
         effort = _resolve_effort(reasoning_effort, self._default_effort)
         if effort:
             payload["reasoning"] = {"effort": effort}
+        _log_prompt_cache_breakpoints(
+            "openrouter", model, system=system_marked, tools=tools_marked
+        )
 
         # Check cache before making any HTTP request
         if _is_free_model(model):
@@ -1087,9 +1225,13 @@ class OpenRouterProvider(LLMProvider):
                     candidates.append(fb)
         else:
             payload_max = max_tokens
+        cache_breakpoints = _prompt_cache_breakpoints_enabled() and _openrouter_anthropic_model(
+            model
+        )
+        wire_messages, system_marked = _openrouter_wire_messages(messages, cache_breakpoints)
         payload: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": wire_messages,
             "temperature": temperature,
             "max_tokens": payload_max,
             "stream": True,
@@ -1099,11 +1241,19 @@ class OpenRouterProvider(LLMProvider):
         if not _is_free_model(model):
             # Ask for a final usage chunk so streamed turns report real token counts
             payload["stream_options"] = {"include_usage": True}
+        tools_marked = False
         if tools:
-            payload["tools"] = _tools_payload(tools)
+            tool_payload = _tools_payload(tools)
+            if cache_breakpoints:
+                tool_payload = _mark_last_tool_breakpoint(tool_payload)
+                tools_marked = True
+            payload["tools"] = tool_payload
         effort = _resolve_effort(reasoning_effort, self._default_effort)
         if effort:
             payload["reasoning"] = {"effort": effort}
+        _log_prompt_cache_breakpoints(
+            "openrouter", model, system=system_marked, tools=tools_marked
+        )
 
         audit_log(
             "llm_stream_start", provider="openrouter", model=model, message_count=len(messages)
@@ -2090,6 +2240,7 @@ class AnthropicProvider(LLMProvider):
         stream: bool,
     ) -> dict[str, Any]:
         system, anthropic_messages = self._to_anthropic_messages(messages)
+        cache_breakpoints = _prompt_cache_breakpoints_enabled()
         thinking, max_tokens, temperature = self._thinking_payload(
             reasoning_effort, max_tokens, temperature
         )
@@ -2100,16 +2251,38 @@ class AnthropicProvider(LLMProvider):
             **thinking,
         }
         if system:
-            payload["system"] = system
+            if cache_breakpoints:
+                # Block-list form is required to carry cache_control; only
+                # used when the pilot flag is on.
+                payload["system"] = [
+                    {
+                        "type": "text",
+                        "text": system,
+                        "cache_control": _ephemeral_cache_control(),
+                    }
+                ]
+            else:
+                payload["system"] = system
         if temperature != 1.0:
             payload["temperature"] = temperature
+        tools_marked = False
         if tools:
-            payload["tools"] = [
+            tool_defs = [
                 {"name": t.name, "description": t.description, "input_schema": t.parameters}
                 for t in tools
             ]
+            if cache_breakpoints:
+                tool_defs = _mark_last_tool_breakpoint(tool_defs)
+                tools_marked = True
+            payload["tools"] = tool_defs
         if stream:
             payload["stream"] = True
+        _log_prompt_cache_breakpoints(
+            "anthropic",
+            model,
+            system=cache_breakpoints and bool(system),
+            tools=tools_marked,
+        )
         return payload
 
     def reservation_max_tokens(self, max_tokens: int, reasoning_effort: str | None = None) -> int:

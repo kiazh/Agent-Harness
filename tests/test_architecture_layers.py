@@ -172,11 +172,16 @@ def test_deferred_import_count_ratchet():
 #     rate-limiter reload; offset by removing the dead embed implementations
 #     (-26) and a duplicated free-tier clamp (-1). No unreviewed growth may
 #     land on top of this.
+#   core/provider.py 2381 -> 2554 (E1 pilot wave): config-gated prompt-cache
+#     breakpoints — payload-only markers on the system tail + last tool for
+#     Anthropic, OpenRouter passthrough only for Anthropic-routed models,
+#     direct/ollama no-ops, and OFF-path wire-byte pins; transport logic
+#     unchanged.
 @pytest.mark.parametrize(
     "relative_path,ceiling",
     [
         ("core/agent.py", 2057),
-        ("core/provider.py", 2381),
+        ("core/provider.py", 2554),
         ("core/compression.py", 999),
     ],
 )
