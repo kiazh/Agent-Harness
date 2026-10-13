@@ -945,7 +945,13 @@ class ContextManager:
                 acquire_cm.close()
                 raise TypeError("acquire() returned a coroutine double")
             async with acquire_cm as conn:
-                async with conn.transaction():
+                transaction_cm = conn.transaction()
+                if inspect.iscoroutine(transaction_cm):
+                    # Same mock-double case one level down (conn is an
+                    # AsyncMock whose transaction() returns a coroutine).
+                    transaction_cm.close()
+                    raise TypeError("transaction() returned a coroutine double")
+                async with transaction_cm:
                     result = await conn.execute(
                         "DELETE FROM context_chunks WHERE session_id = $1",
                         session_id,

@@ -63,6 +63,29 @@ class RecursiveCharacterTextSplitter:
         base_metadata = metadata or {}
         chunks = self._split_recursive(text, self.separators, base_metadata)
 
+        # Hard char bound on base emissions (property: no emitted chunk
+        # exceeds chunk_size*4). The token estimate floors (len // 4), so a
+        # text just above the 4x boundary can pass the fits-check and be
+        # emitted oversized (e.g. 33 chars -> est 8 at chunk_size=8).
+        # Character-split such chunks: contiguous slices keep the
+        # subsequence/substring properties intact.
+        max_chars = self.chunk_size * 4
+        if any(len(chunk.text) > max_chars for chunk in chunks):
+            bounded: list[Chunk] = []
+            for chunk in chunks:
+                if len(chunk.text) > max_chars:
+                    for piece in self._hard_split(chunk.text, max_chars):
+                        bounded.append(
+                            Chunk(
+                                text=piece,
+                                metadata=dict(chunk.metadata),
+                                token_count=self._estimate_tokens(piece),
+                            )
+                        )
+                else:
+                    bounded.append(chunk)
+            chunks = bounded
+
         # Apply overlap
         if self.chunk_overlap > 0 and len(chunks) > 1:
             chunks = self._apply_overlap(chunks)
@@ -213,13 +236,20 @@ class RecursiveCharacterTextSplitter:
             if self._estimate_tokens(candidate) <= self.chunk_size:
                 current_text = candidate
             else:
-                # Current part doesn't fit
+                # Current part doesn't fit. Retain a PLAIN separator at the
+                # tail of the emitted chunk: it was consumed from the source
+                # between current_text and part, and keeping it restores
+                # source adjacency — the prerequisite for overlap-merged
+                # chunks staying genuine substrings of the source (no
+                # fabricated spans; property test in test_fm5_chunker).
+                keep_sep = "" if self.is_separator_regex else sep
                 if current_text:
+                    emitted = current_text + keep_sep
                     chunks.append(
                         Chunk(
-                            text=current_text,
+                            text=emitted,
                             metadata=dict(metadata),
-                            token_count=self._estimate_tokens(current_text),
+                            token_count=self._estimate_tokens(emitted),
                         )
                     )
 
