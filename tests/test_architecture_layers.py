@@ -160,10 +160,17 @@ def test_deferred_import_count_ratchet():
     #   the turn_flow extraction; new core/turn_flow.py +1 guarded helper
     #   import). Census = 675. N1 (final pass): entry added to make the
     #   procedure table complete; the cap was already honest at 675 <= 677.
+    #   Benchmark tool (research/benchmark.py, unified offline benchmark): +5
+    #   (the four test-harness modules — replay/retrieval/prefix/architecture —
+    #   are imported lazily per section because tests/ is not importable until
+    #   sys.path setup and is absent from wheels; plus pytest for
+    #   MonkeyPatch. The machina-side imports — version, locomo, db — are at
+    #   module level, matching research/workflow_benchmark.py.) Census
+    #   675 -> 680, so cap 677 -> 680.
     # Procedure: this number may only move with a delta table like the above
     # in this comment; silent growth fails the suite by design.
     total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))
-    assert total <= 677, f"deferred (function-level) imports grew: {total} > 677"
+    assert total <= 680, f"deferred (function-level) imports grew: {total} > 680"
 
 
 # God-file ceilings. Ratchets down, never up, except with a reviewed delta
