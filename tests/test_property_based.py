@@ -385,9 +385,16 @@ class TestToolRegistryProperties:
             values=st.integers(),
         ),
     )
-    @settings(max_examples=100)
+    @settings(max_examples=100, deadline=None)
     def test_execute_with_arbitrary_args(self, args):
-        """Property: Tool execution with arbitrary args doesn't crash."""
+        """Property: Tool execution with arbitrary args doesn't crash.
+
+        ``deadline=None``: every example performs a real ``asyncio.run`` and
+        logs audit events for validation errors, so per-example wall time is
+        I/O-bound and load-sensitive (observed 338ms under a concurrent
+        full-suite run vs ~1.5ms idle — a hypothesis DeadlineExceeded flake,
+        not a logic failure). Timing is irrelevant to this property.
+        """
         reg = ToolRegistry()
 
         @reg.register()
