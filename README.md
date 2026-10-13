@@ -526,6 +526,11 @@ npm --prefix ui run check
 
 Database tests require the dedicated DSN. Real gateway UI tests additionally require `MACHINA_TEST_PYTHON` and their test environment; the backend's real-gateway wrapper configures those automatically. Missing prerequisites produce explicit skips, not verification evidence. Do not run concurrent backend suites against the same test database.
 
+CI uses the Ruff version pinned in the `dev` dependencies. Before pushing, run both
+Ruff checks across `machina/ tools/`, even when focused tests pass. To correct import
+ordering and formatting, run `python -m ruff check --select I --fix machina/ tools/`
+and `python -m ruff format machina/ tools/`, then rerun the checks above.
+
 Build and inspect artifacts:
 
 ```bash
@@ -535,6 +540,13 @@ python tools/check_release_artifacts.py dist/*
 ```
 
 CI covers Python checks, coverage, optional connector transport tests, the UI and distributable artifacts. The [current evidence](docs/verification/RELEASE_READINESS.md) distinguishes local checks from remote CI and deployment gates. Historical test counts and benchmarks in older documents describe their recorded checkout only.
+
+The backend CI job excludes `ui_integration` and `workflow_trial` tests. The UI job
+owns typechecking, lint, all UI tests and real gateway restart coverage. Optional
+native-versus-LangGraph trials run in the separate **Workflow research** workflow
+when research files or dependency declarations change, weekly on Mondays, or manually.
+To run those groups locally, use `python -m pytest -m ui_integration` or
+`python -m pytest -m workflow_trial`; the unfiltered local suite still runs all groups.
 
 ### Recorded verification
 

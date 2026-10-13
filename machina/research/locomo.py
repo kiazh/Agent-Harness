@@ -496,9 +496,7 @@ def main() -> None:
         default="lexical",
     )
     parser.add_argument("--db-url", help="Initialized PostgreSQL DSN for archive backend")
-    parser.add_argument(
-        "--test-db", action="store_true", help="Use MACHINA_TEST_DATABASE_URL"
-    )
+    parser.add_argument("--test-db", action="store_true", help="Use MACHINA_TEST_DATABASE_URL")
     parser.add_argument(
         "--answers",
         action="store_true",

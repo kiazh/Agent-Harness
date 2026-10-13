@@ -7,6 +7,8 @@ import pytest
 
 from machina.research.workflow_trial import GraphApprovalTrial
 
+pytestmark = pytest.mark.workflow_trial
+
 
 @pytest.mark.asyncio
 async def test_checkpoint_count_reads_all_requested_threads():

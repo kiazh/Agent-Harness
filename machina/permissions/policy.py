@@ -173,9 +173,7 @@ def _sensitive_capabilities(req: ActionRequest) -> list[str]:
         req.operation == "process.exec"
         and first in {"cp", "mv", "mkdir", "touch", "chmod", "chown", "tsc", "ruff"}
     )
-    if writes_paths and any(
-        ".git" in Path(t).parts or ".machina" in Path(t).parts for t in paths
-    ):
+    if writes_paths and any(".git" in Path(t).parts or ".machina" in Path(t).parts for t in paths):
         found.append("security_settings")
     if (
         first

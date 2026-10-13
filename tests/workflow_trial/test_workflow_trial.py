@@ -14,6 +14,8 @@ import pytest
 from machina.core.session import SessionManager
 from machina.research.workflow_trial import GraphApprovalTrial, NativeApprovalTrial
 
+pytestmark = pytest.mark.workflow_trial
+
 
 async def test_native_approval_is_scoped_and_idempotent_after_reopen(db_pool, monkeypatch):
     monkeypatch.setattr("machina.core.session.db", db_pool)

@@ -48,7 +48,12 @@ async def test_terminal_limit_is_rateable_but_cancellation_is_not(monkeypatch, s
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from machina.core.agent import BaseReActAgent, _growth_episode, instrument_run, instrument_stream
+    from machina.core.agent import (
+        BaseReActAgent,
+        _growth_episode,
+        instrument_run,
+        instrument_stream,
+    )
     from machina.core.models import AgentResponse, StreamEvent
 
     session = SimpleNamespace(id=uuid.uuid4(), agent_id="harness")
@@ -140,6 +145,7 @@ async def test_additive_growth_migration_is_idempotent(db_pool):
 
 
 @pytest.mark.asyncio
+@pytest.mark.ui_integration
 async def test_ui_checks_with_real_gateway_restart(db_pool, tmp_path):
     import asyncio
     import os

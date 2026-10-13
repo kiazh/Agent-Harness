@@ -17,9 +17,7 @@ class ExecutionContext:
 
 
 def configured_workspace() -> Path:
-    return Path(
-        config.get("workspace_root") or config.get("machina_home") or Path.cwd()
-    ).resolve()
+    return Path(config.get("workspace_root") or config.get("machina_home") or Path.cwd()).resolve()
 
 
 def _context(mode: str, tool: str, workspace: Path, backend: str | None = None) -> ExecutionContext:

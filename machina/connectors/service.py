@@ -11,7 +11,12 @@ from collections.abc import Mapping
 from typing import Any
 
 from machina.connectors.manager import ConnectorManager
-from machina.connectors.models import ConfigError, ConnectionFailed, ConnectionState, ConnectorToolError
+from machina.connectors.models import (
+    ConfigError,
+    ConnectionFailed,
+    ConnectionState,
+    ConnectorToolError,
+)
 from machina.connectors.policy import classify_tool
 from machina.connectors.registry import ConnectorRegistry
 from machina.connectors.store import ConnectorStore

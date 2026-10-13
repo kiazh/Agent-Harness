@@ -117,7 +117,9 @@ def find_env_file(start: Path | None = None) -> Path:
         else:
             p = Path(os.path.abspath(p))
         if p.name != ".env" and not p.name.endswith(".env") and not p.is_file():
-            raise ValueError(f"MACHINA_ENV_FILE must end with .env or be an existing file: {override!r}")
+            raise ValueError(
+                f"MACHINA_ENV_FILE must end with .env or be an existing file: {override!r}"
+            )
         return p.resolve() if p.exists() else p
     here = (start or Path.cwd()).resolve()
     for candidate in (here, *here.parents):

@@ -5,7 +5,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from machina.connectors.oauth import OAuthError, OAuthOwner
-from machina.gateway.errors import INVALID_PARAMS, NOT_FOUND, OPERATION_FAILED, UNAUTHORIZED, RpcError
+from machina.gateway.errors import (
+    INVALID_PARAMS,
+    NOT_FOUND,
+    OPERATION_FAILED,
+    UNAUTHORIZED,
+    RpcError,
+)
 from machina.gateway.features._common import _str
 
 if TYPE_CHECKING:

@@ -171,7 +171,11 @@ class Orchestrator:
 
         handoff = await self._parent_context(parent_session_id) if parent_session_id else ""
 
-        from machina.core.agent_factory import cap_child_authority, check_mode_cap, parent_authority_var
+        from machina.core.agent_factory import (
+            cap_child_authority,
+            check_mode_cap,
+            parent_authority_var,
+        )
         from machina.core.session_mode import resolve_effective_mode
 
         parent = dict(parent_authority_var.get() or {})

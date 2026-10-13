@@ -29,9 +29,14 @@ def prometheus_text(collector: MetricsCollector = metrics) -> str:
     ]
     for name, stats in sorted(data["latency_totals"].items()):
         label = _label(name)
-        lines.append(f'machina_duration_milliseconds_count{{operation="{label}"}} {int(stats["count"])}')
+        lines.append(
+            f'machina_duration_milliseconds_count{{operation="{label}"}} {int(stats["count"])}'
+        )
         lines.append(f'machina_duration_milliseconds_sum{{operation="{label}"}} {stats["sum"]}')
-    lines += ["# HELP machina_tokens_total Tokens recorded by agents.", "# TYPE machina_tokens_total counter"]
+    lines += [
+        "# HELP machina_tokens_total Tokens recorded by agents.",
+        "# TYPE machina_tokens_total counter",
+    ]
     for kind, count in data["token_totals"].items():
         lines.append(f'machina_tokens_total{{kind="{kind}"}} {count}')
     return "\n".join(lines) + "\n"

@@ -162,7 +162,9 @@ def _getaddrinfo_timeout(hostname: str, timeout: float = 3.0):
 
 
 # Shared bounded executor for DNS (never shut down per call — see above).
-_DNS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="machina-dns")
+_DNS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="machina-dns"
+)
 
 
 def _is_safe_url(url: str) -> bool:

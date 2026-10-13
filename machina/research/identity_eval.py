@@ -111,9 +111,7 @@ async def evaluate_identity_scenarios(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate labeled identity drift scenarios")
     parser.add_argument("scenarios", help="JSON array of baseline and proposed belief sequences")
-    parser.add_argument(
-        "--test-db", action="store_true", help="Use MACHINA_TEST_DATABASE_URL"
-    )
+    parser.add_argument("--test-db", action="store_true", help="Use MACHINA_TEST_DATABASE_URL")
     parser.add_argument("--db-url", help="Initialized PostgreSQL DSN")
     parser.add_argument("--threshold", type=float, default=0.5)
     args = parser.parse_args()

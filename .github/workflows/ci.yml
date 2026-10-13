@@ -46,18 +46,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Set up Node.js for gateway integration tests
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-
-      - name: Install UI dependencies
-        run: npm ci --ignore-scripts --prefix ui
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,workflow-trial,connectors]"
+          pip install -e ".[dev,connectors]"
           python -m pip install hatchling
 
       - name: Run ruff check
@@ -72,6 +64,7 @@ jobs:
       - name: Run pytest with coverage
         run: |
           pytest tests/ -v \
+            -m "not ui_integration and not workflow_trial" \
             --cov=machina \
             --cov-report=xml \
             --cov-report=term-missing \
@@ -100,6 +93,7 @@ jobs:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   ui:
+    # Owns the full UI check, including tests against a restarted real gateway.
     runs-on: ubuntu-latest
     services:
       postgres:

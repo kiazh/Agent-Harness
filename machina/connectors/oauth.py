@@ -32,7 +32,11 @@ from machina.connectors.oauth_models import (
     OAuthSettings,
     RegisteredOAuthClient,
 )
-from machina.connectors.oauth_network import OAuthNetworkClient, OAuthNetworkError, normalize_resource
+from machina.connectors.oauth_network import (
+    OAuthNetworkClient,
+    OAuthNetworkError,
+    normalize_resource,
+)
 from machina.connectors.oauth_store import OAuthCredentialStore, credential_key_for
 
 

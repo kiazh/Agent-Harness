@@ -85,7 +85,9 @@ async def _resolve_session(session_id: str | None):
             raise typer.Exit(1)
         session = await session_manager.get(sid)
         if session is None:
-            output.error(f"Session {session_id} not found", "Use `machina sessions` to list sessions.")
+            output.error(
+                f"Session {session_id} not found", "Use `machina sessions` to list sessions."
+            )
             raise typer.Exit(1)
         return session
     session = await session_manager.get_last_active()
@@ -156,7 +158,8 @@ def chat(
                 session = await session_manager.get(sid)
                 if not session:
                     output.error(
-                        f"Session {session_id} not found", "Use `machina sessions` to list sessions."
+                        f"Session {session_id} not found",
+                        "Use `machina sessions` to list sessions.",
                     )
                     raise typer.Exit(1)
                 output.muted(f"Resuming session: {session.id}")
@@ -175,7 +178,8 @@ def chat(
                 _provider_name = provider or session.provider or config.get("provider")
             except ValueError as e:
                 output.error(
-                    f"Provider error: {e}", "Check your provider configuration with `machina config`."
+                    f"Provider error: {e}",
+                    "Check your provider configuration with `machina config`.",
                 )
                 raise typer.Exit(1) from None
 
@@ -913,7 +917,12 @@ def doctor():
         "",
         "Run `machina setup` or set it in .env.",
     )
-    check("DATABASE_URL", bool(config.get("database_url")), "", "Run `machina setup` or set it in .env.")
+    check(
+        "DATABASE_URL",
+        bool(config.get("database_url")),
+        "",
+        "Run `machina setup` or set it in .env.",
+    )
 
     async def _check_db():
         try:
@@ -974,7 +983,12 @@ def setup(
     """
     import secrets as _secrets
 
-    from machina.security.env_file import PROVIDER_KEYS, find_env_file, read_env_values, set_env_values
+    from machina.security.env_file import (
+        PROVIDER_KEYS,
+        find_env_file,
+        read_env_values,
+        set_env_values,
+    )
 
     target = find_env_file()
     if target.is_file() and force:
