@@ -1365,7 +1365,10 @@ class BaseReActAgent:
             # Skill pages and status snapshots already have bounded output.
             # Preserve continuation offsets and complete JSON beyond the preview cap.
             message_limit = (
-                9000 if tool_name in ("skill_read", "skill_resource", "harness_status") else 1000
+                9000
+                if tool_name
+                in ("skill_read", "skill_resource", "harness_status", "search_documents")
+                else 1000
             )
             self._append_tool_messages(messages, response, tc, result_str[:message_limit])
 

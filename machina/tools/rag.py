@@ -141,13 +141,18 @@ async def index_document(
 
 @registry.register(
     name="search_documents",
-    description="Search indexed documents using hybrid search (BM25 + dense vector + RRF fusion). Returns relevant document chunks.",
+    description="Search indexed documents using hybrid search (PostgreSQL full-text ranking + dense vector + RRF fusion). Returns relevant document chunks.",
     parameters={
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "Search query"},
             "session_id": {"type": "string", "description": "Session ID to search within"},
-            "top_k": {"type": "integer", "description": "Number of results to return (default: 5)"},
+            "top_k": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10,
+                "description": "Number of results to return (1–10, default: 5)",
+            },
         },
         "required": ["query", "session_id"],
     },
@@ -159,7 +164,7 @@ async def search_documents(
 ) -> str:
     """Search indexed documents using hybrid search.
 
-    Combines BM25 (keyword) and dense vector (semantic) search with RRF fusion.
+    Combines PostgreSQL full-text (keyword) and dense vector (semantic) search with RRF fusion.
     """
     try:
         sid = uuid.UUID(session_id)
@@ -169,6 +174,9 @@ async def search_documents(
     _, owned_session = await active_agent_scope()
     if sid != owned_session:
         raise ToolError("document session does not belong to the active agent session")
+
+    if type(top_k) is not int or not 1 <= top_k <= 10:
+        raise ValidationError("top_k must be an integer between 1 and 10")
 
     pipeline = await get_rag_pipeline()
 
@@ -182,14 +190,25 @@ async def search_documents(
         if not results:
             return f"No results found for '{query}'"
 
-        lines = [f"Search results for '{query}' ({len(results)} results):"]
+        results = results[:top_k]
+        lines = [f"Search results for '{query[:200]}' ({len(results)} results):"]
+        # Share the evidence budget across all hits so later passages survive
+        # the agent's bounded tool message. Keep line structure and provenance.
+        headers = []
         for i, result in enumerate(results, 1):
+            source = str(result.chunk.payload.get("metadata", {}).get("source", "unknown"))[:240]
+            ranking = "reranker" if result.rerank_score is not None else "retrieval"
+            headers.append(
+                f"\n{i}. [{result.score:.4f}; {ranking}] {source} (chunk {result.chunk.id})"
+            )
+        # Include headers, newlines and truncation markers in the total budget.
+        remaining = 8500 - len(lines[0]) - sum(map(len, headers)) - 100 * len(results)
+        passage_limit = min(2000, max(0, remaining // len(results)))
+        for result, header in zip(results, headers, strict=True):
             text = result.chunk.payload.get("text", "")
-            source = result.chunk.payload.get("metadata", {}).get("source", "unknown")
-            score = result.score
-            preview = text[:200].replace("\n", " ")
-            lines.append(f"\n{i}. [{score:.4f}] {source}")
-            lines.append(f"   {preview}...")
+            lines.extend([header, text[:passage_limit]])
+            if len(text) > passage_limit:
+                lines.append(f"[passage truncated: {len(text) - passage_limit} characters omitted]")
 
         audit_log(
             "rag_tool_search_documents",

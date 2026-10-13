@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -17,10 +18,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RerankResult:
-    """A reranked result with relevance score."""
+    """A reranked result; None signals passthrough, without a learned score."""
 
     index: int
-    score: float
+    score: float | None
     text: str = ""
 
 
@@ -126,28 +127,30 @@ class CohereReranker(Reranker):
             )
             resp.raise_for_status()
             data = resp.json()
+            results = []
+            seen = set()
+            for item in data["results"]:
+                index, score = item["index"], item["relevance_score"]
+                if (
+                    type(index) is not int
+                    or not 0 <= index < len(documents)
+                    or index in seen
+                    or type(score) not in (int, float)
+                    or not math.isfinite(score)
+                ):
+                    raise ValueError("Invalid reranker index or score")
+                seen.add(index)
+                results.append(RerankResult(index, float(score), documents[index]))
+            if not results:
+                raise ValueError("Empty reranker response")
+            results.sort(key=lambda r: r.score, reverse=True)
         except Exception as e:
             audit_log("rag_rerank_error", model=self._model, error=str(e))
-            logger.error("Rerank API call failed: %s", e)
-            # Fallback: return results with synthetic scores (not original order)
-            logger.warning("Reranker fallback: returning results with synthetic scores")
+            logger.warning("Reranking unavailable; preserving retrieval ranking: %s", e)
             return [
-                RerankResult(index=i, score=1.0 / (i + 1), text=doc)
+                RerankResult(index=i, score=None, text=doc)
                 for i, doc in enumerate(documents[:top_k])
             ]
-
-        results = []
-        for item in data.get("results", []):
-            results.append(
-                RerankResult(
-                    index=item["index"],
-                    score=item["relevance_score"],
-                    text=documents[item["index"]],
-                )
-            )
-
-        # Sort by score descending
-        results.sort(key=lambda r: r.score, reverse=True)
 
         audit_log(
             "rag_rerank_complete",
@@ -180,6 +183,5 @@ class IdentityReranker(Reranker):
     ) -> list[RerankResult]:
         """Return documents in original order (no reranking)."""
         return [
-            RerankResult(index=i, score=1.0 / (i + 1), text=doc)
-            for i, doc in enumerate(documents[:top_k])
+            RerankResult(index=i, score=None, text=doc) for i, doc in enumerate(documents[:top_k])
         ]

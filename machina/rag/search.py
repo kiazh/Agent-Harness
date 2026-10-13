@@ -1,4 +1,4 @@
-"""Hybrid search — BM25 (PostgreSQL FTS) + dense vector + RRF fusion."""
+"""Hybrid search — PostgreSQL full-text ranking + dense vector + RRF fusion."""
 
 from __future__ import annotations
 
@@ -28,6 +28,10 @@ class SearchResult:
     dense_score: float = 0.0
     sparse_score: float = 0.0
     rrf_score: float = 0.0
+    rerank_score: float | None = None
+    retrieval_mode: str = "unknown"
+    rerank_status: str = "not-applied"
+    retrieval_degraded: bool = False
 
 
 #: Document-only retrieval scope (AH-AUDIT-033). Document search returns
@@ -37,12 +41,12 @@ DOCUMENT_TYPES: tuple[str, ...] = ("document",)
 
 
 class HybridSearch:
-    """Hybrid search combining BM25 (PostgreSQL FTS) and dense vector search.
+    """Hybrid search combining PostgreSQL full-text ranking and dense vector search.
 
     Architecture:
         Query → Dense retrieval (top 50)  ──┐
                                          ├──▶ RRF Fusion ──▶ Results
-              → BM25 retrieval (top 50)  ──┘
+              → Keyword retrieval (top 50)  ──┘
 
     RRF formula: RRF(d) = Σ 1 / (k + rank_i(d))
     Default k=60 (standard for large corpora).
@@ -71,7 +75,7 @@ class HybridSearch:
         top_k: int | None = None,
         chunk_types: tuple[str, ...] | None = None,
     ) -> list[SearchResult]:
-        """Perform hybrid search: BM25 + dense vector + RRF fusion.
+        """Perform hybrid search: PostgreSQL FTS + dense vector + RRF fusion.
 
         Runs both retrievals concurrently for lower latency. Document-only
         scope by default (AH-AUDIT-033); pass explicit chunk_types for a
@@ -99,7 +103,7 @@ class HybridSearch:
             dense_results = []
             degraded = True
         if isinstance(sparse_results, Exception):
-            logger.error("BM25 search failed: %s", sparse_results)
+            logger.error("PostgreSQL FTS search failed: %s", sparse_results)
             sparse_results = []
             degraded = True
         if degraded:
@@ -110,6 +114,8 @@ class HybridSearch:
 
         # Sort by RRF score and return top-k
         fused.sort(key=lambda r: r.rrf_score, reverse=True)
+        for result in fused:
+            result.retrieval_degraded = degraded
 
         audit_log(
             "rag_search_complete",
@@ -154,7 +160,7 @@ class HybridSearch:
     ) -> list[SearchResult]:
         """Keyword-only matches for embedder-less operation (LP-10 fallback).
 
-        No paid provider key needed; BM25 over stored search_text.
+        No paid provider key needed; PostgreSQL FTS over stored search_text.
         Document-only scope by default, matching dense/hybrid paths.
         """
         matches = await self._bm25_search(
@@ -213,7 +219,7 @@ class HybridSearch:
         db: Any,
         chunk_types: tuple[str, ...] = DOCUMENT_TYPES,
     ) -> list[tuple[ContextChunk, float]]:
-        """BM25 search using PostgreSQL full-text search (tsvector + GIN).
+        """PostgreSQL FTS search using PostgreSQL full-text search (tsvector + GIN).
 
         Returns empty results if search_text column is not available.
         Document-only scope by default (AH-AUDIT-033).
@@ -246,7 +252,7 @@ class HybridSearch:
             # search_text column doesn't exist — no fallback possible
             # (casting bytea to text produces hex, not readable text)
             logger.warning(
-                "search_text column not found, skipping BM25 search — returning empty results"
+                "search_text column not found, skipping PostgreSQL FTS search — returning empty results"
             )
             rows = []
 

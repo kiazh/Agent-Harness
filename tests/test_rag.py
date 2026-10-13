@@ -529,8 +529,7 @@ class TestReranker:
         results = await reranker.rerank(query, documents)
         assert len(results) == 3
         for r in results:
-            assert isinstance(r.score, float)
-            assert r.score > 0
+            assert r.score is None  # passthrough must not invent relevance
 
     async def test_rerank_empty_documents(self, reranker):
         """Test reranking with empty document list."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import logging
+import math
 import time
 import uuid
 from dataclasses import dataclass
@@ -62,6 +63,7 @@ class RAGConfig:
     top_k: int = 10
     retrieval_top_k: int = 50
     rrf_k: int = 60
+    enable_embeddings: bool = True
     enable_reranking: bool = True
     enable_hybrid_search: bool = True
 
@@ -95,8 +97,10 @@ class RAGPipeline:
         # clients initialize lazily: absent keys yield an explicit
         # keyword-only pipeline (NULL embeddings, honest mode reporting),
         # never a construction crash before the keyword fallback.
-        if embedder is not None:
-            self._embedder: Embedder | None = embedder
+        if not self._config.enable_embeddings:
+            self._embedder: Embedder | None = None
+        elif embedder is not None:
+            self._embedder = embedder
         else:
             try:
                 self._embedder = OpenAIEmbedder()
@@ -290,8 +294,12 @@ class RAGPipeline:
         Returns:
             List of SearchResult objects sorted by relevance.
         """
+        if not query.strip():
+            return []
         scope = tuple(chunk_types) if chunk_types else DOCUMENT_TYPES
-        k = top_k or self._config.top_k
+        k = self._config.top_k if top_k is None else top_k
+        if type(k) is not int or k < 1:
+            raise ValueError("top_k must be a positive integer")
 
         audit_log(
             "rag_search_start",
@@ -332,12 +340,14 @@ class RAGPipeline:
         # key). The fallback mode is recorded for honest status reporting.
         self._last_search_mode = "hybrid"
         query_embedding = None
+        embedding_failed = False
         if self._embedder is None:
             logger.warning("no embedder configured, keyword-only search")
         else:
             try:
                 query_embedding = await self._embedder.embed(query)
             except Exception as e:
+                embedding_failed = True
                 logger.warning("query embedding unavailable, keyword-only fallback: %s", e)
                 query_embedding = None
         if query_embedding is None:
@@ -348,9 +358,11 @@ class RAGPipeline:
                 top_k=k * 2,
                 chunk_types=scope,
             )
+            for result in results:
+                result.retrieval_degraded = embedding_failed
             self._last_search_mode = "keyword-only"
             return await self._finish_search(
-                results, query, session_id, k, rerank, cache_key, now, embed_model
+                results, query, session_id, k, rerank, cache_key, now, embed_model, "keyword-only"
             )
         # Embedding-space identity (AH-AUDIT-035): dimension AND model must
         # match the stored dense space. Different same-dimension models
@@ -374,7 +386,7 @@ class RAGPipeline:
             record_failure("pipeline.search", _boundary_error)
         await self._enforce_embedding_space(session_id, str(embed_model), scope)
 
-        # Hybrid search (BM25 + dense + RRF)
+        # Hybrid search (PostgreSQL FTS + dense + RRF)
         if self._config.enable_hybrid_search:
             results = await self._search.search(
                 session_id=session_id,
@@ -394,7 +406,15 @@ class RAGPipeline:
                 chunk_types=scope,
             )
         return await self._finish_search(
-            results, query, session_id, k, rerank, cache_key, now, embed_model
+            results,
+            query,
+            session_id,
+            k,
+            rerank,
+            cache_key,
+            now,
+            embed_model,
+            "hybrid" if self._config.enable_hybrid_search else "dense",
         )
 
     async def _enforce_embedding_space(
@@ -470,20 +490,53 @@ class RAGPipeline:
         cache_key: tuple,
         now: float,
         embed_model: str,
+        retrieval_mode: str = "unknown",
     ) -> list[SearchResult]:
+        for result in results:
+            result.retrieval_mode = retrieval_mode
         # Rerank
         if rerank and self._config.enable_reranking and len(results) > k:
             documents = [r.chunk.payload.get("text", "") for r in results]
-            rerank_results = await self._reranker.rerank(query, documents, top_k=k)
-
-            # Map reranked results back to SearchResult objects
-            reranked: list[SearchResult] = []
-            for rr in rerank_results:
-                if rr.index < len(results):
-                    original = results[rr.index]
-                    original.score = rr.score
-                    reranked.append(original)
-            results = reranked
+            try:
+                rerank_results = await self._reranker.rerank(query, documents, top_k=k)
+                seen = set()
+                for rr in rerank_results:
+                    if (
+                        type(rr.index) is not int
+                        or not 0 <= rr.index < len(results)
+                        or rr.index in seen
+                        or (
+                            rr.score is not None
+                            and (type(rr.score) not in (int, float) or not math.isfinite(rr.score))
+                        )
+                    ):
+                        raise ValueError("Invalid reranker result")
+                    seen.add(rr.index)
+                if not rerank_results:
+                    raise ValueError("Empty reranker response")
+                # None is an explicit passthrough/failure signal. Validate the
+                # entire response before mutating any candidate or score.
+                if all(rr.score is not None for rr in rerank_results):
+                    reranked = []
+                    for rr in rerank_results[:k]:
+                        original = results[rr.index]
+                        original.score = rr.score
+                        original.rerank_score = rr.score
+                        original.rerank_status = "applied"
+                        reranked.append(original)
+                    results = reranked
+                else:
+                    for result in results:
+                        result.rerank_status = (
+                            "passthrough"
+                            if isinstance(self._reranker, IdentityReranker)
+                            else "fallback"
+                        )
+            except Exception as e:
+                for result in results:
+                    result.rerank_status = "fallback"
+                audit_log("rag_rerank_fallback", error=type(e).__name__)
+                logger.warning("Invalid reranking; preserving retrieval ranking: %s", e)
 
         final_results = results[:k]
 

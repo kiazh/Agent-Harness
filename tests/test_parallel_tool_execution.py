@@ -235,3 +235,31 @@ async def test_invalid_args_do_not_break_the_batch(slow_tool):
         if m.get("role") == "tool"
     )
     assert len(made) == 1
+
+
+async def test_document_evidence_survives_provider_tool_message(monkeypatch):
+    """A searched passage after the old 1000-char cap reaches the next model turn."""
+    from machina.tools.base import Tool
+
+    evidence = "context " * 200 + "Decisive retrieved evidence."
+
+    async def search_stub():
+        return evidence
+
+    monkeypatch.setitem(
+        registry._tools,
+        "search_documents",
+        Tool(
+            name="search_documents",
+            description="document search",
+            parameters={"type": "object", "properties": {}},
+            func=search_stub,
+            is_async=True,
+        ),
+    )
+    registry._definitions_cache = None
+    response = LLMResponse(
+        content="", model="test-model", tool_calls=[_tool_call("search_documents", {}, 0)]
+    )
+    _, messages, _ = await _collect(_StubAgent(), response, uuid.uuid4())
+    assert any(message.get("content") == evidence for message in messages)

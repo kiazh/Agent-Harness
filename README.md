@@ -488,6 +488,8 @@ docker compose up --build
 
 Compose runs the **HTTP backend**, not the terminal UI. It provisions an isolated database volume, leaves the database port unpublished and binds the API to `127.0.0.1:8000`. Review credentials, volumes and the [operations guide](OPERATIONS.md) before deployment. Docker execution has not been verified on this review machine; CI builds and smoke-checks the image.
 
+Document retrieval has a reproducible source-level quality baseline and evaluation command; see [RAG quality review](docs/verification/RAG_QUALITY_REVIEW.md).
+
 ## Research utilities
 
 The repository contains experiments and evaluation adapters alongside the runtime.
