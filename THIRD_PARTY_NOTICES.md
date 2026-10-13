@@ -1,20 +1,13 @@
 # Third-party notices
 
-## AI Research Skills (Orchestra Research)
+## AI Research Skills (Orchestra Research) — relocated
 
-Source: https://github.com/orchestra-research/AI-research-SKILLs
-Retrieved: 2026-10-13 (shallow clone of `main`; no pinned revision recorded)
-License: MIT (each skill carries `license: MIT` in its SKILL.md frontmatter)
+Source: https://github.com/orchestra-research/AI-research-SKILLs (MIT)
 
-98 AI research/engineering skills (vLLM, TRL/GRPO, FAISS, DSPy, evaluation
-harnesses, paper writing, and others) installed as `skills/<name>/` with
-upstream directory contents preserved (SKILL.md plus references/scripts/assets
-where shipped). Five skills (`grpo-rl-training`, `sglang`, `evolving-ai-agents`,
-`nemo-guardrails`, `prompt-guard`) trip the harness's own prompt-injection
-scanner on benign documentation strings and are therefore skipped at registry
-load time (fail-closed); see the install report. No upstream hooks, services or
-executable installers are activated; skill scripts run only through authorized
-tools.
+The 98-skill set was briefly vendored under `skills/` and has been moved
+out of this repository to the operator's agent skills directory
+(`~/.agents/skills/`), where the harness loads them as ordinary skills.
+Nothing under `skills/` in this repo comes from that distribution anymore.
 
 ## ECC (Everything Claude Code)
 
