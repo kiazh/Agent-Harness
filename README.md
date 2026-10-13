@@ -2,9 +2,6 @@
 
 A self-hosted AI agent with a terminal UI, PostgreSQL-backed conversations and memory, tools, delegation, and runtime learning.
 
-[![CI](https://github.com/kiazh/Machina-Harness/actions/workflows/ci.yml/badge.svg)](https://github.com/kiazh/Machina-Harness/actions/workflows/ci.yml)
-[![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-
 **Version 0.2.0.** This is a development release candidate. Local verification is recorded in [release readiness](docs/verification/RELEASE_READINESS.md); production deployment gates remain open. No live-provider quality or performance improvement is claimed from fixture tests.
 
 ## Contents
