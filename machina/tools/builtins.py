@@ -271,12 +271,22 @@ async def web_extract(url: str) -> str:
     return await extract_url_text(url)
 
 
-async def extract_url_text(url: str) -> str:
+# Extraction bounds: the raw-body cap is generous so real pages (often a few
+# hundred KB of markup) can still be processed; the extracted-text cap stays
+# modest because tool output feeds model context. Callers that index pages
+# (web_research) pass a larger text_limit for retrieval quality.
+_EXTRACT_MAX_BYTES = 1_000_000
+_EXTRACT_TEXT_LIMIT = 20_000
+
+
+async def extract_url_text(url: str, *, text_limit: int = _EXTRACT_TEXT_LIMIT) -> str:
     """Fetch and extract bounded page text through the SSRF-safe fetcher."""
     from machina.security.fetch import FetchError, pinned_fetch
 
     try:
-        content = await asyncio.to_thread(pinned_fetch, url.strip(), max_bytes=20_000, timeout=30)
+        content = await asyncio.to_thread(
+            pinned_fetch, url.strip(), max_bytes=_EXTRACT_MAX_BYTES, timeout=30
+        )
     except FetchError as error:
         raise ToolError(f"Error extracting URL: {error}") from None
     if re.search(
@@ -287,7 +297,7 @@ async def extract_url_text(url: str) -> str:
         content = "\n".join(
             line.strip() for line in "".join(parser.parts).splitlines() if line.strip()
         )
-    return content[:5000]
+    return content[:text_limit]
 
 
 @registry.register(description="Search file contents with regex")

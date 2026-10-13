@@ -81,7 +81,8 @@ async def test_redirect_to_private_destination_is_revalidated(monkeypatch):
 
 async def test_extract_body_limit_is_enforced_during_transfer(monkeypatch):
     _fake_pinned_transport(
-        monkeypatch, {"example.com": (["93.184.216.34"], lambda: _ok(b"x" * 20_001))}
+        monkeypatch,
+        {"example.com": (["93.184.216.34"], lambda: _ok(b"x" * (builtins._EXTRACT_MAX_BYTES + 1)))},
     )
     with pytest.raises(ToolError, match="byte cap"):
         await builtins.web_extract("https://example.com/article")
@@ -96,9 +97,31 @@ async def test_extract_preserves_plain_text(monkeypatch):
 
 async def test_extract_propagates_fetch_deadline_without_proxy(monkeypatch):
     def expired(url, *, max_bytes, timeout):
-        assert max_bytes == 20_000 and timeout == 30
+        assert max_bytes == builtins._EXTRACT_MAX_BYTES and timeout == 30
         raise fetch.FetchError("fetch exceeded overall deadline")
 
     monkeypatch.setattr(fetch, "pinned_fetch", expired)
     with pytest.raises(ToolError, match="overall deadline"):
         await builtins.web_extract("https://example.com/article")
+
+
+async def test_large_real_page_is_extracted_not_rejected(monkeypatch):
+    """Pages far beyond the old 20 KB raw cap extract successfully now."""
+    body = b"<p>Sentence about widgets.</p>" * 2_000  # ~56 KB of HTML
+    _fake_pinned_transport(monkeypatch, {"example.com": (["93.184.216.34"], lambda: _ok(body))})
+    result = await builtins.web_extract("https://example.com/article")
+    assert "Sentence about widgets." in result
+    assert len(result) > 5_000  # beyond the old 5 KB text truncation
+    assert len(result) == builtins._EXTRACT_TEXT_LIMIT
+
+
+async def test_extracted_text_honors_custom_limit(monkeypatch):
+    def big_text(url, *, max_bytes, timeout):
+        assert max_bytes == builtins._EXTRACT_MAX_BYTES
+        return "plain words " * 30_000
+
+    monkeypatch.setattr(fetch, "pinned_fetch", big_text)
+    defaulted = await builtins.extract_url_text("https://example.com/article")
+    assert len(defaulted) == builtins._EXTRACT_TEXT_LIMIT
+    custom = await builtins.extract_url_text("https://example.com/article", text_limit=60_000)
+    assert len(custom) == 60_000

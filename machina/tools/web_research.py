@@ -17,6 +17,11 @@ from machina.tools.rag import get_rag_pipeline
 
 logger = logging.getLogger(__name__)
 
+# Index much more page text than the interactive web_extract cap: chunked
+# retrieval is selective, so bigger source snapshots improve research
+# answers. Still bounded well below the raw-body extraction cap.
+_RESEARCH_TEXT_LIMIT = 60_000
+
 
 @registry.register(
     name="web_research",
@@ -90,7 +95,7 @@ async def web_research(query: str, limit: int = 3) -> str:
                 if not content.strip():
                     raise ToolError("Saved source has no retrievable text")
             else:
-                content = await extract_url_text(url)
+                content = await extract_url_text(url, text_limit=_RESEARCH_TEXT_LIMIT)
                 if not content.strip():
                     failures += 1
                     continue
