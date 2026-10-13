@@ -4,6 +4,24 @@ Current release evidence and open gates are in [RELEASE_READINESS.md](docs/verif
 
 Checked matrix: implementation → entry points → dependency → trigger → config → fallback → lifecycle → proof test. Statuses: automatic (every turn), conditional (when triggered/material exists), degraded (fallback reported), optional (explicit), offline (research-only).
 
+## Session history and workflow repairs (2026-10-13)
+
+| Item | Location | Change | Proof |
+|---|---|---|---|
+| S-01 | `core/context.py`, `services.py`, `gateway/server.py` | Resume/export merge retained active and archived conversation; earliest original wins per message ID; compaction preserves retained IDs; resume drops its 200-chunk cutoff | `tests/test_transcript_export.py`: real repeated compression, fresh readers, archive deduplication and >200 chunks |
+| S-02 | `core/agent.py`, `gateway/serializers.py`, `services.py` | Save assistant preambles before tools, retry saves on cancellation, retain interrupted streamed text and bounded 65,536-character tool evidence; label legacy previews and truncation | `tests/test_transcript_export.py`: streaming/non-streaming tool persistence and cancelled writes |
+| S-03 | `core/intent.py`, `skills/workflow.py`, `memory/rsi.py` | Shared cheap conversational routing; explicit follow-on actions and imperative do/have remain tasks; no classifier request | `tests/test_turn_intent.py` |
+| S-04 | `core/agent.py`, `core/self_knowledge.py`, `memory/growth.py`, `skills/runtime.py` | Guidance for substantial task plans, relevant project orientation, selective skills/specialists and verified reusable lessons; explain operational learning versus human-rated persona trials accurately | Intent/brief/growth-prompt regressions; model obedience and improvement require real task replay, not string tests |
+| S-05 | `memory/redaction.py` | Bare AWS-secret matching requires full base64-token boundaries, preserving longer source paths while still redacting standalone keys | Export path regression at every streaming split plus existing redaction tests |
+
+Lessons: model context is a bounded working set, not a transcript; preserve original identity across
+compaction; cancellation can arrive during persistence as well as tool execution. Feature flags
+and observation counts show availability/activity, not successful learning. Old unsaved text
+cannot be recovered; historical compaction copies already assigned new IDs lack reliable deduplication provenance.
+Final local verification: 2,551 backend tests passed, five skipped; standalone UI checks
+passed with 325 tests and six skips, plus typecheck/lint. Details and limits:
+[session workflow review](docs/verification/SESSION_WORKFLOW_REVIEW.md).
+
 ## Hang fixes (2026-10-07)
 
 | Fix | Location | Change | Proof |
@@ -65,13 +83,13 @@ All with failing-first regressions in `tests/test_production_readiness_p1.py` (2
 | Feature | Implementation | Entry points | Dependency | Trigger | Config | Fallback | Lifecycle | Proof |
 |---|---|---|---|---|---|---|---|---|
 | Service graph | `machina/core/runtime.py::RuntimeServices` | CLI/TUI/HTTP/jobs/delegation via `startup()` | DB optional | process start | — | degraded capabilities, never crash | `shutdown()` closes audit+DB, cancels tracked tasks | `test_runtime_startup_never_raises` |
-| Agent factory | `machina/core/agent_factory.py::build_agent_for_session` | chat/gateway `_run_turn`/REST/jobs/delegation | provider key for chat | every turn | `model/provider/agent_id/max_iterations` + definition overrides | raises provider error (chat only) | owned provider closed exactly once | `test_researcher_factory_blocks_write_tools` |
+| Agent factory | `machina/core/agent_factory.py::build_agent_for_session` | chat/gateway `_run_turn`/REST/jobs/delegation | provider key for chat | every turn | `model/provider/agent_id` + definition overrides (`max_iterations` is ignored legacy data) | raises provider error (chat only) | owned provider closed exactly once | `test_researcher_factory_blocks_write_tools` |
 | Turn coordinator | `machina/core/turns.py::SessionTurnCoordinator` + fns | gateway submit/REST claim/scheduler/compress/delete | DB `running` claim or in-process | every turn/mutation | — | in-process-only (documented) | `end_turn` idempotent | existing 409 tests |
 | Approval-aware ownership | `TurnOwnership.wait_for_approval` | broker handler (gateway TUI) | none | permission wait | `approval_timeout` (compute timeout paused) | headless → structured pause | cancel stops waits, frees lease | `test_approval_timeout_distinct` |
 
 ## Context/history
 
-Active context (`context_chunks`), archive (`context_archive`), summaries (`compression_summary`), documents (`chunk_type=document`). Cancellation/failure/denial/disconnect flush history + interruption marker (`_flush_pending_cancellation_safe`). Stable ordering: `created_at,id` tiebreak + fork preserves timestamps. Exports state limits (history `limit=200`, context `50–500`, export full but redacted).
+Active context (`context_chunks`), archive (`context_archive`), summaries (`compression_summary`), documents (`chunk_type=document`). Cancellation/failure/denial/disconnect flush history + interruption marker (`_flush_pending_cancellation_safe`). Stable ordering: `created_at,id` tiebreak + fork preserves timestamps. Resume/export read retained conversation across active and archive without the old 200-chunk display cutoff; model context remains bounded. Export is redacted and labels stored-output limits.
 
 ## Memory
 

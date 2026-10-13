@@ -193,7 +193,9 @@ class Gateway:
         # MACHINA_GATEWAY_TOKEN; None means "open" (stdio local use) with a warning.
         self._auth_token: str | None = os.environ.get("MACHINA_GATEWAY_TOKEN")
         if self._auth_token is None:
-            logger.warning("MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests")
+            logger.warning(
+                "MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests"
+            )
         self._methods: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] = {
             "initialize": self._initialize,
             "session.create": self._session_create,
@@ -513,7 +515,7 @@ class Gateway:
     async def _session_resume(self, params: dict[str, Any]) -> dict[str, Any]:
         self.require_db()
         session = await self.get_session(params)
-        chunks = await context_manager.get_chunks(session.id, limit=200)
+        chunks = await context_manager.get_transcript_chunks(session.id)
         return {"session": session_to_dict(session), "history": history_from_chunks(chunks)}
 
     async def _usage_get(self, params: dict[str, Any]) -> dict[str, Any]:

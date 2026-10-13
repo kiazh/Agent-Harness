@@ -129,6 +129,8 @@ class GrowthStore:
             " When a durable preference, style request or verified reusable lesson "
             "emerges, use learn_personality with a short named note. Update the same key for "
             "corrections. Do not infer private facts, save secrets, or store task instructions. "
+            "Capture an observed failure or user correction as a reusable lesson with its "
+            "verified remedy; update that lesson rather than repeating the pitfall. "
             "Learn lessons only from observed results, not your own unverified claims."
         )
 

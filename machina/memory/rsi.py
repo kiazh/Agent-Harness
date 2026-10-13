@@ -12,6 +12,8 @@ import uuid
 from collections import defaultdict
 from typing import Any
 
+from machina.core.intent import conversational
+
 MAX_REVISIONS = 50
 MAX_CAPABILITIES = 200
 _NAME = re.compile(r"[a-zA-Z][a-zA-Z0-9_.-]{0,79}\Z")
@@ -37,17 +39,7 @@ def decode(value: Any) -> Any:
 
 
 def task_domain(query: str) -> str:
-    informational = re.match(
-        r"\s*(?:(?:can|could|would)\s+you\s+)?(?:what|why|how|who|when|where|explain|describe|tell me)\b",
-        query,
-        re.I,
-    )
-    follow_on_action = re.search(
-        r"(?:[.!?;,]\s*|\b(?:and|then)\s+)(?:please\s+)?(?:fix|build|implement|add|refactor|review|research|create|test)\b",
-        query,
-        re.I,
-    )
-    if informational and not follow_on_action:
+    if conversational(query):
         return "general"
     words = set(re.findall(r"[a-z]+", query.lower()))
     if words & {

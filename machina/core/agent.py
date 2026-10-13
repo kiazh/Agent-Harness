@@ -101,9 +101,11 @@ def instrument_stream(func):
 
 SYSTEM_PROMPT = """You are Machina, a self-hosted AI agent. You have access to tools and persistent context stored in PostgreSQL.
 
-You are a general-purpose agent first: answer greetings and questions directly, act on tasks with the right tool for the job, and never go looking for work. No actionable task means no tools. Never enumerate skill catalogs or directories unprompted; when you need a capability, search for it with a specific query.
+You are a general-purpose agent first: answer greetings and self-contained conceptual questions directly, act on tasks with the right tool for the job, and never go looking for work. Greetings need no tools, skills or delegation. Questions needing current settings, repository evidence or external facts use the relevant read tools. Never enumerate skill catalogs or directories unprompted; when you need a capability, search for it with a specific query.
 
-Delegation: when a task splits into independent subtasks, fan out — issue one delegate call per subtask in a single block so they run in parallel (no more than three). Call list_agents first if you don't know the roster: researcher gathers information (read-only), coder edits code and runs tests, harness does mixed work. Give each subagent a complete standalone task; synthesize their answers yourself. Subagents inherit your restrictions, cannot approve actions, and time out quickly — never delegate to evade an approval, and never delegate what you can do or answer directly.
+For substantial work, keep a short task plan and update it as results arrive. Orient before editing: inspect the project structure, design docs and relevant existing code; consult indexed documents or prior memory when they can inform the task. Automatic skills may already supply relevant workflows; read their remaining steps when needed and search skill_list with a focused query for gaps. Do not require a skill search on every turn or pretend unindexed repo files are in RAG. Verify real outcomes before reporting success. Capture reusable observed failures and user corrections with learn_personality when available, updating an existing lesson key; do not turn assumptions into memories.
+
+Delegation: assess whether independent, substantial subtasks benefit from specialists. Use list_agents to choose from the available roster rather than assuming only the three core roles exist. When useful, issue one delegate call per independent subtask in a single block (no more than three) so they run in parallel. Give each subagent a complete standalone task, constraints and required evidence; synthesize and verify their answers yourself. Researcher gathers information (read-only), coder edits code and runs tests, harness does mixed work; ECC specialists add focused roles. Subagents inherit your restrictions, cannot approve actions, and have bounded deadlines; never delegate to evade an approval or for a trivial task. Results and sequential handoffs move through the parent; there is no live sibling peer chat. share_memory delivers a signed owned memory, not a chat message.
 
 When you need to do something, use the available tools. Think step by step:
 1. Understand the task
@@ -153,6 +155,8 @@ def _notify_growth(session_id: uuid.UUID | str, stage: str, detail: str = "") ->
 _TOOL_RESULT_STALE_HEAD = 350
 _TOOL_RESULT_STALE_TAIL = 350
 _TOOL_RESULT_STALE_CAP = _TOOL_RESULT_STALE_HEAD + _TOOL_RESULT_STALE_TAIL
+# Retained evidence is separate from short previews assembled into prompts.
+_STORED_TOOL_RESULT_CHARS = 65536
 # Positionally addressed skill pages must keep resolving their offsets.
 _SKILL_PAGE_RE = re.compile(r"^(Skill \S+|ECC resource \S+) \[\d+:\d+/\d+\]:")
 
@@ -1316,6 +1320,8 @@ class BaseReActAgent:
                             "tool": tool_name,
                             "args": tool_args,
                             "result_preview": result_str[:500],
+                            "result": result_str[:_STORED_TOOL_RESULT_CHARS],
+                            "result_truncated": len(result_str) > _STORED_TOOL_RESULT_CHARS,
                         },
                         "token_count": len(result_str) // 4,
                     }
@@ -1329,6 +1335,8 @@ class BaseReActAgent:
                         "tool": tool_name,
                         "args": tool_args,
                         "result_preview": result_str[:500],
+                        "result": result_str[:_STORED_TOOL_RESULT_CHARS],
+                        "result_truncated": len(result_str) > _STORED_TOOL_RESULT_CHARS,
                     },
                     token_count=len(result_str) // 4,
                 )
@@ -1731,6 +1739,21 @@ class ReActAgent(BaseReActAgent):
                 )
                 self._schedule_learning_review(session_id, user_message, completed)
                 return completed
+            if response.content:
+                pending_chunks.append(
+                    {
+                        "session_id": session_id,
+                        "agent_id": self.agent_id,
+                        "chunk_type": "assistant_message",
+                        "payload": {"content": response.content},
+                        "token_count": len(response.content) // 4,
+                    }
+                )
+                try:
+                    await self._flush_pending_chunks(pending_chunks)
+                except asyncio.CancelledError:
+                    await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+                    raise
             batch_start = len(tool_calls_made)
             try:
                 await self._execute_tool_calls(
@@ -1844,6 +1867,7 @@ class ReActAgent(BaseReActAgent):
                 return
 
             # Stream LLM call with retry
+            streamed_text: list[str] = []
             try:
                 final_response = None
                 async for event in self._stream_llm_with_retry(
@@ -1852,6 +1876,7 @@ class ReActAgent(BaseReActAgent):
                     session_id=session_id,
                 ):
                     if event.type == "text":
+                        streamed_text.append(event.content or "")
                         yield StreamEvent(type="text", content=event.content)
                     elif event.type == "done":
                         final_response = event.response
@@ -1869,6 +1894,20 @@ class ReActAgent(BaseReActAgent):
                 if final_response is None:
                     raise RuntimeError("Stream completed without a final response")
 
+            except asyncio.CancelledError:
+                if streamed_text:
+                    content = "".join(streamed_text)
+                    pending_chunks.append(
+                        {
+                            "session_id": session_id,
+                            "agent_id": self.agent_id,
+                            "chunk_type": "assistant_message",
+                            "payload": {"content": content, "interrupted": True},
+                            "token_count": len(content) // 4,
+                        }
+                    )
+                await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+                raise
             except UsageBudgetExceededError as e:
                 await self._flush_pending_chunks(pending_chunks)
                 audit_log("agent_run_budget_exceeded", session_id=str(session_id), error=str(e))
@@ -1940,6 +1979,21 @@ class ReActAgent(BaseReActAgent):
                 return
 
             # Execute tool calls with streaming events.
+            if response.content:
+                pending_chunks.append(
+                    {
+                        "session_id": session_id,
+                        "agent_id": self.agent_id,
+                        "chunk_type": "assistant_message",
+                        "payload": {"content": response.content},
+                        "token_count": len(response.content) // 4,
+                    }
+                )
+                try:
+                    await self._flush_pending_chunks(pending_chunks)
+                except asyncio.CancelledError:
+                    await self._flush_pending_cancellation_safe(pending_chunks, session_id)
+                    raise
             batch_start = len(tool_calls_made)
             # AH-015: run_stream previously held ALL history in pending until
             # the final done event — a CancelledError bypassed `except

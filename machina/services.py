@@ -58,7 +58,7 @@ async def export_markdown(session: Session) -> str:
     """
     from machina.memory.redaction import redact_secrets as _redact
 
-    chunks = await context_manager.get_all_chunks(session.id)
+    chunks = await context_manager.get_transcript_chunks(session.id)
     # AH-AUDIT-012: title/goal are outward-facing export fields subject to
     # the same structured redaction policy as message content. Raw stored
     # conversation (DB chunks) is intentionally untouched.
@@ -80,7 +80,10 @@ async def export_markdown(session: Session) -> str:
         if chunk.chunk_type == "user_message":
             lines += ["### User", "", _redact(str(payload.get("content", ""))).text, ""]
         elif chunk.chunk_type == "assistant_message":
-            lines += ["### Assistant", "", _redact(str(payload.get("content", ""))).text, ""]
+            heading = (
+                "### Assistant (interrupted)" if payload.get("interrupted") else "### Assistant"
+            )
+            lines += [heading, "", _redact(str(payload.get("content", ""))).text, ""]
         elif chunk.chunk_type == "compression_summary":
             lines += [
                 "### Summary of earlier context",
@@ -92,9 +95,13 @@ async def export_markdown(session: Session) -> str:
             lines.append(
                 f"**Tool:** `{_redact(str(payload.get('tool', 'unknown'))).text}({_redact(str(payload.get('args', {}))).text})`"
             )
-            preview = payload.get("result_preview", "")
-            if preview:
-                lines.append(f"**Result:** {_redact(str(preview)[:200]).text}")
+            result = payload.get("result", payload.get("result_preview", ""))
+            if result:
+                lines.append(f"**Result:** {_redact(str(result)).text}")
+            if "result" not in payload:
+                lines.append("[Historical tool output: only a preview was stored.]")
+            elif payload.get("result_truncated"):
+                lines.append("[Tool output truncated at the storage limit of 65,536 characters.]")
             lines.append("")
     return "\n".join(lines)
 

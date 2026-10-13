@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from machina.core.intent import conversational
 from machina.skills.registry import Skill, SkillRegistry
 from machina.skills.runtime import _words
 
@@ -66,30 +67,11 @@ def plan_workflow(
 
     skills.load_all()
     words = set(_words(query))
-    if not words or re.fullmatch(
-        r"\s*(hello|hi|hey|thanks|thank you|ok|okay|bye)[\s!.,]*(thanks)?\s*", query, re.I
-    ):
+    if not words or conversational(query):
         return SkillWorkflow("conversation", [], [])
     # A technology mentioned in a question or acknowledgement is a topic,
     # not authorization to start its implementation pipeline. Keep this
     # local and cheap; explicit task requests still use the normal matcher.
-    informational = re.match(
-        r"^\s*(?:(?:can|could|would)\s+you\s+)?"
-        r"(?:what\b|why\b|how\b|who\b|when\b|where\b|"
-        r"explain\b|describe\b|tell\s+me\b|thanks\b|thank\s+you\b)",
-        query,
-        re.I,
-    )
-    follow_on_task = re.search(
-        r"(?:[.!?;,]\s*|\b(?:and|then)\s+)"
-        r"(?:then\s+|now\s+|please\s+)*"
-        r"(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?"
-        r"(?:fix|build|implement|add|refactor|review|research|create|test)\b",
-        query,
-        re.I,
-    )
-    if informational and not follow_on_task:
-        return SkillWorkflow("conversation", [], [])
     routing_query = query
     # Carry stack information into short follow-ups without carrying prior tasks wholesale.
     if not words & _TECHNOLOGIES and len(query.split()) <= 16:

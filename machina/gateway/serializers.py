@@ -38,7 +38,10 @@ def history_from_chunks(chunks: list[ContextChunk]) -> list[dict[str, Any]]:
         if chunk.chunk_type == "user_message":
             history.append({"role": "user", "content": str(payload.get("content", ""))})
         elif chunk.chunk_type == "assistant_message":
-            history.append({"role": "assistant", "content": str(payload.get("content", ""))})
+            content = str(payload.get("content", ""))
+            if payload.get("interrupted"):
+                content += "\n[Interrupted reply]"
+            history.append({"role": "assistant", "content": content})
         elif chunk.chunk_type == "tool_call":
             history.append(
                 {

@@ -166,8 +166,8 @@ def automatic_skill_context(
         "Relevant references for this task — consult a workflow only if the task calls "
         "for it; otherwise ignore these and act as a general agent. They are reference "
         "instructions, subject to your core role, user instructions, available tools "
-        "and permission policy. No actionable task means no tools: answer greetings "
-        "and questions directly without calling tools. "
+        "and permission policy. Answer greetings and self-contained conceptual questions "
+        "directly; requested live settings, repository evidence or external facts need read tools. "
         "Never request approval solely because a skill says to; use the harness policy. "
         "Never assume an upstream slash command, hook, agent or integration is installed. "
     )
@@ -184,7 +184,7 @@ def automatic_skill_context(
         header += (
             "For uncovered subtasks or uncertain matches, search skill_list(query) and read "
             "applicable workflows before proceeding. Answer greetings, acknowledgements, "
-            "and questions with no actionable task directly — never call skill_list for "
+            "and self-contained conceptual questions directly — never call skill_list for "
             "those. When you do search, use a specific query and page with offset only "
             "while the current page shows relevant matches; never enumerate the whole "
             "catalog. "

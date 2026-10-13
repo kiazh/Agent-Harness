@@ -382,7 +382,7 @@ def test_012_export_redacts_title_goal_and_content(monkeypatch):
     async def _no_chunks(*a, **k):
         return []
 
-    monkeypatch.setattr(ctxmod.context_manager, "get_all_chunks", _no_chunks)
+    monkeypatch.setattr(ctxmod.context_manager, "get_transcript_chunks", _no_chunks)
 
     async def _scenario():
         secret = "sk-or-" + "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"

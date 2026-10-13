@@ -130,7 +130,9 @@ _PATTERNS: list[RedactionPattern] = [
     # Bare 40-char base64 AWS-style secret (no key name prefix)
     RedactionPattern(
         name="aws_secret_key_bare",
-        pattern=re.compile(r"\b[a-zA-Z0-9/+=]{40}\b"),
+        # Slash is part of the token: do not mistake a 40-character suffix
+        # inside a longer filesystem path/base64 run for a standalone key.
+        pattern=re.compile(r"(?<![a-zA-Z0-9/+=])[a-zA-Z0-9/+=]{40}(?![a-zA-Z0-9/+=])"),
         replacement="[REDACTED_AWS_SECRET]",
     ),
     # GitHub tokens

@@ -158,6 +158,11 @@ confirmation. Context assembly selects evidence for the next request instead of
 replaying every stored item. Compaction and archival keep older material
 retrievable while making room for recent conversation.
 
+Resumed history and Markdown exports include retained archived originals as well as active
+messages. They preserve assistant text before tool calls and mark interrupted replies.
+New tool output is stored up to 65,536 characters; exports label storage truncation and
+older records that contain only previews. Text never saved by older versions cannot be recovered.
+
 Memory supports durable facts and preferences across conversations. Document
 retrieval follows a separate load → chunk → embed/index → search → optional
 rerank pipeline. PostgreSQL lexical indexes provide search without an embedding
@@ -318,7 +323,7 @@ connector stack for each tool call.
 4. An action that needs consent pauses with the exact proposal. Resume checks
    the session, action identity and current authority before consuming approval.
 5. Results return as tool evidence, and the agent continues until it answers or
-   reaches a configured iteration, time or usage limit.
+   reaches a configured time or usage limit.
 6. Usage and execution evidence are recorded. Optional learning/maintenance and
    client cleanup are lifecycle-managed and bounded; uncertain tool outcomes
    remain explicit rather than being silently rerun.

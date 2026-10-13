@@ -407,18 +407,24 @@ class TestToolChaos:
             return "done"
 
         provider = AsyncMock()
+        # An unbounded agent relies on the provider to finish after receiving
+        # tool failure evidence; repeating this request forever tested the old
+        # iteration cap rather than the per-tool timeout mechanism.
         provider.complete = AsyncMock(
-            return_value=LLMResponse(
-                content="",
-                model="test",
-                usage={"total_tokens": 5},
-                tool_calls=[
-                    {
-                        "id": "call_1",
-                        "function": {"name": "slow_tool", "arguments": "{}"},
-                    }
-                ],
-            )
+            side_effect=[
+                LLMResponse(
+                    content="",
+                    model="test",
+                    usage={"total_tokens": 5},
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "function": {"name": "slow_tool", "arguments": "{}"},
+                        }
+                    ],
+                ),
+                LLMResponse(content="The tool timed out.", model="test", tool_calls=[]),
+            ]
         )
 
         with patch("machina.core.agent.session_manager") as mock_sm:
@@ -448,7 +454,8 @@ class TestToolChaos:
                         assert response is not None
                         # Agent should complete within the timeout window (not hang)
                         # and return a response indicating something went wrong
-                        assert response.iterations >= 1
+                        assert response.iterations == 2
+                        assert provider.complete.await_count == 2
                         # The tool calls should show errors (from timeout)
                         assert any(
                             "Error" in tc.get("result_preview", "") for tc in response.tool_calls

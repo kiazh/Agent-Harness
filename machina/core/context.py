@@ -615,6 +615,39 @@ class ContextManager:
         )
         return [self._row_to_chunk(r) for r in rows]
 
+    async def get_transcript_chunks(self, session_id: uuid.UUID) -> list[ContextChunk]:
+        """Read the retained transcript, newest first, including archived originals.
+
+        One statement provides a consistent snapshot during compaction. Prefer
+        the earliest archived original over compacted copies of an ID; reading history
+        never resurrects context or changes the model's active prompt budget.
+        """
+        rows = await db.fetch(
+            """
+            WITH transcript AS (
+                SELECT id, session_id, agent_id, chunk_type, payload_msgpack,
+                       token_count, embedding, created_at, accessed_at,
+                       1 AS source_priority, created_at AS saved_at, id AS source_id
+                FROM context_chunks WHERE session_id = $1
+                  AND chunk_type IN ('user_message', 'assistant_message', 'tool_call', 'compression_summary')
+                UNION ALL
+                SELECT chunk_id, session_id, COALESCE(agent_id, 'harness'), chunk_type,
+                       payload_msgpack, token_count, embedding,
+                       COALESCE(original_created_at, archived_at), NULL::timestamptz,
+                       0, archived_at, id
+                FROM context_archive WHERE session_id = $1
+                  AND chunk_type IN ('user_message', 'assistant_message', 'tool_call', 'compression_summary')
+            ), deduplicated AS (
+                SELECT DISTINCT ON (id) * FROM transcript
+                ORDER BY id, source_priority, saved_at ASC NULLS LAST, source_id ASC
+            )
+            SELECT * FROM deduplicated
+            ORDER BY created_at DESC NULLS LAST, id DESC
+            """,
+            session_id,
+        )
+        return [self._row_to_chunk(row) for row in rows]
+
     async def get_all_chunks(self, session_id: uuid.UUID) -> list[ContextChunk]:
         """Fetch every active chunk for *session_id* (newest first).
 
@@ -758,13 +791,16 @@ class ContextManager:
         a retry with already-replaced IDs aborts rather than duplicating.
         """
         records = []
+        captured_ids = set(original_ids)
         for c in chunks:
             created = c.created_at or datetime.now(UTC)
             if created.tzinfo is None:
                 created = created.replace(tzinfo=UTC)
             records.append(
                 (
-                    uuid.uuid4(),
+                    # Preserved/truncated compressor output retains transcript
+                    # identity; its archived original remains the full evidence.
+                    c.id if c.id in captured_ids else uuid.uuid4(),
                     session_id,
                     c.agent_id,
                     c.chunk_type,
