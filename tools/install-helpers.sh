@@ -281,13 +281,20 @@ brew_vector_from_source() {
   command -v git >/dev/null 2>&1 || return 1
   command -v make >/dev/null 2>&1 || return 1
   build_dir="$(mktemp -d 2>/dev/null || echo /tmp/pgvector-build-$$)"
+  # INFRA-M2 (infra audit): pin the release tag AND verify the commit SHA —
+  # this path clones and builds code on the user's machine, so an unpinned
+  # default-branch build was the installer's only unpinned code-execution
+  # path. Bump both values together when upgrading.
+  local pgvector_tag="v0.8.7"
+  local pgvector_sha="f37c13f68b57d2c3472b2214fbcff699d6d34876"
   (
     cd "$build_dir" \
-      && git clone --depth 1 https://github.com/pgvector/pgvector.git < /dev/null \
+      && git clone --branch "$pgvector_tag" --depth 1 https://github.com/pgvector/pgvector.git < /dev/null \
+      && [ "$(git -C pgvector rev-parse HEAD)" = "$pgvector_sha" ] \
       && cd pgvector \
       && make PG_CONFIG="$pg_bin/pg_config" < /dev/null \
       && make PG_CONFIG="$pg_bin/pg_config" install < /dev/null
-  ) || return 1
+  ) || { rm -rf "$build_dir"; return 1; }
   rm -rf "$build_dir"
   return 0
 }

@@ -219,6 +219,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application (thin assembly)."""
+    # INFRA-M4 (infra audit): the .env.example placeholder is a publicly
+    # known value — refuse to start behind it (fail closed). An UNSET key
+    # stays the per-request 503 contract; only the literal placeholder is
+    # rejected, so dev/test environments without a key are unaffected.
+    from machina.api.auth import configured_key
+
+    if configured_key() == "replace-with-a-long-random-key":
+        raise RuntimeError(
+            "MACHINA_API_KEY is still the .env.example placeholder; set a real "
+            "random key (e.g. `machina setup` or openssl rand -hex 32)."
+        )
     app = FastAPI(
         title="Machina API",
         version=__version__,

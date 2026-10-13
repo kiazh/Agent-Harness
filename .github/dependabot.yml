@@ -1,0 +1,25 @@
+# INFRA-n5 (infra audit): scheduled dependency-surface review. Pairs with the
+# SHA/tag pinning guidance in the audit report — Dependabot opens PRs for
+# outdated base images, actions, PyPI and npm deps; each PR still flows through
+# the full CI (including the sandbox image build) before merge.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    # uv.lock is the authoritative resolution; review lock drift explicitly.
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: "/ui"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly

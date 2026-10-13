@@ -63,7 +63,10 @@ docs/plugins.md
 communications/
 research/results/
 verify_issues.py
-scripts/
+# Host-side operator scripts (see scripts/README.md); keep the directory
+# itself present for the compose bind mount, ignore its contents.
+scripts/*
+!scripts/README.md
 agents/
 skills/telemetry.json
 skills/telemetry.json.lock

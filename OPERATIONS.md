@@ -33,7 +33,7 @@ preserve the previous live setting. Configure only trusted backend endpoints.
 | Local gateway | `MACHINA_GATEWAY_TOKEN`; TUI launcher provisions its own token. Do not publish unauthenticated stdio transport. |
 | Provenance | `MACHINA_PROVENANCE_KEY`, distinct from API/provider keys. |
 | Workspace | `MACHINA_WORKSPACE_ROOT`; provision separate trusted script root with `MACHINA_SCRIPTS_DIR`. |
-| Docker sandbox | Working daemon and built `Dockerfile.sandbox` image; inspect approved mounts/network policy. Absence refuses sandbox execution. |
+| Docker sandbox | Working daemon and built `Dockerfile.sandbox` image; inspect approved mounts/network policy. Absence refuses sandbox execution. The sandbox needs the host Docker daemon: inside the Compose deployment the app container has neither the CLI nor the socket mount, so `sandbox` mode is unavailable there by design (fail-closed) — run sandbox mode from a host install. |
 | Search | Optional operator-controlled `SEARXNG_URL`; internet fetching still enforces per-hop address/deadline restrictions. |
 | HTTP rate limit | `MACHINA_HTTP_RATE_LIMIT`, default 120 requests/minute per transport peer per worker; 0 disables. Enforce a deployment-wide limit at the trusted edge. |
 | Usage budgets | Session/agent token/request limits under `MACHINA_USAGE_*`; defaults 0 (unlimited). Set explicit production budgets. |

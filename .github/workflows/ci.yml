@@ -16,6 +16,7 @@ concurrency:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     services:
       postgres:
@@ -95,6 +96,7 @@ jobs:
   ui:
     # Owns the full UI check, including tests against a restarted real gateway.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -157,11 +159,17 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
       - name: Build backend image
         run: docker build --tag machina:ci .
+      - name: Build sandbox image
+        # INFRA-B1: the sandbox image breaks silently if unbuilt (the terminal
+        # sandbox feature then fails closed at runtime). Build it on every CI
+        # run so a stale context (e.g. another rename) can never recur.
+        run: docker build --tag machina-tool-sandbox:ci -f Dockerfile.sandbox .
       - name: Smoke-test installed CLI
         run: docker run --rm machina:ci --help
       - name: Validate Compose without loading local credentials

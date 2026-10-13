@@ -1,13 +1,25 @@
+# Sandbox execution image for terminal tool calls (terminal_sandbox=docker /
+# execution mode sandbox). Built and tagged as machina-tool-sandbox:latest
+# (see MACHINA_TERMINAL_IMAGE / OPERATIONS.md):
+#
+#   docker build -f Dockerfile.sandbox -t machina-tool-sandbox:latest .
+#
+# INFRA-B1 (infra audit): this file previously copied a stale `ah/` path from
+# before the package rename, so the image could not build at all and CI never
+# noticed. The context now matches pyproject's forced includes (machina +
+# skills). Runtime-only install: dev extras have no place in an isolation
+# image whose root filesystem is mounted read-only at run time.
 FROM python:3.11-slim
 
 WORKDIR /build
 COPY pyproject.toml README.md ./
-COPY ah ./ah
+COPY machina ./machina
+COPY skills ./skills
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git findutils grep coreutils diffutils \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir '.[dev]'
+    && pip install --no-cache-dir .
 
 USER 65534:65534
 WORKDIR /workspace

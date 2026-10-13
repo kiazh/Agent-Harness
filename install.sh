@@ -79,7 +79,7 @@ EOF
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dir) INSTALL_DIR="${2:-}"; shift 2 ;;
+    --dir) [ $# -ge 2 ] || die "--dir requires a value"; INSTALL_DIR="${2:-}"; shift 2 ;;
     --dev) DO_DEV=1; shift ;;
     --no-ui) DO_UI=0; shift ;;
     --interactive) INTERACTIVE=1; shift ;;
@@ -259,7 +259,7 @@ MACHINA_BIN="$VENV_BIN/machina"
 
 # --- UI deps -------------------------------------------------------------------
 if [ "$DO_UI" = "1" ]; then
-  run_animated "Installing UI dependencies" npm install --ignore-scripts --prefix ui
+  run_animated "Installing UI dependencies" npm ci --ignore-scripts --prefix ui
 else
   log "Skipping UI dependencies"
 fi
@@ -273,11 +273,11 @@ umask 077
 if [ "$ENV_IS_DEFAULT" = "1" ] && [ ! -f "$ENV_FILE" ]; then
   log "Creating .env from .env.example"
   cp .env.example "$ENV_FILE"
-  chmod 600 "$ENV_FILE" 2>/dev/null || true
+  chmod 600 "$ENV_FILE" 2>/dev/null || warn "could not restrict $ENV_FILE to mode 600; verify its permissions"
 else
   log "$ENV_FILE already exists (or is overridden), keeping it (filling gaps only)"
   [ -f "$ENV_FILE" ] || : > "$ENV_FILE"
-  chmod 600 "$ENV_FILE" 2>/dev/null || true
+  chmod 600 "$ENV_FILE" 2>/dev/null || warn "could not restrict $ENV_FILE to mode 600; verify its permissions"
 fi
 
 # Ensure DATABASE_URL exists.
