@@ -106,3 +106,29 @@ M1 loop failure-path parity (run_stream now schedules consolidation), M2 bundle 
 N1 A5 delta-table entry, N2 stale-triage clearing, N3 dead `_turn_locks` removed, N4 provider cache
 comment corrected to the true scoping, N5 telemetry hygiene (dockerignore + docs), N6
 `learn_directory` 120s tool timeout. Regressions: `tests/test_final_pass_fixes.py` (6, RED-verified).
+
+## 9. Unified benchmark (post-program tooling, commit `80eda54`)
+
+`machina/research/benchmark.py` — one offline command that reuses the harnesses above as single
+sources of truth: `python -m machina.research.benchmark [--json out.json]`. Recorded at `80eda54`:
+
+- Incident replay: `provider_calls=1, tokens_in=22, tokens_out=256, recall_calls=3,
+  delegate_launches=7, artifact_written=True, live_calls=0` (incident: 2,119,552 tokens,
+  228 calls, 25 post-ask recalls, no artifact).
+- Retrieval: memory/RAG/recall relevancy = faithfulness = 1.00 (program baseline: faithfulness 0.00).
+- Prompt prefix: 28 tools, stable prefix 3,566 tokens, 71.5% identical-prefix resend on the fixture.
+- Architecture: 199 files / 54,797 LOC; deferred-import census 680 ≤ cap 680 (cap moved 677 → 680
+  by delta-table entry for the tool's five lazy test-harness/pytest imports).
+- Full gates re-run by the same command: backend **3,439 passed, 1 skipped, 1 xfailed** (143.9s; the
+  3,434 program baseline + 5 new tool tests), UI **337 passed, 0 failed, 6 skipped**.
+- LoCoMo memory evaluation (external `locomo10.json`; 10 conversations, 1,986 questions; k=5):
+  deterministic TF-IDF baseline evidence_recall 0.440 / hit 0.477 / MRR 0.354; production
+  PostgreSQL archive search 0.425 / 0.461 / 0.345; production cross-session recall
+  0.425 / 0.461 / 0.345 at 10.6 ms/query. Honest read: the lexical layer of both production paths
+  sits at baseline parity — the deeper pipeline (embeddings/RAG synthesis) is scored separately by
+  the retrieval section above. Answer-level token-F1 was not run (needs authorized reader-LLM
+  calls; the module supports it via `evaluate_answers`).
+- Cross-tool note: no shared benchmark exists with other agent harnesses (e.g. OpenCode); the tool
+  emits an explicit protocol block with the two fair axes (same-task delivery metrics; LoCoMo
+  memory quality) instead of unmeasurable comparisons. The dataset is never auto-downloaded;
+  without it the LoCoMo section reports SKIPPED rather than fabricated numbers.
