@@ -61,6 +61,32 @@ def _module_machina_imports(path: Path) -> list[str]:
     return found
 
 
+def _facade_imports(path: Path) -> list[str]:
+    """Imports (module level or deferred) that pull the provider facade itself.
+
+    Used by the provider package guard: submodules must reach siblings only.
+    """
+    hits: list[str] = []
+
+    def walk(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.ImportFrom) and child.level == 0:
+                if child.module == "machina.core.provider":
+                    hits.append("from machina.core.provider import ...")
+                elif child.module == "machina.core" and any(
+                    alias.name == "provider" for alias in child.names
+                ):
+                    hits.append("from machina.core import provider")
+            elif isinstance(child, ast.Import):
+                for alias in child.names:
+                    if alias.name == "machina.core.provider":
+                        hits.append("import machina.core.provider")
+            walk(child)
+
+    walk(_tree(path))
+    return hits
+
+
 def _is_core(mod: str) -> bool:
     return mod == "machina.core" or mod.startswith("machina.core.")
 
@@ -193,15 +219,66 @@ def test_deferred_import_count_ratchet():
 #     across the DirectProvider loop and both OpenRouter parse sites; a stream
 #     ending without terminal state now raises ProviderError before any done
 #     event. Unreviewed growth beyond this is rejected.
-@pytest.mark.parametrize(
-    "relative_path,ceiling",
-    [
-        ("core/agent.py", 2057),
-        ("core/provider.py", 2576),
-        ("core/compression.py", 999),
-    ],
+#   core/provider.py 2576 -> core/provider/ package (W5 split): facade + 13
+#     focused modules; ``__all__`` byte-identical; +228 lines are per-module
+#     import headers and docstrings only (all 41 class/function bodies verified
+#     byte-identical to the old module; the five function-level imports moved
+#     verbatim, so the deferred-import census is unchanged). Per-file ceilings
+#     are the measured split landing values; the package total is pinned
+#     separately below.
+GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
+    ("core/agent.py", 2057),
+    ("core/compression.py", 999),
+    ("core/provider/__init__.py", 51),
+    ("core/provider/_log.py", 10),
+    ("core/provider/reasoning.py", 61),
+    ("core/provider/specs.py", 103),
+    ("core/provider/audit.py", 147),
+    ("core/provider/rate_limit.py", 79),
+    ("core/provider/caches.py", 97),
+    ("core/provider/transport.py", 382),
+    ("core/provider/base.py", 60),
+    ("core/provider/openrouter.py", 607),
+    ("core/provider/ollama.py", 369),
+    ("core/provider/direct.py", 337),
+    ("core/provider/anthropic.py", 462),
+    ("core/provider/factory.py", 39),
 )
+
+
+@pytest.mark.parametrize("relative_path,ceiling", GOD_FILE_CEILINGS)
 def test_god_file_ceilings_only_fall(relative_path, ceiling):
     assert _line_count(ROOT / relative_path) <= ceiling, (
         f"{relative_path} grew past its ceiling of {ceiling} lines"
     )
+
+
+# Provider package total (W5 split). Ratchets down, never up: keeps the split
+# from silently regrowing into one god module or sprawling into new files.
+_PROVIDER_PACKAGE_TOTAL_CEILING = 2804  # measured at split landing (14 files)
+
+
+def test_provider_package_total_only_falls():
+    package = ROOT / "core" / "provider"
+    total = sum(_line_count(p) for p in sorted(package.rglob("*.py")))
+    assert total <= _PROVIDER_PACKAGE_TOTAL_CEILING, (
+        f"core/provider package grew past its ceiling of "
+        f"{_PROVIDER_PACKAGE_TOTAL_CEILING} lines: {total}"
+    )
+
+
+def test_provider_submodules_do_not_import_the_facade():
+    """Provider submodules import siblings only — never the package facade.
+
+    A submodule importing ``machina.core.provider`` would re-enter the
+    partially initialized package and make import order load-bearing (the
+    classic package-split cycle).
+    """
+    bad: dict[str, list[str]] = {}
+    for path in sorted((ROOT / "core" / "provider").glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        hits = _facade_imports(path)
+        if hits:
+            bad[path.name] = hits
+    assert not bad, f"provider submodules must not import the facade: {bad}"

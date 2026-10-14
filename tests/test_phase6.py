@@ -68,7 +68,7 @@ def test_prometheus_export_uses_cumulative_totals():
 
 
 def test_audit_sanitizes_sensitive_field_names():
-    from machina.core.provider import _sanitize_value
+    from machina.core.provider.audit import _sanitize_value
 
     payload = {
         "apiKey": "unusual-secret-value",

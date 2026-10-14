@@ -253,18 +253,14 @@ def _prefix() -> dict:
 
 def _architecture() -> dict:
     _ensure_tests_importable()
-    from tests.test_architecture_layers import _deferred_import_count
+    from tests.test_architecture_layers import GOD_FILE_CEILINGS, _deferred_import_count
 
     root = _REPO_ROOT / "machina"
     total_deferred = sum(_deferred_import_count(p) for p in root.rglob("*.py"))
     files = list(root.rglob("*.py"))
     total_loc = sum(len(f.read_text(encoding="utf-8").splitlines()) for f in files)
     god = {}
-    for rel, ceiling in (
-        ("core/provider.py", 2554),
-        ("core/agent.py", 2057),
-        ("core/compression.py", 999),
-    ):
+    for rel, ceiling in GOD_FILE_CEILINGS:
         god[rel] = {"lines": sum(1 for _ in open(root / rel)), "ceiling": ceiling}
     return {
         "files": len(files),

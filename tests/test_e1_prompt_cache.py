@@ -595,7 +595,7 @@ async def test_enabled_ollama_untouched(make):
 
 
 def test_openrouter_anthropic_model_gate_is_case_insensitive():
-    from machina.core.provider import _openrouter_anthropic_model
+    from machina.core.provider.transport import _openrouter_anthropic_model
 
     assert _openrouter_anthropic_model("anthropic/claude-sonnet-4")
     assert _openrouter_anthropic_model("ANTHROPIC/claude-opus-4")

@@ -6,6 +6,7 @@ no network, deterministic, and close to the production call path.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -29,6 +30,10 @@ from machina.core.provider import (
     OllamaProvider,
     OpenRouterProvider,
 )
+from machina.core.provider import caches as provider_caches
+from machina.core.provider import rate_limit as provider_rate_limit
+from machina.core.provider import reasoning as provider_reasoning
+from machina.core.provider import transport as provider_transport
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 TOOLS = [ToolDefinition("clock", "Read the time", {"type": "object", "properties": {}})]
@@ -228,13 +233,13 @@ async def test_cache_identity_scopes_every_provider_family(make, family):
 
 
 def test_cache_key_identity_discriminator_is_stable():
-    base = provider_module._cache_key(MESSAGES, None, "m", {"a": 1})
-    scoped = provider_module._cache_key(MESSAGES, None, "m", {"a": 1}, identity="agent:session")
+    base = provider_caches._cache_key(MESSAGES, None, "m", {"a": 1})
+    scoped = provider_caches._cache_key(MESSAGES, None, "m", {"a": 1}, identity="agent:session")
     assert scoped != base
-    assert scoped == provider_module._cache_key(
+    assert scoped == provider_caches._cache_key(
         MESSAGES, None, "m", {"a": 1}, identity="agent:session"
     )
-    assert base == provider_module._cache_key(MESSAGES, None, "m", {"a": 1}, identity=None)
+    assert base == provider_caches._cache_key(MESSAGES, None, "m", {"a": 1}, identity=None)
 
 
 # ─── W3: bounded cache with real TTL ────────────────────────────────────────
@@ -242,24 +247,24 @@ def test_cache_key_identity_discriminator_is_stable():
 
 def test_response_cache_is_size_bounded():
     for index in range(400):
-        provider_module._cache_put(f"fm2-key-{index}", LLMResponse(content=str(index), model="m"))
-    assert len(provider_module._RESPONSE_CACHE) <= 256
+        provider_caches._cache_put(f"fm2-key-{index}", LLMResponse(content=str(index), model="m"))
+    assert len(provider_caches._RESPONSE_CACHE) <= 256
 
 
 def test_response_cache_expires_by_ttl(monkeypatch):
     clock = [1_000.0]
     cache = TTLCache(maxsize=256, ttl=60, timer=lambda: clock[0])
-    monkeypatch.setattr(provider_module, "_RESPONSE_CACHE", cache)
+    monkeypatch.setattr(provider_caches, "_RESPONSE_CACHE", cache)
 
-    provider_module._cache_put("k", LLMResponse(content="v", model="m"))
-    assert provider_module._cache_get("k").content == "v"
+    provider_caches._cache_put("k", LLMResponse(content="v", model="m"))
+    assert provider_caches._cache_get("k").content == "v"
 
     clock[0] += 61.0
-    assert provider_module._cache_get("k") is None
+    assert provider_caches._cache_get("k") is None
 
 
 def test_cache_get_missing_key_returns_none():
-    assert provider_module._cache_get("fm2-absent") is None
+    assert provider_caches._cache_get("fm2-absent") is None
 
 
 # ─── W4: every stream path retries 429 with backoff ─────────────────────────
@@ -272,7 +277,7 @@ def record_sleep(monkeypatch):
     async def record(seconds):
         delays.append(seconds)
 
-    monkeypatch.setattr(provider_module.asyncio, "sleep", record)
+    monkeypatch.setattr(asyncio, "sleep", record)
     return delays
 
 
@@ -538,7 +543,7 @@ async def test_openrouter_stream_finish_reason_without_done_completes(make):
 
 async def test_ollama_complete_without_message_raises_and_finishes_failed(make, monkeypatch):
     ledger = _UsageLedger()
-    monkeypatch.setattr(provider_module, "usage_store", ledger)
+    monkeypatch.setattr("machina.core.provider.ollama.usage_store", ledger)
 
     def handler(request):
         # Ollama can answer 200 with no message (e.g. {"done": true}).
@@ -556,7 +561,7 @@ async def test_ollama_complete_without_message_raises_and_finishes_failed(make, 
 
 
 async def test_fallback_result_is_not_cached_under_requested_model(make, monkeypatch, record_sleep):
-    monkeypatch.setattr(provider_module, "_FREE_FALLBACK_MODELS", ("a/model:free",))
+    monkeypatch.setattr("machina.core.provider.openrouter._FREE_FALLBACK_MODELS", ("a/model:free",))
     requested: list[str] = []
 
     def handler(request):
@@ -597,25 +602,25 @@ async def test_first_candidate_success_is_still_cached(make):
 def test_retry_delay_parses_http_date():
     future = datetime.now(UTC) + timedelta(seconds=30)
     response = httpx.Response(429, headers={"retry-after": format_datetime(future, usegmt=True)})
-    delay = provider_module._retry_delay(0, response, free=False)
+    delay = provider_transport._retry_delay(0, response, free=False)
     assert 25.0 <= delay <= 30.5
 
 
 def test_retry_delay_clamps_past_http_date_to_zero():
     past = datetime.now(UTC) - timedelta(seconds=30)
     response = httpx.Response(429, headers={"retry-after": format_datetime(past, usegmt=True)})
-    assert provider_module._retry_delay(0, response, free=False) == 0.0
+    assert provider_transport._retry_delay(0, response, free=False) == 0.0
 
 
 def test_retry_delay_garbage_falls_back_to_backoff():
     response = httpx.Response(429, headers={"retry-after": "in a bit"})
-    delay = provider_module._retry_delay(0, response, free=False)
+    delay = provider_transport._retry_delay(0, response, free=False)
     assert 1.0 <= delay <= 2.0  # base 1s * 2**0 + <1s jitter
 
 
 def test_retry_delay_still_parses_delta_seconds():
     response = httpx.Response(429, headers={"retry-after": "7"})
-    assert provider_module._retry_delay(0, response, free=False) == 7.0
+    assert provider_transport._retry_delay(0, response, free=False) == 7.0
 
 
 # ─── N6: invalid reasoning_effort config fails loudly, not silently ─────────
@@ -626,7 +631,7 @@ def test_resolve_effort_warns_and_falls_back_on_invalid_config(monkeypatch, capl
 
     monkeypatch.setattr(config, "_session_overrides", {"reasoning_effort": "ultra"})
     with caplog.at_level(logging.WARNING, logger="machina.core.provider"):
-        assert provider_module._resolve_effort(None) == ""
+        assert provider_reasoning._resolve_effort(None) == ""
     assert "reasoning_effort" in caplog.text.lower()
 
 
@@ -638,7 +643,7 @@ def test_resolve_effort_falls_back_on_config_value_error(monkeypatch, caplog):
 
     monkeypatch.setattr(config, "get", broken)
     with caplog.at_level(logging.WARNING, logger="machina.core.provider"):
-        assert provider_module._resolve_effort(None) == ""
+        assert provider_reasoning._resolve_effort(None) == ""
     # The safe-logging record factory strips exception text (it can echo
     # secrets), so the warning names the key + exception class only.
     assert "reasoning_effort" in caplog.text
@@ -653,14 +658,14 @@ def test_resolve_effort_propagates_unexpected_config_errors(monkeypatch):
 
     monkeypatch.setattr(config, "get", broken)
     with pytest.raises(RuntimeError, match="backend exploded"):
-        provider_module._resolve_effort(None)
+        provider_reasoning._resolve_effort(None)
 
 
 def test_resolve_effort_precedence_unchanged():
-    assert provider_module._resolve_effort("high") == "high"
-    assert provider_module._resolve_effort(None, "medium") == "medium"
+    assert provider_reasoning._resolve_effort("high") == "high"
+    assert provider_reasoning._resolve_effort(None, "medium") == "medium"
     with pytest.raises(ValidationError):
-        provider_module._resolve_effort("ultra")
+        provider_reasoning._resolve_effort("ultra")
 
 
 # ─── N7: close contract on the base; dead embed implementations gone ────────
@@ -683,7 +688,7 @@ def test_reload_rate_limiters_rebuilds_existing_buckets(monkeypatch):
     from machina.core.config import config
 
     monkeypatch.setattr(config, "_session_overrides", {"rate_limit_calls_per_minute": 30})
-    bucket = provider_module._get_rate_limiter("fm2-reload-test")
+    bucket = provider_rate_limit._get_rate_limiter("fm2-reload-test")
     try:
         assert bucket.rate == 0.5
         assert bucket.capacity == 30
@@ -691,14 +696,14 @@ def test_reload_rate_limiters_rebuilds_existing_buckets(monkeypatch):
         monkeypatch.setattr(config, "_session_overrides", {"rate_limit_calls_per_minute": 120})
         provider_module.reload_rate_limiters()
 
-        rebuilt = provider_module._RATE_LIMITERS["fm2-reload-test"]
+        rebuilt = provider_rate_limit._RATE_LIMITERS["fm2-reload-test"]
         assert rebuilt is not bucket
         assert rebuilt.rate == 2.0
         assert rebuilt.capacity == 120
         # Buckets for providers that never made a call are not materialized.
-        assert "fm2-untouched" not in provider_module._RATE_LIMITERS
+        assert "fm2-untouched" not in provider_rate_limit._RATE_LIMITERS
     finally:
-        provider_module._RATE_LIMITERS.pop("fm2-reload-test", None)
+        provider_rate_limit._RATE_LIMITERS.pop("fm2-reload-test", None)
 
 
 def test_reload_rate_limiters_rejects_invalid_config(monkeypatch):

@@ -263,8 +263,8 @@ class TestProviderMidStreamFailure:
         )
         reserve = AsyncMock(return_value=uuid.uuid4())
         finish = AsyncMock()
-        monkeypatch.setattr("machina.core.provider.usage_store.reserve", reserve)
-        monkeypatch.setattr("machina.core.provider.usage_store.finish", finish)
+        monkeypatch.setattr("machina.core.usage.usage_store.reserve", reserve)
+        monkeypatch.setattr("machina.core.usage.usage_store.finish", finish)
 
         session_id = uuid.uuid4()
         agent_id = "test-agent"

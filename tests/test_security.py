@@ -357,7 +357,7 @@ class TestAuditLogSanitization:
 
     def test_sanitize_value_redacts_api_key(self):
         """Audit log should redact API keys."""
-        from machina.core.provider import _sanitize_value
+        from machina.core.provider.audit import _sanitize_value
 
         result = _sanitize_value("sk-abc123def456ghi789jkl012mno345pqr")
         assert "sk-abc123" not in result
@@ -365,7 +365,7 @@ class TestAuditLogSanitization:
 
     def test_sanitize_value_redacts_password(self):
         """Audit log should redact passwords."""
-        from machina.core.provider import _sanitize_value
+        from machina.core.provider.audit import _sanitize_value
 
         result = _sanitize_value("password = supersecret123")
         assert "supersecret123" not in result
@@ -373,7 +373,7 @@ class TestAuditLogSanitization:
 
     def test_sanitize_value_redacts_bearer_token(self):
         """Audit log should redact bearer tokens."""
-        from machina.core.provider import _sanitize_value
+        from machina.core.provider.audit import _sanitize_value
 
         result = _sanitize_value("Authorization: Bearer abcdef1234567890")
         assert "abcdef1234567890" not in result
@@ -381,7 +381,7 @@ class TestAuditLogSanitization:
 
     def test_sanitize_value_redacts_db_connection(self):
         """Audit log should redact DB connection strings."""
-        from machina.core.provider import _sanitize_value
+        from machina.core.provider.audit import _sanitize_value
 
         result = _sanitize_value("postgres://user:secretpass@localhost:5432/db")
         assert "secretpass" not in result
@@ -389,14 +389,14 @@ class TestAuditLogSanitization:
 
     def test_sanitize_value_preserves_safe_strings(self):
         """Audit log should not modify safe strings."""
-        from machina.core.provider import _sanitize_value
+        from machina.core.provider.audit import _sanitize_value
 
         result = _sanitize_value("Hello world")
         assert result == "Hello world"
 
     def test_sanitize_value_handles_non_strings(self):
         """Audit log should pass through non-string values."""
-        from machina.core.provider import _sanitize_value
+        from machina.core.provider.audit import _sanitize_value
 
         assert _sanitize_value(42) == 42
         assert _sanitize_value(None) is None
@@ -404,7 +404,7 @@ class TestAuditLogSanitization:
 
     def test_sanitize_value_handles_dicts(self):
         """Audit log should sanitize dict values."""
-        from machina.core.provider import _sanitize_value
+        from machina.core.provider.audit import _sanitize_value
 
         result = _sanitize_value(
             {

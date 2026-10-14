@@ -18,7 +18,8 @@ from hypothesis import strategies as st
 
 from machina.core.assembler import PromptAssembler, get_token_count
 from machina.core.models import ContextChunk
-from machina.core.provider import AsyncTokenBucket, _validate_messages, _validate_params
+from machina.core.provider import AsyncTokenBucket
+from machina.core.provider.transport import _validate_messages, _validate_params
 from machina.tools.base import ToolRegistry
 
 # ===========================================================================

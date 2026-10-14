@@ -16,13 +16,9 @@ import copy
 import pytest
 
 from machina.core.exceptions import RateLimitError
-from machina.core.provider import (
-    _FREE_FALLBACK_MODELS,
-    OpenRouterProvider,
-    _is_free_model,
-    _quota_exhausted,
-    _quota_reset_at,
-)
+from machina.core.provider import OpenRouterProvider
+from machina.core.provider.openrouter import _FREE_FALLBACK_MODELS
+from machina.core.provider.transport import _is_free_model, _quota_exhausted, _quota_reset_at
 
 # The exact headers OpenRouter returns once the daily free quota is spent.
 EXHAUSTED_HEADERS = {

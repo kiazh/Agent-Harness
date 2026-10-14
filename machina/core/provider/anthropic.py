@@ -1,0 +1,462 @@
+"""Anthropic Messages API transport, normalized to OpenAI-style shapes."""
+
+from __future__ import annotations
+
+import json
+import time
+import uuid
+from collections.abc import AsyncGenerator
+from typing import Any
+
+import httpx
+
+from machina.core.config import config
+from machina.core.exceptions import ProviderError, ValidationError
+from machina.core.images import anthropic_content
+from machina.core.metrics import metrics
+from machina.core.models import LLMResponse, StreamEvent, ToolDefinition
+from machina.core.provider._log import logger
+from machina.core.provider.audit import audit_log
+from machina.core.provider.base import LLMProvider
+from machina.core.provider.caches import _cache_get, _cache_key, _cache_put, _caller_identity
+from machina.core.provider.rate_limit import _get_rate_limiter
+from machina.core.provider.reasoning import (
+    ANTHROPIC_THINKING_BUDGETS,
+    _resolve_effort,
+    normalize_reasoning_effort,
+)
+from machina.core.provider.transport import (
+    _ephemeral_cache_control,
+    _log_prompt_cache_breakpoints,
+    _mark_last_tool_breakpoint,
+    _post_with_retry,
+    _prompt_cache_breakpoints_enabled,
+    _stream_with_retry,
+    _validate_messages,
+    _validate_params,
+)
+from machina.core.usage import usage_store
+
+
+# ---------------------------------------------------------------------------
+# Anthropic provider — native Messages API (Anthropic has no OpenAI-compatible
+# endpoint). Requests/responses are normalized to the harness's OpenAI-style
+# shapes so the agent loop works unchanged.
+# ---------------------------------------------------------------------------
+class AnthropicProvider(LLMProvider):
+    """Anthropic Messages API — https://api.anthropic.com/v1/messages."""
+
+    BASE_URL = "https://api.anthropic.com"
+    API_VERSION = "2023-06-01"
+    DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> None:
+        self.api_key = api_key or config.get("anthropic_api_key") or ""
+        if not self.api_key:
+            raise ValidationError("ANTHROPIC_API_KEY not set")
+        self.model = model or self.DEFAULT_MODEL
+        self._default_effort = normalize_reasoning_effort(reasoning_effort)
+        self._rate_limiter = _get_rate_limiter("anthropic")
+        self.client = httpx.AsyncClient(
+            base_url=self.BASE_URL,
+            headers={
+                "x-api-key": self.api_key,
+                "anthropic-version": self.API_VERSION,
+                "Content-Type": "application/json",
+            },
+            timeout=120.0,
+        )
+
+    @staticmethod
+    def _to_anthropic_messages(
+        messages: list[dict[str, Any]],
+    ) -> tuple[str | None, list[dict[str, Any]]]:
+        """Split OpenAI-style history into (system, anthropic messages).
+
+        Handles the harness's shapes: plain role/content dicts, assistant
+        messages carrying OpenAI ``tool_calls``, and ``role: tool`` results.
+        """
+        system_parts: list[str] = []
+        out: list[dict[str, Any]] = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            if role == "system":
+                system_parts.append(str(msg.get("content", "")))
+                continue
+            if role == "tool":
+                out.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": msg.get("tool_call_id", ""),
+                                "content": str(msg.get("content", "")),
+                            }
+                        ],
+                    }
+                )
+                continue
+            tool_calls = msg.get("tool_calls")
+            if role == "assistant" and tool_calls:
+                blocks: list[dict[str, Any]] = []
+                if msg.get("content"):
+                    blocks.append({"type": "text", "text": str(msg.get("content"))})
+                for tc in tool_calls:
+                    fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+                    args = fn.get("arguments", "{}")
+                    try:
+                        parsed = json.loads(args) if isinstance(args, str) else args
+                    except (json.JSONDecodeError, TypeError):
+                        parsed = {}
+                    blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc.get("id", "") if isinstance(tc, dict) else "",
+                            "name": fn.get("name", ""),
+                            "input": parsed if isinstance(parsed, dict) else {},
+                        }
+                    )
+                out.append({"role": "assistant", "content": blocks})
+                continue
+            out.append({"role": role, "content": anthropic_content(msg.get("content", ""))})
+        return ("\n\n".join(system_parts) if system_parts else None, out)
+
+    @staticmethod
+    def _from_response_blocks(content: list[dict[str, Any]]) -> tuple[str, list[dict]]:
+        """Normalize Anthropic content blocks to (text, OpenAI-style tool_calls)."""
+        texts: list[str] = []
+        tool_calls: list[dict] = []
+        for block in content or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and block.get("text"):
+                texts.append(block["text"])
+            elif block.get("type") == "tool_use":
+                tool_calls.append(
+                    {
+                        "id": block.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": block.get("name", ""),
+                            "arguments": json.dumps(block.get("input", {})),
+                        },
+                    }
+                )
+        return "".join(texts), tool_calls
+
+    def _thinking_payload(
+        self, reasoning_effort: str | None, max_tokens: int, temperature: float
+    ) -> tuple[dict[str, Any], int, float]:
+        """Return (extra body, effective max_tokens, effective temperature)."""
+        effort = _resolve_effort(reasoning_effort, self._default_effort)
+        if not effort:
+            return {}, max_tokens, temperature
+        budget = ANTHROPIC_THINKING_BUDGETS[effort]
+        # Thinking requires max_tokens above the budget and temperature 1.
+        return (
+            {"thinking": {"type": "enabled", "budget_tokens": budget}},
+            max(max_tokens, budget + 1024),
+            1.0,
+        )
+
+    def _payload(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        tools: list[ToolDefinition] | None,
+        reasoning_effort: str | None,
+        stream: bool,
+    ) -> dict[str, Any]:
+        system, anthropic_messages = self._to_anthropic_messages(messages)
+        cache_breakpoints = _prompt_cache_breakpoints_enabled()
+        thinking, max_tokens, temperature = self._thinking_payload(
+            reasoning_effort, max_tokens, temperature
+        )
+        payload: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": anthropic_messages,
+            **thinking,
+        }
+        if system:
+            if cache_breakpoints:
+                # Block-list form is required to carry cache_control; only
+                # used when the pilot flag is on.
+                payload["system"] = [
+                    {
+                        "type": "text",
+                        "text": system,
+                        "cache_control": _ephemeral_cache_control(),
+                    }
+                ]
+            else:
+                payload["system"] = system
+        if temperature != 1.0:
+            payload["temperature"] = temperature
+        tools_marked = False
+        if tools:
+            tool_defs = [
+                {"name": t.name, "description": t.description, "input_schema": t.parameters}
+                for t in tools
+            ]
+            if cache_breakpoints:
+                tool_defs = _mark_last_tool_breakpoint(tool_defs)
+                tools_marked = True
+            payload["tools"] = tool_defs
+        if stream:
+            payload["stream"] = True
+        _log_prompt_cache_breakpoints(
+            "anthropic",
+            model,
+            system=cache_breakpoints and bool(system),
+            tools=tools_marked,
+        )
+        return payload
+
+    def reservation_max_tokens(self, max_tokens: int, reasoning_effort: str | None = None) -> int:
+        return self._thinking_payload(reasoning_effort, max_tokens, 0.7)[1]
+
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[ToolDefinition] | None = None,
+        reasoning_effort: str | None = None,
+        session_id: uuid.UUID | None = None,
+        agent_id: str | None = None,
+    ) -> LLMResponse:
+        _validate_messages(messages)
+        _validate_params(temperature, max_tokens)
+        await self._rate_limiter.acquire()
+
+        model = model or self.model
+        payload = self._payload(
+            messages, model, temperature, max_tokens, tools, reasoning_effort, False
+        )
+
+        ckey = _cache_key(
+            messages,
+            tools,
+            f"anthropic:{model}",
+            payload,
+            _caller_identity(session_id, agent_id),
+        )
+        cached = _cache_get(ckey)
+        if cached is not None:
+            logger.debug("cache hit for anthropic model=%s", model)
+            return cached
+
+        audit_log("llm_call_start", provider="anthropic", model=model, message_count=len(messages))
+
+        reservation_id = None
+        if session_id is not None and agent_id is not None:
+            reservation_id = await usage_store.reserve(
+                session_id,
+                agent_id,
+                "anthropic",
+                model,
+                messages,
+                tools or [],
+                payload["max_tokens"],
+            )
+
+        start = time.monotonic()
+        try:
+            resp = await _post_with_retry(self.client, "/v1/messages", payload)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            duration_ms = (time.monotonic() - start) * 1000
+            metrics.record_llm_call(
+                session_id="", model=model, duration_ms=duration_ms, is_error=True
+            )
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
+            audit_log("llm_call_error", provider="anthropic", model=model, error=str(e))
+            raise
+
+        duration_ms = (time.monotonic() - start) * 1000
+        if data.get("type") == "error" or "content" not in data:
+            error = data.get("error") or {}
+            detail = error.get("message") if isinstance(error, dict) else str(error)
+            metrics.record_llm_call(
+                session_id="", model=model, duration_ms=duration_ms, is_error=True
+            )
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
+            audit_log("llm_call_error", provider="anthropic", model=model, error="no_content")
+            raise ProviderError(f"Anthropic returned no content for {model}: {detail or data}")
+
+        content, tool_calls = self._from_response_blocks(data.get("content", []))
+        usage_in = data.get("usage", {})
+        usage = {
+            "prompt_tokens": usage_in.get("input_tokens", 0),
+            "completion_tokens": usage_in.get("output_tokens", 0),
+            "total_tokens": usage_in.get("input_tokens", 0) + usage_in.get("output_tokens", 0),
+        }
+        metrics.record_llm_call(
+            session_id="",
+            model=data.get("model", model),
+            duration_ms=duration_ms,
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+        )
+        if reservation_id is not None:
+            await usage_store.finish(reservation_id, usage, model=data.get("model", model))
+        audit_log(
+            "llm_call_complete",
+            provider="anthropic",
+            model=data.get("model", model),
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            total_tokens=usage["total_tokens"],
+            tool_calls=len(tool_calls),
+        )
+        response = LLMResponse(
+            content=content,
+            model=data.get("model", model),
+            usage=usage,
+            raw=data,
+            tool_calls=tool_calls,
+        )
+        _cache_put(ckey, response)
+        return response
+
+    async def stream_complete(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[ToolDefinition] | None = None,
+        reasoning_effort: str | None = None,
+        session_id: uuid.UUID | None = None,
+        agent_id: str | None = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Stream via Anthropic SSE — yields text deltas as they arrive."""
+        _validate_messages(messages)
+        _validate_params(temperature, max_tokens)
+        await self._rate_limiter.acquire()
+
+        model = model or self.model
+        payload = self._payload(
+            messages, model, temperature, max_tokens, tools, reasoning_effort, True
+        )
+
+        audit_log(
+            "llm_stream_start", provider="anthropic", model=model, message_count=len(messages)
+        )
+
+        reservation_id = None
+        if session_id is not None and agent_id is not None:
+            reservation_id = await usage_store.reserve(
+                session_id,
+                agent_id,
+                "anthropic",
+                model,
+                messages,
+                tools or [],
+                payload["max_tokens"],
+            )
+
+        text_parts: list[str] = []
+        blocks: dict[int, dict[str, Any]] = {}
+        input_tokens = 0
+        output_tokens = 0
+        resolved_model = model
+        try:
+            async with _stream_with_retry(self.client, "/v1/messages", payload) as resp:
+                resp.raise_for_status()
+                event_type = ""
+                async for line in resp.aiter_lines():
+                    if line.startswith("event: "):
+                        event_type = line[7:].strip()
+                        continue
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        data = json.loads(line[6:])
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    if event_type == "error" or data.get("type") == "error":
+                        # Anthropic can fail mid-stream via an explicit error
+                        # event; swallowing it would truncate the answer.
+                        error = data.get("error") or {}
+                        detail = error.get("message") if isinstance(error, dict) else str(error)
+                        raise ProviderError(
+                            f"Anthropic stream error for {resolved_model}: {detail or data}"
+                        )
+                    if event_type == "message_start":
+                        msg = data.get("message", {})
+                        resolved_model = msg.get("model") or resolved_model
+                        input_tokens = msg.get("usage", {}).get("input_tokens", input_tokens)
+                    elif event_type == "content_block_start":
+                        idx = data.get("index", 0)
+                        block = data.get("content_block", {})
+                        if block.get("type") == "tool_use":
+                            blocks[idx] = {
+                                "id": block.get("id", ""),
+                                "name": block.get("name", ""),
+                                "arguments": "",
+                            }
+                    elif event_type == "content_block_delta":
+                        idx = data.get("index", 0)
+                        delta = data.get("delta", {})
+                        if delta.get("type") == "text_delta" and delta.get("text"):
+                            text_parts.append(delta["text"])
+                            yield StreamEvent(type="text", content=delta["text"])
+                        elif delta.get("type") == "input_json_delta" and delta.get("partial_json"):
+                            blocks.setdefault(idx, {"id": "", "name": "", "arguments": ""})[
+                                "arguments"
+                            ] += delta["partial_json"]
+                    elif event_type == "message_delta":
+                        output_tokens = data.get("usage", {}).get("output_tokens", output_tokens)
+        except Exception as e:
+            if reservation_id is not None:
+                await usage_store.finish(reservation_id, failed=True)
+            audit_log("llm_stream_error", provider="anthropic", model=model, error=str(e))
+            raise
+
+        tool_calls = [
+            {
+                "id": b["id"],
+                "type": "function",
+                "function": {"name": b["name"], "arguments": b["arguments"]},
+            }
+            for _, b in sorted(blocks.items())
+            if b.get("name") or b.get("arguments")
+        ]
+        usage = {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }
+        if reservation_id is not None:
+            await usage_store.finish(reservation_id, usage, model=resolved_model)
+        audit_log(
+            "llm_stream_complete", provider="anthropic", model=model, tool_calls=len(tool_calls)
+        )
+        yield StreamEvent(
+            type="done",
+            response=LLMResponse(
+                content="".join(text_parts),
+                model=resolved_model,
+                usage=usage,
+                tool_calls=tool_calls,
+            ),
+        )
+
+    async def close(self) -> None:
+        await self.client.aclose()

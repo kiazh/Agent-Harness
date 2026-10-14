@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 
 import httpx
 import pytest
 
-from machina.core import provider as provider_module
 from machina.core.exceptions import RateLimitError
 from machina.core.models import ToolDefinition
 from machina.core.provider import AsyncTokenBucket, OpenRouterProvider
@@ -35,7 +35,7 @@ async def make_provider(monkeypatch):
     async def record_delay(seconds):
         delays.append(seconds)
 
-    monkeypatch.setattr(provider_module.asyncio, "sleep", record_delay)
+    monkeypatch.setattr(asyncio, "sleep", record_delay)
 
     def make(handler, model="vendor/paid-model"):
         provider = OpenRouterProvider.__new__(OpenRouterProvider)
@@ -77,7 +77,10 @@ async def test_paid_stream_404_with_tools_retries_plain_chat(make_provider):
 
 async def test_free_stream_retries_last_candidate_without_tools(make_provider, monkeypatch):
     """A chain longer than two candidates must reach its last plain-chat retry."""
-    monkeypatch.setattr(provider_module, "_FREE_FALLBACK_MODELS", ("a/model:free", "b/model:free"))
+    monkeypatch.setattr(
+        "machina.core.provider.openrouter._FREE_FALLBACK_MODELS",
+        ("a/model:free", "b/model:free"),
+    )
     requests = []
 
     def handle(request):
@@ -154,7 +157,7 @@ async def test_daily_quota_error_finishes_reservation_without_rotating(
     """Daily quota exhaustion must surface its type and finalize usage."""
     requests = []
     ledger = _UsageLedger()
-    monkeypatch.setattr(provider_module, "usage_store", ledger)
+    monkeypatch.setattr("machina.core.provider.openrouter.usage_store", ledger)
 
     def handle(request):
         requests.append(request)
@@ -191,9 +194,9 @@ async def test_plain_chat_stream_failure_surfaces_the_retry_error(make_provider)
 @pytest.mark.parametrize("stream", [False, True])
 async def test_plain_chat_quota_error_finishes_reservation(make_provider, monkeypatch, stream):
     """Quota errors from the stripped-tools retry retain their type/accounting."""
-    monkeypatch.setattr(provider_module, "_FREE_FALLBACK_MODELS", ())
+    monkeypatch.setattr("machina.core.provider.openrouter._FREE_FALLBACK_MODELS", ())
     ledger = _UsageLedger()
-    monkeypatch.setattr(provider_module, "usage_store", ledger)
+    monkeypatch.setattr("machina.core.provider.openrouter.usage_store", ledger)
     requests = []
 
     def handle(request):

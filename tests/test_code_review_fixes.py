@@ -17,7 +17,7 @@ import pytest
 
 from machina.core.context import ContextManager
 from machina.core.exceptions import ValidationError
-from machina.core.provider import _validate_messages, _validate_params
+from machina.core.provider.transport import _validate_messages, _validate_params
 from machina.core.session import SessionManager
 from machina.db.connection import Database
 from machina.memory.retriever import MemoryRetriever

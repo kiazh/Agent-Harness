@@ -129,7 +129,7 @@ def request_context_tokens(messages, tools, provider) -> int:
     from machina.core.assembler import get_token_count
     from machina.core.config import config
     from machina.core.images import token_messages
-    from machina.core.provider import _tools_payload
+    from machina.core.provider.transport import _tools_payload
 
     messages, visual_tokens = token_messages(messages)
 

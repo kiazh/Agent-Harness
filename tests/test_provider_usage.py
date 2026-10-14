@@ -60,8 +60,8 @@ async def test_openrouter_complete_calls_usage_store_when_session_id_provided(mo
 
     reserve = AsyncMock(return_value=uuid.uuid4())
     finish = AsyncMock()
-    monkeypatch.setattr("machina.core.provider.usage_store.reserve", reserve)
-    monkeypatch.setattr("machina.core.provider.usage_store.finish", finish)
+    monkeypatch.setattr("machina.core.usage.usage_store.reserve", reserve)
+    monkeypatch.setattr("machina.core.usage.usage_store.finish", finish)
 
     session_id = uuid.uuid4()
     agent_id = "test-agent"
@@ -84,8 +84,8 @@ async def test_openrouter_complete_skips_usage_store_when_no_session_id(monkeypa
 
     reserve = AsyncMock(return_value=uuid.uuid4())
     finish = AsyncMock()
-    monkeypatch.setattr("machina.core.provider.usage_store.reserve", reserve)
-    monkeypatch.setattr("machina.core.provider.usage_store.finish", finish)
+    monkeypatch.setattr("machina.core.usage.usage_store.reserve", reserve)
+    monkeypatch.setattr("machina.core.usage.usage_store.finish", finish)
 
     result = await provider.complete(
         messages=[{"role": "user", "content": "hello"}],
@@ -103,8 +103,8 @@ async def test_ollama_complete_calls_usage_store_when_session_id_provided(monkey
 
     reserve = AsyncMock(return_value=uuid.uuid4())
     finish = AsyncMock()
-    monkeypatch.setattr("machina.core.provider.usage_store.reserve", reserve)
-    monkeypatch.setattr("machina.core.provider.usage_store.finish", finish)
+    monkeypatch.setattr("machina.core.usage.usage_store.reserve", reserve)
+    monkeypatch.setattr("machina.core.usage.usage_store.finish", finish)
 
     session_id = uuid.uuid4()
     agent_id = "test-agent"
@@ -127,8 +127,8 @@ async def test_ollama_complete_skips_usage_store_when_no_session_id(monkeypatch)
 
     reserve = AsyncMock(return_value=uuid.uuid4())
     finish = AsyncMock()
-    monkeypatch.setattr("machina.core.provider.usage_store.reserve", reserve)
-    monkeypatch.setattr("machina.core.provider.usage_store.finish", finish)
+    monkeypatch.setattr("machina.core.usage.usage_store.reserve", reserve)
+    monkeypatch.setattr("machina.core.usage.usage_store.finish", finish)
 
     result = await provider.complete(
         messages=[{"role": "user", "content": "hello"}],
@@ -154,8 +154,8 @@ async def test_openrouter_complete_calls_finish_with_failed_on_error(monkeypatch
 
     reserve = AsyncMock(return_value=uuid.uuid4())
     finish = AsyncMock()
-    monkeypatch.setattr("machina.core.provider.usage_store.reserve", reserve)
-    monkeypatch.setattr("machina.core.provider.usage_store.finish", finish)
+    monkeypatch.setattr("machina.core.usage.usage_store.reserve", reserve)
+    monkeypatch.setattr("machina.core.usage.usage_store.finish", finish)
 
     session_id = uuid.uuid4()
     agent_id = "test-agent"
@@ -208,8 +208,8 @@ async def test_openrouter_stream_complete_calls_usage_store_when_session_id_prov
 
     reserve = AsyncMock(return_value=uuid.uuid4())
     finish = AsyncMock()
-    monkeypatch.setattr("machina.core.provider.usage_store.reserve", reserve)
-    monkeypatch.setattr("machina.core.provider.usage_store.finish", finish)
+    monkeypatch.setattr("machina.core.usage.usage_store.reserve", reserve)
+    monkeypatch.setattr("machina.core.usage.usage_store.finish", finish)
 
     session_id = uuid.uuid4()
     agent_id = "test-agent"
@@ -261,8 +261,8 @@ async def test_openrouter_stream_complete_skips_usage_store_when_no_session_id(m
 
     reserve = AsyncMock(return_value=uuid.uuid4())
     finish = AsyncMock()
-    monkeypatch.setattr("machina.core.provider.usage_store.reserve", reserve)
-    monkeypatch.setattr("machina.core.provider.usage_store.finish", finish)
+    monkeypatch.setattr("machina.core.usage.usage_store.reserve", reserve)
+    monkeypatch.setattr("machina.core.usage.usage_store.finish", finish)
 
     events = []
     async for event in provider.stream_complete(
