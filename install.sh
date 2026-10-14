@@ -177,6 +177,10 @@ INSTALL_LIB="$APP_DIR/tools/install-helpers.sh"
 # can no longer redirect it), and unset means the checkout .env.
 if [ -n "${MACHINA_ENV_FILE:-}" ]; then ENV_IS_DEFAULT=0; else ENV_IS_DEFAULT=1; fi
 ENV_FILE="$(resolve_env_file "$START_DIR")"
+# Export the resolved absolute target: `machina init`/`doctor` below run as
+# child processes from APP_DIR, where a relative MACHINA_ENV_FILE would
+# otherwise resolve against the wrong directory (the startup dir differs).
+export MACHINA_ENV_FILE="$ENV_FILE"
 log "Using env file: $ENV_FILE"
 
 # --- Prereqs -----------------------------------------------------------------

@@ -9,6 +9,12 @@ import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works
 // OSC: ESC ] ... (BEL | ESC \). APC/DCS/SOS/PM: ESC [PX^_] ... ESC \.
 const OSC_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 const APC_RE = /\x1b[PX^_][^\x1b]*(?:\x1b\\|\x07)/g;
+// C1 (8-bit) equivalents, same shape: OSC = \x9d ... (BEL | ST \x9c);
+// DCS/SOS/PM/APC = \x90\x98\x9e\x9f ... ST. Payloads are removed with the
+// introducer (fail closed on missing terminators) so no C1 control can ever
+// reach the terminal or recombine with neighbouring bytes.
+const C1_OSC_RE = /\x9d[^\x07\x9c]*(?:\x07|\x9c)?/g;
+const C1_APC_RE = /[\x90\x98\x9e\x9f][^\x07\x9c]*(?:\x07|\x9c)?/g;
 // Single-ESC sequences: ESC( X, ESC) X, ESC# X, ESC[@-_], ESC[\\^_].
 const ESC_SINGLE_RE = /\x1b[()][012AB]|[\x1b\x9b][#()][0-9A-B]|[\x1b\x9b][@-Z\\-_]/g;
 // CSI: ESC [ params intermediates final. Safe SGR (final `m`) is kept when
@@ -49,9 +55,10 @@ const CARRIAGE_RE = /\r/g;
 
 /**
  * Sanitize untrusted text for terminal display.
- * - Removes OSC/APC/DCS title/clipboard/hyperlink sequences entirely.
+ * - Strips OSC/APC/DCS title/clipboard/hyperlink sequences entirely,
+ *   including their C1 (8-bit) forms.
  * - Keeps only allow-listed SGR color sequences; strips cursor movement,
- *   clears, scroll, and all other CSI/ESC controls.
+ *   clears, scroll, and all other CSI/ESC/C1 controls.
  * - Strips C0 controls, CR, backspace, DEL, U+0085/U+2028/U+2029.
  * - Expands tabs to two spaces so width math stays honest.
  * Newlines are preserved. Combining/CJK/emoji graphemes pass through.
@@ -60,6 +67,8 @@ export function sanitizeDisplay(input: string): string {
 	let out = input.replace(/\t/g, "  ");
 	out = out.replace(OSC_RE, "");
 	out = out.replace(APC_RE, "");
+	out = out.replace(C1_OSC_RE, "");
+	out = out.replace(C1_APC_RE, "");
 	out = out.replace(CSI_RE, (m) => (m.endsWith("m") && isSafeSgr(m) ? m : ""));
 	out = out.replace(ESC_SINGLE_RE, "");
 	out = out.replace(CARRIAGE_RE, "");
@@ -67,6 +76,8 @@ export function sanitizeDisplay(input: string): string {
 	// A lone ESC/C1 that survived (e.g. trailing "\x1b") carries no visible
 	// text. Keep safe SGR sequences intact; strip any other ESC/C1 byte.
 	out = out.replace(/\x1b(?!\[[0-9;]*m)/g, "").replace(/\x9b(?!\[[0-9;]*m)/g, "");
+	// Remaining C1 controls (\x9b handled above so allow-listed SGR survives).
+	out = out.replace(/[\x80-\x9a\x9c-\x9f]/g, "");
 	return out;
 }
 
@@ -80,7 +91,11 @@ export function hasNoTerminalControls(text: string): boolean {
 		stripped = stripped.replace(CSI_RE, (m) => (m.endsWith("m") && isSafeSgr(m) ? "" : "\x00"));
 		if (/[\x1b\x9b\x00]/.test(stripped)) return false;
 	}
-	return !/[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f\r\u0085\u2028\u2029]/.test(stripped);
+	return (
+		!/[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f\r\u0085\u2028\u2029]/.test(stripped) &&
+		// No C1 control bytes survive validation (safe SGR was removed above).
+		!/[\x80-\x9f]/.test(stripped)
+	);
 }
 
 /** Visible terminal width using the renderer's grapheme-aware measurement. */

@@ -138,6 +138,31 @@ test("safe_text_never_emits_terminal_controls", () => {
 	assert.ok(mixed.includes("red") && mixed.includes("plain"), "visible text kept");
 });
 
+test("C1 controls never survive sanitization or validation; safe SGR does", () => {
+	// C1 OSC (0x9D) ... ST (0x9C), bare ST, and C1 DCS (0x90) payload forms.
+	const inputs = ["A\u009d0;attack\u009cB", "A\u009cB", "A\u0090payload\u009cB"];
+	for (const input of inputs) {
+		const safe = sanitizeDisplay(input);
+		assert.ok(!/[\u0080-\u009f]/.test(safe), `C1 survives sanitize: ${JSON.stringify(safe)}`);
+		assert.equal(hasNoTerminalControls(input), false, `raw C1 accepted: ${JSON.stringify(input)}`);
+		assert.equal(hasNoTerminalControls(safe), true, `sanitized C1 text rejected: ${JSON.stringify(safe)}`);
+	}
+	// Sequence payloads are removed whole, not left as visible garbage.
+	assert.equal(sanitizeDisplay("A\u009d0;attack\u009cB"), "AB");
+	assert.equal(sanitizeDisplay("A\u0090payload\u009cB"), "AB");
+	assert.equal(sanitizeDisplay("A\u009cB"), "AB");
+	// Allow-listed SGR formatting keeps working in both ESC and C1 CSI forms.
+	for (const sgr of ["\x1b[31mred\x1b[0m", "\x9b[31mred\x9b[0m"]) {
+		const safe = sanitizeDisplay(sgr);
+		assert.equal(safe, sgr, `safe SGR preserved: ${JSON.stringify(sgr)}`);
+		assert.equal(hasNoTerminalControls(safe), true, `safe SGR accepted: ${JSON.stringify(sgr)}`);
+	}
+	// Unsafe C1 CSI (clear screen) is stripped and can never validate.
+	const cleared = sanitizeDisplay("x\x9b2Jy");
+	assert.ok(!/[\u0080-\u009f]/.test(cleared), "unsafe C1 CSI survives");
+	assert.equal(hasNoTerminalControls("x\x9b2Jy"), false, "raw 8-bit CSI accepted");
+});
+
 test("unicode_rendering_stays_inside_width", () => {
 	const samples = [
 		"日本語テスト plains",

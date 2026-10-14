@@ -49,10 +49,12 @@ export const agentsCommand: Command = {
 				return;
 			}
 			case "save": {
-			const name = requireArgs(rest, "/agents save <name> [description]");
-			const desc = rest.replace(/^\S+\s*/, "").trim() || `Custom agent: ${name}`;
+			const args = requireArgs(rest, "/agents save <name> [description]");
+			// First token is the agent name; the remainder is the description.
+			const [name, ...descWords] = args.split(/\s+/);
+			const desc = descWords.join(" ").trim() || `Custom agent: ${name}`;
 			const { agent } = await host.request<AgentSaveResult>("agents.save", {
-				name: name.toLowerCase(),
+				name: name!.toLowerCase(),
 				description: desc,
 				systemPrompt: "",
 				tools: [],

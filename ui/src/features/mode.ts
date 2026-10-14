@@ -75,14 +75,25 @@ export const approvalsCommand: Command = {
 		const session = requireSession(host);
 		const [sub, rest] = splitSub(args);
 		if (sub === "allow" || sub === "deny") {
+			if (!rest) throw new Error(`Usage: /approvals ${sub} <id>. Run /approvals to list pending ids.`);
 			const { approvals } = await host.request<ApprovalsListResult>("approvals.list", {
 				sessionId: session.id,
 			});
-			const match = approvals.find((a) => a.request_id.startsWith(rest));
-			if (!match) throw new Error(`No pending approval starts with "${rest}".`);
+			const matches = approvals.filter((a) => a.request_id.startsWith(rest));
+			if (!matches.length) throw new Error(`No pending approval starts with "${rest}".`);
+			if (matches.length > 1) {
+				const candidates = matches
+					.map((a) => `${shortId(a.request_id)} (${a.operation} ${a.target})`)
+					.join("\n");
+				throw new Error(
+					`"${rest}" matches ${matches.length} pending approvals; use a longer id:\n${candidates}`,
+				);
+			}
+			const match = matches[0]!;
 			await host.request("approvals.resolve", {
 				requestId: match.request_id,
 				verdict: sub === "allow" ? "approved" : "denied",
+				sessionId: session.id,
 			});
 			host.print(`Approval ${sub}ed: ${match.operation} ${match.target}`, "success");
 			return;

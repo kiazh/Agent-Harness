@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import { App } from "../src/app.ts";
@@ -493,4 +496,29 @@ test("local watchdog warns once and retains the guard (never ownership)", async 
 	await (app as unknown as { submitTurn: (text: string) => Promise<void> }).submitTurn("after");
 	assert.equal(client.requests.filter((item) => item.method === "prompt.submit").length, 2);
 	await app.exit();
+});
+
+test("writeFile creates new files but never overwrites existing ones", async () => {
+	const { app } = makeApp(SESSION_A);
+	const dir = await mkdtemp(join(tmpdir(), "machina-writefile-"));
+	try {
+		const existing = join(dir, "AGENTS.md");
+		await writeFile(existing, "# important existing instructions\n", "utf8");
+		await assert.rejects(
+			() => app.writeFile(existing, "# replacement\n"),
+			/Refusing to overwrite existing file/,
+		);
+		assert.equal(
+			await readFile(existing, "utf8"),
+			"# important existing instructions\n",
+			"existing content must survive a refused write",
+		);
+
+		// Fresh files (including missing parent directories) still work.
+		const fresh = join(dir, "nested", "notes.md");
+		assert.equal(await app.writeFile(fresh, "created\n"), fresh);
+		assert.equal(await readFile(fresh, "utf8"), "created\n");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });

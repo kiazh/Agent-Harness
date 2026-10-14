@@ -566,7 +566,16 @@ export class App implements FeatureHost {
 	async writeFile(path: string, text: string): Promise<string> {
 		const full = resolve(process.cwd(), path);
 		await mkdir(dirname(full), { recursive: true });
-		await writeFile(full, text, "utf8");
+		try {
+			// "wx" refuses to clobber: /init and /export must never silently
+			// truncate an existing file (runCommand reports the refusal).
+			await writeFile(full, text, { encoding: "utf8", flag: "wx" });
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+				throw new Error(`Refusing to overwrite existing file ${full}. Delete it first or choose another path.`);
+			}
+			throw error;
+		}
 		return full;
 	}
 

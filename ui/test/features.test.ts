@@ -741,6 +741,28 @@ test("/agents list and show render agent definitions", async () => {
 	assert.match(host.last().text, /read_file, write_file/);
 });
 
+test("/agents save uses the first token as name and the remainder as description", async () => {
+	const host = new FakeHost();
+	host.responses["agents.list"] = { agents: [] };
+	host.responses["agents.save"] = (p: Record<string, unknown>) => ({ agent: { name: p.name } });
+	await run("/agents save helper My helper description", host);
+	assert.deepEqual(host.calls.at(-1)!.params, {
+		name: "helper",
+		description: "My helper description",
+		systemPrompt: "",
+		tools: [],
+	});
+	assert.match(host.last().text, /Saved agent "helper"/);
+
+	// Name only: the description falls back to the custom-agent default.
+	const solo = new FakeHost();
+	solo.responses["agents.list"] = { agents: [] };
+	solo.responses["agents.save"] = (p: Record<string, unknown>) => ({ agent: { name: p.name } });
+	await run("/agents save reviewer", solo);
+	assert.equal(solo.calls.at(-1)!.params.name, "reviewer");
+	assert.equal(solo.calls.at(-1)!.params.description, "Custom agent: reviewer");
+});
+
 test("/delegate runs one step through agents.run", async () => {
 	const host = new FakeHost();
 	host.responses["agents.run"] = {
@@ -1066,6 +1088,41 @@ test("/approvals renders one table and rejects bad ids as errors", async () => {
 	await run("/approvals dance", host);
 	assert.equal(host.last().kind, "error");
 	assert.match(host.last().text, /Unknown \/approvals option/);
+});
+
+test("/approvals allow refuses empty and ambiguous ids, and binds the resolved session", async () => {
+	const host = new FakeHost();
+	host.responses["approvals.list"] = {
+		approvals: [
+			{ request_id: "aaaaaaaa-1111-4000-a000-000000000001", operation: "terminal", target: "cmd-1", agent_id: "harness", status: "pending" },
+			{ request_id: "aaabbbbb-2222-4000-a000-000000000002", operation: "file.write", target: "file-2", agent_id: "harness", status: "pending" },
+		],
+	};
+	const resolves = () => host.calls.filter((c) => c.method === "approvals.resolve");
+	host.responses["approvals.resolve"] = {};
+
+	// Empty id: refuse before dispatching anything.
+	await run("/approvals allow", host);
+	assert.equal(host.last().kind, "error");
+	assert.match(host.last().text, /Usage: \/approvals allow/);
+	assert.equal(resolves().length, 0, "empty id must not approve the first request");
+
+	// Ambiguous prefix: list the candidates and refuse.
+	await run("/approvals allow aa", host);
+	assert.equal(host.last().kind, "error");
+	assert.match(host.last().text, /matches 2/);
+	assert.match(host.last().text, /aaaaaaaa/);
+	assert.match(host.last().text, /aaabbbbb/);
+	assert.equal(resolves().length, 0, "ambiguous prefix must not approve the first match");
+
+	// Unique prefix: resolve exactly that request, bound to this session.
+	await run("/approvals allow aaaaaaaa", host);
+	assert.deepEqual(resolves().at(-1)!.params, {
+		requestId: "aaaaaaaa-1111-4000-a000-000000000001",
+		verdict: "approved",
+		sessionId: SESSION.id,
+	});
+	assert.match(host.last().text, /Approval allowed: terminal cmd-1/);
 });
 
 test("/growth forget reports a miss as a warning", async () => {
