@@ -375,3 +375,47 @@ async def test_import_codex_reports_the_resulting_status(fake_home):
     assert imported["status"]["source"] == "machina"
     assert imported["status"]["accountId"] == "acct-cli"
     assert codex_file.read_bytes() == codex_bytes
+
+
+async def test_oversized_callback_headers_leave_the_listener_serving(fake_home, monkeypatch):
+    """F5 (review round 5): >64 KiB of headers without a terminator must be
+    dropped without breaking the flow - the real callback still completes."""
+    port = _free_port()
+    _install_login(monkeypatch, port)
+    monkeypatch.setattr(chatgpt_auth, "exchange_code", lambda code, **kwargs: _tokens())
+    harness = _Harness()
+
+    await harness.call("auth.chatgpt.login", {"no_browser": True})
+    pending = feature._PENDING
+    assert pending is not None
+
+    def oversized() -> None:
+        conn = socket.create_connection(("127.0.0.1", port), timeout=5.0)
+        try:
+            conn.sendall(b"GET /auth/callback HTTP/1.1\r\nX-Junk: " + b"a" * 200_000)
+            # Keep the socket open: the server must cross its 64 KiB stream
+            # limit before EOF, which is the unhandled-exception case (F5).
+            time.sleep(0.3)
+        finally:
+            conn.close()
+
+    loop = asyncio.get_running_loop()
+    unhandled: list[str] = []
+    previous_handler = loop.get_exception_handler()
+
+    def collect(_loop: asyncio.AbstractEventLoop, context: dict) -> None:
+        unhandled.append(str(context.get("message", "")) + repr(context.get("exception")))
+
+    loop.set_exception_handler(collect)
+    try:
+        await asyncio.to_thread(oversized)
+    finally:
+        loop.set_exception_handler(previous_handler)
+    assert not any("LimitOverrun" in item for item in unhandled), unhandled
+    status, _ = await asyncio.to_thread(
+        _open_callback, f"http://127.0.0.1:{port}/auth/callback?code=gw-code&state=gw-state"
+    )
+    assert status == 200
+    await asyncio.wait_for(pending.task, timeout=5)
+    events = harness.events()
+    assert events and events[-1]["type"] == "auth.chatgpt.completed"

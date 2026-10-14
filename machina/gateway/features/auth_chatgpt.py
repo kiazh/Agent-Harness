@@ -156,7 +156,15 @@ class _CallbackListener:
         try:
             try:
                 raw = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=10.0)
-            except (TimeoutError, asyncio.IncompleteReadError, ConnectionError):
+            except (
+                TimeoutError,
+                asyncio.IncompleteReadError,
+                asyncio.LimitOverrunError,
+                ConnectionError,
+            ):
+                # Garbage/oversized requests (or port probers) are dropped
+                # without touching the flow: the listener must stay able to
+                # serve the real callback (review round 5, F5).
                 return
             request_line = raw.split(b"\r\n", 1)[0].decode("latin-1", "replace")
             parts = request_line.split(" ")
