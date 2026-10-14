@@ -30,15 +30,22 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
+import queue
 import random
+import secrets
 import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import urllib.error
+import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -46,13 +53,30 @@ from urllib.parse import urlparse
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_VENV = REPO_ROOT / ".venv"
 PROOFS_DIR = REPO_ROOT / "docs" / "verification" / "proofs"
-JOURNEY_IDS = ("j1", "j2", "j3", "j4", "j5")
+JOURNEY_IDS = ("j1", "j2", "j3", "j4", "j5", "j6", "j7", "j8")
 JOURNEY_TITLES = {
     "j1": "memory-roundtrip (chat -> consolidate -> memories row + cursor)",
     "j2": "web-research-rag (real web_research -> context_chunks for source)",
     "j3": "web-crawl (real web_crawl -> indexed chunks for source)",
     "j4": "mcp-firecrawl (connector connect -> execute_call scrape -> markdown)",
     "j5": "cli-smoke (machina chat exit 0, no InterfaceError / extraction failure)",
+    "j6": (
+        "compaction-triggers (SSE auto + gateway auto + explicit compress; archive/summary/state)"
+    ),
+    "j7": "turn-parity (SSE turn -> stdio gateway turn -> SSE turn; frames, transcript, claims)",
+    "j8": "provider-facade (config route -> real call via usage_store -> llm_usage row + status)",
+}
+# Per-journey wall-clock budgets (sum of bounded steps). Recorded as notes on
+# every run; a journey is expected to finish well under its budget.
+JOURNEY_TIMEOUT_BUDGET_SECONDS = {
+    "j1": 300.0,
+    "j2": 240.0,
+    "j3": 240.0,
+    "j4": 300.0,
+    "j5": 300.0,
+    "j6": 720.0,
+    "j7": 600.0,
+    "j8": 300.0,
 }
 ERROR_SUBSTRINGS = ("InterfaceError", "Memory extraction failed")
 FIRECRAWL_DEFAULT_URL = "http://localhost:3002"
@@ -62,6 +86,13 @@ JSON_PAGE = "https://docs.python.org/3/library/json.html"
 # a fragile operator. One recorded retry below absorbs provider flake — never
 # an assertion's strength.
 JSON_QUERY = "python json encoder and decoder documentation"
+# j6 forces the post-turn compaction trigger to fire on otherwise tiny
+# sessions (the threshold branch must not mask the trigger/guard paths under
+# test). It is set on the journey's own child processes only; assertions stay
+# strict and the observed effective value is recorded.
+E2E_COMPRESSION_THRESHOLD = "0.001"
+SSE_DONE_SENTINEL = "[DONE]"
+SSE_PROMPT_PATH = "/api/v1/sessions/{session_id}/prompt"
 
 
 # ---------------------------------------------------------------------------
@@ -491,6 +522,285 @@ async def main():
 asyncio.run(main())
 """
 
+_SEED_COMPACTION_SCRIPT = """
+import asyncio, json, sys
+sys.path.insert(0, "__REPO__")
+from machina.db.connection import db
+
+SPEC = json.loads(sys.argv[1])
+
+async def main():
+    await db.connect()
+    try:
+        await db.initialize_runtime_schema()
+        from machina.core.context import context_manager
+        from machina.core.session import session_manager
+        from machina.core.session_mode import activate_durable_mode
+
+        session = await session_manager.create(
+            title=SPEC["title"], goal=SPEC["goal"], agent_id=SPEC["agent_id"]
+        )
+        await activate_durable_mode(str(session.id), SPEC["agent_id"], "full")
+        filler = " ".join(f"seed{i}" for i in range(40))
+        chunks = [
+            {
+                "session_id": session.id,
+                "agent_id": SPEC["agent_id"],
+                "chunk_type": "assistant_message",
+                "payload": {"content": f"{SPEC['marker']}-{i} {filler}"},
+                "token_count": 400,
+            }
+            for i in range(SPEC["seed_count"])
+        ]
+        chunks.append(
+            {
+                "session_id": session.id,
+                "agent_id": SPEC["agent_id"],
+                "chunk_type": "document",
+                "payload": {"content": f"{SPEC['marker']}-DOC fixture document"},
+                "token_count": 1500,
+                "document_source": SPEC["document_source"],
+            }
+        )
+        inserted = await context_manager.add_chunks_batch(chunks)
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "session_id": str(session.id),
+                    "seeded_ids": [str(c.id) for c in inserted[:-1]],
+                    "document_id": str(inserted[-1].id),
+                }
+            )
+        )
+    finally:
+        await db.close()
+
+asyncio.run(main())
+"""
+
+_J6_STATE_SCRIPT = """
+import asyncio, json, sys
+sys.path.insert(0, "__REPO__")
+import msgpack
+from machina.db.connection import db
+
+SPEC = json.loads(sys.argv[1])
+SID = SPEC["session_id"]
+
+async def main():
+    await db.connect()
+    try:
+        row = await db.fetchrow(
+            "SELECT state_msgpack, claim_owner, claim_kind FROM sessions WHERE id = $1::uuid",
+            SID,
+        )
+        state = {}
+        if row is not None and row["state_msgpack"]:
+            state = msgpack.unpackb(row["state_msgpack"], raw=False)
+        summary = await db.fetchrow(
+            "SELECT COUNT(*)::int AS n, "
+            "(SELECT id::text FROM context_chunks WHERE session_id = $1::uuid "
+            " AND chunk_type = 'compression_summary' "
+            " ORDER BY created_at DESC, id DESC LIMIT 1) AS latest_id "
+            "FROM context_chunks WHERE session_id = $1::uuid "
+            "AND chunk_type = 'compression_summary'",
+            SID,
+        )
+        archive = await db.fetch(
+            "SELECT chunk_id::text AS chunk_id FROM context_archive "
+            "WHERE session_id = $1::uuid AND archive_reason = 'compressed'",
+            SID,
+        )
+        document_present = None
+        document_archived = None
+        if SPEC.get("document_id"):
+            document_present = bool(
+                await db.fetchval(
+                    "SELECT COUNT(*)::int FROM context_chunks WHERE id = $1::uuid",
+                    SPEC["document_id"],
+                )
+            )
+            document_archived = bool(
+                await db.fetchval(
+                    "SELECT COUNT(*)::int FROM context_archive WHERE chunk_id = $1::uuid",
+                    SPEC["document_id"],
+                )
+            )
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "session_found": row is not None,
+                    "summary_count": int(summary["n"]) if summary else 0,
+                    "latest_summary_id": summary["latest_id"] if summary else None,
+                    "archive_count": len(archive),
+                    "archived_chunk_ids": [r["chunk_id"] for r in archive[:50]],
+                    "document_present": document_present,
+                    "document_archived": document_archived,
+                    "claim_owner": row["claim_owner"] if row is not None else None,
+                    "claim_kind": row["claim_kind"] if row is not None else None,
+                    "last_auto_compact_tokens": state.get("last_auto_compact_tokens"),
+                },
+                default=str,
+            )
+        )
+    finally:
+        await db.close()
+
+asyncio.run(main())
+"""
+
+_J7_TRANSCRIPT_SCRIPT = """
+import asyncio, json, sys
+sys.path.insert(0, "__REPO__")
+import msgpack
+from machina.db.connection import db
+
+SPEC = json.loads(sys.argv[1])
+SID = SPEC["session_id"]
+
+async def main():
+    await db.connect()
+    try:
+        rows = await db.fetch(
+            "SELECT chunk_type, payload_msgpack FROM context_chunks "
+            "WHERE session_id = $1::uuid ORDER BY created_at ASC, id ASC",
+            SID,
+        )
+        user_blob = []
+        assistant_count = 0
+        for row in rows:
+            chunk_type = row["chunk_type"]
+            if chunk_type not in ("user_message", "assistant_message"):
+                continue
+            try:
+                payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
+            except Exception:
+                payload = {}
+            content = str(payload.get("content", ""))
+            if chunk_type == "user_message":
+                user_blob.append(content)
+            else:
+                assistant_count += 1
+        blob = "\\n".join(user_blob).casefold()
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "user_message_count": len(user_blob),
+                    "assistant_message_count": assistant_count,
+                    "user_tokens": {
+                        token: (str(token).casefold() in blob) for token in SPEC["tokens"]
+                    },
+                },
+                default=str,
+            )
+        )
+    finally:
+        await db.close()
+
+asyncio.run(main())
+"""
+
+_CONFIG_PROBE_SCRIPT = """
+import json, sys
+sys.path.insert(0, "__REPO__")
+from machina.core.config import config
+
+print(json.dumps({"ok": True, "provider": config.get("provider"), "model": config.get("model")}))
+"""
+
+_J8_PROVIDER_SCRIPT = """
+import asyncio, json, sys, uuid
+sys.path.insert(0, "__REPO__")
+from machina.db.connection import db
+
+SPEC = json.loads(sys.argv[1])
+
+async def main():
+    await db.connect()
+    provider = None
+    try:
+        import machina.core.provider as provider_mod
+        from machina.core.config import config
+        from machina.core.provider import (
+            PROVIDERS,
+            PROVIDER_SPECS,
+            LLMProvider,
+            get_provider,
+        )
+        from machina.core.runtime import _detect_providers
+        from machina.core.usage import usage_store
+
+        facade_missing = [
+            name for name in provider_mod.__all__ if not hasattr(provider_mod, name)
+        ]
+        selected = str(config.get("provider") or "")
+        model = str(config.get("model") or "")
+        spec = PROVIDER_SPECS.get(selected)
+        detection = _detect_providers()
+        provider = get_provider(provider=selected, model=model)
+        prompt = f"Reply with exactly: {SPEC['token']}"
+        response = await usage_store.complete_call(
+            provider,
+            uuid.UUID(SPEC["session_id"]),
+            SPEC["agent_id"],
+            messages=[{"role": "user", "content": prompt}],
+            tools=[],
+            max_tokens=64,
+            temperature=0.0,
+        )
+        content = str(getattr(response, "content", "") or "")
+        usage = getattr(response, "usage", None) or {}
+        total_tokens = usage.get("total_tokens", 0) if isinstance(usage, dict) else 0
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "selected": selected,
+                    "model": model,
+                    "expected_key_env": spec.api_key_env if spec is not None else None,
+                    "facade_missing": facade_missing,
+                    "facade_consistent": bool(
+                        not facade_missing
+                        and selected in PROVIDERS
+                        and set(PROVIDER_SPECS) | {"openrouter", "anthropic", "ollama"}
+                        == set(PROVIDERS)
+                    ),
+                    "chat_provider": detection.get("chat_provider"),
+                    "chat_provider_selected": detection.get("chat_provider_selected"),
+                    "provider_class": type(provider).__name__,
+                    "provider_is_llm": isinstance(provider, LLMProvider),
+                    "provider_model": str(getattr(provider, "model", "")),
+                    "contains_token": SPEC["token"].casefold() in content.casefold(),
+                    "content_excerpt": content[-200:],
+                    "total_tokens": total_tokens,
+                },
+                default=str,
+            )
+        )
+    except Exception as error:
+        print(
+            json.dumps(
+                {"ok": False, "error": f"{type(error).__name__}: {str(error)[:200]}"}
+            )
+        )
+    finally:
+        try:
+            if provider is not None:
+                close = getattr(provider, "close", None)
+                if callable(close):
+                    result = close()
+                    if hasattr(result, "__await__"):
+                        await result
+        except Exception:
+            pass
+        await db.close()
+
+asyncio.run(main())
+"""
+
 
 def call_script(
     ctx: dict, script: str, params: dict | None = None, timeout: float = 60.0
@@ -565,6 +875,487 @@ def record_cli_checks(record: dict, raw: dict, label: str) -> None:
         {"hits": hits, "stderr_excerpt": raw["stderr"][-400:]},
     )
     record["observed"][f"{label}_wall_seconds"] = raw["wall_seconds"]
+
+
+# ---------------------------------------------------------------------------
+# Loopback transport helpers (j6/j7): real uvicorn server + real stdio gateway
+# ---------------------------------------------------------------------------
+
+
+def pick_port() -> int:
+    """Allocate a free loopback port for a short-lived real server."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def uvicorn_available(ctx: dict) -> bool:
+    """j6/j7 SKIP probe: the venv must ship uvicorn for the HTTP stack."""
+    raw = run_cmd(
+        [str(ctx["venv_python"]), "-c", "import uvicorn; print('uvicorn-ok')"],
+        cwd=REPO_ROOT,
+        env=child_env(),
+        timeout=60,
+    )
+    return raw["exit_code"] == 0 and "uvicorn-ok" in raw["stdout"]
+
+
+def _bounded_tail(text: object, limit: int = 300) -> str:
+    value = str(text or "")
+    return value if len(value) <= limit else value[-limit:]
+
+
+def _tail_text(path: Path, limit: int = 400) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[-limit:]
+    except OSError:
+        return ""
+
+
+def _json_or_excerpt(raw: bytes) -> dict:
+    text = raw.decode("utf-8", errors="replace")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return {"raw_excerpt": _bounded_tail(text, 300)}
+    return payload if isinstance(payload, dict) else {"payload": payload}
+
+
+def http_json(
+    base_url: str,
+    method: str,
+    path: str,
+    api_key: str | None = None,
+    body: dict | None = None,
+    timeout: float = 30.0,
+) -> tuple[int, dict]:
+    """One real HTTP call; returns (status, parsed JSON or a bounded excerpt)."""
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    headers: dict[str, str] = {}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    if api_key:
+        headers["X-API-Key"] = api_key
+    request = urllib.request.Request(base_url + path, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, _json_or_excerpt(response.read(65536))
+    except urllib.error.HTTPError as error:
+        return error.code, _json_or_excerpt(error.read(65536))
+    except Exception as error:  # noqa: BLE001 - reported by the caller as a failed check
+        return 0, {"error": f"{type(error).__name__}: {error}"}
+
+
+class ApiServer:
+    """A real ``python -m machina.api`` child over loopback (no mocks).
+
+    stdout/stderr go to scratch files (no pipe-buffer deadlocks); readiness is
+    the real ``GET /ready`` (DB + schema); teardown always kills the process
+    group. The ephemeral API key lives only in the child env and in the
+    caller's local variable — never in any recorded command or observation.
+    """
+
+    def __init__(self, ctx: dict, name: str, scratch: Path, env_overrides: dict[str, str]) -> None:
+        self.host = "127.0.0.1"
+        self.port = pick_port()
+        self.base_url = f"http://{self.host}:{self.port}"
+        self.out_path = scratch / f"{name}.server.out"
+        self.err_path = scratch / f"{name}.server.err"
+        self._venv_python = str(ctx["venv_python"])
+        env = child_env()
+        env.update(env_overrides)
+        stdout = open(self.out_path, "wb")
+        stderr = open(self.err_path, "wb")
+        self.proc = subprocess.Popen(
+            [
+                self._venv_python,
+                "-m",
+                "machina.api",
+                "--host",
+                self.host,
+                "--port",
+                str(self.port),
+            ],
+            cwd=str(REPO_ROOT),
+            env=env,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=True,
+        )
+        stdout.close()
+        stderr.close()
+
+    def command_display(self) -> str:
+        return (
+            f"MACHINA_API_KEY=<redacted> {self._venv_python} -m machina.api "
+            f"--host {self.host} --port {self.port}"
+        )
+
+    def wait_ready(self, deadline_s: float = 60.0) -> dict:
+        start = time.monotonic()
+        last_status = 0
+        while time.monotonic() - start < deadline_s:
+            if self.proc.poll() is not None:
+                break
+            try:
+                last_status, _ = http_json(self.base_url, "GET", "/ready", timeout=3.0)
+            except Exception:  # noqa: BLE001 - retried until the deadline
+                last_status = 0
+            if last_status == 200:
+                return {
+                    "ready": True,
+                    "waited_seconds": round(time.monotonic() - start, 3),
+                    "last_status": last_status,
+                }
+            time.sleep(0.5)
+        return {
+            "ready": False,
+            "waited_seconds": round(time.monotonic() - start, 3),
+            "last_status": last_status,
+            "exit_code": self.proc.poll(),
+            "stderr_excerpt": _tail_text(self.err_path),
+        }
+
+    def stop(self, timeout: float = 15.0) -> dict:
+        if self.proc.poll() is None:
+            _kill_group(self.proc, signal.SIGTERM)
+            try:
+                self.proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _kill_group(self.proc, signal.SIGKILL)
+                try:
+                    self.proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+        return {"exit_code": self.proc.returncode, "stderr_excerpt": _tail_text(self.err_path)}
+
+
+def start_api_server(
+    ctx: dict, name: str, env_overrides: dict[str, str], attempts: int = 2
+) -> tuple[ApiServer | None, dict]:
+    """Start the real API server, retrying once on a bind race."""
+    scratch = ctx["scratch_root"] / name
+    scratch.mkdir(parents=True, exist_ok=True)
+    meta: dict = {}
+    for attempt in range(1, attempts + 1):
+        server = ApiServer(ctx, name, scratch, env_overrides)
+        meta = {"port": server.port, "attempt": attempt}
+        meta.update(server.wait_ready())
+        if meta.get("ready"):
+            return server, meta
+        server.stop()
+        meta["stderr_excerpt_after_stop"] = _tail_text(server.err_path)
+    return None, meta
+
+
+def sse_prompt(
+    server: ApiServer, api_key: str, session_id: str, text: str, timeout: float = 180.0
+) -> dict:
+    """POST one prompt and consume the real SSE stream until ``[DONE]``/deadline."""
+    start = time.monotonic()
+    out: dict = {
+        "status": 0,
+        "media_type": "",
+        "done_seen": False,
+        "frame_type_counts": {},
+        "frames_read": 0,
+        "text_concat": "",
+        "done_content": "",
+        "raw_excerpt": "",
+        "error": "",
+        "wall_seconds": 0.0,
+    }
+    connection = http.client.HTTPConnection(server.host, server.port, timeout=min(120.0, timeout))
+    body = json.dumps({"text": text, "protocolVersion": 1})
+    try:
+        connection.request(
+            "POST",
+            SSE_PROMPT_PATH.format(session_id=session_id),
+            body=body,
+            headers={"Content-Type": "application/json", "X-API-Key": api_key},
+        )
+        response = connection.getresponse()
+        out["status"] = response.status
+        out["media_type"] = response.getheader("Content-Type", "")
+        if response.status != 200:
+            out["raw_excerpt"] = _bounded_tail(
+                response.read(4096).decode("utf-8", errors="replace"), 300
+            )
+            return out
+        deadline = start + timeout
+        while time.monotonic() < deadline:
+            try:
+                raw_line = response.readline()
+            except (TimeoutError, OSError) as error:
+                out["error"] = f"stream read failed: {type(error).__name__}"
+                return out
+            if not raw_line:
+                out["error"] = "stream closed before [DONE]"
+                return out
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[len("data:") :].strip()
+            if payload == SSE_DONE_SENTINEL:
+                out["done_seen"] = True
+                return out
+            try:
+                frame = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(frame, dict):
+                continue
+            out["frames_read"] += 1
+            frame_type = str(frame.get("type", "?"))
+            counts = out["frame_type_counts"]
+            counts[frame_type] = counts.get(frame_type, 0) + 1
+            if frame_type == "text":
+                out["text_concat"] += str(frame.get("content", ""))
+                out["text_concat"] = _bounded_tail(out["text_concat"], 8000)
+            elif frame_type == "done":
+                out["done_content"] = str(frame.get("content", ""))
+        out["error"] = "deadline exceeded before [DONE]"
+        return out
+    except (http.client.HTTPException, OSError) as error:
+        out["error"] = f"{type(error).__name__}: {error}"
+        return out
+    finally:
+        try:
+            connection.close()
+        except Exception:
+            pass
+        out["wall_seconds"] = round(time.monotonic() - start, 3)
+
+
+def sse_observed(result: dict) -> dict:
+    """Bounded, secret-free view of one SSE result for the proof."""
+    return {
+        "status": result.get("status"),
+        "media_type": result.get("media_type"),
+        "done_seen": result.get("done_seen"),
+        "frames_read": result.get("frames_read"),
+        "frame_type_counts": result.get("frame_type_counts"),
+        "wall_seconds": result.get("wall_seconds"),
+        "error": result.get("error", ""),
+        "text_excerpt": _bounded_tail(result.get("text_concat", ""), 300),
+        "done_content_excerpt": _bounded_tail(result.get("done_content", ""), 300),
+    }
+
+
+class GatewayStdio:
+    """Drive a real ``python -m machina.gateway`` over its stdio JSON-RPC line.
+
+    The ephemeral ``MACHINA_GATEWAY_TOKEN`` lives only in the child env and in
+    ``self.token`` — never in a recorded command or observation. stdout is the
+    protocol channel pumped through a queue so every wait is deadline-bounded;
+    stderr goes to a scratch file.
+    """
+
+    def __init__(
+        self, ctx: dict, name: str, scratch: Path, extra_env: dict[str, str] | None = None
+    ) -> None:
+        self.token = secrets.token_hex(16)
+        self.events: list[dict] = []
+        self._event_cursor = 0
+        self._queue: queue.Queue[str | None] = queue.Queue()
+        self._next_id = 0
+        self._venv_python = str(ctx["venv_python"])
+        self.err_path = scratch / f"{name}.gateway.err"
+        env = child_env()
+        env["MACHINA_GATEWAY_TOKEN"] = self.token
+        if extra_env:
+            env.update(extra_env)
+        stderr = open(self.err_path, "wb")
+        self.proc = subprocess.Popen(
+            [self._venv_python, "-m", "machina.gateway"],
+            cwd=str(REPO_ROOT),
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=stderr,
+            text=True,
+            errors="replace",
+            bufsize=1,
+            start_new_session=True,
+        )
+        stderr.close()
+        self._reader = threading.Thread(target=self._pump_stdout, daemon=True)
+        self._reader.start()
+
+    def command_display(self) -> str:
+        return f"MACHINA_GATEWAY_TOKEN=<redacted> {self._venv_python} -m machina.gateway"
+
+    def _pump_stdout(self) -> None:
+        try:
+            stream = self.proc.stdout
+            if stream is None:
+                return
+            for line in stream:
+                self._queue.put(line)
+        except Exception:
+            pass
+        finally:
+            self._queue.put(None)
+
+    def _read_frame(self, deadline: float) -> dict | None:
+        while time.monotonic() < deadline:
+            try:
+                line = self._queue.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            if line is None:
+                raise EOFError("gateway stdout closed")
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                frame = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(frame, dict):
+                return frame
+        return None
+
+    def call(self, method: str, params: dict, timeout: float = 60.0) -> dict:
+        self._next_id += 1
+        request_id = self._next_id
+        full_params = dict(params)
+        full_params["token"] = self.token
+        frame = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": full_params}
+        try:
+            if self.proc.stdin is None:
+                raise BrokenPipeError("gateway stdin closed")
+            self.proc.stdin.write(json.dumps(frame) + "\n")
+            self.proc.stdin.flush()
+        except Exception as error:  # noqa: BLE001 - reported by the caller as a failed check
+            return {"error": {"message": f"gateway write failed: {type(error).__name__}"}}
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                incoming = self._read_frame(deadline)
+            except EOFError:
+                return {"error": {"message": f"gateway exited before answering {method}"}}
+            if incoming is None:
+                return {"error": {"message": f"no response to {method} before timeout"}}
+            if incoming.get("method") == "event":
+                self.events.append(incoming.get("params") or {})
+                continue
+            if incoming.get("id") == request_id:
+                return incoming
+
+    def wait_event(
+        self, event_type: str, turn_id: str | None = None, timeout: float = 180.0
+    ) -> dict | None:
+        deadline = time.monotonic() + timeout
+        while True:
+            while self._event_cursor < len(self.events):
+                event = self.events[self._event_cursor]
+                self._event_cursor += 1
+                if event.get("type") == event_type and (
+                    turn_id is None or event.get("turnId") == turn_id
+                ):
+                    return event
+            if time.monotonic() >= deadline:
+                return None
+            try:
+                incoming = self._read_frame(deadline)
+            except EOFError:
+                return None
+            if incoming is None:
+                return None
+            if incoming.get("method") == "event":
+                self.events.append(incoming.get("params") or {})
+
+    def event_type_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for event in self.events:
+            event_type = str(event.get("type", "?"))
+            counts[event_type] = counts.get(event_type, 0) + 1
+        return counts
+
+    def stop(self, timeout: float = 10.0) -> dict:
+        try:
+            self.call("shutdown", {}, timeout=5.0)
+        except Exception:
+            pass
+        try:
+            if self.proc.stdin is not None:
+                self.proc.stdin.close()
+        except Exception:
+            pass
+        if self.proc.poll() is None:
+            try:
+                self.proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _kill_group(self.proc, signal.SIGTERM)
+                try:
+                    self.proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    _kill_group(self.proc, signal.SIGKILL)
+                    try:
+                        self.proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+        result = {"exit_code": self.proc.returncode, "stderr_excerpt": _tail_text(self.err_path)}
+        try:
+            if self.proc.stdout is not None:
+                self.proc.stdout.close()
+        except Exception:
+            pass
+        return result
+
+
+def wait_db(
+    ctx: dict,
+    queries: list[dict],
+    predicate: Callable[[dict], bool],
+    deadline_s: float = 90.0,
+    interval: float = 2.0,
+) -> tuple[dict, float, bool]:
+    """Poll real DB queries until ``predicate(results)`` is true or the deadline."""
+    start = time.monotonic()
+    last: dict = {}
+    while True:
+        try:
+            last = db_query(ctx, queries)
+            if predicate(last):
+                return last, round(time.monotonic() - start, 3), True
+        except Exception as error:  # noqa: BLE001 - reported by the caller's check
+            last = {"error": f"{type(error).__name__}: {error}"}
+        if time.monotonic() - start >= deadline_s:
+            return last, round(time.monotonic() - start, 3), False
+        time.sleep(interval)
+
+
+def j6_state(
+    ctx: dict, session_id: str, document_id: str | None = None, timeout: float = 60.0
+) -> tuple[dict, dict]:
+    params: dict = {"session_id": session_id}
+    if document_id:
+        params["document_id"] = document_id
+    return call_script(ctx, _J6_STATE_SCRIPT, params, timeout=timeout)
+
+
+def wait_j6_state(
+    ctx: dict,
+    session_id: str,
+    document_id: str | None,
+    predicate: Callable[[dict], bool],
+    deadline_s: float = 90.0,
+    interval: float = 2.0,
+) -> tuple[dict, float, bool]:
+    start = time.monotonic()
+    state: dict = {"ok": False}
+    while True:
+        try:
+            _, state = j6_state(ctx, session_id, document_id)
+        except Exception as error:  # noqa: BLE001 - reported by the caller's check
+            state = {"ok": False, "error": f"{type(error).__name__}: {error}"}
+        if state.get("ok") and predicate(state):
+            return state, round(time.monotonic() - start, 3), True
+        if time.monotonic() - start >= deadline_s:
+            return state, round(time.monotonic() - start, 3), False
+        time.sleep(interval)
 
 
 # ---------------------------------------------------------------------------
@@ -944,12 +1735,793 @@ def run_j5(ctx: dict) -> dict:
     return finish(record, "PASS")
 
 
+def run_j6(ctx: dict) -> dict:
+    record = new_record("j6")
+    scratch = ctx["scratch_root"] / "j6"
+    scratch.mkdir(parents=True, exist_ok=True)
+    if not uvicorn_available(ctx):
+        return finish(
+            record,
+            "SKIP",
+            "HTTP stack unavailable (uvicorn missing in the venv); W6 cannot be verified",
+        )
+    marker = f"W6SEED{random.randint(1000, 9999)}"
+    record["observed"]["marker"] = marker
+    api_key = secrets.token_hex(16)
+    env_overrides = {
+        "MACHINA_API_KEY": api_key,
+        "MACHINA_COMPRESSION_THRESHOLD": E2E_COMPRESSION_THRESHOLD,
+        "MACHINA_AUTO_COMPACTION_ENABLED": "true",
+        "MACHINA_COMPRESSION_ENABLED": "true",
+    }
+
+    # Fixture: a real session plus seeded chunks through the production context
+    # API (6 x assistant_message > compression_preserve_recent, 1 document).
+    raw, fixture = call_script(
+        ctx,
+        _SEED_COMPACTION_SCRIPT,
+        {
+            "title": "e2e-gate j6",
+            "goal": "e2e gate: compaction triggers via SSE, gateway and explicit compress",
+            "agent_id": "harness",
+            "marker": marker,
+            "seed_count": 6,
+            "document_source": f"e2e://j6/{marker}",
+        },
+        timeout=120,
+    )
+    if not fixture.get("ok"):
+        return finish(
+            record,
+            "FAIL",
+            f"seed fixture failed: exit={raw['exit_code']} "
+            f"{fixture.get('error', raw['stderr'][-200:])}",
+        )
+    session_id = fixture["session_id"]
+    seeded_ids = [str(item) for item in (fixture.get("seeded_ids") or [])]
+    document_id = fixture.get("document_id")
+    record["observed"]["session_id"] = session_id
+    record["observed"]["seeded_chunk_count"] = len(seeded_ids)
+    record["observed"]["document_id"] = document_id
+    record["commands"].append(
+        f'{ctx["venv_python"]} -c "<context_manager.add_chunks_batch: '
+        f'{len(seeded_ids)} seeds + 1 document>"'
+    )
+
+    server, server_meta = start_api_server(ctx, "j6", env_overrides)
+    record["observed"]["server"] = server_meta
+    if server is None:
+        return finish(record, "FAIL", f"api server did not become ready: {server_meta}")
+    record["commands"].append(server.command_display())
+
+    try:
+        # Phase A: post-stream auto-compaction on the real SSE route.
+        token_a = f"OK{random.randint(100, 999)}A"
+        sse_a = sse_prompt(server, api_key, session_id, f"Reply with exactly: {token_a}")
+        record["observed"]["sse_turn_a"] = sse_observed(sse_a)
+        record["commands"].append(
+            f"POST {server.base_url}{SSE_PROMPT_PATH.format(session_id=session_id)} "
+            "(SSE, X-API-Key set)"
+        )
+        check(
+            record,
+            "sse_turn_a_stream",
+            sse_a.get("status") == 200 and bool(sse_a.get("done_seen")),
+            "HTTP 200 text/event-stream terminated by [DONE]",
+            {
+                "status": sse_a.get("status"),
+                "media_type": sse_a.get("media_type"),
+                "done_seen": sse_a.get("done_seen"),
+                "error": sse_a.get("error", ""),
+            },
+        )
+        check(
+            record,
+            "sse_turn_a_text",
+            token_a.casefold()
+            in (str(sse_a.get("text_concat", "")) + str(sse_a.get("done_content", ""))).casefold(),
+            f"streamed text contains the requested reply '{token_a}'",
+            _bounded_tail(
+                str(sse_a.get("text_concat", "")) + str(sse_a.get("done_content", "")), 200
+            ),
+        )
+
+        state_a, waited_a, ok_a = wait_j6_state(
+            ctx,
+            session_id,
+            document_id,
+            lambda state: (
+                int(state.get("summary_count") or 0) >= 1
+                and int(state.get("archive_count") or 0) >= 1
+                and isinstance(state.get("last_auto_compact_tokens"), int)
+                and int(state.get("last_auto_compact_tokens")) > 0
+                and state.get("claim_owner") is None
+            ),
+            deadline_s=120.0,
+        )
+        record["observed"]["phase_a_compaction"] = state_a
+        record["observed"]["phase_a_waited_seconds"] = waited_a
+        check(
+            record,
+            "auto_compaction_after_sse",
+            ok_a,
+            "SSE post-stream fired maybe_auto_compact: summary + archive + state + claim released",
+            state_a,
+        )
+        archived = {str(item) for item in (state_a.get("archived_chunk_ids") or [])}
+        check(
+            record,
+            "archived_ids_are_seeded",
+            bool(archived) and archived <= set(seeded_ids),
+            "archived compressed rows are a non-empty subset of the seeded fixture ids",
+            {"archived": sorted(archived)[:10], "seeded_count": len(seeded_ids)},
+        )
+        check(
+            record,
+            "document_survives_compaction",
+            state_a.get("document_present") is True and not state_a.get("document_archived"),
+            "document chunk stays active and is never archived by compaction",
+            {
+                "document_present": state_a.get("document_present"),
+                "document_archived": state_a.get("document_archived"),
+            },
+        )
+
+        # Phase B: the no-progress guard must skip a nearly-idle second turn.
+        token_b = f"OK{random.randint(100, 999)}B"
+        sse_b = sse_prompt(server, api_key, session_id, f"Reply with exactly: {token_b}")
+        record["observed"]["sse_turn_b"] = sse_observed(sse_b)
+        check(
+            record,
+            "sse_turn_b_stream",
+            sse_b.get("status") == 200 and bool(sse_b.get("done_seen")),
+            "second SSE turn completes normally",
+            {
+                "status": sse_b.get("status"),
+                "done_seen": sse_b.get("done_seen"),
+                "error": sse_b.get("error", ""),
+            },
+        )
+        _, transcript_b = call_script(
+            ctx,
+            _J7_TRANSCRIPT_SCRIPT,
+            {"session_id": session_id, "tokens": [token_b]},
+            timeout=60,
+        )
+        check(
+            record,
+            "sse_turn_b_persisted",
+            bool((transcript_b.get("user_tokens") or {}).get(token_b)),
+            "second user message is durably stored before the no-progress window",
+            {"user_tokens": transcript_b.get("user_tokens")},
+        )
+
+        # Snapshots require the claim to be free: a still-running compaction
+        # holds the mutation claim, so the stability window cannot race it.
+        def settled(state: dict) -> bool:
+            return bool(state.get("ok") and state.get("claim_owner") is None)
+
+        state_b1, _, ok_b1 = wait_j6_state(ctx, session_id, document_id, settled, deadline_s=60.0)
+        time.sleep(20.0)
+        state_b2, waited_b2, ok_b2 = wait_j6_state(
+            ctx, session_id, document_id, settled, deadline_s=60.0
+        )
+        window_before = {
+            key: state_b1.get(key)
+            for key in (
+                "summary_count",
+                "latest_summary_id",
+                "archive_count",
+                "last_auto_compact_tokens",
+            )
+        }
+        window_after = {
+            key: state_b2.get(key)
+            for key in (
+                "summary_count",
+                "latest_summary_id",
+                "archive_count",
+                "last_auto_compact_tokens",
+            )
+        }
+        record["observed"]["phase_b_stable_window"] = {
+            "before": window_before,
+            "after": window_after,
+            "waited_seconds": round(20.0 + waited_b2, 3),
+        }
+        check(
+            record,
+            "no_second_compaction_on_idle_turn",
+            bool(ok_b1 and ok_b2 and window_before == window_after),
+            "no-progress guard: summary/archive/state unchanged across a 20s window after turn B",
+            record["observed"]["phase_b_stable_window"],
+        )
+
+        # Phase C: the explicit path (shared core) still archives-before-replace.
+        compress = run_cmd(
+            [str(ctx["machina_bin"]), "compress", session_id],
+            cwd=scratch,
+            env=child_env(),
+            timeout=ctx["timeout"],
+        )
+        record["commands"].append(f"cd {scratch} && machina compress {session_id}")
+        record["observed"]["cli_compress_excerpt"] = _bounded_tail(compress["stdout"], 400)
+        check(
+            record,
+            "cli_compress_exit_zero",
+            compress["exit_code"] == 0 and not compress["timed_out"],
+            "explicit machina compress exits 0",
+            {"exit_code": compress["exit_code"], "timed_out": compress["timed_out"]},
+        )
+        check(
+            record,
+            "cli_compress_reports_result",
+            "Context compressed:" in compress["stdout"],
+            "CLI reports a 'Context compressed: N chunks' result line",
+            _bounded_tail(compress["stdout"], 400),
+        )
+        state_c, waited_c, ok_c = wait_j6_state(
+            ctx,
+            session_id,
+            document_id,
+            lambda state: (
+                int(state.get("archive_count") or 0) > int(state_b2.get("archive_count") or 0)
+                and state.get("latest_summary_id") is not None
+                and state.get("latest_summary_id") != state_b2.get("latest_summary_id")
+                and state.get("claim_owner") is None
+            ),
+            deadline_s=120.0,
+        )
+        record["observed"]["phase_c_explicit_compress"] = state_c
+        record["observed"]["phase_c_waited_seconds"] = waited_c
+        check(
+            record,
+            "explicit_compress_shares_core",
+            ok_c,
+            "explicit path archives-before-replace and writes a new summary chunk",
+            state_c,
+        )
+    finally:
+        record["observed"]["server_stop"] = server.stop()
+
+    # Phase D: the gateway transport's post-turn trigger (message.complete is
+    # emitted before the background maybe_auto_compact task runs).
+    raw, fixture_d = call_script(
+        ctx,
+        _SEED_COMPACTION_SCRIPT,
+        {
+            "title": "e2e-gate j6 gateway",
+            "goal": "e2e gate: gateway post-turn compaction trigger",
+            "agent_id": "harness",
+            "marker": f"{marker}G",
+            "seed_count": 6,
+            "document_source": f"e2e://j6/{marker}G",
+        },
+        timeout=120,
+    )
+    if not fixture_d.get("ok"):
+        check(record, "gateway_seed_fixture", False, "second seeded session", fixture_d)
+    else:
+        session_d = fixture_d["session_id"]
+        record["observed"]["gateway_session_id"] = session_d
+        record["commands"].append(
+            f'{ctx["venv_python"]} -c "<context_manager.add_chunks_batch: gateway session>"'
+        )
+        gateway = GatewayStdio(
+            ctx,
+            "j6",
+            scratch,
+            extra_env={
+                "MACHINA_AUTO_COMPACTION_ENABLED": "true",
+                "MACHINA_COMPRESSION_ENABLED": "true",
+                "MACHINA_COMPRESSION_THRESHOLD": E2E_COMPRESSION_THRESHOLD,
+                "MACHINA_GATEWAY_NO_SCHEDULER": "1",
+            },
+        )
+        record["commands"].append(gateway.command_display())
+        try:
+            init = gateway.call("initialize", {"protocolVersion": 1}, timeout=60)
+            check(
+                record,
+                "gateway_initialize",
+                "result" in init,
+                "gateway initialize returns a result",
+                {"error": init.get("error")},
+            )
+            token_d = f"OK{random.randint(100, 999)}D"
+            submit = gateway.call(
+                "prompt.submit",
+                {"sessionId": session_d, "text": f"Reply with exactly: {token_d}"},
+                timeout=60,
+            )
+            turn_id = str((submit.get("result") or {}).get("turnId") or "")
+            check(
+                record,
+                "gateway_turn_accepted",
+                bool(turn_id) and "error" not in submit,
+                "gateway accepts the prompt and returns a turnId",
+                {"result": submit.get("result"), "error": submit.get("error")},
+            )
+            complete = (
+                gateway.wait_event("message.complete", turn_id=turn_id, timeout=180)
+                if turn_id
+                else None
+            )
+            check(
+                record,
+                "gateway_message_complete",
+                complete is not None,
+                "gateway emits message.complete",
+                bool(complete),
+            )
+            gateway_text = str((complete or {}).get("text", ""))
+            check(
+                record,
+                "gateway_reply_fixture",
+                token_d.casefold() in gateway_text.casefold(),
+                f"message.complete.text contains '{token_d}'",
+                _bounded_tail(gateway_text, 200),
+            )
+            state_d, waited_d, ok_d = wait_j6_state(
+                ctx,
+                session_d,
+                fixture_d.get("document_id"),
+                lambda state: (
+                    int(state.get("summary_count") or 0) >= 1
+                    and int(state.get("archive_count") or 0) >= 1
+                    and state.get("claim_owner") is None
+                ),
+                deadline_s=120.0,
+            )
+            record["observed"]["phase_d_gateway_compaction"] = state_d
+            record["observed"]["phase_d_waited_seconds"] = waited_d
+            check(
+                record,
+                "auto_compaction_after_gateway_turn",
+                ok_d,
+                "gateway post-turn fired maybe_auto_compact: summary + archive + claim released",
+                state_d,
+            )
+        finally:
+            record["observed"]["gateway_stop"] = gateway.stop()
+            revoke_session(ctx, session_d, record)
+
+    revoke_session(ctx, session_id, record)
+    failed = [item for item in record["checks"] if not item["ok"]]
+    if failed:
+        return finish(record, "FAIL", "failed checks: " + ", ".join(c["name"] for c in failed))
+    return finish(record, "PASS")
+
+
+def run_j7(ctx: dict) -> dict:
+    record = new_record("j7")
+    scratch = ctx["scratch_root"] / "j7"
+    scratch.mkdir(parents=True, exist_ok=True)
+    if not uvicorn_available(ctx):
+        return finish(
+            record,
+            "SKIP",
+            "HTTP stack unavailable (uvicorn missing in the venv); W2 cannot be verified",
+        )
+    api_key = secrets.token_hex(16)
+    server, server_meta = start_api_server(ctx, "j7", {"MACHINA_API_KEY": api_key})
+    record["observed"]["server"] = server_meta
+    if server is None:
+        return finish(record, "FAIL", f"api server did not become ready: {server_meta}")
+    record["commands"].append(server.command_display())
+
+    gateway: GatewayStdio | None = None
+    session_id = ""
+    try:
+        _, cfg = call_script(ctx, _CONFIG_PROBE_SCRIPT, timeout=60)
+        provider = str(cfg.get("provider") or "")
+        model = str(cfg.get("model") or "")
+        record["observed"]["configured_route"] = {"provider": provider, "model": model}
+
+        bad_status, bad_body = http_json(
+            server.base_url,
+            "POST",
+            "/api/v1/sessions",
+            api_key=api_key,
+            body={"title": "e2e-gate j7 invalid", "provider": "not-a-provider"},
+        )
+        record["commands"].append(
+            f"POST {server.base_url}/api/v1/sessions (provider=not-a-provider, X-API-Key set)"
+        )
+        check(
+            record,
+            "invalid_provider_rejected",
+            bad_status == 400 and "unknown provider" in json.dumps(bad_body).lower(),
+            "unknown provider is rejected with 400 (PROVIDERS facade reachable from the API)",
+            {"status": bad_status, "body_excerpt": _bounded_tail(json.dumps(bad_body), 200)},
+        )
+
+        created_status, created_body = http_json(
+            server.base_url,
+            "POST",
+            "/api/v1/sessions",
+            api_key=api_key,
+            body={"title": "e2e-gate j7", "provider": provider or None},
+        )
+        session_id = str((created_body.get("session") or {}).get("id") or "")
+        record["observed"]["session_id"] = session_id
+        record["commands"].append(
+            f"POST {server.base_url}/api/v1/sessions (X-API-Key set, "
+            f"provider={provider or 'default'})"
+        )
+        check(
+            record,
+            "session_created_via_http",
+            created_status == 200 and bool(session_id),
+            "real HTTP session create returns a session id",
+            {"status": created_status, "session_id": session_id},
+        )
+        check(
+            record,
+            "session_provider_roundtrip",
+            (created_body.get("session") or {}).get("provider") == provider,
+            "created session stores the configured provider",
+            (created_body.get("session") or {}).get("provider"),
+        )
+
+        if session_id:
+            token_a = f"PARITY{random.randint(1000, 9999)}A"
+            token_b = token_a[:-1] + "B"
+            token_c = token_a[:-1] + "C"
+            record["observed"]["tokens"] = {"a": token_a, "b": token_b, "c": token_c}
+
+            # Phase A: SSE turn 1 (the SSE route's agent loop).
+            sse_a = sse_prompt(server, api_key, session_id, f"Reply with exactly: {token_a}")
+            record["observed"]["sse_turn_a"] = sse_observed(sse_a)
+            record["commands"].append(
+                f"POST {server.base_url}{SSE_PROMPT_PATH.format(session_id=session_id)} "
+                "(SSE, X-API-Key set)"
+            )
+            check(
+                record,
+                "sse_turn_a_stream",
+                sse_a.get("status") == 200 and bool(sse_a.get("done_seen")),
+                "SSE turn completes with [DONE]",
+                {
+                    "status": sse_a.get("status"),
+                    "done_seen": sse_a.get("done_seen"),
+                    "error": sse_a.get("error", ""),
+                },
+            )
+            check(
+                record,
+                "sse_turn_a_text",
+                token_a.casefold()
+                in (
+                    str(sse_a.get("text_concat", "")) + str(sse_a.get("done_content", ""))
+                ).casefold(),
+                f"SSE streamed text contains '{token_a}'",
+                _bounded_tail(
+                    str(sse_a.get("text_concat", "")) + str(sse_a.get("done_content", "")), 200
+                ),
+            )
+
+            # Phase B: stdio gateway turn on the SSE-created session (cross-
+            # process claim release + the gateway loop's event contract).
+            gateway = GatewayStdio(
+                ctx, "j7", scratch, extra_env={"MACHINA_GATEWAY_NO_SCHEDULER": "1"}
+            )
+            record["commands"].append(gateway.command_display())
+            init = gateway.call("initialize", {"protocolVersion": 1}, timeout=60)
+            check(
+                record,
+                "gateway_initialize",
+                "result" in init,
+                "gateway initialize returns a result",
+                {"error": init.get("error")},
+            )
+            submit = gateway.call(
+                "prompt.submit",
+                {"sessionId": session_id, "text": f"Reply with exactly: {token_b}"},
+                timeout=60,
+            )
+            turn_id = str((submit.get("result") or {}).get("turnId") or "")
+            record["observed"]["gateway_turn_id"] = turn_id
+            check(
+                record,
+                "gateway_turn_accepted_after_sse",
+                bool(turn_id) and "error" not in submit,
+                "gateway prompt.submit accepted on the SSE-created session "
+                "(cross-process claim release)",
+                {"result": submit.get("result"), "error": submit.get("error")},
+            )
+            complete = (
+                gateway.wait_event("message.complete", turn_id=turn_id, timeout=180)
+                if turn_id
+                else None
+            )
+            counts = gateway.event_type_counts()
+            record["observed"]["gateway_event_type_counts"] = counts
+            gateway_text = str((complete or {}).get("text", ""))
+            check(
+                record,
+                "gateway_message_complete",
+                complete is not None and token_b.casefold() in gateway_text.casefold(),
+                f"gateway emits message.complete carrying '{token_b}'",
+                {"text_excerpt": _bounded_tail(gateway_text, 200), "counts": counts},
+            )
+            check(
+                record,
+                "gateway_delta_stream",
+                counts.get("message.delta", 0) >= 1,
+                "gateway streamed >=1 message.delta",
+                counts,
+            )
+            check(
+                record,
+                "gateway_no_error_event",
+                counts.get("error", 0) == 0,
+                "no error event frames on the gateway turn",
+                counts,
+            )
+
+            # Claim released after the gateway turn (bounded poll).
+            claim_results, claim_waited, claim_free = wait_db(
+                ctx,
+                [
+                    {
+                        "name": "claim",
+                        "sql": "SELECT claim_owner, claim_kind FROM sessions WHERE id = $1::uuid",
+                        "args": [session_id],
+                    }
+                ],
+                lambda results: (
+                    bool(results.get("claim")) and results["claim"][0].get("claim_owner") is None
+                ),
+                deadline_s=30.0,
+            )
+            record["observed"]["gateway_claim"] = {
+                "results": claim_results,
+                "waited_seconds": claim_waited,
+            }
+            check(
+                record,
+                "gateway_claim_released",
+                claim_free,
+                "sessions.claim_owner is NULL after message.complete",
+                claim_results,
+            )
+
+            # Phase C: SSE re-acquisition after the gateway turn.
+            sse_c = sse_prompt(server, api_key, session_id, f"Reply with exactly: {token_c}")
+            record["observed"]["sse_turn_c"] = sse_observed(sse_c)
+            check(
+                record,
+                "sse_turn_c_after_gateway",
+                sse_c.get("status") == 200
+                and bool(sse_c.get("done_seen"))
+                and token_c.casefold()
+                in (
+                    str(sse_c.get("text_concat", "")) + str(sse_c.get("done_content", ""))
+                ).casefold(),
+                "SSE accepts a fresh turn on the gateway-touched session (claim reacquired)",
+                {
+                    "status": sse_c.get("status"),
+                    "done_seen": sse_c.get("done_seen"),
+                    "error": sse_c.get("error", ""),
+                },
+            )
+
+            # Transcript parity: all three turns are durably persisted.
+            _, transcript = call_script(
+                ctx,
+                _J7_TRANSCRIPT_SCRIPT,
+                {"session_id": session_id, "tokens": [token_a, token_b, token_c]},
+                timeout=60,
+            )
+            record["observed"]["transcript"] = transcript
+            user_tokens = transcript.get("user_tokens") or {}
+            check(
+                record,
+                "transcript_user_messages",
+                int(transcript.get("user_message_count") or 0) >= 3
+                and all(user_tokens.get(item) for item in (token_a, token_b, token_c)),
+                "3 user_message rows persisted with each unique turn token",
+                transcript,
+            )
+            check(
+                record,
+                "transcript_assistant_messages",
+                int(transcript.get("assistant_message_count") or 0) >= 3,
+                ">=3 assistant_message rows persisted across both transports",
+                {"assistant_message_count": transcript.get("assistant_message_count")},
+            )
+    finally:
+        if gateway is not None:
+            record["observed"]["gateway_stop"] = gateway.stop()
+        record["observed"]["server_stop"] = server.stop()
+        if session_id:
+            revoke_session(ctx, session_id, record)
+
+    failed = [item for item in record["checks"] if not item["ok"]]
+    if failed:
+        return finish(record, "FAIL", "failed checks: " + ", ".join(c["name"] for c in failed))
+    return finish(record, "PASS")
+
+
+def run_j8(ctx: dict) -> dict:
+    record = new_record("j8")
+    _, cfg = call_script(ctx, _CONFIG_PROBE_SCRIPT, timeout=60)
+    provider = str(cfg.get("provider") or "")
+    model = str(cfg.get("model") or "")
+    record["observed"]["configured_route"] = {"provider": provider, "model": model}
+    if provider.lower() == "ollama" and not _port_open("127.0.0.1", 11434):
+        return finish(
+            record,
+            "SKIP",
+            "selected provider is ollama and the daemon is unreachable (optional journey)",
+        )
+
+    session_id, _, setup_payload = setup_session(
+        ctx, "j8", "e2e gate: provider facade -> real call -> durable llm_usage row"
+    )
+    if not session_id:
+        return finish(record, "FAIL", f"session setup failed: {setup_payload}")
+    record["observed"]["session_id"] = session_id
+
+    token = f"PROV{random.randint(1000, 9999)}"
+    record["observed"]["fixture_token"] = token
+    raw, payload = call_script(
+        ctx,
+        _J8_PROVIDER_SCRIPT,
+        {"session_id": session_id, "agent_id": "harness", "token": token},
+        timeout=ctx["timeout"],
+    )
+    record["commands"].append(
+        f'{ctx["venv_python"]} -c "<get_provider + usage_store.complete_call>" session={session_id}'
+    )
+    record["observed"]["provider_call"] = {
+        "exit_code": raw["exit_code"],
+        "selected": payload.get("selected"),
+        "model": payload.get("model"),
+        "chat_provider": payload.get("chat_provider"),
+        "provider_class": payload.get("provider_class"),
+        "contains_token": payload.get("contains_token"),
+        "total_tokens": payload.get("total_tokens"),
+        "error": payload.get("error", ""),
+    }
+    check(
+        record,
+        "provider_call_ok",
+        raw["exit_code"] == 0 and bool(payload.get("ok")),
+        "real configured provider completes through usage_store.complete_call",
+        {"ok": bool(payload.get("ok")), "error": payload.get("error", "")},
+    )
+    check(
+        record,
+        "provider_facade_consistent",
+        bool(payload.get("facade_consistent")),
+        "machina.core.provider.__all__ exports intact; PROVIDERS == PROVIDER_SPECS + specials",
+        {
+            "facade_missing": payload.get("facade_missing"),
+            "consistency": payload.get("facade_consistent"),
+        },
+    )
+    check(
+        record,
+        "provider_capability_ready",
+        payload.get("chat_provider") == "ready"
+        and payload.get("chat_provider_selected") == payload.get("selected"),
+        "runtime _detect_providers reports the selected provider ready",
+        {
+            "chat_provider": payload.get("chat_provider"),
+            "selected": payload.get("selected"),
+            "expected_key_env": payload.get("expected_key_env"),
+        },
+    )
+    check(
+        record,
+        "provider_resolved",
+        bool(payload.get("provider_is_llm")) and payload.get("provider_model") == model,
+        f"get_provider returns an LLMProvider bound to the configured model '{model}'",
+        {
+            "provider_is_llm": payload.get("provider_is_llm"),
+            "provider_model": payload.get("provider_model"),
+        },
+    )
+    check(
+        record,
+        "reply_fixture",
+        bool(payload.get("contains_token")),
+        f"completion content contains '{token}'",
+        payload.get("content_excerpt", ""),
+    )
+    check(
+        record,
+        "usage_known",
+        isinstance(payload.get("total_tokens"), int) and payload["total_tokens"] > 0,
+        "provider returned positive total_tokens",
+        payload.get("total_tokens"),
+    )
+
+    try:
+        usage = db_query(
+            ctx,
+            [
+                {
+                    "name": "usage",
+                    "sql": (
+                        "SELECT status, provider, model, prompt_tokens, completion_tokens, "
+                        "accounted_tokens FROM llm_usage WHERE session_id = $1::uuid "
+                        "ORDER BY created_at DESC LIMIT 1"
+                    ),
+                    "args": [session_id],
+                }
+            ],
+        )
+        usage_rows = usage.get("usage") or []
+        row = usage_rows[0] if usage_rows else {}
+        record["observed"]["llm_usage_row"] = row
+        check(
+            record,
+            "llm_usage_row_complete",
+            row.get("status") == "complete",
+            "durable llm_usage row is complete",
+            row,
+        )
+        check(
+            record,
+            "llm_usage_known_tokens",
+            row.get("prompt_tokens") is not None
+            and row.get("completion_tokens") is not None
+            and int(row.get("accounted_tokens") or 0) > 0,
+            "llm_usage row carries non-null prompt/completion tokens and accounted tokens",
+            row,
+        )
+        check(
+            record,
+            "llm_usage_model",
+            row.get("model") == model,
+            f"llm_usage.model equals configured model '{model}'",
+            row.get("model"),
+        )
+    except Exception as error:  # noqa: BLE001 - recorded as a failed check below
+        check(record, "llm_usage_query", False, "database query succeeds", str(error))
+
+    status_run = run_cmd(
+        [str(ctx["machina_bin"]), "status"],
+        cwd=REPO_ROOT,
+        env=child_env(),
+        timeout=120,
+    )
+    record["commands"].append(f"cd {REPO_ROOT} && machina status")
+    record["observed"]["cli_status_excerpt"] = _bounded_tail(status_run["stdout"], 400)
+    check(
+        record,
+        "cli_status_exit_zero",
+        status_run["exit_code"] == 0 and not status_run["timed_out"],
+        "machina status exits 0",
+        {"exit_code": status_run["exit_code"], "timed_out": status_run["timed_out"]},
+    )
+    check(
+        record,
+        "cli_status_chat_provider_line",
+        "Chat provider" in status_run["stdout"],
+        "status output includes the 'Chat provider' capability line",
+        _bounded_tail(status_run["stdout"], 300),
+    )
+
+    revoke_session(ctx, session_id, record)
+    failed = [item for item in record["checks"] if not item["ok"]]
+    if failed:
+        return finish(record, "FAIL", "failed checks: " + ", ".join(c["name"] for c in failed))
+    return finish(record, "PASS")
+
+
 JOURNEYS = {
     "j1": run_j1,
     "j2": run_j2,
     "j3": run_j3,
     "j4": run_j4,
     "j5": run_j5,
+    "j6": run_j6,
+    "j7": run_j7,
+    "j8": run_j8,
 }
 
 
@@ -1109,6 +2681,9 @@ def main(argv: list[str] | None = None) -> int:
             finish(record, "FAIL", record["reason"])
         record["duration_seconds"] = round(time.monotonic() - start, 3)
         record.setdefault("notes", []).append(f"scratch: {scratch_root}")
+        budget = JOURNEY_TIMEOUT_BUDGET_SECONDS.get(jid)
+        if budget:
+            record["notes"].append(f"budget: {int(budget)}s wall-clock (bounded steps sum)")
         doc["journeys"].append(record)
         if record["status"] == "PASS":
             doc["summary"]["passed"] += 1

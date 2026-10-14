@@ -59,6 +59,9 @@ Firecrawl on `localhost:3002`):
 | j3 | live `web_crawl` indexes chunks for the fetched page |
 | j4 | Firecrawl MCP connector connect + broker-approved `execute_call` scrape returns `ok:true` and non-empty markdown (SKIP if unreachable) |
 | j5 | `machina chat "Reply with exactly: OK" -q` exits 0 with no `InterfaceError` / `Memory extraction failed` on stderr |
+| j6 | compaction triggers: real SSE turn + real stdio-gateway turn + explicit `machina compress` produce `context_archive` rows, a `compression_summary` chunk and `sessions.state.last_auto_compact_tokens`; document chunks survive compaction; an idle second turn compacts nothing (no-progress guard) |
+| j7 | cross-transport turn parity: real HTTP SSE turn → real stdio-gateway turn → SSE turn on one session; `[DONE]` / `message.complete` terminal events, durable `user_message`/`assistant_message` rows, and claim release in both directions |
+| j8 | provider facade: config-resolved `get_provider` + real `usage_store.complete_call` returns the fixture text and a durable `llm_usage` row (`status=complete`, known tokens); `machina status` exits 0 with a `Chat provider` line |
 
 Exit codes: `0` no failures (skips allowed), `1` at least one FAIL, `2` usage
 or missing venv. A SKIP is missing evidence, not a pass — name it in the
@@ -72,6 +75,22 @@ Notes that keep the gate honest:
   failure with the diagnostic the gate printed.
 - The gate exercises the current working tree. Record the git head and dirty
   status sha (the proof does this automatically).
+- j6/j7 boot the real HTTP API (`python -m machina.api`) on an ephemeral
+  loopback port with an ephemeral `MACHINA_API_KEY` generated per run, and
+  drive a real `python -m machina.gateway` stdio child with an ephemeral
+  `MACHINA_GATEWAY_TOKEN`. Ephemeral secrets never enter proofs: recorded
+  commands show `<redacted>` placeholders only.
+- j6 forces the post-turn compaction trigger with
+  `MACHINA_COMPRESSION_THRESHOLD=0.001` on its own child processes so small
+  fixture sessions exercise the trigger, archive and no-progress-guard paths.
+  The threshold is provisioning, not a weakened assertion.
+- j6/j7 SKIP with "HTTP stack unavailable (uvicorn missing in the venv)" when
+  the venv cannot run the API server; that is missing evidence, not a pass.
+  j8 SKIPs when the selected provider is `ollama` and the daemon is
+  unreachable.
+- j6/j7 own exactly one server/gateway child at a time and always kill the
+  process group in `finally` (ephemeral ports only, readiness via
+  `GET /ready`), so a FAIL cannot leak a process into the next journey.
 
 ## 4. Adversarial verification before merge
 
