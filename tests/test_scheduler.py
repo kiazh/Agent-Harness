@@ -321,3 +321,29 @@ class TestGatewayJobs:
         assert (await h.call("jobs.setEnabled", {"id": str(uuid.uuid4()), "enabled": True}))[
             "error"
         ]["code"] == NOT_FOUND
+
+
+# ─── _build_agent session-read boundary ────────────────────────────────────────
+
+
+async def test_build_agent_records_session_read_failure(monkeypatch):
+    """W7: a failed session read during job-agent build is diagnosed."""
+    from unittest.mock import AsyncMock
+
+    from machina.core import scheduler as scheduler_module
+    from machina.core.metrics import metrics
+
+    runner = scheduler_module.JobRunner()
+    monkeypatch.setattr(
+        "machina.core.session.session_manager.get_fresh",
+        AsyncMock(side_effect=RuntimeError("session store unavailable")),
+    )
+    sentinel = object()
+    monkeypatch.setattr(
+        "machina.core.agent_factory.build_agent_for_session",
+        AsyncMock(return_value=sentinel),
+    )
+    before = metrics.get_counter("diagnostic.failures")
+    built = await runner._build_agent("harness", session_id=uuid.uuid4())
+    assert built is sentinel
+    assert metrics.get_counter("diagnostic.failures") == before + 1

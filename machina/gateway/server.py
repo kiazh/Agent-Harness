@@ -351,7 +351,11 @@ class Gateway:
         if self._job_runner is not None:
             try:
                 await asyncio.wait_for(self._job_runner.stop(), timeout=timeout)
-            except (TimeoutError, asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
+                # Shutdown cancellation of close() itself must propagate; only
+                # the job runner's own bounded failures are absorbed below.
+                raise
+            except (TimeoutError, Exception):
                 logger.warning("gateway job runner stop exceeded its bound; continuing")
             self._job_runner = None
         tasks = [t for t in self._turns.values() if not t.done()]
@@ -858,7 +862,8 @@ class Gateway:
                 from machina.core.turns import renew_turn as _renew_claim
 
                 _renew_token = owned_token
-            except Exception:
+            except Exception as exc:
+                record_failure("server.approval_renew", exc)
                 _renew_token = None
             try:
                 return await fut
@@ -1153,7 +1158,14 @@ class Gateway:
                 _renew_task.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(_renew_task), timeout=5)
-            except (TimeoutError, asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
+                # The join itself cancels (and joins) the renewal task, so an
+                # inner-task CancelledError is the expected completion. A
+                # cancellation delivered to the turn while it is being torn
+                # down (shutdown) must propagate instead of being absorbed.
+                if not _renew_task.cancelled():
+                    raise
+            except (TimeoutError, Exception):
                 if not _renew_task.done():
                     _renew_task.cancel()
             finally:

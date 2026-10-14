@@ -197,6 +197,87 @@ class TestContextCompressor:
         assert result.method == "truncate"
         assert len(result.compressed_chunks) > 0
 
+    def test_compress_llm_fallback_records_diagnostic(self, sample_chunks):
+        """W7: an LLM-summarize failure is counted, not silently downgraded."""
+        from machina.core.metrics import metrics
+
+        config = CompressionConfig(llm_summarize=True, preserve_recent=2)
+        compressor = ContextCompressor(config=config)
+        failing_provider = AsyncMock()
+        failing_provider.complete = AsyncMock(side_effect=Exception("LLM error"))
+
+        before = metrics.get_counter("diagnostic.failures")
+        result = compressor.compress(
+            sample_chunks, uuid.uuid4(), "harness", llm_provider=failing_provider
+        )
+        assert result.method == "truncate"
+        assert metrics.get_counter("diagnostic.failures") == before + 1
+
+    def test_compress_records_double_fallback_diagnostics(self, sample_chunks, monkeypatch):
+        """W7: when LLM and truncation both fail, both boundaries are counted."""
+        from machina.core.metrics import metrics
+
+        config = CompressionConfig(llm_summarize=True, preserve_recent=2)
+        compressor = ContextCompressor(config=config)
+        failing_provider = AsyncMock()
+        failing_provider.complete = AsyncMock(side_effect=Exception("LLM error"))
+
+        def explode(*_args):
+            raise RuntimeError("truncate error")
+
+        monkeypatch.setattr(compressor, "_truncate_compress", explode)
+        before = metrics.get_counter("diagnostic.failures")
+        result = compressor.compress(
+            sample_chunks, uuid.uuid4(), "harness", llm_provider=failing_provider
+        )
+        assert result.method == "none"
+        assert {c.id for c in result.compressed_chunks} == {c.id for c in sample_chunks}
+        assert metrics.get_counter("diagnostic.failures") == before + 2
+
+    def test_compress_truncate_failure_records_diagnostic(self, sample_chunks, monkeypatch):
+        """W7: a truncation-only failure (no LLM) is counted."""
+        from machina.core.metrics import metrics
+
+        config = CompressionConfig(llm_summarize=False, preserve_recent=2)
+        compressor = ContextCompressor(config=config)
+
+        def explode(*_args):
+            raise RuntimeError("truncate error")
+
+        monkeypatch.setattr(compressor, "_truncate_compress", explode)
+        before = metrics.get_counter("diagnostic.failures")
+        result = compressor.compress(sample_chunks, uuid.uuid4(), "harness")
+        assert result.method == "none"
+        assert {c.id for c in result.compressed_chunks} == {c.id for c in sample_chunks}
+        assert metrics.get_counter("diagnostic.failures") == before + 1
+
+    async def test_acompress_records_fallback_diagnostics(self, sample_chunks, monkeypatch):
+        """W7: acompress counts LLM fallback and truncation failure separately."""
+        from machina.core.metrics import metrics
+
+        config = CompressionConfig(llm_summarize=True, preserve_recent=2)
+        compressor = ContextCompressor(config=config)
+        failing_provider = AsyncMock()
+        failing_provider.complete = AsyncMock(side_effect=Exception("LLM error"))
+
+        before = metrics.get_counter("diagnostic.failures")
+        result = await compressor.acompress(
+            sample_chunks, uuid.uuid4(), "harness", llm_provider=failing_provider
+        )
+        assert result.method == "truncate"
+        assert metrics.get_counter("diagnostic.failures") == before + 1
+
+        def explode(*_args):
+            raise RuntimeError("truncate error")
+
+        monkeypatch.setattr(compressor, "_truncate_compress", explode)
+        before = metrics.get_counter("diagnostic.failures")
+        result = await compressor.acompress(
+            sample_chunks, uuid.uuid4(), "harness", llm_provider=failing_provider
+        )
+        assert result.method == "none"
+        assert metrics.get_counter("diagnostic.failures") == before + 2
+
     def test_compress_preserves_recent_chunks(self, sample_chunks):
         """Test that recent chunks are preserved."""
         config = CompressionConfig(llm_summarize=False, preserve_recent=3)

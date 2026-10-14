@@ -83,8 +83,8 @@ class RuntimeServices:
                         min(5.0, timeout),
                         "oauth shutdown",
                     )
-                except Exception as error:
-                    logger.warning("oauth shutdown failed (%s)", type(error).__name__)
+                except Exception:
+                    logger.exception("oauth shutdown failed")
             await _bounded_cleanup(
                 self._connector_service.manager.shutdown_all(), timeout, "connector shutdown"
             )
@@ -110,8 +110,8 @@ class RuntimeServices:
                 try:
                     await db.initialize_runtime_schema()
                     report["personality_growth"] = "ready"
-                except Exception as error:
-                    logger.warning("Runtime schema upgrade failed (%s)", type(error).__name__)
+                except Exception:
+                    logger.exception("Runtime schema upgrade failed")
                     report["db"] = "unavailable: runtime schema upgrade failed"
                     report["personality_growth"] = "unavailable"
                     await db.close()
@@ -154,18 +154,15 @@ class RuntimeServices:
                 if not db.connected:
                     try:
                         await db.connect()
-                    except Exception as error:
-                        logger.warning(
-                            "Runtime refresh could not connect to the database (%s)",
-                            type(error).__name__,
-                        )
+                    except Exception:
+                        logger.exception("Runtime refresh could not connect to the database")
                 if db.connected:
                     try:
                         await db.initialize_runtime_schema()
                         report["db"] = "ready"
                         report["personality_growth"] = "ready"
-                    except Exception as error:
-                        logger.warning("Runtime schema upgrade failed (%s)", type(error).__name__)
+                    except Exception:
+                        logger.exception("Runtime schema upgrade failed")
                         report["db"] = "unavailable: runtime schema upgrade failed"
                         report["personality_growth"] = "unavailable"
                         await db.close()
@@ -224,8 +221,8 @@ class RuntimeServices:
                     )
                 except asyncio.CancelledError as e:
                     cancellation = e
-                except Exception as error:
-                    logger.warning("connector shutdown failed (%s)", type(error).__name__)
+                except Exception:
+                    logger.exception("connector shutdown failed")
                 try:
                     from machina.observability.audit import audit_persistence
 
@@ -236,16 +233,16 @@ class RuntimeServices:
                     )
                 except asyncio.CancelledError as e:
                     cancellation = e
-                except Exception as error:
-                    logger.warning("audit shutdown failed (%s)", type(error).__name__)
+                except Exception:
+                    logger.exception("audit shutdown failed")
                 try:
                     await drain_background_tasks(
                         timeout=min(0.1 if cancellation is not None else 5, timeout)
                     )
                 except asyncio.CancelledError as e:
                     cancellation = e
-                except Exception as error:
-                    logger.warning("background drain failed (%s)", type(error).__name__)
+                except Exception:
+                    logger.exception("background drain failed")
                 try:
                     from machina.db.connection import db
 
@@ -256,8 +253,8 @@ class RuntimeServices:
                     )
                 except asyncio.CancelledError as e:
                     cancellation = e
-                except Exception as error:
-                    logger.warning("database shutdown failed (%s)", type(error).__name__)
+                except Exception:
+                    logger.exception("database shutdown failed")
                 if cancellation is not None:
                     raise cancellation
             finally:

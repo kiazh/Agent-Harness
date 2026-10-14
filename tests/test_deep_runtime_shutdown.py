@@ -165,3 +165,33 @@ async def test_cancelled_shutdown_releases_audit_ownership_before_runtime_restar
         while writer._owners:
             await original_stop(timeout=0.05)
         await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def test_shutdown_service_failures_log_tracebacks(monkeypatch, caplog):
+    """W7: shutdown service failures log the traceback, not just a type name."""
+    import logging
+
+    runtime = RuntimeServices(_started=True)
+
+    class Manager:
+        async def shutdown_all(self):
+            raise RuntimeError("connector boom")
+
+    class Connectors:
+        manager = Manager()
+
+    runtime._connector_service = Connectors()
+
+    async def fail_close():
+        raise RuntimeError("db boom")
+
+    monkeypatch.setattr("machina.db.connection.db.close", fail_close)
+    with caplog.at_level(logging.ERROR, logger="machina.core.runtime"):
+        await runtime.shutdown(timeout=1)
+
+    by_message = {record.getMessage(): record for record in caplog.records}
+    # The safe-logging factory moves exc_info into a sanitized traceback
+    # (class + frames): its presence is the exc_info/logger.exception pin.
+    assert "RuntimeError" in by_message["connector shutdown failed"].exc_text
+    assert "RuntimeError" in by_message["database shutdown failed"].exc_text
+    assert not runtime._started

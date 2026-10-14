@@ -89,6 +89,48 @@ class TestMemoryConsolidationTaskReference:
         assert len(agent._consolidation_tasks) == 0
 
     @pytest.mark.asyncio
+    async def test_cursor_parse_failure_records_diagnostic(self, memory_boundaries):
+        """W7: an unparseable consolidation cursor is diagnosed before fallback."""
+        from machina.core.agent import BaseReActAgent
+        from machina.core.metrics import metrics
+        from machina.memory.consolidator import ConsolidationResult
+
+        consolidator = MagicMock()
+        consolidator.consolidate_session = AsyncMock(
+            return_value=ConsolidationResult("complete", [], None)
+        )
+        agent = BaseReActAgent(provider=object(), memory_consolidator=consolidator)
+        session_id = uuid.uuid4()
+        memory_boundaries[session_id] = {
+            "mem_consolidated_up_to": {"id": str(uuid.uuid4()), "at": "not-a-timestamp"}
+        }
+        before = metrics.get_counter("diagnostic.failures")
+        await agent._consolidate_memories(session_id)
+        assert metrics.get_counter("diagnostic.failures") == before + 1
+        consolidator.consolidate_session.assert_awaited_once()
+        assert consolidator.consolidate_session.await_args.kwargs["since"] is None
+
+    @pytest.mark.asyncio
+    async def test_newest_read_failure_records_diagnostic(self, monkeypatch, memory_boundaries):
+        """W7: a failed newest-chunk read is diagnosed before the empty fallback."""
+        from machina.core.agent import BaseReActAgent, context_manager
+        from machina.core.metrics import metrics
+        from machina.memory.consolidator import ConsolidationResult
+
+        consolidator = MagicMock()
+        consolidator.consolidate_session = AsyncMock(
+            return_value=ConsolidationResult("complete", [], None)
+        )
+        agent = BaseReActAgent(provider=object(), memory_consolidator=consolidator)
+        monkeypatch.setattr(
+            context_manager, "get_chunks", AsyncMock(side_effect=RuntimeError("read failed"))
+        )
+        session_id = uuid.uuid4()
+        before = metrics.get_counter("diagnostic.failures")
+        await agent._consolidate_memories(session_id)
+        assert metrics.get_counter("diagnostic.failures") == before + 1
+
+    @pytest.mark.asyncio
     async def test_task_actually_completes(self, memory_boundaries):
         """The consolidation coroutine must run to completion (not be GC'd)."""
         from machina.core.agent import BaseReActAgent

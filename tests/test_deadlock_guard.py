@@ -108,6 +108,59 @@ class TestDeadlockGuard:
             assert result is not None
             assert result.status == "complete"
 
+    async def test_delegate_falls_back_when_mode_cap_check_raises(self, orchestrator, monkeypatch):
+        """W7: a raising check_mode_cap is diagnosed, then fail-closed to the cap."""
+        from machina.core.metrics import metrics
+
+        mock_agent = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.content = "test response"
+        mock_response.tokens_used = 10
+        mock_response.iterations = 1
+        mock_agent.run = AsyncMock(return_value=mock_response)
+
+        mock_factory = MagicMock(return_value=mock_agent)
+        orchestrator._agent_factory = mock_factory
+
+        mock_agent_def = MagicMock()
+        mock_agent_def.model = None
+        mock_agent_def.provider = None
+        mock_agent_def.max_iterations = 10
+        mock_agent_def.system_prompt = None
+        mock_agent_def.tools = None
+
+        def cap_explodes(*_args, **_kwargs):
+            raise RuntimeError("authority lookup failed")
+
+        monkeypatch.setattr("machina.core.agent_factory.check_mode_cap", cap_explodes)
+
+        with (
+            patch("machina.core.orchestrator.agent_registry") as mock_registry,
+            patch("machina.core.orchestrator.session_manager") as mock_session_mgr,
+            patch("machina.core.orchestrator.context_manager") as mock_ctx_mgr,
+            patch("machina.core.orchestrator.db") as mock_db,
+        ):
+            mock_registry.get = AsyncMock(return_value=mock_agent_def)
+            mock_session = MagicMock()
+            mock_session.id = uuid.uuid4()
+            mock_session.agent_id = "test-agent"
+            mock_session.model = None
+            mock_session.provider = None
+            mock_session.context_budget = 8000
+            mock_session.goal = None
+            mock_session_mgr.create = AsyncMock(return_value=mock_session)
+            mock_session_mgr.get = AsyncMock(return_value=mock_session)
+            mock_session_mgr.get_fresh = AsyncMock(return_value=mock_session)
+            mock_db.execute = AsyncMock(return_value="INSERT 0 1")
+            mock_ctx_mgr.get_recent_context = AsyncMock(return_value=[])
+            mock_ctx_mgr.add_chunk = AsyncMock()
+
+            before = metrics.get_counter("diagnostic.failures")
+            result = await orchestrator.delegate("test-agent", "do something", _hop_count=0)
+            assert result is not None
+            assert result.status == "complete"
+            assert metrics.get_counter("diagnostic.failures") == before + 1
+
     async def test_delegate_rejects_negative_hops(self, orchestrator):
         """delegate() must reject negative hop counts."""
         mock_agent_def = MagicMock()

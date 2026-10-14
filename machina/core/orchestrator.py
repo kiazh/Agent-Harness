@@ -243,7 +243,8 @@ class Orchestrator:
         # sandbox parent to a host mode merely because the global default changed.
         try:
             check_mode_cap(parent, parent_mode)
-        except Exception:
+        except Exception as exc:
+            record_failure("orchestrator.check_mode_cap", exc)
             parent_mode = str(parent.get("max_mode") or "ask")
         child_authority = dict(parent)
         child_authority["max_mode"] = parent_mode

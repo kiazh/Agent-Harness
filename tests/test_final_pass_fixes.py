@@ -50,7 +50,9 @@ def _agent(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_stream_llm_error_schedules_consolidation(monkeypatch):
+async def test_stream_llm_error_schedules_consolidation(monkeypatch, caplog):
+    import logging
+
     agent, calls = _agent(monkeypatch)
 
     async def boom(self, **_kwargs):
@@ -59,9 +61,33 @@ async def test_stream_llm_error_schedules_consolidation(monkeypatch):
 
     monkeypatch.setattr(type(agent), "_stream_llm_with_retry", boom)
     sid = uuid.uuid4()
-    events = [e async for e in agent.run_stream(sid, "hi", verbose=False)]
+    with caplog.at_level(logging.ERROR, logger="machina.core.agent"):
+        events = [e async for e in agent.run_stream(sid, "hi", verbose=False)]
     assert any(e.type == "done" and e.response.outcome == "failed" for e in events)
     assert calls == [sid], "run_stream LLM-error path must schedule consolidation (M1)"
+    # W7: the top-level provider-failure boundary logs the sanitized traceback.
+    failures = [r for r in caplog.records if r.getMessage() == "LLM stream ultimately failed"]
+    assert failures and "RuntimeError" in failures[0].exc_text
+
+
+@pytest.mark.asyncio
+async def test_run_llm_error_logs_traceback(monkeypatch, caplog):
+    """W7: run()'s top-level provider-failure boundary logs the traceback."""
+    import logging
+
+    agent, calls = _agent(monkeypatch)
+
+    async def boom(self, **_kwargs):
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(type(agent), "_call_llm_with_retry", boom)
+    sid = uuid.uuid4()
+    with caplog.at_level(logging.ERROR, logger="machina.core.agent"):
+        response = await agent.run(sid, "hi", verbose=False)
+    assert response.outcome == "failed"
+    assert calls == [sid]
+    failures = [r for r in caplog.records if r.getMessage() == "LLM call ultimately failed"]
+    assert failures and "RuntimeError" in failures[0].exc_text
 
 
 @pytest.mark.asyncio
@@ -72,7 +98,10 @@ async def test_stream_context_exceeded_schedules_consolidation(monkeypatch):
     monkeypatch.setattr(mod, "_request_context_tokens", lambda *a, **k: 10**9)
     sid = uuid.uuid4()
     events = [e async for e in agent.run_stream(sid, "hi", verbose=False)]
-    assert any(e.type == "done" and "exceeds the model context window" in e.response.content for e in events)
+    assert any(
+        e.type == "done" and "exceeds the model context window" in e.response.content
+        for e in events
+    )
     assert calls == [sid], "run_stream context-exceeded path must schedule consolidation (M1)"
 
 

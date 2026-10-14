@@ -98,3 +98,48 @@ async def test_eviction_pages_across_more_than_one_hundred_chunks(db_pool, monke
         )
     finally:
         await db_pool.execute("DELETE FROM sessions WHERE id = $1", session.id)
+
+
+async def test_batch_and_individual_archive_failures_log_tracebacks(monkeypatch, caplog):
+    """W7: archive-failure warnings carry the traceback, not just the message."""
+    import logging
+
+    from machina.core import context
+
+    session = uuid.uuid4()
+    now = datetime.now(UTC)
+    rows = [
+        {
+            "id": uuid.uuid4(),
+            "agent_id": "owner",
+            "chunk_type": "user_message",
+            "token_count": 1,
+            "created_at": now + timedelta(seconds=i),
+            "payload_msgpack": b"\x80",
+            "embedding": None,
+        }
+        for i in range(12)
+    ]
+    database = MagicMock()
+    database.fetchrow = AsyncMock(return_value={"total_chunks": 12, "total_tokens": 12})
+    database.fetch = AsyncMock(return_value=rows)
+    connection = AsyncMock()
+    connection.transaction = MagicMock()
+    connection.fetch = AsyncMock(return_value=[{"id": row["id"]} for row in rows])
+    connection.executemany = AsyncMock(side_effect=RuntimeError("batch insert failed"))
+    connection.fetchval = AsyncMock(return_value=rows[0]["id"])  # per-row claim
+    connection.fetchrow = AsyncMock(return_value=None)  # archive_chunk returns None
+    database.acquire.return_value.__aenter__.return_value = connection
+    monkeypatch.setattr(context, "db", database)
+
+    with caplog.at_level(logging.WARNING, logger="machina.core.context"):
+        evicted = await ContextManager().evict_old_chunks(session, max_chunks=2)
+    assert evicted == 0
+    batch = [r for r in caplog.records if "Batch archive failed" in r.getMessage()]
+    individual = [r for r in caplog.records if "Failed to archive chunk" in r.getMessage()]
+    # The safe-logging factory moves exc_info into a sanitized traceback
+    # (class + frames): its presence is the exc_info=True pin.
+    assert batch and batch[0].exc_text, "batch archive warning must include the traceback"
+    assert "RuntimeError" in batch[0].exc_text
+    assert individual and individual[0].exc_text, "per-chunk warning must include the traceback"
+    assert "RuntimeError" in individual[0].exc_text

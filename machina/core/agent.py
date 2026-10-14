@@ -1423,11 +1423,13 @@ class BaseReActAgent:
                         if since_time.tzinfo is None:
                             since_time = since_time.replace(tzinfo=UTC)
                     since = (since_time, uuid.UUID(str(cursor["id"])))
-                except Exception:
+                except Exception as exc:
+                    record_failure("agent.consolidation_cursor", exc)
                     since = None
             try:
                 newest = await context_manager.get_chunks(session_id, limit=1)
-            except Exception:
+            except Exception as exc:
+                record_failure("agent.consolidation_cursor", exc)
                 newest = []
             if since is not None:
                 try:
@@ -1643,7 +1645,7 @@ class ReActAgent(BaseReActAgent):
                 )
             except Exception as e:
                 await self._flush_pending_chunks(pending_chunks)
-                logger.error("LLM call ultimately failed: %s", e)
+                logger.exception("LLM call ultimately failed")
                 audit_log(
                     "agent_run_llm_error",
                     session_id=str(session_id),
@@ -1904,7 +1906,7 @@ class ReActAgent(BaseReActAgent):
                 return
             except Exception as e:
                 await self._flush_pending_chunks(pending_chunks)
-                logger.error("LLM stream ultimately failed: %s", e)
+                logger.exception("LLM stream ultimately failed")
                 audit_log(
                     "agent_run_llm_error",
                     session_id=str(session_id),

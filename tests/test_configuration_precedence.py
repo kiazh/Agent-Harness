@@ -111,3 +111,39 @@ def test_fresh_theme_default_is_codex_without_overwriting_explicit_values(tmp_pa
     explicit = tmp_path / "config.yaml"
     explicit.write_text("theme: default\n", encoding="utf-8")
     assert Config.load(explicit).get("theme") == "default"
+
+
+def test_unreadable_config_file_warning_has_traceback(tmp_path, caplog):
+    """W7: a skipped config file logs the traceback (exc_info=True)."""
+    import logging
+
+    config_dir = tmp_path / "as-directory.yaml"
+    config_dir.mkdir()  # exists() is true; open() raises IsADirectoryError
+    with caplog.at_level(logging.WARNING, logger="machina.core.config"):
+        Config.load(config_dir)
+    records = [r for r in caplog.records if "Failed to load config" in r.getMessage()]
+    # Safe logging moves exc_info into a sanitized traceback attribute.
+    assert records and "IsADirectoryError" in records[0].exc_text
+
+
+def test_unreadable_config_value_warning_has_traceback(tmp_path, monkeypatch, caplog):
+    """W7: a per-key unreadable value logs the traceback (exc_info=True)."""
+    import logging
+    import sys
+
+    import machina.core.config  # noqa: F401 — ensure the module is imported
+
+    config_module = sys.modules["machina.core.config"]
+    path = tmp_path / "config.yaml"
+    path.write_text("model: from-file\n", encoding="utf-8")
+
+    def explode(_key, _value):
+        raise RuntimeError("validator unavailable")
+
+    monkeypatch.setattr(config_module, "validate_value", explode)
+    with caplog.at_level(logging.WARNING, logger="machina.core.config"):
+        loaded = config_module.Config.load(path)
+    assert loaded is not None
+    records = [r for r in caplog.records if "Ignoring unreadable config" in r.getMessage()]
+    # Safe logging moves exc_info into a sanitized traceback attribute.
+    assert records and "RuntimeError" in records[0].exc_text

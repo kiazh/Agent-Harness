@@ -195,3 +195,73 @@ class TestResurrectionCountIncremented:
             for call in execute_calls
         )
         assert update_called, "Expected UPDATE to increment resurrection_count"
+
+
+# ─── W7 batch 2: replacement error boundaries ────────────────────────────────
+
+
+class TestReplacementErrorBoundaries:
+    """Diagnostics are recorded before replacement derives fallback values."""
+
+    async def test_ownership_probe_failure_records_diagnostic(self, manager, mock_db):
+        from datetime import UTC, datetime
+
+        from machina.core.exceptions import StaleOwnershipError
+        from machina.core.metrics import metrics
+
+        session_id = uuid.uuid4()
+        connection = AsyncMock()
+        connection.transaction = MagicMock()
+        connection.fetchrow = AsyncMock(
+            return_value={
+                "claim_owner": "owner",
+                "claim_kind": "turn",
+                "claim_expires_at": datetime.now(UTC),
+            }
+        )
+        connection.fetchval = AsyncMock(side_effect=RuntimeError("clock unavailable"))
+        mock_db.acquire = MagicMock()
+        mock_db.acquire.return_value.__aenter__.return_value = connection
+
+        before = metrics.get_counter("diagnostic.failures")
+        with patch("machina.core.context.db", mock_db):
+            with pytest.raises(StaleOwnershipError):
+                await manager.replace_chunks_by_ids(session_id, [], [], expected_owner="owner")
+        # The probe failure is counted even though the fallback (stale) stands.
+        assert metrics.get_counter("diagnostic.failures") == before + 1
+
+    async def test_archive_derived_field_failures_record_diagnostics(self, manager, mock_db):
+        from datetime import UTC, datetime
+
+        from machina.core.metrics import metrics
+
+        session_id = uuid.uuid4()
+        chunk_id = uuid.uuid4()
+        row = {
+            "id": chunk_id,
+            "agent_id": "harness",
+            "chunk_type": "user_message",
+            "payload_msgpack": b"\xc1",  # reserved MessagePack code: unpack fails
+            "token_count": 1,
+            "embedding": "not-a-vector",
+            "created_at": datetime(2025, 1, 1, tzinfo=UTC),
+        }
+        connection = AsyncMock()
+        connection.transaction = MagicMock()
+        connection.fetch = AsyncMock(return_value=[row])
+        connection.execute = AsyncMock(return_value="DELETE 1")
+        mock_db.acquire = MagicMock()
+        mock_db.acquire.return_value.__aenter__.return_value = connection
+
+        before = metrics.get_counter("diagnostic.failures")
+        with patch("machina.core.context.db", mock_db):
+            replaced = await manager.replace_chunks_by_ids(
+                session_id, [chunk_id], [], archive_reason="compressed"
+            )
+        assert replaced == 0
+        assert metrics.get_counter("diagnostic.failures") == before + 2
+        # Archived with None derived fields rather than losing the row.
+        archive_calls = [
+            c for c in connection.execute.await_args_list if "context_archive" in str(c)
+        ]
+        assert archive_calls, "archive insert must still run with fallback derived fields"

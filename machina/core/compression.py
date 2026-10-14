@@ -27,6 +27,7 @@ from machina.core.checkpoint import (
     validate_checkpoint,
 )
 from machina.core.models import ContextChunk
+from machina.observability.diagnostics import record_failure
 
 __all__ = [
     "CompactionCheckpoint",
@@ -214,20 +215,23 @@ class ContextCompressor:
                     )
                 )
                 method = "llm_summarize"
-            except Exception:
+            except Exception as exc:
+                record_failure("compression.llm_summarize", exc)
                 try:
                     compressed = self._truncate_compress(old_chunks, session_id, agent_id)
                     method = "truncate"
-                except Exception:
+                except Exception as exc:
                     # If all compression fails, preserve original chunks to avoid context loss
+                    record_failure("compression.truncate", exc)
                     compressed = old_chunks
                     method = "none"
         else:
             try:
                 compressed = self._truncate_compress(old_chunks, session_id, agent_id)
                 method = "truncate"
-            except Exception:
+            except Exception as exc:
                 # If truncation fails, preserve original chunks to avoid context loss
+                record_failure("compression.truncate", exc)
                 compressed = old_chunks
                 method = "none"
 
@@ -295,18 +299,21 @@ class ContextCompressor:
                     old_chunks, session_id, agent_id, llm_provider, checked_checkpoint
                 )
                 method = "llm_summarize"
-            except Exception:
+            except Exception as exc:
+                record_failure("compression.llm_summarize", exc)
                 try:
                     compressed = self._truncate_compress(old_chunks, session_id, agent_id)
                     method = "truncate"
-                except Exception:
+                except Exception as exc:
+                    record_failure("compression.truncate", exc)
                     compressed = old_chunks
                     method = "none"
         else:
             try:
                 compressed = self._truncate_compress(old_chunks, session_id, agent_id)
                 method = "truncate"
-            except Exception:
+            except Exception as exc:
+                record_failure("compression.truncate", exc)
                 compressed = old_chunks
                 method = "none"
         all_compressed = compressed + recent_chunks

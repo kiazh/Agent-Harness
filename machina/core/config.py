@@ -458,7 +458,7 @@ class Config:
                 with open(load_path) as f:
                     file_data = yaml.safe_load(f) or {}
             except Exception as e:
-                logger.warning("Failed to load config from %s: %s", load_path, e)
+                logger.warning("Failed to load config from %s: %s", load_path, e, exc_info=True)
             else:
                 logger.debug("Config loaded from %s", load_path)
             for key, value in file_data.items():
@@ -473,6 +473,7 @@ class Config:
                             key,
                             load_path,
                             type(e).__name__,
+                            exc_info=True,
                         )
 
         # Environment and backends are resolved live by get(), so rotation

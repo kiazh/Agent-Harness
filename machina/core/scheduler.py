@@ -995,7 +995,8 @@ class JobRunner:
             try:
                 # AH-AUDIT-019: execution-critical read bypasses the cache.
                 session = await session_manager.get_fresh(session_id)
-            except Exception:
+            except Exception as exc:
+                record_failure("scheduler.session_read", exc)
                 session = None
         if session is None:
             # Fallback identity when the session cannot be resolved:

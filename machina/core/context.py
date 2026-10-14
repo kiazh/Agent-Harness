@@ -22,6 +22,7 @@ from machina.core.serialization import (
 )
 from machina.core.text_search import build_or_tsquery
 from machina.db.lazy import LazyDb
+from machina.observability.diagnostics import record_failure
 
 logger = logging.getLogger(__name__)
 
@@ -814,7 +815,8 @@ class ContextManager:
                     if live:
                         try:
                             live = claim["claim_expires_at"] > await conn.fetchval("SELECT now()")
-                        except Exception:
+                        except Exception as exc:
+                            record_failure("context.eviction.ownership_probe", exc)
                             live = False
                     if not live:
                         raise StaleOwnershipError(
@@ -848,12 +850,14 @@ class ContextManager:
                         raw_payload = r["payload_msgpack"]
                         try:
                             search_text = _search_text_for(msgpack.unpackb(raw_payload, raw=False))
-                        except Exception:
+                        except Exception as exc:
+                            record_failure("context.archive.search_text", exc)
                             search_text = None
                         emb = r["embedding"]
                         try:
                             emb_str = embedding_to_str(str_to_embedding(emb)) if emb else None
-                        except Exception:
+                        except Exception as exc:
+                            record_failure("context.archive.embedding", exc)
                             emb_str = None
                         await conn.execute(
                             """
@@ -1300,7 +1304,12 @@ class ContextManager:
             except Exception as batch_error:
                 # A bad row must not turn eviction into data loss or block all
                 # other rows; retry individually only on this exceptional path.
-                logger.warning("Batch archive failed for session %s: %s", session_id, batch_error)
+                logger.warning(
+                    "Batch archive failed for session %s: %s",
+                    session_id,
+                    batch_error,
+                    exc_info=True,
+                )
                 successful = []
                 for row in selected:
                     try:
@@ -1336,7 +1345,9 @@ class ContextManager:
                                 )
                                 successful.append(row)
                     except Exception as error:
-                        logger.warning("Failed to archive chunk %s: %s", row["id"], error)
+                        logger.warning(
+                            "Failed to archive chunk %s: %s", row["id"], error, exc_info=True
+                        )
 
             tokens_freed += sum(row["token_count"] for row in successful)
             chunks_freed += len(successful)
