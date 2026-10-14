@@ -355,11 +355,12 @@ class ChatGPTProvider(LLMProvider):
         from the catalog entry for *model* (wire-filtered), never a
         cross-model static vocabulary.
         """
+        account = self._account_hint()
         if explicit is not None:
-            return validate_effort(model, explicit)
+            return validate_effort(model, explicit, account_id=account)
         if self._default_effort:
-            return validate_effort(model, self._default_effort)
-        return validate_effort(model, config.get("reasoning_effort"))
+            return validate_effort(model, self._default_effort, account_id=account)
+        return validate_effort(model, config.get("reasoning_effort"), account_id=account)
 
     def _payload(
         self,
@@ -384,6 +385,18 @@ class ChatGPTProvider(LLMProvider):
             payload["tool_choice"] = "auto"
             payload["parallel_tool_calls"] = True
         return payload
+
+    def _account_hint(self) -> str:
+        """Best-effort account id for account-scoped catalog reads.
+
+        Read-only and never raises: without a hint the catalog keeps its
+        documented most-recent behavior, so this only ever improves
+        isolation between accounts (review round 6, R6-1).
+        """
+        try:
+            return str(chatgpt_auth.status(path=self._auth_path).get("account_id") or "")
+        except Exception:
+            return ""
 
     async def _resolve_tokens(self) -> dict[str, Any]:
         return await asyncio.to_thread(chatgpt_auth.resolve_tokens, path=self._auth_path)
@@ -427,7 +440,7 @@ class ChatGPTProvider(LLMProvider):
         await self._rate_limiter.acquire()
 
         resolved_model = model or self.model
-        validate_model_slug(resolved_model)
+        validate_model_slug(resolved_model, account_id=self._account_hint())
         payload = self._payload(messages, resolved_model, tools, reasoning_effort)
         audit_log(
             "llm_stream_start",

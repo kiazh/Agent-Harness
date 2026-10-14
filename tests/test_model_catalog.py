@@ -42,6 +42,52 @@ def _seed_live(monkeypatch, payload: dict | None = None, *, account: str = "acct
     catalog.refresh_live_catalog("token-1", account, force=True)
 
 
+def test_account_scoped_reads_never_cross_accounts(hermetic_catalog, monkeypatch):
+    """R6-1: keyed reads isolate accounts; unknown callers keep the
+    documented most-recent fallback."""
+    payload_a = _fixture_payload()
+    payload_a["models"][0]["slug"] = "only-in-account-a"
+    payload_b = _fixture_payload()
+    payload_b["models"][0]["slug"] = "only-in-account-b"
+
+    models_a = catalog.parse_catalog(payload_a, source="live")
+    models_b = catalog.parse_catalog(payload_b, source="live")
+    monkeypatch.setattr(
+        catalog,
+        "fetch_live_catalog",
+        lambda token, account, **k: models_a if account == "acct-a" else models_b,
+    )
+    catalog.refresh_live_catalog("token-1", "acct-a", force=True)
+    catalog.refresh_live_catalog("token-1", "acct-b", force=True)
+
+    live_a = {m.slug for m in catalog.live_models_or_none("acct-a") or []}
+    live_b = {m.slug for m in catalog.live_models_or_none("acct-b") or []}
+    assert "only-in-account-a" in live_a and "only-in-account-a" not in live_b
+    assert "only-in-account-b" in live_b and "only-in-account-b" not in live_a
+
+    slugs_a = {m.slug for m in catalog.cached_catalog("acct-a")}
+    slugs_b = {m.slug for m in catalog.cached_catalog("acct-b")}
+    assert "only-in-account-a" in slugs_a and "only-in-account-a" not in slugs_b
+    assert "only-in-account-b" in slugs_b and "only-in-account-b" not in slugs_a
+
+    # Validation is scoped: the slug exists live for A only.
+    assert (
+        catalog.validate_model_slug("only-in-account-a", account_id="acct-a") == "only-in-account-a"
+    )
+    with pytest.raises(ValidationError):
+        catalog.validate_model_slug("only-in-account-a", account_id="acct-b")
+
+    # Unknown-account callers keep the documented most-recent fallback.
+    recent = catalog.live_models_or_none()
+    assert recent is not None and any(m.slug == "only-in-account-b" for m in recent)
+
+    # And an account with no live data never inherits another's list.
+    assert catalog.live_models_or_none("acct-c") is None
+    fallback_slugs = {m.slug for m in catalog.cached_catalog("acct-c")}
+    assert "only-in-account-a" not in fallback_slugs
+    assert "only-in-account-b" not in fallback_slugs
+
+
 # ─── parsing the real payload ───────────────────────────────────────────────
 
 

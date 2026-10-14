@@ -320,6 +320,15 @@ def test_deferred_import_count_ratchet():
 #     specs.py 125 -> 166: dynamic PROVIDERS membership for named providers
 #     (tuple subclass __contains__) + provider_names() listing helper.
 #     Package total 3578 -> 4200 by exactly this delta.
+#   review round 6 R6-1 (2026-10-14): +58 in the provider package — the
+#     catalog's read helpers are now account-scoped (cached_catalog /
+#     live_models_or_none / window_for / supported_efforts_for /
+#     validate_model_slug / validate_effort take account_id+base_url; the
+#     unknown-account fallback is now genuinely most-recent via
+#     _most_recent_live) and chatgpt.py passes a best-effort _account_hint so
+#     validation can never consult another account's live list. catalog.py
+#     508 -> 553, chatgpt.py 616 -> 629. Package total 4200 -> 4258 by
+#     exactly this delta.
 GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
     ("core/agent.py", 2057),
     ("core/compression.py", 999),
@@ -336,9 +345,9 @@ GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
     ("core/provider/ollama.py", 378),
     ("core/provider/direct.py", 339),
     ("core/provider/anthropic.py", 564),
-    ("core/provider/chatgpt.py", 616),
+    ("core/provider/chatgpt.py", 629),
     ("core/provider/factory.py", 134),
-    ("core/provider/catalog.py", 508),
+    ("core/provider/catalog.py", 553),
 )
 
 
@@ -356,7 +365,8 @@ def test_god_file_ceilings_only_fall(relative_path, ceiling):
 # 3578 = 3511 + 67 for the reviewed free-models lane delta above.
 # 4200 = 3578 + 622 for the reviewed model-catalog lane delta above
 #        (new catalog.py + chatgpt/factory/specs growth).
-_PROVIDER_PACKAGE_TOTAL_CEILING = 4200
+# 4258 = 4200 + 58 for the reviewed round-6 R6-1 account-scoping delta above.
+_PROVIDER_PACKAGE_TOTAL_CEILING = 4258
 
 
 def test_provider_package_total_only_falls():

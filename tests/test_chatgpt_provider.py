@@ -672,13 +672,18 @@ CATALOG_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "model_catalog_
 
 
 def _seed_live_catalog(monkeypatch):
-    """Seed the in-process live catalog from the REAL 2026-10-14 fixture."""
+    """Seed the in-process live catalog from the REAL 2026-10-14 fixture.
+
+    Seeded under the account the fixture providers are signed in as
+    (``acct-provider``): catalog validation is account-scoped since review
+    round 6 R6-1, so the seed must match the provider's token store.
+    """
     from machina.core.provider import catalog
 
     payload = json.loads(CATALOG_FIXTURE.read_text(encoding="utf-8"))
     models = catalog.parse_catalog(payload, source="live")
     monkeypatch.setattr(catalog, "fetch_live_catalog", lambda *args, **kwargs: models)
-    catalog.refresh_live_catalog("token-1", "acct-1", force=True)
+    catalog.refresh_live_catalog("token-1", "acct-provider", force=True)
     return catalog
 
 

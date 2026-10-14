@@ -379,24 +379,52 @@ def _read_codex_cache() -> list[CatalogModel]:
     return models
 
 
-def cached_catalog() -> list[CatalogModel]:
+def _most_recent_live(*, fresh_only: bool = False) -> list[CatalogModel] | None:
+    """Live entries of the most recently fetched account.
+
+    The unknown-account fallback for display surfaces without a resolved
+    auth context: the freshest data available wins; account-scoped callers
+    never go through here (review round 6, R6-1).
+    """
+    now = time.monotonic()
+    best_models: list[CatalogModel] | None = None
+    best_fetched = -1.0
+    for models, fetched in _live_cache.values():
+        if not models or (fresh_only and now - fetched >= _CATALOG_TTL_SECONDS):
+            continue
+        if fetched > best_fetched:
+            best_models, best_fetched = models, fetched
+    return best_models
+
+
+def cached_catalog(account_id: str = "", base_url: str = "") -> list[CatalogModel]:
     """Best available catalog without network I/O.
 
-    Precedence: in-process live (even slightly stale — real data beats
+    Precedence: live data for the requested account (or, when the account is
+    unknown, the most recently fetched live entry — real data beats
     snapshots) -> Codex CLI models cache -> bundled verified snapshot.
+    Account-scoped callers must pass their account so one account's live
+    list is never served for another (review round 6, R6-1); with an account
+    present and no live entry for it, the non-live sources answer instead of
+    another account's list.
     """
-    for models, _fetched in _live_cache.values():
-        if models:
-            return models
+    if account_id or base_url:
+        entry = _live_cache.get(_cache_key(account_id, base_url))
+        if entry and entry[0]:
+            return entry[0]
+    else:
+        live = _most_recent_live()
+        if live:
+            return live
     models = _read_codex_cache()
     if models:
         return models
     return _fallback_models()
 
 
-def catalog_source() -> str:
+def catalog_source(account_id: str = "", base_url: str = "") -> str:
     """Source tag for :func:`cached_catalog` without materializing entries."""
-    models = cached_catalog()
+    models = cached_catalog(account_id, base_url)
     return models[0].source if models else "none"
 
 
@@ -423,31 +451,41 @@ def find_model(slug: str | None, models: list[CatalogModel] | None = None) -> Ca
     )
 
 
-def live_models_or_none() -> list[CatalogModel] | None:
-    """Fresh in-process live entries, or None when none were fetched yet."""
-    for models, fetched in _live_cache.values():
-        if models and time.monotonic() - fetched < _CATALOG_TTL_SECONDS:
-            return models
-    return None
+def live_models_or_none(account_id: str = "", base_url: str = "") -> list[CatalogModel] | None:
+    """Fresh in-process live entries, or None when none were fetched yet.
+
+    Callers that know their account get exact-key isolation (R6-1); the
+    unknown-account form keeps the documented most-recent-entry fallback.
+    """
+    if account_id or base_url:
+        entry = _live_cache.get(_cache_key(account_id, base_url))
+        if entry and entry[0] and time.monotonic() - entry[1] < _CATALOG_TTL_SECONDS:
+            return entry[0]
+        return None
+    return _most_recent_live(fresh_only=True)
 
 
-def window_for(slug: str | None) -> int | None:
+def window_for(slug: str | None, *, account_id: str = "", base_url: str = "") -> int | None:
     """Context window for a ChatGPT slug from live/cache data only (no net).
 
     Falls back to the bundled snapshot last. Returns None when the slug is
     unknown to every source so the caller keeps its own default.
     """
-    model = find_model(slug)
+    entries = cached_catalog(account_id, base_url) if (account_id or base_url) else None
+    model = find_model(slug, entries)
     return model.context_window if model is not None else None
 
 
-def supported_efforts_for(slug: str | None) -> tuple[str, ...] | None:
+def supported_efforts_for(
+    slug: str | None, *, account_id: str = "", base_url: str = ""
+) -> tuple[str, ...] | None:
     """Per-model supported efforts from the entry for THAT slug, or None."""
-    model = find_model(slug)
+    entries = cached_catalog(account_id, base_url) if (account_id or base_url) else None
+    model = find_model(slug, entries)
     return model.supported_efforts if model is not None else None
 
 
-def validate_model_slug(slug: str) -> str:
+def validate_model_slug(slug: str, *, account_id: str = "", base_url: str = "") -> str:
     """Reject a slug the *live* catalog definitively lacks.
 
     Strictness is deliberately scoped: only fresh live discovery can reject
@@ -456,7 +494,7 @@ def validate_model_slug(slug: str) -> str:
     the final authority — and the call proceeds normally.
     """
     name = str(slug or "").strip()
-    live = live_models_or_none()
+    live = live_models_or_none(account_id, base_url)
     if live and find_model(name, live) is None:
         available = ", ".join(model.slug for model in visible_models(live)) or "none"
         raise ValidationError(
@@ -465,7 +503,13 @@ def validate_model_slug(slug: str) -> str:
     return name
 
 
-def validate_effort(slug: str | None, effort: str | None) -> str:
+def validate_effort(
+    slug: str | None,
+    effort: str | None,
+    *,
+    account_id: str = "",
+    base_url: str = "",
+) -> str:
     """Validate one effort against the catalog entry for *slug*.
 
     Returns the normalized effort or "" for the unset idiom. Raises
@@ -476,7 +520,7 @@ def validate_effort(slug: str | None, effort: str | None) -> str:
     requested = str(effort or "").strip().lower()
     if requested in UNSET_EFFORT_SENTINELS:
         return ""
-    supported = supported_efforts_for(slug)
+    supported = supported_efforts_for(slug, account_id=account_id, base_url=base_url)
     if supported is None:
         if requested not in WIRE_REASONING_EFFORTS:
             raise ValidationError(
@@ -485,7 +529,8 @@ def validate_effort(slug: str | None, effort: str | None) -> str:
             )
         return requested
     if requested not in supported:
-        model = find_model(slug)
+        entries = cached_catalog(account_id, base_url) if (account_id or base_url) else None
+        model = find_model(slug, entries)
         advertised = model.advertised_efforts if model is not None else ()
         extra = ""
         if requested in advertised:
