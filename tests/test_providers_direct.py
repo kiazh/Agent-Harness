@@ -80,10 +80,9 @@ def test_providers_tuple_lists_every_family():
         "deepseek",
         "xai",
         "opencode",
+        "kimi",
         "chatgpt",
-        "claude",
         "copilot",
-        "gemini",
         "custom",
         "ollama",
     }
@@ -123,6 +122,12 @@ def test_direct_specs_have_accurate_base_urls_and_keys():
             "OPENCODE_API_KEY",
             "big-pickle",
         ),
+        "kimi": (
+            # Kimi Code (overseas); key created in the Kimi Code Console.
+            "https://api.kimi.ai/coding/v1",
+            "KIMI_API_KEY",
+            "kimi-for-coding",
+        ),
     }
     assert set(PROVIDER_SPECS) == set(expected)
     for name, (base_url, env_key, model) in expected.items():
@@ -146,6 +151,7 @@ def test_config_registers_every_provider_key():
         "TOGETHER_API_KEY",
         "DEEPSEEK_API_KEY",
         "XAI_API_KEY",
+        "KIMI_API_KEY",
         "COHERE_API_KEY",
     ):
         config_key = env_key.lower()
@@ -175,6 +181,25 @@ def test_normalize_reasoning_effort_rejects_garbage():
 
     with pytest.raises(ValidationError):
         normalize_reasoning_effort("ultra")
+
+
+def test_config_effort_vocabulary_cross_reference():
+    """Config accepts wider tiers than the conservative wire vocabulary.
+
+    REASONING_EFFORTS stays low|medium|high for providers whose wire may reject
+    wider values; the config layer additionally allows xhigh|max, which the
+    ChatGPT provider validates per model against the catalog. Keep both views
+    in step when a provider gains tiers (review round 6, R6-3).
+    """
+    from machina.core.config import validate_value
+    from machina.core.provider import REASONING_EFFORTS
+
+    for effort in REASONING_EFFORTS:
+        assert validate_value("reasoning_effort", effort) == effort
+    assert validate_value("reasoning_effort", "") == ""
+    for wider in ("xhigh", "max"):
+        assert wider not in REASONING_EFFORTS
+        assert validate_value("reasoning_effort", wider) == wider
 
 
 # ─── factory ───────────────────────────────────────────────────────────────
