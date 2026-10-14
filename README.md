@@ -131,10 +131,10 @@ Type `/` for commands. Management commands open pickers or forms; `?` on empty i
 | `/keys` | Manage masked provider keys |
 | `/persona` | Add/edit or reset the default persona |
 | `/growth` | Inspect learning, teach, rate, forget or restore a revision |
-| `/delegate`, `/agents` | Pick an agent, then enter its task; list available roles |
+| `/delegate`, `/agents` | Pick an agent, then enter its task; `sessions` picks a delegated subagent to view (or press `↓` on an empty composer); list available roles |
 | `/sessions`, `/new`, `/resume`, `/delete` | Browse, start and resume conversations; checklist deletion |
 | `/search`, `/recall`, `/export`, `/rename`, `/fork`, `/goal` | Search, recall, export, rename, fork, and goal-track sessions |
-| `/memory`, `/skills` | Search memory; browse installed skills |
+| `/memory`, `/skills` | Search memory; browse installed skills, review/roll back learned skills |
 | `/context`, `/compress` | Inspect and compact session context |
 | `/jobs` | Schedule and manage background jobs |
 | `/theme` | Preview and save a theme; Escape restores the previous theme |
@@ -152,6 +152,7 @@ Type `/` for commands. Management commands open pickers or forms; `?` on empty i
 - Deterministic directory learning: the read-only `learn_directory` tool builds a bounded, cached repository digest (totals, largest modules, entry points, tests, import hubs) with **no model calls**; repeat calls are served from the content-hash cache.
 - **42 curated ECC skills**, bundled offline and selected by task evidence. Relevant excerpts are disclosed progressively rather than injecting the entire library into each prompt.
 - **71 ECC subagents** plus the existing `harness`, `researcher` and `coder` roles. Only the selected role's instructions enter its delegated context. [Integration details and tool limitations](docs/ECC_AGENTS.md).
+- **Delegated subagents at a glance**: the footer shows the count of a session's delegated children (e.g. `2 subagents`). Press `↓` on an empty composer to pick one to watch (or `Ctrl+Shift+←/→` to cycle); selecting swaps the transcript via the normal session-resume path. Hidden sessions buffer a bounded live tail so switching back shows their recent work.
 - Scheduling, usage accounting and configurable session/agent budgets.
 - Default-on persona growth and runtime adaptation, with durable notes, human feedback, revision history and restoration.
 
@@ -194,6 +195,13 @@ Skill routing uses explicit requests, trigger matches and task evidence to selec
 relevant workflows. Bundled metadata and bounded excerpts keep unrelated skill
 content out of the prompt; complete instructions are loaded when needed. The
 curated 42-skill set replaces indiscriminate loading of the upstream collection.
+
+Post-turn learning publishes a validated reusable workflow as an enabled learned
+skill directly — creation-only, bounded per session and by a rolling 24-hour
+per-agent cap, redacted, injection-scanned and audited — with no standing
+approval gate. `/skills proposals` is then a post-hoc review/rollback queue;
+`/skills revert <id>` unpublishes a learned skill, and a precision auto-disable
+returns the reviewer to stage-only if too many published skills get reverted.
 
 Paste a GitHub repo link in chat to install its skills: the agent stages the
 repo (shallow clone, digest-bound plan, nothing installed or executed) and,
@@ -624,11 +632,15 @@ correctness, retrieval faithfulness, deterministic-first routing) closed out at
 **3,576 backend tests passed, 0 failed, 1 skipped, 1 xfailed** (exact commands in the
 [completion bundle](docs/verification/COMPLETION_BUNDLE.md)), with standalone UI
 checks recorded at **337 passed, 0 failed, 6 skipped**. The 2026-10-14 follow-up
-waves (local ONNX/model2vec retrieval stack, adversarial re-verification) end at
-**3,734 backend tests passed, 0 failed** with a final j1–j8 gate of
-**8 PASS / 0 FAIL / 0 SKIP**. Fixture-replay metrics, before/after token
-measurements and the full artifact/commit record are in the completion bundle;
-remaining uncertainties and operator-level deferrals are listed there as well.
+waves (local ONNX/model2vec retrieval stack, adversarial re-verification, agent
+tabs, the Machina MCP server, auto-applied skill learning) close out at
+**3,776 backend tests passed, 0 failed**, standalone UI at **370 tests /
+364 pass / 0 fail / 6 env-gated skips**, and a final j1–j9 gate of
+**9 PASS / 0 FAIL / 0 SKIP** ([proof](docs/verification/proofs/2026-10-14-e2e-gate.md));
+architecture ratchets are green (deferred imports 682/682, mcp_server 0/0).
+Fixture-replay metrics, before/after token measurements and the full
+artifact/commit record are in the completion bundle; remaining uncertainties and
+operator-level deferrals are listed there as well.
 
 The earlier 2026-10-12 candidate review (starting checkout `54d79d5`) recorded
 **2,237 backend tests passed, 5 skipped, 0 failed** with **82.26% coverage**, and a
@@ -661,12 +673,14 @@ registered `machina` server). Exit code is 0
 only when no journey failed (skips allowed), 1 on any failure and 2 on
 usage/environment errors; every run writes
 `<UTC date>-e2e-gate.json`/`.md` under `docs/verification/proofs/`. The
-latest recorded full run (2026-10-14) passed all eight journeys defined at that
-time (8 PASS / 0 FAIL / 0 SKIP;
-[proof](docs/verification/proofs/2026-10-14-e2e-gate.md)); j9 landed after
-that run with its own end-to-end interop validation
-([proof](docs/verification/proofs/interop_2026-10-14/README.md)) and is
-certified only in environments that satisfy its registration requirement.
+latest recorded full run (2026-10-14) passed all nine journeys
+(9 PASS / 0 FAIL / 0 SKIP;
+[proof](docs/verification/proofs/2026-10-14-e2e-gate.md)), including the j4
+Firecrawl connector path and the j9 OpenCode roundtrip on this machine. j9
+still skips cleanly where `opencode` is absent or no `machina` server is
+registered, so it is certified only in environments that satisfy that
+requirement; its standalone interop validation remains at the
+[interop proof](docs/verification/proofs/interop_2026-10-14/README.md).
 Policy, proof rules and the three adversarial pre-merge personas are in the
 [E2E protocol](docs/verification/E2E_PROTOCOL.md).
 
