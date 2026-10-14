@@ -217,3 +217,46 @@ Found by running the system live (all numbers observed, not estimated):
   it); (W3) the schema-conformance SQLite skip is file-scoped so Postgres `?` operators remain
   covered; (N1) `web_crawl` now reports "Stopped early" when bounds cut a crawl short.
   Full suite after the wave: **3,469 passed, 0 failed**.
+
+## 11. Code-review remediation (W0-W8), in progress
+
+Source: `docs/verification/CODEBASE_REVIEW_2026-10-13.md` (external audit, untracked) plus
+three internal review lanes (A: architecture coherence; B: tests/docs; C: quantitative
+metrics). Execution order: W0 -> W4 -> W1 -> W3 -> W7/W8 -> structural W6/W2/W5, with the
+test batches (B) interleaved. Evidence per step below; this section grows as the queue lands.
+
+- **W4** (`711b49e`): one authority merge (`merge_authority`) + explicit AgentDef/authority
+  convention translation; `tests/test_authority_merge.py` pins the convention pairs.
+- **W1a** (`4a06870`): the three unadopted ports modules deleted (zero production importers).
+- **W1b** (`c3da32b`): dead constants excised; digest version single-sourced.
+- **W1c** (`34f4447`): dead config/stores/params removed; `terminal_image` wired to its reader.
+- **W3** (`cc309e8`): one claim-renewal primitive (`turns.renewal_loop`) used by every
+  transport; `TurnOwnership.start_renewal` delegates to it (accepts `on_lost`, injectable
+  loss event, returns the task); Gateway and SSE inline loops deleted; never-adopted
+  `SessionTurnCoordinator` deleted with its false delegation docstring. Two bugs caught while
+  landing: (a) a replacement typo emitted the unregistered protocol event
+  `turn.ownership.lost` (registered name: `turn.ownership_lost`) — the emit raised inside the
+  loss callback and would have silently skipped stopping owned work; cancel now precedes emit
+  and the primitive guards the callback; (b) the primitive initially dropped the former
+  loops' defensive renew `try/except` — restored (transport test fakes pin the two-argument
+  call shape). New regression:
+  `tests/test_audit_remediation.py::test_renewal_loop_reports_loss_through_the_shared_primitive`.
+  Full suite: **3,486 passed, 0 failed**; ruff check + format green.
+
+- **W1-finish** (this commit): the remaining production-dead surface removed with
+  zero-reference verification per item: `compression.RollingCompaction` and its four
+  methods (module docstring corrected to name the real path, `services.maybe_auto_compact`;
+  its test class removed; `_split_preserve_recent`'s always-true nested branches collapsed,
+  behavior identical); `models.ToolCall`/`ToolResult` (plus `__all__`/re-export cleanup);
+  `context.replace_chunks` + `mark_accessed` (the fenced `replace_chunks_by_ids` is the real
+  path); `orchestrator._build_agent` (superseded by `_default_agent`); `scheduler.job_runner`;
+  `core/container.py` (production-dead — the live composition root is `runtime_services`;
+  its tests removed); the `tools/registry.py` shim (3 tests repointed to
+  `machina.tools.base.registry`). Test-observed diagnostics `agent._last_rag_mode` and
+  `wiring._last_complexity` KEPT with comments — their tests assert real classification
+  behavior. L4: `runtime._detect_providers` capability string now derived honestly from
+  `cohere_api_key`; redundant local imports removed (`provider.py`, hoisted `time` in
+  `gateway/server.py`); `_default_agent_factory` kept as sentinel with an accurate comment;
+  confirmed `context_windows.turn_token_budget` / `provider._cache_clear` are documented
+  compat seams and `config._session_overrides` already carries its honest "no production
+  writer" note. Suite: **3,467 passed, 0 failed** (delta = removed tests); ruff green.
