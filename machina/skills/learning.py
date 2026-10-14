@@ -15,7 +15,8 @@ from machina.core.config import config
 from machina.core.usage import usage_store
 from machina.db.connection import db
 from machina.memory.redaction import redact_secrets
-from machina.skills.registry import SkillParser, SkillRegistry, skill_registry
+from machina.observability.diagnostics import record_failure
+from machina.skills.registry import Skill, SkillParser, SkillRegistry, skill_registry
 
 logger = logging.getLogger(__name__)
 
@@ -344,6 +345,15 @@ class LearningReviewer:
         return report
 
     async def approve(self, review_id: uuid.UUID, *, agent_id: str) -> dict[str, Any]:
+        """Approve a pending proposal and publish its skill exactly once.
+
+        Publication is staged and compensable: the skill is written before the
+        approval commit, and any failure or cancellation while committing
+        removes it again so a pending review never keeps a live skill. An
+        artifact that provably belongs to this same review (matching source
+        and staged payload) is adopted instead of refused, so an interrupted
+        attempt can be completed by retrying approval.
+        """
         async with db.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
@@ -355,27 +365,74 @@ class LearningReviewer:
                     raise PermissionError("learning proposal belongs to a different agent")
                 if row["status"] != "pending":
                     return self._serialize(row)
-                self.registry.load_all()
-                if (
-                    self.registry.get(row["name"]) is not None
-                    or (self.registry.skills_dir / row["name"] / "SKILL.md").exists()
-                ):
-                    raise ValueError("skill already exists; review a new proposal")
-                self.registry.create_skill(
-                    row["name"],
-                    row["description"],
-                    row["content"],
-                    triggers=json.loads(row["triggers"])
+                triggers = (
+                    json.loads(row["triggers"])
                     if isinstance(row["triggers"], str)
-                    else row["triggers"],
-                    source=f"learning-review:{review_id}",
-                    source_type="learned",
+                    else (row["triggers"] or [])
                 )
-                approved = await conn.fetchrow(
-                    "UPDATE learning_reviews SET status = 'approved', reviewed_at = now() WHERE id = $1 RETURNING *",
-                    review_id,
-                )
+                source = f"learning-review:{review_id}"
+                self.registry.load_all()
+                staged = self._staged_artifact(row, triggers, source)
+                if staged is None:
+                    self.registry.create_skill(
+                        row["name"],
+                        row["description"],
+                        row["content"],
+                        triggers=triggers,
+                        source=source,
+                        source_type="learned",
+                    )
+                elif not staged.enabled:
+                    # A crashed attempt left our artifact disabled; approval
+                    # must publish it enabled.
+                    self.registry.set_enabled(row["name"], True)
+                try:
+                    approved = await conn.fetchrow(
+                        "UPDATE learning_reviews SET status = 'approved', reviewed_at = now() "
+                        "WHERE id = $1 RETURNING *",
+                        review_id,
+                    )
+                except BaseException:
+                    # The review did not commit: drop this review's artifact so
+                    # it cannot stay enabled against a pending review or block
+                    # the retry that re-publishes it.
+                    self._discard_artifact(row["name"], source)
+                    raise
                 return self._serialize(approved)
+
+    def _staged_artifact(self, row: Any, triggers: Any, source: str) -> Skill | None:
+        """Return this review's already-published artifact, or None if absent.
+
+        Only an artifact whose provenance AND staged payload match the review
+        row may be adopted; anything else conflicts with an unrelated skill
+        and keeps the existing refusal.
+        """
+        name = row["name"]
+        skill = self.registry.get(name)
+        if skill is None:
+            if (self.registry.skills_dir / name / "SKILL.md").exists():
+                # The path exists but did not parse: not provably ours.
+                raise ValueError("skill already exists; review a new proposal")
+            return None
+        if (
+            skill.source != source
+            or skill.description != row["description"]
+            or skill.triggers != triggers
+            or skill.content.strip() != str(row["content"]).strip()
+        ):
+            raise ValueError("skill already exists; review a new proposal")
+        return skill
+
+    def _discard_artifact(self, name: str, source: str) -> None:
+        """Best-effort removal of this review's staged artifact after failure."""
+        try:
+            self.registry.load_all()
+            skill = self.registry.get(name)
+            if skill is None or skill.source != source:
+                return
+            self.registry.delete_skill(name)
+        except Exception as exc:
+            record_failure("skills.learning.approve_rollback", exc)
 
     async def reject(self, review_id: uuid.UUID, *, agent_id: str) -> dict[str, Any]:
         row = await db.fetchrow(

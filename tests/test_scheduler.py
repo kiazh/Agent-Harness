@@ -316,6 +316,180 @@ class TestJobRunner:
         await job_store.delete(job.id)
 
 
+# ─── R12: session-claim renewal across effects + quarantine ─────────────────────
+
+
+def _renewal_job(session_id: uuid.UUID):
+    from machina.core.scheduler import Job
+
+    return Job(
+        id=uuid.uuid4(),
+        name="claim-renewal",
+        kind="interval",
+        session_id=session_id,
+        agent_name="harness",
+        prompt="work",
+        interval_seconds=60,
+        enabled=True,
+        status="running",
+        last_run_at=None,
+        next_run_at=datetime.now(UTC),
+        last_error=None,
+        run_count=0,
+        claim_token=uuid.uuid4(),
+    )
+
+
+@needs_db
+@pytest.mark.usefixtures("connected_db")
+async def test_quarantined_job_keeps_its_session_claim_alive(monkeypatch):
+    """R12: the session claim is renewed while a resistant effect is quarantined.
+
+    Compressed clocks: 1s claim TTL, 0.15s job timeout. Pre-fix the claim
+    expired ~1s in and a second ``try_begin_turn`` succeeded while the
+    quarantined effect was still active.
+    """
+    import asyncio
+
+    from machina.core import scheduler as scheduler_module
+    from machina.core import turns
+    from machina.core.scheduler import JobRunner
+    from machina.core.session import session_manager
+
+    session = await session_manager.create(title="R12 claim renewal")
+    release = asyncio.Event()
+    resisted = asyncio.Event()
+
+    class Agent:
+        async def run(self, *args, **kwargs):
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                resisted.set()
+                await release.wait()
+            return AgentResponse(content="done")
+
+    class Store:
+        def __init__(self, job):
+            self.job = job
+
+        async def claim_due(self):
+            job, self.job = self.job, None
+            return job
+
+        async def renew_lease(self, *args):
+            return True
+
+        async def finish(self, *args, **kwargs):
+            return True
+
+    original_begin = turns.try_begin_turn
+
+    async def short_claim(session_id, **kwargs):
+        # Same claim contract, compressed TTL for the test clock.
+        return await original_begin(session_id, ttl_s=1)
+
+    runner = JobRunner(store=Store(_renewal_job(session.id)), agent_factory=lambda _n: Agent())
+    monkeypatch.setattr(scheduler_module, "RUN_LEASE_SECONDS", 0.15)
+    monkeypatch.setattr(turns, "try_begin_turn", short_claim)
+    try:
+        assert await runner.run_due_once() is True
+        assert resisted.is_set()
+        assert runner._quarantined
+        await asyncio.sleep(1.05)
+        # The quarantined effect still owns the session: no other turn can
+        # claim it while the old job is active.
+        second = await original_begin(session.id)
+        try:
+            assert second is None
+        finally:
+            if second:
+                await turns.end_turn(session.id, second)
+        release.set()
+        await asyncio.gather(*tuple(runner._quarantined), return_exceptions=True)
+    finally:
+        release.set()
+        await runner.stop()
+        await session_manager.delete(session.id)
+
+
+async def test_quarantined_effects_are_fenced_when_claim_renewal_fails(monkeypatch):
+    """R12: losing the session claim cancels effects still in quarantine."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from machina.core import scheduler as scheduler_module
+    from machina.core import turns
+    from machina.core.scheduler import JobRunner
+    from machina.db.connection import db as live_db
+
+    release = asyncio.Event()
+    first_cancel, fenced = asyncio.Event(), asyncio.Event()
+    allow_loss = asyncio.Event()
+
+    class Agent:
+        async def run(self, *args, **kwargs):
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                first_cancel.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    fenced.set()
+                    raise
+            return AgentResponse(content="done")
+
+    class Store:
+        def __init__(self, job):
+            self.job = job
+
+        async def claim_due(self):
+            job, self.job = self.job, None
+            return job
+
+        async def renew_lease(self, *args):
+            return True
+
+        async def finish(self, *args, **kwargs):
+            return True
+
+    async def renew_session_claim(session_id, token):
+        assert token == "job-turn"
+        return not allow_loss.is_set()
+
+    end_turn = AsyncMock(return_value=True)
+    runner = JobRunner(store=Store(_renewal_job(uuid.uuid4())), agent_factory=lambda _n: Agent())
+    monkeypatch.setattr(scheduler_module, "RUN_LEASE_SECONDS", 0.15)
+    monkeypatch.setattr(turns, "try_begin_turn", AsyncMock(return_value="job-turn"))
+    monkeypatch.setattr(turns, "end_turn", end_turn)
+    monkeypatch.setattr(turns, "renew_turn", renew_session_claim)
+    # Arm the DB-backed renewal path without a real pool: renewal loss is
+    # simulated through the patched renew_turn above.
+    monkeypatch.setattr(live_db, "_pool", object())
+
+    try:
+        run = asyncio.create_task(runner.run_due_once())
+        await asyncio.wait_for(first_cancel.wait(), 1)
+        await asyncio.wait_for(run, 1)
+        assert runner._quarantined
+        allow_loss.set()
+        # The next renewal reports loss; the fence must cancel the effect.
+        await asyncio.wait_for(fenced.wait(), 2)
+        deadline = asyncio.get_running_loop().time() + 1
+        while runner._quarantined and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert not runner._quarantined
+        assert end_turn.await_count == 1
+    finally:
+        release.set()
+        allow_loss.set()
+        for task in list(runner._quarantined):
+            task.cancel()
+        await asyncio.gather(*list(runner._quarantined), return_exceptions=True)
+        await runner.stop()
+
+
 # ─── gateway methods (real DB) ──────────────────────────────────────────────────
 
 

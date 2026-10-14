@@ -527,6 +527,10 @@ class JobRunner:
         # M3: lease-renewal tasks are owned here so shutdown can cancel them
         # even when their quarantined effect resists cancellation.
         self._leases: set[asyncio.Task] = set()
+        # R12: session-turn claim renewals are owned here for the same
+        # shutdown reason: a quarantined effect must not keep renewing a
+        # session claim after the runner is gone.
+        self._claim_leases: set[asyncio.Task] = set()
         # Bounded budget for joining finalizers during stop(); effects get the
         # established `_cancel_grace_seconds`, finalizers get this longer
         # budget (a store.finish may be mid-round-trip).
@@ -575,13 +579,18 @@ class JobRunner:
                 task.cancel()
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
-        # Lease renewals outliving their run end here; _finish_run re-cancels
-        # idempotently for runs that terminate after shutdown.
+        # Lease renewals (job lease + session-turn claim) outliving their run
+        # end here: after shutdown their claims must lapse instead of staying
+        # renewed. _finish_run re-cancels idempotently for runs that terminate
+        # after shutdown.
         leases = [t for t in list(self._leases) if not t.done()]
+        claim_leases = [t for t in list(self._claim_leases) if not t.done()]
         for task in leases:
             task.cancel()
-        if leases:
-            await asyncio.gather(*leases, return_exceptions=True)
+        for task in claim_leases:
+            task.cancel()
+        if leases or claim_leases:
+            await asyncio.gather(*leases, *claim_leases, return_exceptions=True)
 
     async def _loop(self) -> None:
         while not self._stopping.is_set():
@@ -656,8 +665,19 @@ class JobRunner:
                 try:
                     await exec_task
                 except asyncio.CancelledError:
-                    error = "cancelled"
-                    raise
+                    current = asyncio.current_task()
+                    if ownership_lost.is_set() and not (
+                        current is not None and current.cancelling()
+                    ):
+                        # The effect was fenced by the ownership-loss path
+                        # (job-lease or session-claim renewal failure), not by
+                        # cancelling this runner: record the loss instead of
+                        # letting a stray CancelledError end the poll loop.
+                        error = "ownership lost; execution cancelled"
+                        logger.warning("Job %s (%s) lost ownership; cancelled", job.name, job.id)
+                    else:
+                        error = "cancelled"
+                        raise
                 except PermissionError as e:
                     # AH-AUDIT-021: typed approval pause parks durably (no
                     # rerun before explicit resume) instead of error-retry.
@@ -790,6 +810,54 @@ class JobRunner:
                     ownership_lost.set()
                 return
 
+    def _start_claim_renewal(
+        self,
+        job: Job,
+        token: str,
+        ownership_lost: asyncio.Event | None,
+    ) -> asyncio.Task | None:
+        """Renew this run's session-turn claim for as long as effects live.
+
+        R12: effects can outlive the session claim's TTL — most importantly
+        the cancellation-resistant work retained by quarantine — so the claim
+        is renewed for the whole ``_execute`` lifetime on the job-lease
+        cadence (``RUN_LEASE_SECONDS / 3``, capped by the shared primitive at
+        one third of the turn TTL). The shared renewal primitive reports loss
+        on the first failed renewal; loss fences the effects (cancel of the
+        owning task) and, when supervised by ``run_due_once``, also sets its
+        ``ownership_lost`` event so that run follows its normal loss path.
+        DB-less local claims never expire, so renewal is only armed for
+        DB-backed claims. Like the job lease, the task is runner-owned so
+        shutdown stops it even while a quarantined effect resists
+        cancellation.
+        """
+        from machina.core.turns import renewal_loop as _renew_session_claim
+        from machina.db.connection import db
+
+        if not db.connected:
+            return None
+        effects_task = asyncio.current_task()
+        lost = ownership_lost if ownership_lost is not None else asyncio.Event()
+        task = asyncio.create_task(
+            _renew_session_claim(
+                job.session_id,
+                token,
+                interval_s=RUN_LEASE_SECONDS / 3,
+                ownership_lost=lost,
+                on_lost=lambda: self._fence_effects(effects_task),
+            ),
+            name=f"job-session-claim-{job.id}",
+        )
+        self._claim_leases.add(task)
+        task.add_done_callback(self._claim_leases.discard)
+        return task
+
+    @staticmethod
+    def _fence_effects(task: asyncio.Task | None) -> None:
+        """Cancel the run whose session claim is no longer provably owned."""
+        if task is not None and not task.done():
+            task.cancel()
+
     async def _execute(self, job: Job, ownership_lost: asyncio.Event | None = None) -> None:
         if job.session_id is None:
             raise RuntimeError("job has no session")
@@ -804,7 +872,12 @@ class JobRunner:
         job_turn = await _begin_job_turn(job.session_id)
         if not job_turn:
             raise RuntimeError("session turn busy; job rescheduled")
+        claim_renewal: asyncio.Task | None = None
         try:
+            # R12: keep the session claim alive for the whole effect lifetime
+            # (quarantine included), so a long or resistant run cannot outlive
+            # its claim while another turn starts on the same session.
+            claim_renewal = self._start_claim_renewal(job, job_turn, ownership_lost)
             if getattr(job, "no_agent", False):
                 # AH-AUDIT-009 trust model: no-agent scripts are
                 # administrator-configured (human-transport jobs_create
@@ -965,6 +1038,15 @@ class JobRunner:
                         # Optional fallback preserves the primary outcome; report no payload.
                         record_failure("scheduler._execute", _boundary_error)
         finally:
+            if claim_renewal is not None:
+                # Stop/join the claim renewal before releasing the claim itself
+                # (order mirrors the transports' engine cleanup).
+                claim_renewal.cancel()
+                try:
+                    await asyncio.gather(claim_renewal, return_exceptions=True)
+                except (asyncio.CancelledError, Exception) as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("scheduler._execute", _boundary_error)
             try:
                 await _end_job_turn(job.session_id, job_turn)
             except Exception as _boundary_error:

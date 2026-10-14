@@ -141,10 +141,11 @@ class TurnEvent:
 class TurnClose:
     """Outcome of :meth:`TurnEngine.close`.
 
-    ``release_failed`` means ownership is unknown (the release raised): the
-    caller must not emit a terminal completion claiming the turn is unowned.
-    ``cancelled`` / ``timed_out`` are the transport's classifications, echoed
-    back for terminal payloads.
+    ``release_failed`` means ownership is unknown — the release raised, or it
+    did not settle within ``release_timeout_s`` (including after a consumed
+    mid-release cancellation): the caller must not emit a terminal completion
+    claiming the turn is unowned. ``cancelled`` / ``timed_out`` are the
+    transport's classifications, echoed back for terminal payloads.
     """
 
     cancelled: bool = False
@@ -189,6 +190,8 @@ class TurnEngine:
         self._open_tools: dict[str, str] = {}
         self._loss_event = asyncio.Event()
         self._renew_task: asyncio.Task | None = None
+        # Retained when a bounded release cannot settle; see _release_claim.
+        self._release_task: asyncio.Task | None = None
 
     # ─── wiring ────────────────────────────────────────────────────────────
 
@@ -247,6 +250,16 @@ class TurnEngine:
     @property
     def tool_count(self) -> int:
         return self._tool_count
+
+    @property
+    def outstanding_release(self) -> asyncio.Task | None:
+        """Release task retained after a bounded release could not settle.
+
+        ``close(release_failed=True)`` does not mean the claim is lost — the
+        retained task may still release it. It is observed (its outcome is
+        never a silent orphan) and exposed here for reconciliation.
+        """
+        return self._release_task
 
     @property
     def pauses(self) -> list[dict[str, Any]]:
@@ -499,12 +512,18 @@ class TurnEngine:
         )
 
     async def _release_claim(self) -> bool:
-        """Stop renewal, shielded bounded release, join renewal. True = failed.
+        """Stop renewal, bounded release, join renewal. True = failed.
 
-        A cancellation delivered while the release is in flight is consumed:
-        the bounded re-wait settles the release, then cleanup continues so the
-        claim can never be orphaned mid-flight (RF4-C1). A remote failure
-        raising from the release marks unknown ownership instead.
+        The configured ``release_timeout_s`` bounds EVERY wait on the release,
+        including the first: an unbounded first wait would let a hung release
+        outlive the bound and change the transport's terminal decision. A
+        cancellation delivered while the release is in flight is consumed once
+        (RF4-C1) and the bounded re-wait settles the release; if the release
+        still cannot settle (timeout, second cancellation, or a remote failure)
+        ownership is unproven — the outstanding task is retained and observed,
+        and the caller gets ``True`` so transports emit ``turn.cleanup_pending``
+        instead of a normal completion while the claim may still be held. A
+        remote failure raising from the release marks unknown ownership too.
         """
         self._stage("releasing_ownership")
         renew_task = self._renew_task
@@ -512,25 +531,8 @@ class TurnEngine:
             renew_task.cancel()
         release_failed = False
         if self.spec.token:
-            try:
-                release = asyncio.ensure_future(
-                    _turns.end_turn(self.spec.session_id, self.spec.token)
-                )
-                try:
-                    await asyncio.shield(release)
-                except asyncio.CancelledError:
-                    try:
-                        await asyncio.wait_for(
-                            asyncio.shield(release), timeout=self._release_timeout_s
-                        )
-                    except (TimeoutError, asyncio.CancelledError, Exception):
-                        logger.warning(
-                            "turn release did not settle within bound; "
-                            "claim falls back to TTL expiry"
-                        )
-            except Exception as exc:
-                release_failed = True
-                self._record("release", exc)
+            release = asyncio.ensure_future(_turns.end_turn(self.spec.session_id, self.spec.token))
+            release_failed = await self._await_release(release)
         if renew_task is not None:
             # W7: a cancellation delivered to the turn while tearing down must
             # propagate, but the expected self-cancelled join is absorbed.
@@ -547,6 +549,45 @@ class TurnEngine:
                 if not renew_task.done():
                     renew_task.cancel()
         return release_failed
+
+    async def _await_release(self, release: asyncio.Task) -> bool:
+        """Bounded wait(s) on the shielded release; True = ownership unproven."""
+        try:
+            await asyncio.wait_for(asyncio.shield(release), timeout=self._release_timeout_s)
+            return False
+        except asyncio.CancelledError:
+            # Cancellation delivered mid-release (RF4-C1): consume it once and
+            # give the same release the shared bound again. A second
+            # cancellation is uncertainty too: fail closed instead of
+            # continuing cleanup as if the claim were released.
+            try:
+                await asyncio.wait_for(asyncio.shield(release), timeout=self._release_timeout_s)
+                return False
+            except asyncio.CancelledError:
+                return self._retain_release(release, "cancelled again")
+            except TimeoutError:
+                return self._retain_release(release, "did not settle within bound")
+            except Exception as exc:
+                self._record("release", exc)
+                return self._retain_release(release, "raised")
+        except TimeoutError:
+            return self._retain_release(release, "did not settle within bound")
+        except Exception as exc:
+            self._record("release", exc)
+            return True
+
+    def _retain_release(self, release: asyncio.Task, why: str) -> bool:
+        """Keep an unsettled release observed for reconciliation; True = failed."""
+        self._release_task = release
+        release.add_done_callback(self._observe_release)
+        logger.warning("turn release %s; claim falls back to TTL expiry", why)
+        return True
+
+    @staticmethod
+    def _observe_release(task: asyncio.Task) -> None:
+        """Consume a retained release's outcome so it is never a silent orphan."""
+        if not task.cancelled():
+            task.exception()
 
     def schedule_auto_compact(self) -> None:
         """Fire-and-forget threshold compaction after ownership is released.

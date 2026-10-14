@@ -476,6 +476,84 @@ async def test_close_consumes_mid_release_cancellation(monkeypatch):
         await asyncio.gather(task, return_exceptions=True)
 
 
+async def test_close_applies_release_bound_to_first_wait(monkeypatch):
+    """R13: the FIRST release wait honours release_timeout_s.
+
+    Pre-fix, a blocked ``end_turn`` held cleanup past the configured bound
+    (unbounded first wait). The unsettled release must be reported as
+    ``release_failed`` and retained/observed for reconciliation while it is
+    still running.
+    """
+    entered, gate = asyncio.Event(), asyncio.Event()
+    end_calls: list[str] = []
+
+    async def blocked_end(session_id, token):
+        end_calls.append(token)
+        entered.set()
+        await gate.wait()
+        return True
+
+    monkeypatch.setattr(turns, "end_turn", blocked_end)
+
+    engine = TurnEngine(_spec(), boundary="test.release-bound", release_timeout_s=0.02)
+    loop = asyncio.get_running_loop()
+    try:
+        started = loop.time()
+        report = await asyncio.wait_for(engine.close(), 1)
+        elapsed = loop.time() - started
+
+        assert report.release_failed is True
+        assert end_calls == ["owner-token"]  # released exactly once, still in flight
+        assert elapsed < 0.5  # bounded by 0.02s, not by the blocked release
+        outstanding = engine.outstanding_release
+        assert outstanding is not None and not outstanding.done()
+    finally:
+        gate.set()
+        outstanding = engine.outstanding_release
+        if outstanding is not None:
+            await asyncio.gather(outstanding, return_exceptions=True)
+    assert not outstanding.cancelled()
+
+
+async def test_cancelled_cleanup_reports_release_failure_while_blocked(monkeypatch):
+    """R13: a cancellation + bounded re-wait timeout is release uncertainty.
+
+    Pre-fix the re-wait swallowed the timeout and returned
+    ``release_failed=False`` — gateway/SSE then emitted normal completion
+    while the claim was still held. The re-wait timeout must fail closed and
+    keep the outstanding release observed.
+    """
+    entered, gate = asyncio.Event(), asyncio.Event()
+
+    async def blocked_end(session_id, token):
+        entered.set()
+        await gate.wait()
+        return True
+
+    monkeypatch.setattr(turns, "end_turn", blocked_end)
+
+    engine = TurnEngine(_spec(), boundary="test.release-bound", release_timeout_s=0.02)
+    close_task = asyncio.create_task(engine.close())
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        close_task.cancel()
+        report = await asyncio.wait_for(close_task, 1)
+
+        assert report.release_failed is True
+        assert not close_task.cancelled()  # consumed cancellation, reported uncertainty
+        outstanding = engine.outstanding_release
+        assert outstanding is not None and not outstanding.done()
+    finally:
+        gate.set()
+        if not close_task.done():
+            close_task.cancel()
+        await asyncio.gather(close_task, return_exceptions=True)
+        outstanding = engine.outstanding_release
+        if outstanding is not None:
+            await asyncio.gather(outstanding, return_exceptions=True)
+    assert not outstanding.cancelled()
+
+
 async def test_cancellation_during_optional_join_still_releases_and_propagates(monkeypatch):
     join_started = asyncio.Event()
     end_calls: list[str] = []
