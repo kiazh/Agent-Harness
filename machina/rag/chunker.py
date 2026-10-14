@@ -17,6 +17,32 @@ class Chunk:
     token_count: int = 0
 
 
+#: File extensions and common aliases mapped to the canonical language names
+#: understood by :meth:`RecursiveCharacterTextSplitter.split_code`.
+_LANGUAGE_ALIASES: dict[str, str] = {
+    "py": "python",
+    "python": "python",
+    "js": "javascript",
+    "javascript": "javascript",
+    "ts": "typescript",
+    "typescript": "typescript",
+    "java": "java",
+    "go": "go",
+    "rs": "rust",
+    "rust": "rust",
+}
+
+
+def normalize_language(language: str | None) -> str:
+    """Normalize an extension/alias ("py", ".js", "TS") to a splitter language.
+
+    Unknown values are returned lowercased (and un-dotted) so the caller can
+    still inspect them; only known aliases are rewritten.
+    """
+    value = (language or "").strip().lstrip(".").lower()
+    return _LANGUAGE_ALIASES.get(value, value)
+
+
 class RecursiveCharacterTextSplitter:
     """Split text into chunks using recursive character splitting.
 
@@ -156,6 +182,7 @@ class RecursiveCharacterTextSplitter:
 
         base_metadata = metadata or {}
         chunks: list[Chunk] = []
+        language = normalize_language(language)
 
         # Simple heuristic: split on function/class definitions
         if language in ("python", "javascript", "typescript", "java", "go", "rust"):
@@ -166,6 +193,22 @@ class RecursiveCharacterTextSplitter:
             matches = list(pattern.finditer(text))
 
             if len(matches) > 1:
+                # Header content before the first definition (package
+                # declarations, imports, module constants) is not a symbol but
+                # must never be dropped: keep it as a preamble chunk.
+                preamble = text[: matches[0].start()].strip()
+                if preamble:
+                    preamble_meta = {**base_metadata, "language": language, "symbol": None}
+                    if self._estimate_tokens(preamble) > self.chunk_size:
+                        chunks.extend(self.split_text(preamble, preamble_meta))
+                    else:
+                        chunks.append(
+                            Chunk(
+                                text=preamble,
+                                metadata=preamble_meta,
+                                token_count=self._estimate_tokens(preamble),
+                            )
+                        )
                 for i, match in enumerate(matches):
                     start = match.start()
                     end = matches[i + 1].start() if i + 1 < len(matches) else len(text)

@@ -24,7 +24,7 @@ from machina.db.connection import db
 from machina.memory.authority import is_catalog_or_echo
 from machina.memory.redaction import redact_secrets
 from machina.observability.diagnostics import record_failure
-from machina.rag.chunker import Chunk, RecursiveCharacterTextSplitter
+from machina.rag.chunker import Chunk, RecursiveCharacterTextSplitter, normalize_language
 from machina.rag.embedder import Embedder, OpenAIEmbedder
 from machina.rag.loaders import Document, FileLoader
 from machina.rag.reranker import IdentityReranker, Reranker
@@ -295,6 +295,16 @@ class RAGPipeline:
         )
 
         async def _replace_and_insert(executor: Any) -> Any:
+            # Serialize replacements of the same (session, source) across
+            # connections/processes. Inside the surrounding transaction each
+            # competing transaction cannot observe the others' uncommitted
+            # INSERTs, so un-serialized DELETE+INSERT runs interleave and every
+            # caller commits its own copy of the document. The transaction-
+            # scoped advisory lock is released on commit/rollback.
+            await executor.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"rag_document_replace:{session_id}:{doc_source}",
+            )
             await executor.execute(
                 "DELETE FROM context_chunks WHERE session_id = $1 AND document_source = $2",
                 session_id,
@@ -799,7 +809,7 @@ class RAGPipeline:
         if doc.doc_type == "markdown":
             return self._chunker.split_markdown(doc.content, metadata)
         elif doc.doc_type == "code":
-            lang = doc.metadata.get("extension", "").lstrip(".")
+            lang = normalize_language(doc.metadata.get("extension", ""))
             return self._chunker.split_code(doc.content, language=lang, metadata=metadata)
         else:
             return self._chunker.split_text(doc.content, metadata)

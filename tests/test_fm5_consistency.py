@@ -321,6 +321,33 @@ async def test_reindex_same_document_source_keeps_single_copy(db_pool, monkeypat
         await db_pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
 
 
+async def test_concurrent_reindex_of_one_source_keeps_single_copy(db_pool, monkeypatch):
+    """8 concurrent replacements of one document leave exactly one generation.
+
+    Without per-(session, source) serialization each replacement's DELETE
+    cannot see the other transactions' uncommitted INSERTs, so every
+    transaction commits its own copy of the document (audit repro: 8
+    concurrent replacements -> 8 stored chunks for one source).
+    """
+    monkeypatch.setattr("machina.rag.pipeline.db", db_pool)
+    session_id = await db_pool.fetchval(
+        "INSERT INTO sessions (agent_id) VALUES ('harness') RETURNING id"
+    )
+    source = f"race-{uuid.uuid4()}.txt"
+    doc = Document(content=("A" * 2000) + "\n", source=source, doc_type="text")
+    pipeline = RAGPipeline(config=RAGConfig(enable_embeddings=False, enable_reranking=False))
+    try:
+        await asyncio.gather(*(pipeline.index_document(doc, session_id) for _ in range(8)))
+        count = await db_pool.fetchval(
+            "SELECT count(*) FROM context_chunks WHERE session_id = $1 AND document_source = $2",
+            session_id,
+            source,
+        )
+        assert count == 1
+    finally:
+        await db_pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
+
+
 async def test_reindex_deletes_previous_generation_before_insert():
     pipeline = RAGPipeline(config=RAGConfig(enable_embeddings=False, enable_reranking=False))
     mock_db = AsyncMock()

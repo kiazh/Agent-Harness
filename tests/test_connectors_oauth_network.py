@@ -10,6 +10,7 @@ from machina.connectors.oauth_network import (
     OAuthNetworkClient,
     OAuthNetworkError,
     issuer_metadata_candidates,
+    normalize_resource,
     parse_bearer_challenges,
     protected_resource_candidates,
 )
@@ -184,6 +185,51 @@ def test_issuer_oidc_candidate_order():
         "https://host.example.com/.well-known/oauth-protected-resource/team/mcp",
         "https://host.example.com/.well-known/oauth-protected-resource",
     ]
+
+
+def test_ipv6_literal_authority_round_trips_bracketed():
+    """IPv6 hosts keep their brackets in normalized and discovery URLs."""
+    assert normalize_resource("http://[::1]:8080/mcp") == "http://[::1]:8080/mcp"
+    assert normalize_resource("https://[2001:db8::1]/resource") == "https://[2001:db8::1]/resource"
+    # Default port dropped, brackets kept.
+    assert normalize_resource("https://[::1]:443/mcp") == "https://[::1]/mcp"
+    assert protected_resource_candidates("http://[::1]:8080/mcp") == [
+        "http://[::1]:8080/.well-known/oauth-protected-resource/mcp",
+        "http://[::1]:8080/.well-known/oauth-protected-resource",
+    ]
+    assert issuer_metadata_candidates("https://[2001:db8::1]/tenant") == [
+        "https://[2001:db8::1]/.well-known/oauth-authorization-server/tenant",
+        "https://[2001:db8::1]/.well-known/openid-configuration/tenant",
+        "https://[2001:db8::1]/tenant/.well-known/openid-configuration",
+    ]
+
+
+async def test_ipv6_discovery_requests_bracketed_authorities():
+    """Discovery derives its well-known URLs from the same bracketed base."""
+    transport = StubTransport()
+    endpoint = "http://[::1]:8080/mcp"
+    issuer = "http://[::1]:8080/auth"
+    transport.route(
+        "http://[::1]:8080/.well-known/oauth-protected-resource/mcp",
+        payload={
+            "resource": endpoint,
+            "authorization_servers": [issuer],
+            "scopes_supported": ["read"],
+        },
+    )
+    meta = {
+        "issuer": issuer,
+        "authorization_endpoint": f"{issuer}/authorize",
+        "token_endpoint": f"{issuer}/token",
+        "response_types_supported": ["code"],
+        "code_challenge_methods_supported": ["S256"],
+    }
+    for candidate in issuer_metadata_candidates(issuer):
+        transport.route(candidate, payload=meta)
+    client = OAuthNetworkClient(local_access=True, transport=transport)
+    result = await _discover(client, _config(endpoint=endpoint))
+    assert result.resource == endpoint
+    assert transport.fetches[0] == "http://[::1]:8080/.well-known/oauth-protected-resource/mcp"
 
 
 def test_strict_mismatch_and_unsafe_urls_fail_closed():

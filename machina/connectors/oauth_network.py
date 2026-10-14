@@ -42,10 +42,23 @@ class OAuthNetworkError(Exception):
         self.reason = reason
 
 
+def _authority_host(host: str | None) -> str:
+    """Format a parsed hostname for URL authority reconstruction.
+
+    ``urlparse`` strips the brackets from IPv6 literals; rebuilding an
+    authority without re-bracketing them produces an invalid URL
+    (``http://::1:8080/mcp`` instead of ``http://[::1]:8080/mcp``).
+    """
+    value = host or ""
+    if ":" in value:
+        return f"[{value}]"
+    return value
+
+
 def normalize_resource(url: str) -> str:
     parts = urlparse(url)
     scheme = parts.scheme.lower()
-    host = (parts.hostname or "").lower().rstrip(".")
+    host = _authority_host((parts.hostname or "").lower().rstrip("."))
     port = parts.port
     if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
         port = None
@@ -246,7 +259,7 @@ def _scope_list(value: str | None) -> tuple[str, ...]:
 
 def protected_resource_candidates(endpoint: str) -> list[str]:
     parts = urlparse(endpoint)
-    base = f"{parts.scheme}://{parts.hostname}"
+    base = f"{parts.scheme}://{_authority_host(parts.hostname)}"
     if parts.port:
         base += f":{parts.port}"
     path = parts.path or ""
@@ -259,7 +272,7 @@ def protected_resource_candidates(endpoint: str) -> list[str]:
 
 def issuer_metadata_candidates(issuer: str) -> list[str]:
     parts = urlparse(issuer)
-    base = f"{parts.scheme}://{parts.hostname}"
+    base = f"{parts.scheme}://{_authority_host(parts.hostname)}"
     if parts.port:
         base += f":{parts.port}"
     path = (parts.path or "").rstrip("/")
