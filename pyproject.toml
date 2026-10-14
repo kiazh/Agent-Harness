@@ -40,7 +40,7 @@ embeddings-onnx = ["fastembed>=0.9,<1.0"]
 # Zero-API local cross-encoder reranking (fastembed ONNX; shares the dependency
 # with embeddings-onnx). Local-first "auto" selects it whenever installed.
 rerank = ["fastembed>=0.9,<1.0"]
-workflow-trial = ["langgraph>=1.2.12", "langgraph-checkpoint-postgres>=3.1.2", "psycopg[binary]>=3.1"]
+workflow-trial = ["langgraph>=1.2.14", "langgraph-checkpoint-postgres>=3.1.2", "psycopg[binary]>=3.1"]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
