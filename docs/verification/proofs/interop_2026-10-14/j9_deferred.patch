@@ -1,0 +1,201 @@
+diff --git a/tools/e2e_gate.py b/tools/e2e_gate.py
+index 26a9aa4..ced9e41 100644
+--- a/tools/e2e_gate.py
++++ b/tools/e2e_gate.py
+@@ -36,6 +36,7 @@ import os
+ import queue
+ import random
+ import secrets
++import shutil
+ import signal
+ import socket
+ import subprocess
+@@ -53,7 +54,7 @@ from urllib.parse import urlparse
+ REPO_ROOT = Path(__file__).resolve().parents[1]
+ DEFAULT_VENV = REPO_ROOT / ".venv"
+ PROOFS_DIR = REPO_ROOT / "docs" / "verification" / "proofs"
+-JOURNEY_IDS = ("j1", "j2", "j3", "j4", "j5", "j6", "j7", "j8")
++JOURNEY_IDS = ("j1", "j2", "j3", "j4", "j5", "j6", "j7", "j8", "j9")
+ JOURNEY_TITLES = {
+     "j1": "memory-roundtrip (chat -> consolidate -> memories row + cursor)",
+     "j2": "web-research-rag (real web_research -> context_chunks for source)",
+@@ -65,6 +66,7 @@ JOURNEY_TITLES = {
+     ),
+     "j7": "turn-parity (SSE turn -> stdio gateway turn -> SSE turn; frames, transcript, claims)",
+     "j8": "provider-facade (config route -> real call via usage_store -> llm_usage row + status)",
++    "j9": "opencode-mcp (opencode run -> machina_chat tool call -> Machina session row contains token)",
+ }
+ # Per-journey wall-clock budgets (sum of bounded steps). Recorded as notes on
+ # every run; a journey is expected to finish well under its budget.
+@@ -77,6 +79,7 @@ JOURNEY_TIMEOUT_BUDGET_SECONDS = {
+     "j6": 720.0,
+     "j7": 600.0,
+     "j8": 300.0,
++    "j9": 420.0,
+ }
+ ERROR_SUBSTRINGS = ("InterfaceError", "Memory extraction failed")
+ FIRECRAWL_DEFAULT_URL = "http://localhost:3002"
+@@ -803,6 +806,48 @@ asyncio.run(main())
+ """
+ 
+ 
++_J9_ASSERT_SCRIPT = """
++import asyncio, json, sys
++sys.path.insert(0, "__REPO__")
++import msgpack
++from machina.db.connection import db
++
++SPEC = json.loads(sys.argv[1])
++TOKEN = SPEC["token"]
++
++async def main():
++    await db.connect()
++    try:
++        rows = await db.fetch(
++            "SELECT c.session_id, c.chunk_type, c.payload_msgpack, c.created_at, s.title "
++            "FROM context_chunks c JOIN sessions s ON s.id = c.session_id "
++            "WHERE c.created_at > now() - interval '30 minutes' "
++            "ORDER BY c.created_at DESC LIMIT 400"
++        )
++        matches = []
++        for row in rows:
++            try:
++                payload = msgpack.unpackb(row["payload_msgpack"], raw=False)
++            except Exception:
++                continue
++            if TOKEN not in json.dumps(payload, default=str):
++                continue
++            matches.append(
++                {
++                    "session_id": str(row["session_id"]),
++                    "chunk_type": row["chunk_type"],
++                    "title": row["title"],
++                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
++                }
++            )
++        print(json.dumps({"ok": True, "scanned": len(rows), "matches": matches[:5]}))
++    finally:
++        await db.close()
++
++asyncio.run(main())
++"""
++
++
+ def call_script(
+     ctx: dict, script: str, params: dict | None = None, timeout: float = 60.0
+ ) -> tuple[dict, dict]:
+@@ -2519,6 +2564,106 @@ def run_j8(ctx: dict) -> dict:
+     return finish(record, "PASS")
+ 
+ 
++def run_j9(ctx: dict) -> dict:
++    """OpenCode -> machina MCP shim -> Machina session, end to end.
++
++    Skipped unless the `opencode` CLI exists and lists a registered `machina`
++    MCP server for this project (registration lives in opencode.json, added by
++    the interop proof step: `opencode mcp add machina -- <venv-python> -m
++    machina.mcp_server`). Writes are asserted in a real Machina session row,
++    never against OpenCode's own storage.
++    """
++    record = new_record("j9")
++    opencode_bin = shutil.which("opencode")
++    record["observed"]["opencode_bin"] = opencode_bin or ""
++    if not opencode_bin:
++        return finish(record, "SKIP", "opencode CLI not installed (optional journey)")
++
++    listed = run_cmd(
++        [opencode_bin, "mcp", "list"], cwd=ctx["repo_root"], env=child_env(), timeout=120
++    )
++    record["commands"].append("opencode mcp list")
++    record["observed"]["mcp_list_exit_code"] = listed["exit_code"]
++    mcp_list_text = (listed["stdout"] + listed["stderr"]).lower()
++    record["observed"]["mcp_list_has_machina"] = "machina" in mcp_list_text
++    if "machina" not in mcp_list_text:
++        return finish(
++            record,
++            "SKIP",
++            "machina MCP server not registered for this project; run: "
++            f"opencode mcp add machina -- {ctx['venv_python']} -m machina.mcp_server",
++        )
++
++    token = f"MCPJ9-{random.randint(100000, 999999)}"
++    record["observed"]["token"] = token
++    message = (
++        "Use the machina_chat tool exactly once. Pass it this prompt: "
++        f"Reply with exactly {token} and nothing else. "
++        "Then return the machina_chat tool output."
++    )
++    run = run_cmd(
++        [opencode_bin, "run", "--standalone", "--auto", "--format", "json", message],
++        cwd=ctx["repo_root"],
++        env=child_env(),
++        timeout=ctx["timeout"],
++    )
++    record["commands"].append(
++        "opencode run --standalone --auto --format json "
++        f'"Use the machina_chat tool exactly once. Pass it this prompt: '
++        f'Reply with exactly {token} and nothing else. Then return the machina_chat tool output."'
++    )
++    record["observed"]["opencode_exit_code"] = run["exit_code"]
++    record["observed"]["opencode_timed_out"] = run["timed_out"]
++    record["observed"]["opencode_wall_seconds"] = run["wall_seconds"]
++    record["observed"]["opencode_output_excerpt"] = _bounded_tail(run["stdout"], 500)
++    check(
++        record,
++        "opencode_run_exit_zero",
++        run["exit_code"] == 0 and not run["timed_out"],
++        "opencode run exits 0 without timeout",
++        {"exit_code": run["exit_code"], "timed_out": run["timed_out"]},
++    )
++    # The JSON transcript must name the namespaced machina chat tool (any
++    # delimiter convention: machina.machina_chat / machina_machina_chat).
++    tool_markers = ("machina.machina_chat", "machina_machina_chat", "machina:machina_chat")
++    tool_present = any(marker in run["stdout"] for marker in tool_markers)
++    record["observed"]["machina_chat_marker_present"] = tool_present
++    check(
++        record,
++        "machina_tool_call_present",
++        tool_present,
++        "opencode JSON transcript names the machina_chat MCP tool",
++        {"markers": tool_markers, "matched": tool_present},
++    )
++    check(
++        record,
++        "opencode_output_contains_token",
++        token in run["stdout"],
++        "opencode output carries the token returned through machina_chat",
++        {"token": token, "matched": token in run["stdout"]},
++    )
++
++    # Machina-side proof: the token must exist in a real session row (chunk
++    # payloads), not merely in OpenCode's transcript.
++    raw, payload = call_script(ctx, _J9_ASSERT_SCRIPT, {"token": token}, timeout=120)
++    matches = payload.get("matches") or []
++    record["observed"]["db_assert_exit_code"] = raw["exit_code"]
++    record["observed"]["db_scanned_chunks"] = payload.get("scanned")
++    record["observed"]["db_sessions_with_token"] = matches[:3]
++    check(
++        record,
++        "session_row_contains_token",
++        bool(matches),
++        ">=1 Machina context chunk (fresh session) contains the token",
++        {"matches": matches[:3], "scanned": payload.get("scanned")},
++    )
++
++    failed = [item for item in record["checks"] if not item["ok"]]
++    if failed:
++        return finish(record, "FAIL", "failed checks: " + ", ".join(c["name"] for c in failed))
++    return finish(record, "PASS")
++
++
+ JOURNEYS = {
+     "j1": run_j1,
+     "j2": run_j2,
+@@ -2528,6 +2673,7 @@ JOURNEYS = {
+     "j6": run_j6,
+     "j7": run_j7,
+     "j8": run_j8,
++    "j9": run_j9,
+ }
+ 
+ 

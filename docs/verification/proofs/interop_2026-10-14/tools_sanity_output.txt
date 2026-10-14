@@ -1,0 +1,18 @@
+=== machina_status ===
+Machina status
+postgres: PostgreSQL 16.15 (Homebrew) on aarch64-apple-darwin25.6.0
+sessions: 148 | chunks: 1041 | memories: 52 (pending: 0)
+tools: 29 registered
+model: deepseek-chat (provider: deepseek)
+mode: workspace | backend: host | workspace: (unset)
+chat provider: unknown
+memory retrieval: dense+sparse (onnx:BAAI/bge-small-en-v1.5)
+memory extraction: ready
+document rag: ready; 19 indexed documents
+reranker: local (configured; pipeline not initialized)
+auto compaction: enabled
+sandbox: unknown
+jobs awaiting approval: 0
+permission durability: unknown
+=== machina_session_create ===
+{"status": "created", "session_id": "d007db6f-e0c8-40df-bda2-fcb80d8850b1", "title": "mcp shim sanity"}

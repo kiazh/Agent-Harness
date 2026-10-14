@@ -1,0 +1,23 @@
+{
+ "ok": true,
+ "sessions": [
+  {
+   "token": "INTEROP-2E1D4B",
+   "session_id": "4dea2599-bf4f-4e7b-bc1b-cd286f72ceb3",
+   "chunks": 2,
+   "token_in_chunks": [
+    "user_message",
+    "assistant_message"
+   ]
+  },
+  {
+   "token": "INTEROP-9C4A7E",
+   "session_id": "ac839bd9-8c72-41d2-976a-9849c2102d5f",
+   "chunks": 2,
+   "token_in_chunks": [
+    "user_message",
+    "assistant_message"
+   ]
+  }
+ ]
+}

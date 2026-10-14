@@ -107,3 +107,6 @@ node_modules/
 
 # Proof artifacts: evidence logs under docs/verification/proofs/ are tracked
 !docs/verification/proofs/**/*.log
+
+# Machine-specific MCP registration (create via: opencode mcp add machina -- <python> -m machina.mcp_server)
+opencode.json
