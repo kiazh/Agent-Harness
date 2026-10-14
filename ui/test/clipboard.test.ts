@@ -4,6 +4,17 @@ import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+async function writeClipboardFixture(directory: string, output: string): Promise<void> {
+	// A shell fixture boots in milliseconds — a Node fixture can outlive the
+	// 3 s copy timeout under parallel test load — while still proving the
+	// value arrives on stdin and is never shell-evaluated: cat reads stdin,
+	// argv is ignored.
+	const script = `#!/bin/sh\nexec /bin/cat > ${JSON.stringify(output)}\n`;
+	for (const command of ["pbcopy", "wl-copy", "xclip"]) {
+		await writeFile(join(directory, command), script, { mode: 0o700 });
+	}
+}
+
 test("clipboard transfer sends the complete value on stdin without shell evaluation", async (t) => {
 	if (process.platform === "win32") { t.skip("POSIX executable fixture"); return; }
 	const { copyText } = await import("../src/clipboard.ts");
@@ -11,9 +22,7 @@ test("clipboard transfer sends the complete value on stdin without shell evaluat
 	const output = join(directory, "copied.txt");
 	const originalPath = process.env.PATH;
 	try {
-		for (const command of ["pbcopy", "wl-copy", "xclip"]) {
-			await writeFile(join(directory, command), `#!${process.execPath}\nconst fs = require("node:fs"); fs.writeFileSync(${JSON.stringify(output)}, fs.readFileSync(0));`, { mode: 0o700 });
-		}
+		await writeClipboardFixture(directory, output);
 		process.env.PATH = directory;
 		const value = `https://auth.example.com/authorize?state=${"a".repeat(500)}&literal=$(touch should-not-exist)\nsecond line`;
 		assert.equal(await copyText(value), true);
@@ -54,9 +63,7 @@ test("the fullscreen TUI copies selections through the real clipboard, not OSC 5
 		clearFromCursor() {}, clearScreen() {}, setTitle() {}, setProgress() {},
 	};
 	try {
-		for (const command of ["pbcopy", "wl-copy", "xclip"]) {
-			await writeFile(join(directory, command), `#!${process.execPath}\nconst fs = require("node:fs"); fs.writeFileSync(${JSON.stringify(output)}, fs.readFileSync(0));`, { mode: 0o700 });
-		}
+		await writeClipboardFixture(directory, output);
 		process.env.PATH = directory;
 		const tui = new TuiAltScreen(term as never, undefined, undefined, tuiClipboardOptions());
 		(tui as unknown as { getActiveSelectionText: () => string }).getActiveSelectionText = () => "selected highlight";
