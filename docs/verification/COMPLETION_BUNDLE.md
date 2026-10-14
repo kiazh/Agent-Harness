@@ -439,3 +439,23 @@ Consolidated tree: **3,531 passed, 0 failed, 1 skipped, 1 xfailed**;
   docs/verification/proofs/2026-10-14-e2e-gate.*). This run certifies the
   full stack: all 20 review findings fixed, local quality wave landed,
   restored firecrawl.
+
+- **Adversarial re-verification round (2026-10-14, evening)**: a second
+  hostile pass over the day's fixes found SIX real gaps, all now fixed with
+  revert-verified pins: (1) rg value-taking options (`-g '*'`, `--glob`)
+  hid the default directory walk and leaked credentials - full option-table
+  parse audited against rg 15.1.0 (`4c76e18`); (2) the recursive-copy scan
+  failed OPEN at the 4,096-entry cap and under `cp -L` symlinks - now fails
+  closed with full dereference-flag semantics (`4c76e18`); (3) CLI ownership
+  loss was checked only on the next yield - delayed effects ran after loss,
+  generator closed after claim release/DB close - now cancels immediately
+  with `['generator.close','release','db.close']` ordering (`9de5556`);
+  (4) skill publication survived COMMIT-time transaction failures
+  (`8186adc`); (5) provider-qualified embedding ids
+  (`openai/text-embedding-3-small`) still misrouted to ONNX (`8186adc`);
+  (6) the pilot stringified numeric golds before scoring (`8186adc`).
+  Also fixed from live use the same day: TUI selection copy flashed
+  "Copied!" while only writing OSC 52 - the real platform clipboard is now
+  injected and the flash reports the true spawn result (`64d9125`).
+  Suite after the round: **3,734 passed / 0 failed**; ruff green (493
+  files); final gate re-run recorded below when it completes.
