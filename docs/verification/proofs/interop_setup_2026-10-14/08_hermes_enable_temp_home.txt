@@ -1,0 +1,28 @@
+  Hermes registers user-level only (no project scope); using global scope
+  run: /Users/shadow/.local/bin/hermes mcp add machina --command /Users/shadow/machina/.venv/bin/python --args -m machina.mcp_server
+  registration command exited 0
+  output: Connecting to 'machina'...
+
+  ✓ Connected! Found 3 tool(s) from 'machina':
+
+    machina_status                           Read-only Machina status: database, counts, mode and capabil...
+    machina_chat                             Run one headless Machina turn and return a JSON result.
+
+Spa...
+    machina_session_create                   Create an empty Machina session row and return its id as JSO...
+
+  Enable all 3 tools? [Y/n/select]: 
+  ✓ Saved 'machina' to /tmp/hermes-interop-verify/config.yaml (3/3 tools enabled)
+  Start a new session to use these tools, or run /reload-mcp to load them into open sessions.
+registered `machina` for Hermes (global scope) and verified it.
+  ✓ verify: present in `hermes mcp list` (enabled)
+model:
+  default: test
+_config_version: 50
+mcp_servers:
+  machina:
+    command: /Users/shadow/machina/.venv/bin/python
+    args:
+      - -m
+      - machina.mcp_server
+    enabled: true

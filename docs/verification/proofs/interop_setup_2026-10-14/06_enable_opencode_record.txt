@@ -1,0 +1,3 @@
+  already registered in /Users/shadow/machina/opencode.json; no changes made
+`machina` is already registered for OpenCode (project scope); no changes made.
+  ✓ verify: present in `opencode mcp list` (connected)

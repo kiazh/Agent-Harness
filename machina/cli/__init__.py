@@ -24,6 +24,7 @@ import machina.tools  # noqa: F401 — registers all built-in tools
 from machina import __version__, services
 from machina.cli import output
 from machina.cli.growth import app as growth_app
+from machina.cli.interop import app as interop_app
 from machina.cli.launcher import launch_ui
 from machina.cli.output import console
 from machina.core.background_tasks import drain_background_tasks
@@ -40,6 +41,7 @@ app = typer.Typer(
     invoke_without_command=True,
 )
 app.add_typer(growth_app, name="growth")
+app.add_typer(interop_app, name="interop")
 
 
 @app.callback()

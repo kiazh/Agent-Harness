@@ -1,0 +1,6 @@
+  Codex registers user-level only (no project scope); using global scope
+  run: /Users/shadow/.local/bin/codex mcp add machina -- /Users/shadow/machina/.venv/bin/python -m machina.mcp_server
+  registration command exited 0
+  output: Added global MCP server 'machina'.
+registered `machina` for Codex (global scope) and verified it.
+  ✓ verify: present in `codex mcp list --json` (enabled)

@@ -1,0 +1,13 @@
+{
+  "codex": {
+    "binary": "/Users/shadow/.local/bin/codex",
+    "enabled": true,
+    "registered_at": "2026-10-14T16:53:49+00:00",
+    "scope": "global",
+    "verify": {
+      "detail": "present in `codex mcp list --json` (enabled)",
+      "ok": true
+    },
+    "version": "codex-cli 0.162.1"
+  }
+}

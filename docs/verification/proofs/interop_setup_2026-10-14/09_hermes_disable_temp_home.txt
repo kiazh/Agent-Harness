@@ -1,0 +1,31 @@
+$ machina interop status (HERMES_HOME=/tmp/hermes-interop-verify)
+                                      External agent harnesses (3)                                      
+┏━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━┓
+┃ Platform ┃ Installed ┃ Version                                      ┃ Running ┃ Registered ┃ Enabled ┃
+┡━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━┩
+│ OpenCode │ yes       │ opencode v2.0.26                             │ yes     │ project    │ manual  │
+│ Codex    │ yes       │ codex-cli 0.162.1                            │ yes     │ global     │ manual  │
+│ Hermes   │ yes       │ Hermes Agent v0.21.6+386.g5ba559c (2026.9... │ yes     │ global     │ yes     │
+└──────────┴───────────┴──────────────────────────────────────────────┴─────────┴────────────┴─────────┘
+Machina MCP server: /Users/shadow/machina/.venv/bin/python -m machina.mcp_server
+· OpenCode: registered outside Machina's state — `machina interop enable opencode` records it without changing anything.
+· Codex: registered outside Machina's state — `machina interop enable codex` records it without changing anything.
+· Hermes: registered (global scope).
+Enable other harnesses with `machina interop enable <platform>`; see `machina interop --help`.
+
+$ machina interop disable hermes
+  run: /Users/shadow/.local/bin/hermes mcp remove machina
+  remove command exited 0
+  output: Remove server 'machina'? [Y/n]:   ✓ Removed 'machina' from config
+  ✓ Cleaned up OAuth tokens
+removed `machina` from Hermes and verified it is gone.
+  ✓ verify: absent from `mcp list` and config file /tmp/hermes-interop-verify/config.yaml
+
+$ HERMES_HOME=/tmp/hermes-interop-verify hermes mcp list
+
+  No MCP servers configured.
+
+  Add one with:
+    hermes mcp add <name> --url <endpoint>
+    hermes mcp add <name> --command <cmd> --args <args...>
+

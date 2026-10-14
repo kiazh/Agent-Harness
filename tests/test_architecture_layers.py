@@ -157,7 +157,7 @@ _CORE_IMPORT_CEILINGS = {
 # machina/research/benchmark.py's architecture section (round-2 review N6:
 # the hand-mirrored literal drifted once already). Moves only with the delta
 # table documented inside test_deferred_import_count_ratchet.
-DEFERRED_IMPORT_CAP = 682
+DEFERRED_IMPORT_CAP = 683
 
 
 def test_module_level_core_imports_only_shrink():
@@ -218,6 +218,11 @@ def test_deferred_import_count_ratchet():
     #         re-measuring the merged tree on 2026-10-14: census == 682.
     #   Census 677 -> 682, so cap 680 -> 682. Unreviewed growth beyond this
     #   still fails by design; itemize any further movement here.
+    #   Interop self-setup wave (2026-10-14): +1 machina/interop.py — the
+    #   module's only deferred import is ``_child_process`` inside the
+    #   helper, binding the stdlib-only leaf lazily so importing
+    #   ``machina.interop`` never pulls the agent runtime (same idiom as the
+    #   mcp_server shim). Census 682 -> 683, so cap 682 -> 683.
     # Procedure: this number may only move with a delta table like the above
     # in this comment; silent growth fails the suite by design.
     total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))

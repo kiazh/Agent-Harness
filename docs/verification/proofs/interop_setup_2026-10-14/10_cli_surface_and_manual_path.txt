@@ -1,0 +1,30 @@
+$ machina interop --help
+                                                                                                                                                      
+ Usage: python -m machina interop [OPTIONS] COMMAND [ARGS]...                                                                                         
+                                                                                                                                                      
+ Detect external agent harnesses (OpenCode, Codex, Hermes) and register or remove Machina's MCP server for them.                                      
+                                                                                                                                                      
+╭─ Options ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                                                                                        │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ status   Show which harnesses are installed, running, registered, and enabled.                                                                     │
+│ enable   Register Machina's MCP server for a harness (idempotent).                                                                                 │
+│ disable  Remove Machina's MCP server registration (manual where unsupported).                                                                      │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+$ machina --help (interop line)
+│ interop              Detect external agent harnesses (OpenCode, Codex, Hermes) and register or remove Machina's MCP server for them.               │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+$ machina interop enable nope (bad platform)
+Unknown platform 'nope'; choose one of: opencode, codex, hermes
+exit=2
+
+$ machina interop disable opencode (manual path)
+  edit /Users/shadow/machina/opencode.json, /Users/shadow/.config/opencode/opencode.json and remove the `machina` entry
+OpenCode's CLI has no MCP remove subcommand; delete the `machina` entry manually from: /Users/shadow/machina/opencode.json, 
+/Users/shadow/.config/opencode/opencode.json
+exit=1
