@@ -1,6 +1,7 @@
 """Routine tools must run without cards; risky effects must still pause."""
 
 import json
+import os
 import uuid
 
 import pytest
@@ -556,3 +557,258 @@ def test_recursive_copy_with_dereferenced_symlink_cycle_terminates(workspace):
         tool="terminal", **action_for_tool("terminal", {"command": "cp -RL looped/. loop-target"})
     )
     assert decide(request).verdict == "allowed"
+
+
+def _terminal_request(command: str):
+    return build_request(tool="terminal", **action_for_tool("terminal", {"command": command}))
+
+
+# ─── R4-060: recursive `git grep` forms require the same review as grep/rg ──
+# `git grep` searches every tracked file by default, and `--untracked` /
+# `--no-exclude-standard` additionally reach ignored files (`.env`); the
+# policy classified every `git grep` as a routine git read, so the match set
+# was unknown at approval time (same hazard as `grep -R`/`rg` walks).
+
+GIT_GREP_WALK_COMMANDS = [
+    "git grep --untracked --no-exclude-standard REVIEW_TOKEN",
+    "git grep --no-exclude-standard REVIEW_TOKEN",
+    "git grep REVIEW_TOKEN",
+    "git grep REVIEW_TOKEN .",
+    "git grep REVIEW_TOKEN src",
+    "git grep -e REVIEW_TOKEN",
+    "git grep --regexp=REVIEW_TOKEN",
+    "git grep --untracked REVIEW_TOKEN '*.env'",
+    "git grep -f patterns.txt",
+    # -O/--open-files-in-pager runs a pager command on matched files: review.
+    "git grep -Osh REVIEW_TOKEN README.md",
+    "git grep -nOsh REVIEW_TOKEN README.md",
+    "git grep --open-files-in-pager=sh REVIEW_TOKEN README.md",
+    # `uv run` is how the workflow reaches project tools; the traversal
+    # classifier must see through it or the walk escapes review.
+    "uv run git grep --untracked REVIEW_TOKEN",
+]
+
+
+@pytest.mark.parametrize("command", GIT_GREP_WALK_COMMANDS)
+def test_git_grep_walks_require_review(workspace, command):
+    (workspace / "src").mkdir()
+    (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+    (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+    decision = decide(_terminal_request(command))
+    assert decision.verdict == "pending", (command, decision.reason)
+    assert "opaque_execution_review" in decision.reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git grep REVIEW_TOKEN README.md",
+        "git grep -e REVIEW_TOKEN README.md",
+        "git grep --regexp=REVIEW_TOKEN README.md",
+        "git grep --untracked REVIEW_TOKEN README.md",
+        "git grep REVIEW_TOKEN -- README.md",
+    ],
+)
+def test_git_grep_regular_file_pathspecs_stay_routine(workspace, command):
+    (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+    assert decide(_terminal_request(command)).verdict == "allowed", command
+
+
+def test_plain_git_reads_stay_routine(workspace):
+    (workspace / "README.md").write_text("docs\n", encoding="utf-8")
+    for command in (
+        "git status --short",
+        "git log --oneline -1",
+        "git show --stat HEAD",
+        "git diff --stat",
+    ):
+        assert decide(_terminal_request(command)).verdict == "allowed", command
+
+
+# R4-060: `REV:path` operands name a file's content; a credential path after
+# the colon must gate exactly like a direct read, not as an ordinary git read.
+GIT_REVSPEC_CREDENTIAL_COMMANDS = [
+    "git show HEAD:credentials",
+    "git show HEAD:.netrc",
+    "git show HEAD:id_rsa",
+    "git show HEAD:credentials.bak",
+    "git show HEAD:.env-backup",
+]
+
+
+@pytest.mark.parametrize("command", GIT_REVSPEC_CREDENTIAL_COMMANDS)
+def test_git_revspec_credential_operands_require_credential_access(workspace, command):
+    decision = decide(_terminal_request(command))
+    assert decision.verdict == "pending", (command, decision.reason)
+    assert "credential_access" in decision.reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["git show HEAD:README.md", "git show HEAD:docs/notes.md"],
+)
+def test_git_revspec_benign_operands_stay_routine(workspace, command):
+    (workspace / "README.md").write_text("docs\n", encoding="utf-8")
+    (workspace / "docs").mkdir()
+    (workspace / "docs" / "notes.md").write_text("docs\n", encoding="utf-8")
+    assert decide(_terminal_request(command)).verdict == "allowed", command
+
+
+# R4-060: `.env~`/`.env-backup`/`credentials~`/`.netrc.bak`-style backup and
+# editor copies of credential files must gate like the files they copy.
+CREDENTIAL_BACKUP_PATHS = [
+    ".env~",
+    ".env-backup",
+    "credentials~",
+    "credentials.bak",
+    "credentials.1",
+    "deploy/production.env~",
+    ".netrc.bak",
+    ".netrc_backup",
+    "id_rsa.bak",
+]
+
+
+@pytest.mark.parametrize("path", CREDENTIAL_BACKUP_PATHS)
+def test_credential_backup_names_require_review(workspace, path):
+    decision = decide(build_request(operation="file.read", targets=[path]))
+    assert decision.verdict == "pending", (path, decision.reason)
+    assert "credential_access" in decision.reason
+
+
+def test_terminal_read_of_backup_credential_name_requires_review(workspace):
+    decision = decide(_terminal_request("cat credentials.bak"))
+    assert decision.verdict == "pending"
+    assert "credential_access" in decision.reason
+
+
+def test_env_example_still_allowed_after_backup_families(workspace):
+    for path in (".env.example", "docs/.env.example"):
+        assert decide(build_request(operation="file.read", targets=[path])).verdict == "allowed", (
+            path
+        )
+
+
+# ─── R4-061: bare -c/-C/-o calibration ─────────────────────────────────────
+# `-c`/`-C`/`-o` are format/output selectors for the read commands below but
+# redirect behavior for git (config), python (code) and find (boolean OR);
+# the blanket escape list over-rejected the benign spellings as review.
+
+CALIBRATED_BARE_FLAG_COMMANDS = [
+    "wc -c README.md",
+    "ls -C",
+    "ls -o",
+    "grep -C 2 REVIEW_TOKEN README.md",
+    "head -c 100 README.md",
+    "diff -c a.txt b.txt",
+]
+
+
+@pytest.mark.parametrize("command", CALIBRATED_BARE_FLAG_COMMANDS)
+def test_calibrated_bare_flags_stay_routine(workspace, command):
+    (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+    (workspace / "a.txt").write_text("a\n", encoding="utf-8")
+    (workspace / "b.txt").write_text("b\n", encoding="utf-8")
+    assert decide(_terminal_request(command)).verdict == "allowed", command
+
+
+async def test_calibrated_flag_passes_the_real_broker_without_a_card(workspace):
+    from machina.permissions.broker import permission_broker, set_approval_handler
+
+    async def unexpected_card(card):
+        pytest.fail("calibrated benign flag requested approval")
+
+    (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+    request = _terminal_request("grep -C 2 REVIEW_TOKEN README.md")
+    set_approval_handler(unexpected_card)
+    try:
+        assert await permission_broker.guard(request) is request
+    finally:
+        set_approval_handler(None)
+
+
+# Calibration must not relax the hostile spellings: bare git config
+# injection, python code evaluation, find's boolean OR, and the attached
+# -c/-C/-o forms (commands.py attached-value guard) all stay review.
+RETAINED_ESCAPE_COMMANDS = [
+    "git -c alias.status=whoami status",
+    "git -calias.status=whoami status",
+    "python -cprint",
+    "find README.md -name a -o -name b",
+    "grep -C2 REVIEW_TOKEN README.md",
+    "head -c100 README.md",
+]
+
+
+@pytest.mark.parametrize("command", RETAINED_ESCAPE_COMMANDS)
+def test_retained_escape_spellings_still_require_review(workspace, command):
+    (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+    assert decide(_terminal_request(command)).verdict == "pending", command
+
+
+# ─── R4-062: recursive-copy tree scan fails closed on unreadable dirs ──────
+# An unreadable subdirectory cannot be proven free of protected components;
+# the scan used to skip it (fail open) while the entry-cap truncation already
+# failed closed. Both must force review.
+
+
+def test_recursive_copy_of_unreadable_subdir_requires_review(workspace):
+    source = workspace / "archive-src"
+    locked = source / "locked"
+    locked.mkdir(parents=True)
+    (locked / "notes.txt").write_text("hidden\n", encoding="utf-8")
+    (workspace / "archive-dst").mkdir()
+    os.chmod(locked, 0o000)
+    try:
+        try:
+            list(locked.iterdir())
+        except OSError:
+            pass
+        else:  # only reached when the OS ignores directory modes (e.g. root)
+            pytest.skip("directory permissions are not enforced for this user")
+        decision = decide(_terminal_request("cp -R archive-src/. archive-dst"))
+        assert decision.verdict == "pending"
+        assert "security_settings" in decision.reason
+    finally:
+        os.chmod(locked, 0o700)
+
+
+def test_recursive_copy_of_readable_sources_stays_routine(workspace):
+    source = workspace / "visible-src"
+    nested = source / "nested"
+    nested.mkdir(parents=True)
+    (nested / "notes.txt").write_text("hello\n", encoding="utf-8")
+    (workspace / "visible-dst").mkdir()
+    assert decide(_terminal_request("cp -R visible-src/. visible-dst")).verdict == "allowed"
+
+
+@pytest.mark.parametrize("failure", ["iterdir", "entry-stat"])
+def test_recursive_copy_tree_scan_failures_fail_closed(workspace, monkeypatch, failure):
+    from pathlib import Path as _Path
+
+    source = workspace / "flaky-src"
+    (source / "nested").mkdir(parents=True)
+    (workspace / "flaky-dst").mkdir()
+    real_iterdir = _Path.iterdir
+    real_is_dir = _Path.is_dir
+
+    if failure == "iterdir":
+
+        def broken_iterdir(self):
+            if self.name == "nested":
+                raise PermissionError("injected unreadable directory")
+            return real_iterdir(self)
+
+        monkeypatch.setattr(_Path, "iterdir", broken_iterdir)
+    else:
+
+        def broken_is_dir(self):
+            if self.name == "nested":
+                raise OSError("injected stat failure")
+            return real_is_dir(self)
+
+        monkeypatch.setattr(_Path, "is_dir", broken_is_dir)
+
+    decision = decide(_terminal_request("cp -R flaky-src/. flaky-dst"))
+    assert decision.verdict == "pending"
+    assert "security_settings" in decision.reason

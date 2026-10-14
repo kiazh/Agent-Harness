@@ -84,6 +84,19 @@ _ESCAPE_ARGS = frozenset(
         "--work-tree",
     }
 )
+# R4-061: bare `-c`/`-C`/`-o` are format/output selectors for the read-only
+# commands below — `wc -c`, `ls -C`, `ls -o`, `grep -C 2`, `head -c N`,
+# `diff -c` — and must stay routine. For every other command, and for every
+# ATTACHED spelling (`-cVALUE`, `-CVALUE`, `-oVALUE`; guarded below), the
+# same letters redirect behavior (git's global -c/-C config/chdir, python -c
+# code evaluation, find's boolean -o) and stay review.
+_CALIBRATED_BARE_FLAGS = {
+    "ls": frozenset({"-C", "-o"}),
+    "wc": frozenset({"-c"}),
+    "grep": frozenset({"-C"}),
+    "head": frozenset({"-c"}),
+    "diff": frozenset({"-c"}),
+}
 
 
 def executable_name(value: str) -> str:
@@ -123,7 +136,8 @@ def routine_project_command(argv: list[str], cwd: str, root: Path) -> bool:
     # Common virtualenv bin paths are still opaque until explicitly approved.
     if "/" in argv[0] or "\\" in argv[0]:
         return False
-    if any(arg.split("=", 1)[0] in _ESCAPE_ARGS for arg in argv[1:]):
+    calibrated = _CALIBRATED_BARE_FLAGS.get(executable_name(argv[0]), frozenset())
+    if any(arg.split("=", 1)[0] in _ESCAPE_ARGS and arg not in calibrated for arg in argv[1:]):
         return False
     if any(
         arg.startswith(("-o", "-c", "-C")) and not arg.startswith("--") and len(arg) > 2

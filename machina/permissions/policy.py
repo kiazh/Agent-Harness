@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -115,9 +116,7 @@ def workspace_root() -> Path:
 #: statements (same seam idiom as the leaf-independence conversions).
 _CREDENTIAL_STORE_MODULES = (
     "machina.security.chatgpt_auth",
-    "machina.security.claude_auth",
     "machina.security.copilot_auth",
-    "machina.security.gemini_auth",
 )
 
 
@@ -179,7 +178,11 @@ def sensitive_path(value: str, root: Path | None = None) -> bool:
     searching (``search_files``): a descendant ``credentials`` /
     ``production.env`` must be gated exactly like a direct read, and the
     resolved credential-store files gate wherever they live (R3-1). Matches
-    credential path components, never incidental words/usernames.
+    credential path components, never incidental words/usernames. R4-060:
+    ``REV:path`` operands are split on the first colon (a drive-letter prefix
+    is not a revspec) and backup/editor spellings of a name are matched
+    through their decoration, so `git show HEAD:credentials` and `.env~`
+    gate like `cat credentials`.
     """
     root = root if root is not None else workspace_root()
     if _is_credential_store(value, root):
@@ -193,6 +196,13 @@ def sensitive_path(value: str, root: Path | None = None) -> bool:
         except ValueError:
             text = str(path)
     parts = [p.lower() for p in text.replace("\\", "/").split("/") if p]
+    # Git revspec operands name the file after the first colon
+    # (`HEAD:credentials`, `HEAD:deploy/.env`); include that half so a
+    # revspec can never hide a credential file. `C:` is a drive letter, not
+    # a revspec.
+    if ":" in text and not (len(text) > 1 and text[1] == ":"):
+        parts.extend(p.lower() for p in text.split(":", 1)[1].split("/") if p)
+    parts = [_backup_stripped(p) for p in parts]
     private_dirs = {".ssh", ".aws", ".gnupg", ".azure", ".kube"}
     private_files = {
         ".npmrc",
@@ -216,6 +226,27 @@ def sensitive_path(value: str, root: Path | None = None) -> bool:
     return any(
         parts[i : i + 2] in (["etc", "passwd"], ["etc", "shadow"]) for i in range(len(parts) - 1)
     )
+
+
+# R4-060: backup/editor/rotation decorations that do not change which
+# credential family a name belongs to (`.env~`, `.env-backup`,
+# `credentials.bak`, `.netrc.old`, `credentials.1`, `id_rsa_backup`). The
+# family matcher sees through them, so an editor or rsync copy of a secret
+# gates exactly like the original.
+_BACKUP_DECORATION_RE = re.compile(
+    r"(?:~+\d*|[._-](?:bak|backup|old|orig|save|swp|swo|tmp|temp)\d*|[._-]\d+)+$",
+    re.IGNORECASE,
+)
+
+
+def _backup_stripped(part: str) -> str:
+    """Strip trailing backup decorations from one path component."""
+    stripped = part
+    while True:
+        shortened = _BACKUP_DECORATION_RE.sub("", stripped)
+        if shortened == stripped:
+            return stripped
+        stripped = shortened
 
 
 # ripgrep options that consume the NEXT argv value (rg accepts both
@@ -320,16 +351,94 @@ def _rg_directory_walk(args: list[str], cwd: str) -> bool:
     return False
 
 
+# `git grep` options (R4-060) whose values must be consumed before operand
+# classification, mirroring the rg tables above; audited against `git grep -h`.
+_GIT_GREP_VALUE_LONG_OPTIONS = frozenset(
+    {"--context", "--file", "--max-count", "--regexp", "--threads"}
+)
+_GIT_GREP_VALUE_SHORT_OPTIONS = frozenset("ABCefm")
+_GIT_GREP_PATTERN_OPTIONS = frozenset({"-e", "--regexp", "-f", "--file"})
+
+
+def _git_grep_directory_walk(args: list[str], cwd: str) -> bool:
+    """True when ``git grep`` reads repository descendants, not named files.
+
+    ``git grep`` searches every tracked file when its pathspecs do not
+    restrict it, and ``--untracked``/``--no-exclude-standard`` additionally
+    reach untracked and ignored files (``.env``). Pathspecs are git patterns,
+    not filesystem paths: glob/magic/exclude forms match unknown sets and
+    review. Only invocations whose operands are all plain regular files stay
+    routine (same doctrine as ``_rg_directory_walk``).
+    """
+    operands: list[str] = []
+    pathspecs: list[str] = []
+    pattern_from_flag = False
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if arg == "--":
+            pathspecs.extend(args[index:])
+            break
+        if arg.startswith("--"):
+            option = arg.partition("=")[0]
+            if option == "--open-files-in-pager":
+                # Opens matches in a pager command (code execution).
+                return True
+            if option in _GIT_GREP_PATTERN_OPTIONS:
+                pattern_from_flag = True
+                if "=" not in arg:
+                    index += 1  # the pattern/file value
+            elif "=" not in arg and option in _GIT_GREP_VALUE_LONG_OPTIONS:
+                index += 1  # the option's value
+            continue
+        if arg.startswith("-") and len(arg) > 1:
+            cluster = arg[1:]
+            if "O" in cluster:
+                # -O opens matches in a pager command (code execution).
+                return True
+            for position, char in enumerate(cluster):
+                if char in {"e", "f"}:
+                    pattern_from_flag = True
+                if char in _GIT_GREP_VALUE_SHORT_OPTIONS:
+                    if position == len(cluster) - 1:
+                        index += 1  # value is the next argv
+                    break
+            continue
+        operands.append(arg)
+    paths = (operands if pattern_from_flag else operands[1:]) + pathspecs
+    if not paths:
+        # No pathspec operand: git grep walks the whole tracked tree.
+        return True
+    for value in paths:
+        if not value or value.startswith((":", "!", "(")) or any(ch in value for ch in "*?["):
+            # Magic/glob/exclude pathspecs match an unknown set of files.
+            return True
+        path = Path(value.replace("\\", "/")).expanduser()
+        base = path if path.is_absolute() else Path(cwd or ".") / path
+        try:
+            if base.is_dir():
+                return True
+        except OSError:
+            return True
+    return False
+
+
 def _recursive_traversal(argv: list[str], cwd: str) -> bool:
     """True when an execution walks directory descendants.
 
     Recursive reads have unknown match sets: the pattern argument never names
     the files it reaches, so an otherwise-routine command can surface a
     descendant credential file (e.g. ``grep -R TOKEN .`` matching ``.env``,
-    or ripgrep's default directory walk reaching ``credentials``). These
-    require explicit review; reads whose operand set is all regular files
-    stay routine.
+    or ripgrep's default directory walk reaching ``credentials``, or
+    ``git grep --untracked`` reaching ignored ``.env`` files). These require
+    explicit review; reads whose operand set is all regular files stay
+    routine.
     """
+    # `uv run <tool>` must classify as the tool it launches; otherwise the
+    # recursive forms below escape review by one level of indirection.
+    while len(argv) > 2 and executable_name(argv[0]) == "uv" and argv[1] == "run":
+        argv = argv[2:]
     if not argv:
         return False
     name = executable_name(argv[0])
@@ -388,6 +497,14 @@ def _recursive_traversal(argv: list[str], cwd: str) -> bool:
             except OSError:
                 return True
         return False
+    if name == "git":
+        # R4-060: `git grep` reads tracked file contents recursively, and
+        # `--untracked`/`--no-exclude-standard` reach ignored files (.env);
+        # it gates exactly like the grep/rg walks. Other git reads are
+        # name/diff output and keep their existing classification.
+        if args and args[0] == "grep":
+            return _git_grep_directory_walk(args[1:], cwd)
+        return False
     return False
 
 
@@ -407,7 +524,9 @@ def _tree_contains_component(
     dereferences them (``cp -L``); a copied link alone writes no descendants.
     A truncated scan (inspection cap) cannot prove the absence of protected
     components, so it reports True (fail closed) and forces review instead of
-    allowing the copy. Symlink cycles are guarded by a visited-target set.
+    allowing the copy. R4-062: an unreadable directory (listing or entry stat
+    failure) cannot be proven clear either; it reports True as well. Symlink
+    cycles are guarded by a visited-target set.
     """
     if not root.is_dir():
         return False
@@ -426,7 +545,8 @@ def _tree_contains_component(
         try:
             entries = list(current.iterdir())
         except OSError:
-            continue
+            # Cannot prove absence without listing: fail closed.
+            return True
         for entry in entries:
             seen += 1
             if seen > max_entries:
@@ -438,7 +558,9 @@ def _tree_contains_component(
                 if entry.is_dir() and (follow_symlinks or not entry.is_symlink()):
                     stack.append(entry)
             except OSError:
-                continue
+                # A failed stat hides whether this entry is a directory to
+                # descend into: fail closed.
+                return True
     return False
 
 

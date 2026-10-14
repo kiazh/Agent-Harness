@@ -32,9 +32,18 @@ logger = logging.getLogger(__name__)
 DISPLAY_VALUE_MAX = 300
 
 ApprovalHandler = Callable[[dict], Awaitable[str]]
+# Transport-provided resolution sink (R4-065): called ONLY for terminal
+# decisions the broker itself records (the deadline expiry), never for human
+# decisions — those are recorded and announced by the transport that made
+# them, so the broker must not duplicate them. Synchronous, best-effort:
+# a transport failure never alters the authorization outcome.
+ApprovalResolutionNotifier = Callable[[dict], None]
 # Transport-provided human approver (TUI card / HTTP resolve). Never set to an
 # agent tool — broker rejects agent principals at resolve time.
 _approval_handler: ContextVar[ApprovalHandler | None] = ContextVar("approval_handler", default=None)
+_approval_resolution: ContextVar[ApprovalResolutionNotifier | None] = ContextVar(
+    "approval_resolution_notifier", default=None
+)
 _principal: ContextVar[str] = ContextVar("approval_principal", default="tui")
 _turn: ContextVar[str] = ContextVar("approval_turn", default="")
 resume_approval_var: ContextVar[str | None] = ContextVar("resume_approval", default=None)
@@ -68,11 +77,16 @@ def get_current_turn() -> str:
 
 
 def set_approval_handler(
-    handler: ApprovalHandler | None, *, principal: str = "tui", turn_id: str = ""
+    handler: ApprovalHandler | None,
+    *,
+    principal: str = "tui",
+    turn_id: str = "",
+    on_resolved: ApprovalResolutionNotifier | None = None,
 ) -> None:
     _approval_handler.set(handler)
     _principal.set(principal)
     _turn.set(turn_id)
+    _approval_resolution.set(on_resolved)
 
 
 class NeedsApproval(Exception):
@@ -252,8 +266,7 @@ class PermissionBroker:
                 handler(_approval_view(req, approval)), timeout=timeout
             )
         except TimeoutError:
-            await _store.resolve_decision(req.request_id, "expired", principal)
-            raise NeedsApproval({**approval, "status": "expired"}) from None
+            return await self._approval_deadline(req, approval, principal)
         # The transport recorded the decision; read it back (never re-resolve:
         # the record is already consumed and a second resolve must fail).
         rec = await _store.get_approval(req.request_id)
@@ -278,6 +291,44 @@ class PermissionBroker:
         _stamp_execution(req)
         audit_permission_verdict("allowed", req, reason="approval granted")
         return req
+
+    async def _approval_deadline(
+        self, req: ActionRequest, approval: dict, principal: str
+    ) -> ActionRequest:
+        """Approval deadline passed: expire, or honour a decision that landed first.
+
+        R4-066: the conditional expire can lose to a human decision recorded
+        microseconds before the deadline. The DURABLE record is the truth, so
+        an approved-but-unclaimed decision is claimed and executed exactly
+        once here — never reported as "expired" against the record, and never
+        left as a stale approved row a later retry could replay.
+        R4-065: a genuine expiry is surfaced on the transport's decision
+        channel (when one registered a sink) so the UI retires the card
+        without a decision.
+        """
+        resolved = await _store.resolve_decision(req.request_id, "expired", principal)
+        if resolved is not None:
+            _notify_resolution({**approval, "status": "expired"})
+            raise NeedsApproval({**approval, "status": "expired"}) from None
+        current = await _store.get_approval(req.request_id) or {}
+        state = str(current.get("status") or "")
+        if state == "approved" and not current.get("consumed"):
+            if current.get("digest") == req.digest and await _store.claim_execution(
+                req.request_id, digest=req.digest, session_id=req.session_id
+            ):
+                req.approval_id = req.request_id
+                _stamp_execution(req)
+                audit_permission_verdict("allowed", req, reason="approval granted at deadline")
+                return req
+            # Approved but not claimable by this execution (changed action or
+            # an existing claim): report the live durable state, fail closed.
+            raise NeedsApproval(current) from None
+        if state == "pending":
+            # The conditional expire could not commit and the row is still
+            # pending: report the truth, never a false expiry.
+            raise NeedsApproval(current) from None
+        audit_permission_verdict("denied", req, reason=f"approval already {state or 'expired'}")
+        raise ApprovalDenied(f"approval already {state or 'expired'}") from None
 
     async def complete(self, request_id: str, outcome: str) -> bool:
         """Mark a claimed execution completed/failed/cancelled (best effort)."""
@@ -316,6 +367,24 @@ def _stamp_execution(req: ActionRequest) -> None:
     )
 
 
+def _notify_resolution(card: dict) -> None:
+    """Surface a broker-recorded resolution on the transport's frame channel.
+
+    The transport owns the channel (gateway write / SSE); the broker only
+    reports the terminal state it recorded itself (deadline expiry). No sink
+    is registered outside interactive transports, and a failing sink never
+    alters the authorization outcome.
+    """
+    notifier = _approval_resolution.get()
+    if notifier is None:
+        return
+    try:
+        notifier(card)
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("broker.approval_resolution", _boundary_error)
+
+
 def _redacted(value: object) -> str:
     """Best-effort secret redaction for DISPLAY and audit text.
 
@@ -341,6 +410,20 @@ def _truncate_display(value: str, limit: int = DISPLAY_VALUE_MAX) -> str:
     return f"{value[:limit]}…(+{len(value) - limit} chars)"
 
 
+# R4-067: audit rows must name the acted-on target without becoming a secret
+# exfiltration channel. Bounded count, bounded length, redacted per element.
+AUDIT_PREVIEW_ITEMS = 3
+AUDIT_PREVIEW_MAX = 200
+
+
+def _audit_previews(values: object) -> list[str]:
+    """Bounded, redacted previews of attacker-influenced action material."""
+    out = []
+    for value in list(values or [])[:AUDIT_PREVIEW_ITEMS]:
+        out.append(_truncate_display(_redacted(value), AUDIT_PREVIEW_MAX))
+    return out
+
+
 def audit_permission_verdict(verdict: str, req: ActionRequest, *, reason: str = "") -> None:
     """Emit a sanitized permission-verdict audit event (FM3-F8).
 
@@ -348,6 +431,10 @@ def audit_permission_verdict(verdict: str, req: ActionRequest, *, reason: str = 
     agent loop can report verdicts observed outside :meth:`guard` without
     importing core internals. Never raises: auditing must not alter the
     authorization outcome.
+
+    R4-067: routine allowed/denied rows carry bounded, redacted target/argv
+    previews so an audit of an action without an approval card still names
+    what was acted on; the execution digest (prefix) stays the exact binding.
     """
     try:
         from machina.core.provider import audit_log
@@ -363,6 +450,8 @@ def audit_permission_verdict(verdict: str, req: ActionRequest, *, reason: str = 
             mode=req.mode,
             # Digest prefix only: the full digest is security material.
             digest_prefix=(req.digest or "")[:16],
+            targets=_audit_previews(req.targets),
+            argv=_audit_previews(req.argv),
             reason=_redacted(reason),
         )
     except Exception:

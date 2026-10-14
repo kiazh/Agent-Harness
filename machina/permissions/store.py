@@ -520,6 +520,13 @@ async def create_approval(req: Any, principal: str) -> dict:
                 )
         except Exception:
             logger.exception("durable approval create failed")
+            # R4-068: the in-memory record was only a mirror of the intended
+            # durable row. A failed INSERT must not leave a pending record
+            # behind — nothing announces it, nothing can resolve it durably,
+            # and the caller is about to fail closed. Drop exactly this record.
+            async with _mem.lock:
+                if _mem.approvals.get(req.request_id) is rec:
+                    _mem.approvals.pop(req.request_id, None)
             raise
         async with _mem.lock:
             rec["durable"] = True
@@ -689,17 +696,33 @@ async def claim_execution(request_id: str, *, digest: str, session_id: str) -> b
 
 
 async def complete_execution(request_id: str, outcome: str) -> bool:
-    """claimed → completed/failed/cancelled. Conditional; False if not claimed."""
+    """claimed → completed/failed/cancelled. Conditional; False if not claimed.
+
+    F6/R4-068: durable-first — the memory mirror advances only AFTER the
+    durable conditional UPDATE confirms. With the DB disconnected nothing is
+    completed locally (a durable-origin mirror must not record a terminal
+    state the durable authority never saw). A durable conditional failure
+    fails closed in memory (consumed) so nothing can replay the row through
+    the memory path after an outage.
+    """
     global _last_durable
     if outcome not in TERMINAL:
         raise ValueError(f"invalid outcome {outcome!r}")
-    async with _mem.lock:
-        rec = _mem.approvals.get(request_id)
-        mem_ok = rec is not None and rec.get("status") == "claimed"
-        if mem_ok:
-            rec["status"] = outcome
     db = await _db()
     if db is None:
+        async with _mem.lock:
+            rec = _mem.approvals.get(request_id)
+            mem_ok = (
+                rec is not None
+                # Durable-origin approval: the DB is the only authority, and
+                # with it disconnected this mirror may already be stale.
+                and not rec.get("durable")
+                and rec.get("status") == "claimed"
+            )
+            if mem_ok:
+                rec["status"] = outcome
+        if mem_ok:
+            _last_durable = False
         return bool(mem_ok)
     try:
         async with db.acquire() as conn:
@@ -715,6 +738,16 @@ async def complete_execution(request_id: str, outcome: str) -> bool:
         logger.exception("durable execution completion failed")
         raise
     _last_durable = True
+    async with _mem.lock:
+        rec = _mem.approvals.get(request_id)
+        if rec is not None:
+            if ok:
+                # Only now, after the durable conditional UPDATE confirmed.
+                rec["status"] = outcome
+            else:
+                # Conditional failure = the durable side did not confirm this
+                # completion (not claimed / already terminal). Fail closed.
+                rec["consumed"] = True
     return ok
 
 
