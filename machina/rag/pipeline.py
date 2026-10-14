@@ -8,7 +8,7 @@ import logging
 import math
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import msgpack
@@ -231,6 +231,15 @@ class RAGPipeline:
             source=doc.source,
             doc_type=doc.doc_type,
         )
+
+        # Redact the COMPLETE document before splitting (R03): a multiline
+        # secret (e.g. a PEM block) whose delimiters land in different
+        # chunks is invisible to per-chunk redaction, so its body would
+        # reach the embedder and storage. Whole-document redaction sees
+        # both delimiters; the per-chunk pass below stays as additional
+        # protection. The in-memory copy is redacted, the caller's Document
+        # is left untouched.
+        doc = replace(doc, content=_redact_or_failed(doc.content))
 
         # Chunk
         chunks = self._chunk_document(doc, metadata)

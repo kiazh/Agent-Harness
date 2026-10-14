@@ -204,9 +204,15 @@ def test_shared_pipeline_rebuilds_when_cohere_key_identity_changes(monkeypatch):
 
     class FakeCohereReranker:
         DEFAULT_MODEL = "rerank-v3.5"
+        # Real backend marker: without it the identity falls back to the
+        # configured side and the digest-length mismatch this test guards
+        # (R17) stays invisible.
+        backend = "cohere"
 
         def __init__(self, *args, **kwargs):
             self.api_key = keys["value"]
+            self._model = "rerank-v3.5"
+            self._timeout = float(real_get("reranker_timeout") or 10.0)
 
     monkeypatch.setattr(config, "get", fake_get)
     monkeypatch.setattr("machina.rag.reranker.CohereReranker", FakeCohereReranker)

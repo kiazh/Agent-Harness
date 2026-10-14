@@ -410,6 +410,62 @@ def test_012_metadata_redacted_and_reserved_fields_win():
     assert meta["embedding_model"] == "evil"  # pipeline overwrites reserved after
 
 
+def test_r03_whole_document_redaction_precedes_chunking():
+    """R03: index_document must redact the complete document before splitting.
+
+    A multiline PEM block larger than the chunk size has its BEGIN/END
+    delimiters in different chunks, so per-chunk redaction misses the body.
+    Redacting the whole document first removes it from every embedding
+    input and every serialized storage payload; the per-chunk pass stays
+    as extra protection.
+    """
+    import importlib
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    import msgpack
+
+    from machina.rag.loaders import Document
+    from machina.rag.pipeline import RAGConfig, RAGPipeline
+
+    pipeline_module = importlib.import_module("machina.rag.pipeline")
+    line = "MIIReviewSyntheticPrivateKeyBodyABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg"
+    text = (
+        "Notes\n\n-----BEGIN PRIVATE KEY-----\n"
+        + "\n".join([line] * 140)
+        + "\n-----END PRIVATE KEY-----\n"
+    )
+    received: list[str] = []
+    stored: list[str] = []
+
+    class Embeddings:
+        model_name = "spy"
+
+        async def embed_batch(self, texts):
+            received.extend(texts)
+            return [None] * len(texts)
+
+    async def fetch(query, *args):
+        stored.extend(msgpack.unpackb(raw, raw=False)["text"] for raw in args[3])
+        return []
+
+    async def _scenario():
+        pipeline = RAGPipeline(embedder=Embeddings(), config=RAGConfig(chunk_size=512))
+        with (
+            patch.object(pipeline_module, "db", SimpleNamespace(fetch=fetch)),
+            patch.object(pipeline_module, "audit_log", lambda *a, **k: None),
+        ):
+            return await pipeline.index_document(Document(text, "review.pem.txt"), uuid.uuid4())
+
+    chunks = asyncio.run(_scenario())
+    assert chunks == []
+    # The whole-document pass still produces redacted chunks (not an empty
+    # index), and no embedding input or stored payload carries the body.
+    assert received and all(line not in chunk for chunk in received)
+    assert stored and all(line not in chunk for chunk in stored)
+    assert "[REDACTED_PRIVATE_KEY]" in received[0]
+
+
 # ─── AH-013/016/017: claims ────────────────────────────────────────────────
 
 

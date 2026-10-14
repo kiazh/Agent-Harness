@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import uuid
 from typing import Any
@@ -19,23 +18,19 @@ logger = logging.getLogger(__name__)
 # Global RAG pipeline instance (lazy-initialized)
 _rag_pipeline: RAGPipeline | None = None
 _rag_pipeline_lock = asyncio.Lock()
-# IDENTITY of the shared instance: (reranker selection identity, (embedding
-# backend, model, base_url)). Rotation of any component — a different
-# reranker backend/model/endpoint, a rotated Cohere key, or an embedding
-# backend/model/endpoint change — must rebuild the pipeline; comparing
-# presence alone kept the old client (and its old key) serving all later
-# requests (AH-AUDIT-036).
-_rag_pipeline_identity: tuple[tuple[str, str, str, str], tuple[str, str, str]] | None = None
+# IDENTITY of the shared instance: (reranker selection identity,
+# (embedding backend, model, base_url), (keyword RRF weight, dense RRF
+# weight)). Rotation of any component — a different reranker
+# backend/model/endpoint/timeout, a rotated Cohere key, an embedding
+# backend/model/endpoint change, or an RRF weight change — must rebuild the
+# pipeline; comparing presence alone kept the old client (and its old key)
+# serving all later requests (AH-AUDIT-036, R17, R19).
+_rag_pipeline_identity: (
+    tuple[tuple[str, str, str, str, float], tuple[str, str, str], tuple[float, float]] | None
+) = None
 
 
-def _cohere_key_digest(key: str | None) -> str | None:
-    """Opaque credential identity; None when no key is configured."""
-    if not key:
-        return None
-    return hashlib.sha256(str(key).encode("utf-8")).hexdigest()
-
-
-def _current_reranker_identity() -> tuple[str, str, str, str]:
+def _current_reranker_identity() -> tuple[str, str, str, str, float]:
     """Resolved reranker selection identity (fresh read; no model loads)."""
     try:
         from machina.rag.reranker import (
@@ -45,37 +40,25 @@ def _current_reranker_identity() -> tuple[str, str, str, str]:
 
         return reranker_selection_identity(resolve_reranker_selection())
     except Exception:
-        return ("none", "", "", "")
+        return ("none", "", "", "", 0.0)
 
 
 def _built_reranker_identity(
     pipeline: RAGPipeline | None,
-) -> tuple[str, str, str, str] | None:
+) -> tuple[str, str, str, str, float] | None:
     """Identity of the reranker the pipeline actually BOUND to.
 
-    None means passthrough (or a foreign implementation): the configured
-    identity stays recorded so a failing build is not retried on every
-    request.
+    Shares the configured-identity calculation so both sides compare
+    directly (R17); None means passthrough (or a foreign implementation):
+    the configured identity stays recorded so a failing build is not
+    retried on every request.
     """
-    reranker = getattr(pipeline, "_reranker", None)
-    backend = getattr(reranker, "backend", "")
-    if backend == "local-onnx":
-        return ("local", getattr(reranker, "_model_id", "") or "", "", "")
-    if backend == "local-http":
-        return (
-            "http",
-            getattr(reranker, "_model", "") or "",
-            getattr(reranker, "_url", "") or "",
-            "",
-        )
-    if backend == "cohere":
-        return (
-            "cohere",
-            getattr(reranker, "_model", "") or "",
-            "",
-            _cohere_key_digest(getattr(reranker, "api_key", None)) or "",
-        )
-    return None
+    try:
+        from machina.rag.reranker import bound_reranker_identity
+
+        return bound_reranker_identity(getattr(pipeline, "_reranker", None))
+    except Exception:
+        return None
 
 
 def _current_embedding_identity() -> tuple[str, str, str]:
@@ -92,9 +75,25 @@ def _current_embedding_identity() -> tuple[str, str, str]:
         return ("auto", "", "")
 
 
-def _current_pipeline_identity() -> tuple[tuple[str, str, str, str], tuple[str, str, str]]:
+def _current_weight_identity() -> tuple[float, float]:
+    """Configured RRF fusion weights (R19: read only at construction)."""
+    try:
+        from machina.core.config import config as _cfg
+
+        return (float(_cfg.get("rrf_keyword_weight")), float(_cfg.get("rrf_dense_weight")))
+    except Exception:
+        return (1.0, 1.0)
+
+
+def _current_pipeline_identity() -> tuple[
+    tuple[str, str, str, str, float], tuple[str, str, str], tuple[float, float]
+]:
     """Identity of everything the shared pipeline is configured from (fresh read)."""
-    return (_current_reranker_identity(), _current_embedding_identity())
+    return (
+        _current_reranker_identity(),
+        _current_embedding_identity(),
+        _current_weight_identity(),
+    )
 
 
 def _build_shared_pipeline() -> RAGPipeline:
@@ -124,8 +123,9 @@ async def get_rag_pipeline() -> RAGPipeline:
     """Get or create the global RAG pipeline instance.
 
     Rebuilds when the pipeline IDENTITY changes: the reranker selection it
-    was built with (backend/model/endpoint or a rotated Cohere key) or the
-    configured embedding backend/model/endpoint. Reuses when unchanged.
+    was built with (backend/model/endpoint/timeout or a rotated Cohere key),
+    the configured embedding backend/model/endpoint, or the RRF fusion
+    weights. Reuses when unchanged.
     """
     global _rag_pipeline, _rag_pipeline_identity
     current = _current_pipeline_identity()
@@ -138,13 +138,14 @@ async def get_rag_pipeline() -> RAGPipeline:
                 # build fell back to passthrough without binding a backend,
                 # keep the configured identity so a failing runtime is not
                 # retried on every request; a real config/key change changes
-                # `current` and still forces the rebuild. Embedding identity
-                # stays config-derived: build_embedder degrades to
+                # `current` and still forces the rebuild. Embedding and weight
+                # identity stay config-derived: build_embedder degrades to
                 # keyword-only without changing it.
                 built = _built_reranker_identity(_rag_pipeline)
                 _rag_pipeline_identity = (
                     built if built is not None else current[0],
                     current[1],
+                    current[2],
                 )
     return _rag_pipeline
 

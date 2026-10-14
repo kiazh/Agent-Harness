@@ -475,6 +475,7 @@ class RerankerSettings:
     url: str = ""
     backend: str = "auto"  # configured reranker_backend value
     reason: str = ""  # why unavailable when kind == "none"
+    timeout: float = 10.0  # configured reranker_timeout (R20)
 
 
 def reranker_available() -> bool:
@@ -493,6 +494,20 @@ def _config_value(key: str, default: str = "") -> str:
         return default if value is None else str(value)
     except Exception:
         return default
+
+
+def _configured_timeout() -> float:
+    """Configured ``reranker_timeout`` in seconds (R20), clamped to defaults.
+
+    Applied to both API-backed rerankers (HTTP and Cohere) so one documented
+    knob controls request timeouts; the class defaults stay as the fallback
+    when the value is unreadable or non-positive.
+    """
+    try:
+        value = float(_config_value("reranker_timeout", str(HttpReranker.DEFAULT_TIMEOUT)))
+    except (TypeError, ValueError):
+        return HttpReranker.DEFAULT_TIMEOUT
+    return value if value > 0 else HttpReranker.DEFAULT_TIMEOUT
 
 
 def resolve_reranker_selection() -> RerankerSettings:
@@ -514,6 +529,7 @@ def resolve_reranker_selection() -> RerankerSettings:
     model = _config_value("reranker_local_model").strip()
     url = _config_value("reranker_http_url").strip()
     http_model = _config_value("reranker_http_model").strip()
+    timeout = _configured_timeout()
     if backend not in ("auto", "cohere", "local", "http", "none"):
         return RerankerSettings(
             "none", backend=backend, reason=f"unknown reranker_backend {backend!r}"
@@ -529,7 +545,12 @@ def resolve_reranker_selection() -> RerankerSettings:
                 backend=backend,
                 reason="reranker_backend=cohere but COHERE_API_KEY is not set",
             )
-        return RerankerSettings("cohere", model=CohereReranker.DEFAULT_MODEL, backend=backend)
+        return RerankerSettings(
+            "cohere",
+            model=CohereReranker.DEFAULT_MODEL,
+            backend=backend,
+            timeout=timeout,
+        )
     if backend == "local":
         if not reranker_available():
             return RerankerSettings(
@@ -539,7 +560,10 @@ def resolve_reranker_selection() -> RerankerSettings:
                 reason="reranker_backend=local but fastembed is not installed",
             )
         return RerankerSettings(
-            "local", model=model or LocalOnnxReranker.DEFAULT_MODEL, backend=backend
+            "local",
+            model=model or LocalOnnxReranker.DEFAULT_MODEL,
+            backend=backend,
+            timeout=timeout,
         )
     if backend == "http":
         if not url:
@@ -548,14 +572,22 @@ def resolve_reranker_selection() -> RerankerSettings:
                 backend=backend,
                 reason="reranker_backend=http but reranker_http_url is empty",
             )
-        return RerankerSettings("http", model=http_model, url=url, backend=backend)
+        return RerankerSettings("http", model=http_model, url=url, backend=backend, timeout=timeout)
     # auto: local-first (zero-API design rule), then the Cohere key.
     if reranker_available():
         return RerankerSettings(
-            "local", model=model or LocalOnnxReranker.DEFAULT_MODEL, backend=backend
+            "local",
+            model=model or LocalOnnxReranker.DEFAULT_MODEL,
+            backend=backend,
+            timeout=timeout,
         )
     if _config_value("cohere_api_key"):
-        return RerankerSettings("cohere", model=CohereReranker.DEFAULT_MODEL, backend=backend)
+        return RerankerSettings(
+            "cohere",
+            model=CohereReranker.DEFAULT_MODEL,
+            backend=backend,
+            timeout=timeout,
+        )
     return RerankerSettings(
         "none",
         backend=backend,
@@ -584,22 +616,68 @@ def build_reranker(settings: RerankerSettings | None = None) -> Reranker:
         if resolved.kind == "local":
             return LocalOnnxReranker(model=resolved.model)
         if resolved.kind == "http":
-            return HttpReranker(url=resolved.url, model=resolved.model)
-        return CohereReranker()
+            return HttpReranker(url=resolved.url, model=resolved.model, timeout=resolved.timeout)
+        return CohereReranker(timeout=resolved.timeout)
     except Exception as e:
         logger.warning("reranker backend %r unavailable: %s", resolved.kind, e, exc_info=True)
         return IdentityReranker(reason=f"{resolved.kind} unavailable: {e}")
 
 
-def reranker_selection_identity(settings: RerankerSettings) -> tuple[str, str, str, str]:
+def _key_digest(credential: str | None) -> str:
+    """Opaque full-length credential identity (rotation changes the digest)."""
+    if not credential:
+        return ""
+    return hashlib.sha256(str(credential).encode("utf-8")).hexdigest()
+
+
+def reranker_selection_identity(
+    settings: RerankerSettings,
+) -> tuple[str, str, str, str, float]:
     """Identity of the resolved backend; key digest catches credential rotation.
 
     The URL is normalized (trailing slash stripped) so identity comparison
-    stays stable against the instance's own normalization.
+    stays stable against the instance's own normalization. The configured
+    timeout participates for backends that apply it (cohere/http); the
+    fastembed backend ignores ``reranker_timeout`` and reports 0 so a
+    timeout change does not rebuild it.
+
+    R17: both this configured identity and :func:`bound_reranker_identity`
+    must use this one calculation — differing digest lengths previously made
+    consecutive ``get_rag_pipeline()`` calls rebuild forever.
     """
     key_digest = ""
     if settings.kind == "cohere":
         credential = _config_value("cohere_api_key")
-        if credential:
-            key_digest = hashlib.sha256(credential.encode("utf-8")).hexdigest()[:16]
-    return (settings.kind, settings.model, settings.url.rstrip("/"), key_digest)
+        key_digest = _key_digest(credential)
+    timeout = settings.timeout if settings.kind in ("cohere", "http") else 0.0
+    return (settings.kind, settings.model, settings.url.rstrip("/"), key_digest, timeout)
+
+
+def bound_reranker_identity(reranker: Reranker) -> tuple[str, str, str, str, float] | None:
+    """Identity of the instantiated reranker, in the configured-identity shape.
+
+    ``None`` for passthrough/foreign implementations: callers keep the
+    configured identity so a failing build is not retried on every request.
+    Uses the same :func:`_key_digest` calculation as
+    :func:`reranker_selection_identity` (R17).
+    """
+    backend = getattr(reranker, "backend", "")
+    if backend == "local-onnx":
+        return ("local", getattr(reranker, "_model_id", "") or "", "", "", 0.0)
+    if backend == "local-http":
+        return (
+            "http",
+            getattr(reranker, "_model", "") or "",
+            getattr(reranker, "_url", "") or "",
+            "",
+            float(getattr(reranker, "_timeout", 0.0) or 0.0),
+        )
+    if backend == "cohere":
+        return (
+            "cohere",
+            getattr(reranker, "_model", "") or "",
+            "",
+            _key_digest(getattr(reranker, "api_key", None)),
+            float(getattr(reranker, "_timeout", 0.0) or 0.0),
+        )
+    return None

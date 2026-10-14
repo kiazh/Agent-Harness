@@ -24,6 +24,7 @@ from machina.rag.reranker import (
     HttpReranker,
     IdentityReranker,
     LocalOnnxReranker,
+    bound_reranker_identity,
     build_reranker,
     reranker_selection_identity,
     resolve_reranker_selection,
@@ -145,15 +146,22 @@ def test_reranker_selection_identity_is_stable_and_rotates_keys(monkeypatch):
         available=True,
         reranker_backend="cohere",
         cohere_api_key="key-one",
+        reranker_timeout="30",
     )
     first = reranker_selection_identity(resolve_reranker_selection())
     assert first[0] == "cohere" and first[3]
+    # Full-length digest: the bound instance uses the very same calculation
+    # (R17 — a 16-char configured digest vs 64-char bound rebuilt forever).
+    assert len(first[3]) == 64
+    # Configured timeout participates for API-backed rerankers (R20).
+    assert first[4] == 30.0
 
     _configure(
         monkeypatch,
         available=True,
         reranker_backend="cohere",
         cohere_api_key="key-two",
+        reranker_timeout="30",
     )
     second = reranker_selection_identity(resolve_reranker_selection())
     assert second != first
@@ -163,9 +171,21 @@ def test_reranker_selection_identity_is_stable_and_rotates_keys(monkeypatch):
         available=True,
         reranker_backend="http",
         reranker_http_url="http://127.0.0.1:8080/",
+        reranker_timeout="77",
     )
     identity = reranker_selection_identity(resolve_reranker_selection())
-    assert identity == ("http", "", "http://127.0.0.1:8080", "")
+    assert identity == ("http", "", "http://127.0.0.1:8080", "", 77.0)
+
+    # The fastembed backend has no request timeout: a timeout change must
+    # not rebuild it (identity reports 0.0 for local).
+    _configure(
+        monkeypatch,
+        available=True,
+        reranker_backend="local",
+        reranker_timeout="77",
+    )
+    local_identity = reranker_selection_identity(resolve_reranker_selection())
+    assert local_identity[4] == 0.0
 
 
 # ─── LocalOnnxReranker with a stubbed fastembed runtime ─────────────────────
@@ -471,6 +491,149 @@ async def test_shared_pipeline_rebuilds_on_reranker_selection_change(monkeypatch
     assert isinstance(third._reranker, IdentityReranker)
     # A passthrough build is not retried on every request.
     assert await rag_tools.get_rag_pipeline() is third
+
+
+async def test_shared_pipeline_reuse_with_real_cohere_backend_marker(monkeypatch):
+    """R17: with the real Cohere backend marker, two consecutive reads of an
+    identical configuration must return the SAME pipeline.
+
+    The configured identity used a 16-char credential digest while the bound
+    instance reported 64 characters, so every call rebuilt the pipeline and
+    dropped its caches. Both sides must use one shared calculation.
+    """
+    from machina.tools import rag as rag_tools
+
+    state = {
+        "reranker_backend": "cohere",
+        "cohere_api_key": "cohere-key-ONE",
+        "embedding_backend": "off",
+        "embedding_model": "",
+        "embedding_base_url": "",
+        "reranker_timeout": "10",
+        "rrf_keyword_weight": "1.0",
+        "rrf_dense_weight": "0.25",
+    }
+    fake = _FakeConfig(**state)
+    monkeypatch.setattr(config_module, "config", fake, raising=False)
+    monkeypatch.setattr(rag_tools, "_rag_pipeline", None, raising=False)
+    monkeypatch.setattr(rag_tools, "_rag_pipeline_identity", None, raising=False)
+
+    built: list = []
+    try:
+        first = await rag_tools.get_rag_pipeline()
+        built.append(first)
+        assert isinstance(first._reranker, CohereReranker)
+        assert first._reranker.backend == "cohere"
+        # One shared calculation for configured and bound identity.
+        assert rag_tools._built_reranker_identity(first) == rag_tools._current_reranker_identity()
+        assert await rag_tools.get_rag_pipeline() is first
+
+        # A rotated key rebuilds exactly once and then reuses again.
+        fake.values["cohere_api_key"] = "cohere-key-TWO"
+        second = await rag_tools.get_rag_pipeline()
+        built.append(second)
+        assert second is not first
+        assert second._reranker.api_key == "cohere-key-TWO"
+        assert await rag_tools.get_rag_pipeline() is second
+    finally:
+        for pipeline in built:
+            await pipeline._reranker.close()
+
+
+async def test_shared_pipeline_rebuilds_on_rrf_weight_change(monkeypatch):
+    """R19: RRF weights were read only at construction and omitted from the
+    shared identity, so 1.0 -> 0.25 kept serving the old 1.0 pipeline."""
+    from machina.tools import rag as rag_tools
+
+    state = {
+        "reranker_backend": "none",
+        "embedding_backend": "off",
+        "embedding_model": "",
+        "embedding_base_url": "",
+        "rrf_keyword_weight": "1.0",
+        "rrf_dense_weight": "1.0",
+    }
+    fake = _FakeConfig(**state)
+    monkeypatch.setattr(config_module, "config", fake, raising=False)
+    monkeypatch.setattr(rag_tools, "_rag_pipeline", None, raising=False)
+    monkeypatch.setattr(rag_tools, "_rag_pipeline_identity", None, raising=False)
+
+    first = await rag_tools.get_rag_pipeline()
+    assert first._search._dense_weight == 1.0
+    assert await rag_tools.get_rag_pipeline() is first
+
+    fake.values["rrf_dense_weight"] = "0.25"
+    second = await rag_tools.get_rag_pipeline()
+    assert second is not first
+    assert second._search._dense_weight == 0.25
+    assert await rag_tools.get_rag_pipeline() is second
+
+
+async def test_reranker_timeout_flows_to_clients_and_rebuilds(monkeypatch):
+    """R20: the configured reranker_timeout reaches factory-built HTTP and
+    Cohere clients and participates in the shared identity, so a runtime
+    update rebuilds the pipeline (77 was previously ignored: 10s/30s)."""
+    from machina.tools import rag as rag_tools
+
+    state = {
+        "reranker_backend": "http",
+        "reranker_http_url": "http://127.0.0.1:8080",
+        "reranker_http_model": "",
+        "reranker_timeout": "10",
+        "embedding_backend": "off",
+        "embedding_model": "",
+        "embedding_base_url": "",
+        "rrf_keyword_weight": "1.0",
+        "rrf_dense_weight": "0.25",
+    }
+    fake = _FakeConfig(**state)
+    monkeypatch.setattr(config_module, "config", fake, raising=False)
+    monkeypatch.setattr(rag_tools, "_rag_pipeline", None, raising=False)
+    monkeypatch.setattr(rag_tools, "_rag_pipeline_identity", None, raising=False)
+
+    settings = resolve_reranker_selection()
+    assert settings.timeout == 10.0
+    reranker = build_reranker(settings)
+    try:
+        assert isinstance(reranker, HttpReranker)
+        assert reranker._timeout == 10.0
+        # Configured and bound identities agree (shared calculation).
+        assert reranker_selection_identity(settings) == bound_reranker_identity(reranker)
+    finally:
+        await reranker.close()
+
+    built: list = []
+    try:
+        first = await rag_tools.get_rag_pipeline()
+        built.append(first)
+        assert first._reranker._timeout == 10.0
+        assert await rag_tools.get_rag_pipeline() is first
+
+        fake.values["reranker_timeout"] = "77"
+        second = await rag_tools.get_rag_pipeline()
+        built.append(second)
+        assert second is not first
+        assert second._reranker._timeout == 77.0
+        assert await rag_tools.get_rag_pipeline() is second
+    finally:
+        for pipeline in built:
+            await pipeline._reranker.close()
+
+    # The same configured value reaches the Cohere client.
+    fake.values.update(
+        {
+            "reranker_backend": "cohere",
+            "cohere_api_key": "cohere-key-X",
+            "reranker_timeout": "77",
+        }
+    )
+    settings = resolve_reranker_selection()
+    reranker = build_reranker(settings)
+    try:
+        assert isinstance(reranker, CohereReranker)
+        assert reranker._timeout == 77.0
+    finally:
+        await reranker.close()
 
 
 # ─── Harness helpers ────────────────────────────────────────────────────────

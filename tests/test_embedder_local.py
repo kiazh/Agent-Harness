@@ -206,6 +206,74 @@ def test_resolve_reports_reason_when_onnx_dependency_missing(monkeypatch):
     assert build_embedder() is None
 
 
+async def test_auto_considers_model_backend_compatibility(monkeypatch):
+    """R18: auto + fastembed must not forward an explicit model the ONNX
+    runtime cannot serve. fastembed rejects those ids at load, so search
+    silently degraded to keyword-only for previously working model2vec/API
+    configurations; the compatible backend must win instead."""
+    monkeypatch.setattr(
+        embedder_module,
+        "_fastembed_supports_model",
+        lambda model: model == "minishlab/potion-base-8M",
+        raising=False,
+    )
+
+    # model2vec id fastembed rejects -> the model2vec runtime (not ONNX).
+    _configure(
+        monkeypatch,
+        backend="auto",
+        model="minishlab/potion-base-4M",
+        onnx_available=True,
+    )
+    settings = resolve_embedding_settings()
+    assert (settings.kind, settings.model) == ("local", "minishlab/potion-base-4M")
+    embedder = build_embedder(settings)
+    assert isinstance(embedder, LocalEmbedder)
+    await embedder.close()
+
+    # A fastembed-served id stays on ONNX (ruled out as an incompatibility).
+    _configure(
+        monkeypatch,
+        backend="auto",
+        model="minishlab/potion-base-8M",
+        onnx_available=True,
+    )
+    settings = resolve_embedding_settings()
+    assert (settings.kind, settings.model) == ("onnx", "minishlab/potion-base-8M")
+
+    # OpenAI API id -> the API adapter when credentials exist, not ONNX.
+    _configure(
+        monkeypatch,
+        backend="auto",
+        model="text-embedding-3-small",
+        openai_key="sk-test",
+        onnx_available=True,
+    )
+    settings = resolve_embedding_settings()
+    assert (settings.kind, settings.model) == ("openai", "text-embedding-3-small")
+
+    # Without credentials nothing can serve that id: honest keyword-only.
+    _configure(
+        monkeypatch,
+        backend="auto",
+        model="text-embedding-3-small",
+        onnx_available=True,
+    )
+    settings = resolve_embedding_settings()
+    assert settings.kind == "none"
+    assert "text-embedding-3-small" in settings.reason
+
+
+def test_fastembed_runtime_rejects_the_review_models():
+    """The compatibility check tracks fastembed's real supported list: at
+    0.9, potion-base-4M and text-embedding-3-small are rejected while
+    potion-base-8M is supported."""
+    pytest.importorskip("fastembed")
+    assert embedder_module._fastembed_supports_model("minishlab/potion-base-4M") is False
+    assert embedder_module._fastembed_supports_model("text-embedding-3-small") is False
+    assert embedder_module._fastembed_supports_model("minishlab/potion-base-8M") is True
+
+
 # ─── Keyless OpenAI-compatible local server ─────────────────────────────────
 
 

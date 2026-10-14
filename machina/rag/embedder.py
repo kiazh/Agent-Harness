@@ -611,6 +611,60 @@ def onnx_embedder_available() -> bool:
         return False
 
 
+def _openai_api_model(model: str) -> bool:
+    """Whether *model* is an OpenAI-API embedding id (R18).
+
+    These ids cannot be served by the local runtimes: fastembed rejects
+    them at load and model2vec cannot fetch them, so ``auto`` must keep an
+    existing API configuration on the API backend.
+    """
+    return model in OpenAIEmbedder.MODEL_DIMENSIONS or model.startswith("text-embedding-")
+
+
+#: model2vec static models share this publisher prefix. fastembed serves a
+#: subset (e.g. minishlab/potion-base-8M); the rest (potion-base-4M) are
+#: rejected at load, which is what the compatibility check below catches.
+_MODEL2VEC_PREFIX = "minishlab/"
+
+
+def _fastembed_supports_model(model: str) -> bool | None:
+    """fastembed's own supported-model list, or None when unverifiable.
+
+    Reading the list is metadata-only (no weights, no network); the import
+    only happens when an explicit local model needs verification.
+    """
+    try:
+        from fastembed import TextEmbedding
+
+        supported = {entry.get("model") for entry in TextEmbedding.list_supported_models()}
+    except Exception:
+        return None
+    return model in supported
+
+
+def _model_fits_onnx(model: str) -> bool:
+    """Whether the fastembed ONNX backend can serve the configured *model* (R18).
+
+    An empty model means the backend default, which always fits. OpenAI API
+    ids never fit. Published model2vec ids are checked against fastembed's
+    supported list so potion-base-8M (supported) still routes to ONNX while
+    potion-base-4M does not. Unknown ids keep the previous precedence
+    (fastembed verifies them at load).
+    """
+    if not model:
+        return True
+    if _openai_api_model(model):
+        return False
+    if model.startswith(_MODEL2VEC_PREFIX):
+        return _fastembed_supports_model(model) is True
+    return True
+
+
+def _model_fits_local(model: str) -> bool:
+    """Whether the model2vec runtime could plausibly serve *model* (R18)."""
+    return not _openai_api_model(model)
+
+
 def _config_value(key: str, default: str = "") -> str:
     try:
         from machina.core.config import config
@@ -637,8 +691,14 @@ def resolve_embedding_settings() -> EmbeddingSettings:
       compute stays on-host); then OpenAI/OpenRouter credentials as a
       fallback; else none.
 
-    The configured ``embedding_model`` is honored by whichever backend is
-    selected. Availability is an import spec check only — no model loads.
+    An explicit ``embedding_model`` is honored by whichever backend is
+    selected — and, under ``auto``, checked for backend compatibility first
+    (R18): OpenAI API ids and model2vec ids fastembed cannot serve
+    (e.g. ``minishlab/potion-base-4M``) are not forwarded to the ONNX
+    runtime, so a previously working model2vec/API configuration does not
+    degrade to keyword-only. fastembed-supported ids (e.g.
+    ``minishlab/potion-base-8M``) still route to ONNX. Availability is an
+    import spec check only — no model loads.
     """
     backend = (_config_value("embedding_backend", "auto") or "auto").strip().lower()
     model = _config_value("embedding_model").strip()
@@ -690,9 +750,9 @@ def resolve_embedding_settings() -> EmbeddingSettings:
             base_url=base_url,
             backend=backend,
         )
-    if onnx_embedder_available():
+    if onnx_embedder_available() and _model_fits_onnx(model):
         return EmbeddingSettings("onnx", model=model or OnnxEmbedder.DEFAULT_MODEL, backend=backend)
-    if local_embedder_available():
+    if local_embedder_available() and _model_fits_local(model):
         return EmbeddingSettings(
             "local", model=model or LocalEmbedder.DEFAULT_MODEL, backend=backend
         )
@@ -702,6 +762,15 @@ def resolve_embedding_settings() -> EmbeddingSettings:
             model=model or OpenAIEmbedder.DEFAULT_MODEL,
             base_url=OpenAIEmbedder.DEFAULT_BASE_URL,
             backend=backend,
+        )
+    if model:
+        return EmbeddingSettings(
+            "none",
+            backend=backend,
+            reason=(
+                f"no embedding backend can serve embedding_model {model!r} "
+                "(install the matching runtime or configure credentials)"
+            ),
         )
     return EmbeddingSettings("none", backend=backend, reason="no embedding provider configured")
 
