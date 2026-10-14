@@ -1217,12 +1217,15 @@ class ContextManager:
                     > ($2, $3::uuid)
                 )
                 AND id NOT IN (
-                    -- Hard floor: never select a chunk among the newest ten.
-                    -- Concurrent callers each hold their own stale snapshot, so
-                    -- without this a second caller's cursor advances past the
-                    -- rows the first already deleted and removes the survivors.
+                    -- Hard floor: never select a chunk among the newest ten
+                    -- CONVERSATIONS. Documents are excluded from the
+                    -- candidate scope above, so the floor must exclude them
+                    -- too: otherwise newer documents consume the ten slots
+                    -- and stale concurrent callers can evict every
+                    -- conversation.
                     SELECT id FROM context_chunks
                     WHERE session_id = $1
+                    AND chunk_type <> 'document'
                     ORDER BY COALESCE(created_at, '0001-01-01 00:00:00+00'::timestamptz) DESC, id DESC
                     LIMIT 10
                 )

@@ -994,6 +994,47 @@ class TestMemoryConsolidator:
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
             assert results.status == "empty" and results.entries == []
 
+    async def test_wrong_shape_json_fails_extraction_and_keeps_checkpoint(
+        self, consolidator, mock_store, monkeypatch
+    ):
+        """JSON of the wrong shape ({}) is a retryable extraction failure like
+        malformed JSON — never an empty success that advances the checkpoint."""
+        from types import SimpleNamespace
+
+        from machina.core.usage import usage_store
+        from machina.memory import consolidator as consolidator_module
+
+        chunk = SimpleNamespace(
+            chunk_type="user_message",
+            payload={"content": "Remember: user prefers dark mode"},
+            created_at=datetime.now(UTC),
+            id=uuid.uuid4(),
+            token_count=5,
+        )
+
+        async def fake_chunks(*args, **kwargs):
+            return [chunk]
+
+        monkeypatch.setattr(consolidator_module.context_manager, "get_chunks_since", fake_chunks)
+        consolidator.llm = object()
+        consolidator.store = mock_store
+
+        responses = ["{}", "[]"]
+
+        async def fake_complete(*args, **kwargs):
+            return SimpleNamespace(content=responses.pop(0))
+
+        monkeypatch.setattr(usage_store, "complete_call", fake_complete)
+
+        wrong_shape = await consolidator._consolidate_session_impl(uuid.uuid4(), "harness")
+        assert wrong_shape.status == "failed"
+        assert wrong_shape.checkpoint is None
+
+        # A genuine empty array remains a successful empty extraction.
+        empty = await consolidator._consolidate_session_impl(uuid.uuid4(), "harness")
+        assert empty.status == "empty"
+        assert empty.checkpoint is not None
+
     async def test_consolidate_session_records_candidate_embedding_failure(
         self, consolidator, mock_store, monkeypatch
     ):

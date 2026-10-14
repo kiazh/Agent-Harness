@@ -937,6 +937,12 @@ class JobRunner:
                     )
                     err.approval_request_id = first.get("request_id", "")  # type: ignore[attr-defined]
                     raise err
+                # A terminal non-completed typed outcome is a job failure, not
+                # an idle success: surface the outcome in the recorded error.
+                # Typed pauses are handled above and keep parking behavior.
+                outcome = str(getattr(response, "outcome", "completed") or "completed")
+                if outcome != "completed":
+                    raise RuntimeError(f"agent outcome: {outcome}")
             finally:
                 # AH-AUDIT-026: shared owner-aware cleanup contract —
                 # bounded join, never closes injected/shared clients, never

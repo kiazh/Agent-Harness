@@ -209,6 +209,49 @@ async def test_estimate_survives_session_lookup_failure(monkeypatch):
     assert "services.maybe_auto_compact.session" in [op for op, _ in recorded]
 
 
+async def test_estimator_counts_full_schema_for_unrestricted_empty_tools(monkeypatch):
+    """AgentDef.tools=[] is unrestricted at execution (definition_tool_cap
+    resolves it to None); the estimator must count the full registry schema,
+    not zero schemas."""
+    from types import SimpleNamespace
+
+    import machina.services as svc
+    from machina.core.agent_def import agent_registry
+    from machina.core.agent_factory import definition_tool_cap
+    from machina.core.assembler import get_token_count
+    from machina.core.session import session_manager
+    from machina.tools.base import registry
+
+    full = [
+        SimpleNamespace(name=f"tool_{i}", description="d" * 120, parameters={"type": "object"})
+        for i in range(3)
+    ]
+    one = [full[0]]
+
+    async def fake_session_get(_sid):
+        return SimpleNamespace(agent_id="audit-agent", provider=None, model=None)
+
+    def resolver(tools):
+        async def fake_defn_get(_name):
+            return SimpleNamespace(tools=tools, system_prompt="")
+
+        return fake_defn_get
+
+    monkeypatch.setattr(session_manager, "get", fake_session_get)
+    monkeypatch.setattr(registry, "get_tool_definitions", lambda: list(full))
+
+    assert definition_tool_cap(SimpleNamespace(tools=[])) is None
+    monkeypatch.setattr(agent_registry, "get", resolver([]))
+    unrestricted = await svc._estimate_next_request(uuid.uuid4())
+    monkeypatch.setattr(agent_registry, "get", resolver(["tool_0"]))
+    restricted = await svc._estimate_next_request(uuid.uuid4())
+
+    full_tokens = get_token_count(str(full))
+    one_tokens = get_token_count(str(one))
+    assert full_tokens > one_tokens  # fixture sanity
+    assert unrestricted - restricted == full_tokens - one_tokens
+
+
 # ─── 7. Status fallback ──────────────────────────────────────────────────
 
 

@@ -379,7 +379,12 @@ async def _estimate_next_request(session_id) -> int:
 
                 definition = await agent_registry.get(session.agent_id or "harness")
                 if definition is not None:
-                    allowed = definition.tools
+                    from machina.core.agent_factory import definition_tool_cap
+
+                    # AgentDef [] means unrestricted (full registry), unlike
+                    # authority-layer [] which means zero tools; resolve
+                    # through the same translation execution uses.
+                    allowed = definition_tool_cap(definition)
                     definition_prompt = definition.system_prompt or ""
             except Exception as _boundary_error:
                 # Optional fallback preserves the primary outcome; report no payload.

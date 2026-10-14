@@ -169,3 +169,42 @@ def test_shared_pipeline_logs_traceback_on_cohere_failure(monkeypatch, caplog):
     pipeline = rag_tools._build_shared_pipeline()
     assert isinstance(pipeline._reranker, IdentityReranker)
     assert any("RuntimeError" in (record.exc_text or "") for record in caplog.records)
+
+
+def test_shared_pipeline_rebuilds_when_cohere_key_identity_changes(monkeypatch):
+    """Rotating one nonempty Cohere key to another must rebuild the shared
+    pipeline: the cached client tracked key PRESENCE, so the old client bound
+    to the old key served all later requests."""
+    import asyncio
+
+    from machina.core.config import config
+    from machina.tools import rag as rag_tools
+
+    keys = {"value": "cohere-key-ONE"}
+    real_get = config.get
+
+    def fake_get(key=None):
+        if key == "cohere_api_key":
+            return keys["value"]
+        return real_get(key)
+
+    class FakeCohereReranker:
+        def __init__(self, *args, **kwargs):
+            self.api_key = keys["value"]
+
+    monkeypatch.setattr(config, "get", fake_get)
+    monkeypatch.setattr("machina.rag.reranker.CohereReranker", FakeCohereReranker)
+    monkeypatch.setattr(rag_tools, "_rag_pipeline", None)
+    monkeypatch.setattr(rag_tools, "_rag_pipeline_identity", None, raising=False)
+
+    first = asyncio.run(rag_tools.get_rag_pipeline())
+    assert first._reranker.api_key == "cohere-key-ONE"
+    # Identity unchanged: the shared pipeline is reused.
+    assert asyncio.run(rag_tools.get_rag_pipeline()) is first
+
+    # Rotated key: a reranker bound to the NEW identity is built.
+    keys["value"] = "cohere-key-TWO"
+    second = asyncio.run(rag_tools.get_rag_pipeline())
+    assert second is not first
+    assert second._reranker.api_key == "cohere-key-TWO"
+    assert asyncio.run(rag_tools.get_rag_pipeline()) is second

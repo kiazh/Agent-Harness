@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import uuid
 from typing import Any
@@ -18,10 +19,11 @@ logger = logging.getLogger(__name__)
 # Global RAG pipeline instance (lazy-initialized)
 _rag_pipeline: RAGPipeline | None = None
 _rag_pipeline_lock = asyncio.Lock()
-# Whether the shared instance was built with Cohere credentials present.
-# A mismatch (rotation/appearance/disappearance) rebuilds the pipeline so
-# the selected reranker always matches configuration (AH-AUDIT-036).
-_rag_pipeline_cohere: bool | None = None
+# IDENTITY (digest of the API key), not boolean presence, of the Cohere
+# credential the shared instance was built with. Rotation to another nonempty
+# key must rebuild the pipeline; comparing presence alone kept the old client
+# (and its old key) serving all later requests (AH-AUDIT-036).
+_rag_pipeline_identity: str | None = None
 
 
 def _cohere_configured() -> bool:
@@ -31,6 +33,29 @@ def _cohere_configured() -> bool:
         return bool(_cfg.get("cohere_api_key"))
     except Exception:
         return False
+
+
+def _cohere_key_digest(key: str | None) -> str | None:
+    """Opaque credential identity; None when no key is configured."""
+    if not key:
+        return None
+    return hashlib.sha256(str(key).encode("utf-8")).hexdigest()
+
+
+def _current_cohere_identity() -> str | None:
+    """Identity of the Cohere credential currently configured (read fresh)."""
+    try:
+        from machina.core.config import config as _cfg
+
+        return _cohere_key_digest(_cfg.get("cohere_api_key"))
+    except Exception:
+        return None
+
+
+def _built_cohere_identity(pipeline: RAGPipeline | None) -> str | None:
+    """Identity of the credential the pipeline's reranker was BUILT with."""
+    reranker = getattr(pipeline, "_reranker", None)
+    return _cohere_key_digest(getattr(reranker, "api_key", None))
 
 
 def _build_shared_pipeline() -> RAGPipeline:
@@ -57,15 +82,26 @@ def _build_shared_pipeline() -> RAGPipeline:
 
 
 async def get_rag_pipeline() -> RAGPipeline:
-    """Get or create the global RAG pipeline instance."""
-    global _rag_pipeline, _rag_pipeline_cohere
-    current = _cohere_configured()
-    if _rag_pipeline is None or _rag_pipeline_cohere != current:
+    """Get or create the global RAG pipeline instance.
+
+    Rebuilds when the Cohere credential IDENTITY changes (rotation to a
+    different nonempty key, appearance, or disappearance), so the reranker
+    client always matches the configured key. Reuses when unchanged.
+    """
+    global _rag_pipeline, _rag_pipeline_identity
+    current = _current_cohere_identity()
+    if _rag_pipeline is None or _rag_pipeline_identity != current:
         async with _rag_pipeline_lock:
             # Double-check after acquiring lock
-            if _rag_pipeline is None or _rag_pipeline_cohere != current:
+            if _rag_pipeline is None or _rag_pipeline_identity != current:
                 _rag_pipeline = _build_shared_pipeline()
-                _rag_pipeline_cohere = current
+                # Record the identity the reranker actually bound to. When the
+                # build fell back without binding a key, keep the configured
+                # identity so a failing client is not rebuilt on every
+                # request; a real rotation changes `current` and still
+                # forces the rebuild.
+                built = _built_cohere_identity(_rag_pipeline)
+                _rag_pipeline_identity = built if built is not None else current
     return _rag_pipeline
 
 

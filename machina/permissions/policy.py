@@ -142,6 +142,62 @@ def _sensitive_path(value: str, root: Path) -> bool:
     )
 
 
+def _recursive_traversal(argv: list[str], cwd: str) -> bool:
+    """True when an execution walks directory descendants.
+
+    Recursive reads have unknown match sets: the pattern argument never names
+    the files it reaches, so an otherwise-routine command can surface a
+    descendant credential file (e.g. ``grep -R TOKEN .`` matching ``.env``).
+    These require explicit review; plain single-file reads stay routine.
+    """
+    from machina.permissions.commands import executable_name
+
+    if not argv:
+        return False
+    name = executable_name(argv[0])
+    args = argv[1:]
+    if name == "grep":
+        for arg in args:
+            if arg in {"--recursive", "--dereference-recursive"}:
+                return True
+            if (
+                arg.startswith("-")
+                and not arg.startswith("--")
+                and any(ch in arg[1:] for ch in ("r", "R"))
+            ):
+                return True
+        return False
+    if name == "rg":
+        # ripgrep searches recursively by default but skips hidden files.
+        # These flags defeat that skip, so dotfiles become reachable.
+        for arg in args:
+            if arg in {"--hidden", "--unrestricted", "--no-ignore"}:
+                return True
+            if arg.startswith("-") and not arg.startswith("--") and "u" in arg[1:]:
+                return True
+        return False
+    if name == "find":
+        # find walks its roots; any directory operand (or no operand at all)
+        # descends into potentially sensitive dotfiles.
+        roots: list[str] = []
+        for arg in args:
+            if arg.startswith("-"):
+                break
+            roots.append(arg)
+        if not roots:
+            return True
+        for value in roots:
+            path = Path(value.replace("\\", "/")).expanduser()
+            base = path if path.is_absolute() else Path(cwd or ".") / path
+            try:
+                if base.is_dir():
+                    return True
+            except OSError:
+                return True
+        return False
+    return False
+
+
 def _sensitive_capabilities(req: ActionRequest) -> list[str]:
     """Exact capability identities plus operation-aware path/command checks."""
     from machina.permissions.commands import (
@@ -227,6 +283,11 @@ def _sensitive_capabilities(req: ActionRequest) -> list[str]:
         found.append("destructive_system")
     if first == "find" and "-delete" in req.argv:
         found.append("destructive_system")
+    # A recursive traversal's match set is unknown at approval time; the
+    # pattern never names the files it reaches, so descendant dotfiles can
+    # leak through otherwise-routine output. Review instead of allow.
+    if req.operation == "process.exec" and _recursive_traversal(req.argv, req.cwd):
+        found.append("opaque_execution_review")
     return sorted(set(found))
 
 

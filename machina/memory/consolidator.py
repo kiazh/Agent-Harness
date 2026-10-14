@@ -576,7 +576,13 @@ class MemoryConsolidator:
             items = json.loads(content)
             if not isinstance(items, list):
                 logger.warning("LLM returned non-list for memory extraction: %s", type(items))
-                return []
+                # Wrong-shape JSON ({} or a scalar) is as untrustworthy as
+                # malformed JSON: a retryable extraction failure — never an
+                # empty success that advances the checkpoint.
+                raise RuntimeError(
+                    "memory extraction parse failed: expected a JSON array, "
+                    f"got {type(items).__name__}"
+                )
 
             memories: list[MemoryEntry] = []
             for item in items:

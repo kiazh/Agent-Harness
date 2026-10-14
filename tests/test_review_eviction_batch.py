@@ -143,3 +143,86 @@ async def test_batch_and_individual_archive_failures_log_tracebacks(monkeypatch,
     assert "RuntimeError" in batch[0].exc_text
     assert individual and individual[0].exc_text, "per-chunk warning must include the traceback"
     assert "RuntimeError" in individual[0].exc_text
+
+
+async def test_stale_callers_cannot_evict_all_conversations(db_pool, monkeypatch):
+    """The newest-ten floor must protect CONVERSATIONS even when newer indexed
+    documents exist. Two callers with stale bounds each evicted ten, removing
+    all twenty conversations because the floor was consumed by documents."""
+    import asyncio
+
+    from machina.core import context as context_module
+
+    session_id = uuid.uuid4()
+    await db_pool.execute(
+        "INSERT INTO sessions (id, title, agent_id) VALUES ($1, $2, $3)",
+        session_id,
+        "audit-eviction",
+        "harness",
+    )
+    now = datetime.now(UTC)
+
+    async def insert_chunk(kind: str, created: datetime, source: str | None = None) -> None:
+        await db_pool.execute(
+            """INSERT INTO context_chunks
+               (session_id, agent_id, chunk_type, payload_msgpack, token_count,
+                created_at, search_text, document_source)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+            session_id,
+            "harness",
+            kind,
+            b"\x80",
+            10,
+            created,
+            kind,
+            source,
+        )
+
+    try:
+        for i in range(20):  # 20 conversations, oldest
+            await insert_chunk("user_message", now - timedelta(minutes=100 - i))
+        for i in range(10):  # 10 documents, newest
+            await insert_chunk("document", now - timedelta(minutes=10 - i * 0.5), f"doc-{i}.md")
+
+        real_db = db_pool
+        coordinator: dict = {"task_a": None, "paused": False}
+        b_done = asyncio.Event()
+
+        class CoordinatedDb:
+            def __getattr__(self, name):
+                return getattr(real_db, name)
+
+            async def fetch(self, *args, **kwargs):
+                if asyncio.current_task() is coordinator["task_a"] and not coordinator["paused"]:
+                    coordinator["paused"] = True
+                    await b_done.wait()
+                return await real_db.fetch(*args, **kwargs)
+
+        monkeypatch.setattr(context_module, "db", CoordinatedDb())
+
+        # Caller A computes its bounds, then pauses before its candidate
+        # SELECT; caller B runs fully against the same stale totals.
+        task_a = asyncio.create_task(ContextManager().evict_old_chunks(session_id, max_chunks=10))
+        coordinator["task_a"] = task_a
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        evicted_b = await ContextManager().evict_old_chunks(session_id, max_chunks=10)
+        b_done.set()
+        evicted_a = await task_a
+
+        conversations_left = await db_pool.fetchval(
+            "SELECT COUNT(*) FROM context_chunks WHERE session_id = $1 AND chunk_type <> 'document'",
+            session_id,
+        )
+        documents_left = await db_pool.fetchval(
+            "SELECT COUNT(*) FROM context_chunks WHERE session_id = $1 AND chunk_type = 'document'",
+            session_id,
+        )
+        assert (evicted_a, evicted_b) == (0, 10)
+        assert int(conversations_left) == 10
+        assert int(documents_left) == 10
+    finally:
+        await db_pool.execute("DELETE FROM context_chunks WHERE session_id = $1", session_id)
+        await db_pool.execute("DELETE FROM context_archive WHERE session_id = $1", session_id)
+        await db_pool.execute("DELETE FROM sessions WHERE id = $1", session_id)

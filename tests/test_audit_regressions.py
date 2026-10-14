@@ -322,3 +322,29 @@ def test_compose_starts_api_and_initializes_schema():
     assert "machina init" in app["command"][0]
     assert "machina serve" in app["command"][0]
     assert "127.0.0.1:8000:8000" in app["ports"]
+
+
+async def test_recursive_traversal_reads_require_review(monkeypatch, tmp_path):
+    """A recursive grep's match set is unknown at approval time: a descendant
+    dotfile (.env) can leak through otherwise-routine output, so recursive
+    traversal must review while plain single-file reads stay routine."""
+    from machina.core.config import config
+    from machina.permissions.policy import build_request, decide
+    from machina.permissions.tools import action_for_tool
+
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / ".env").write_text("PRIVATE_TOKEN=secret\n", encoding="utf-8")
+    (root / "README.md").write_text("docs\n", encoding="utf-8")
+    monkeypatch.setattr(config, "workspace_root", str(root))
+    monkeypatch.setattr(config, "execution_mode", "ask")
+
+    def request(command: str):
+        return build_request(tool="terminal", **action_for_tool("terminal", {"command": command}))
+
+    assert decide(request("grep -R PRIVATE_TOKEN .")).verdict == "pending"
+    assert decide(request("grep -r PRIVATE_TOKEN .")).verdict == "pending"
+    assert decide(request("find . -name '*.py'")).verdict == "pending"
+    # Plain single-file reads stay routine.
+    assert decide(request("cat README.md")).verdict == "allowed"
+    assert decide(request("grep PRIVATE_TOKEN README.md")).verdict == "allowed"

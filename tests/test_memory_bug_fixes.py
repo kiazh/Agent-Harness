@@ -409,3 +409,41 @@ class TestConsolidatorBatchDedup:
             # This should not raise and should complete
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
             assert results.status == "empty" and results.entries == []
+
+
+# ===========================================================================
+# Audit: repeated rerank indices must not duplicate a memory
+# ===========================================================================
+
+
+class TestRerankIndexDedup:
+    """A repeated index in the LLM rerank response surfacing one memory N times."""
+
+    async def test_repeated_indices_do_not_duplicate_outputs(self):
+        from types import SimpleNamespace
+
+        from machina.core import usage as usage_module
+
+        candidates = [
+            RetrievedMemory(
+                memory=MemoryEntry(
+                    id=uuid.uuid4(),
+                    session_id=None,
+                    agent_id="harness",
+                    content=f"memory-{i}",
+                    category="fact",
+                ),
+                score=1.0 - i * 0.1,
+                source="dense",
+            )
+            for i in range(3)
+        ]
+
+        async def fake_complete(*args, **kwargs):
+            return SimpleNamespace(content="[0,0,0]")
+
+        retriever = MemoryRetriever(llm_provider=object())
+        with patch.object(usage_module.usage_store, "complete_call", fake_complete):
+            out = await retriever._rerank("query", candidates)
+
+        assert [str(r.memory.id) for r in out] == [str(c.memory.id) for c in candidates]

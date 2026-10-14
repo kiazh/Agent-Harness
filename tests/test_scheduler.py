@@ -99,6 +99,62 @@ def test_job_create_validates_kind_and_interval():
     asyncio.run(check())
 
 
+async def test_failed_agent_outcome_is_recorded_as_error(monkeypatch):
+    """A non-completed typed AgentResponse outcome is a failed job, not an
+    idle success: finish() must record an error naming the outcome."""
+    from machina.core import turns
+    from machina.core.scheduler import Job, JobRunner
+
+    async def fake_begin(session_id):
+        return "turn-token"
+
+    async def fake_end(session_id, token):
+        return None
+
+    monkeypatch.setattr(turns, "try_begin_turn", fake_begin)
+    monkeypatch.setattr(turns, "end_turn", fake_end)
+
+    job = Job(
+        id=uuid.uuid4(),
+        name="failed outcome",
+        kind="interval",
+        session_id=uuid.uuid4(),
+        agent_name="harness",
+        prompt="work",
+        interval_seconds=60,
+        enabled=True,
+        status="running",
+        last_run_at=None,
+        next_run_at=datetime.now(UTC),
+        last_error=None,
+        run_count=0,
+        claim_token=uuid.uuid4(),
+    )
+    finished: dict = {}
+
+    class Store:
+        async def claim_due(self):
+            return job
+
+        async def renew_lease(self, job_id, claim_token):
+            return True
+
+        async def finish(self, job_id, *, error, claim_token, paused_for):
+            finished["error"] = error
+            finished["paused_for"] = paused_for
+            return True
+
+    class Agent:
+        async def run(self, session_id, prompt, verbose):
+            return AgentResponse(content="task could not be completed", outcome="failed")
+
+    runner = JobRunner(store=Store(), agent_factory=lambda _name: Agent())
+    assert await runner.run_due_once() is True
+    assert finished["error"] is not None
+    assert "failed" in finished["error"]
+    assert finished["paused_for"] is None
+
+
 # ─── store + runner (real DB) ──────────────────────────────────────────────────
 
 

@@ -545,10 +545,13 @@ Return ONLY the JSON array, no other text."""
             if not isinstance(indices, list):
                 return candidates
 
-            # Reorder candidates
+            # Reorder candidates; ignore out-of-range and repeated indices so
+            # one memory can never be surfaced multiple times.
             reranked = []
+            seen_indices: set[int] = set()
             for idx in indices:
-                if isinstance(idx, int) and 0 <= idx < len(candidates):
+                if isinstance(idx, int) and 0 <= idx < len(candidates) and idx not in seen_indices:
+                    seen_indices.add(idx)
                     reranked.append(candidates[idx])
 
             # Add any candidates not included in LLM response
