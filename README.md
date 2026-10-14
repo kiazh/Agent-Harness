@@ -399,11 +399,17 @@ relevant configuration through the [operations guide](OPERATIONS.md).
 | Custom | `CUSTOM_BASE_URL` and optional `CUSTOM_API_KEY` | Any OpenAI-compatible endpoint; keyless local servers supported |
 | Ollama | Running Ollama service and an installed model | Local service; no cloud key required |
 
-In the TUI, `/keys` manages masked credentials, `/provider` chooses the adapter,
-`/models` chooses the session model and `/default-model` saves a future default.
-`/effort` sets reasoning effort where the selected provider supports it. Direct
-adapters use their vendor's key and endpoint. Cohere's key is for the optional
-Cohere reranker, not a chat provider; local ONNX reranking needs no key.
+In the TUI, `/keys` manages masked credentials - including the keys of
+user-added providers, which appear automatically after `/provider add` -
+`/provider` (alias `/providers`) chooses or manages adapters, and `/models`
+opens the catalog grouped provider-by-provider with the session's provider
+first: search matches provider names and model ids (`deepseek`, `gpt`), and
+picking a model from another provider asks a one-line confirm - never a silent
+switch. `/default-model` saves a future default; `/effort` sets reasoning
+effort where the selected provider supports it, and an unset alias such as
+`off` clears it. Direct adapters use their vendor's key and endpoint. Cohere's
+key is for the optional Cohere reranker, not a chat provider; local ONNX
+reranking needs no key.
 
 **ChatGPT account.** The `chatgpt` provider runs turns on your ChatGPT
 subscription instead of a metered API key. Sign in with `machina auth login`
@@ -439,8 +445,13 @@ stored as `MACHINA_PROVIDER_<NAME>_API_KEY` in the git-ignored `.env` (never
 in the metadata file — `--no-key` marks a keyless local endpoint) and its
 model catalog is pulled from `GET {base_url}/models`. Added providers behave
 like built-ins everywhere: `/provider`, `/models`, `MACHINA_PROVIDER=<name>`,
-and the gateway. `machina providers list|remove|models` manages them;
-metadata lives in `~/.machina/providers.json` (0600).
+and the gateway. Model commands resolve against the resumed session's pinned
+route (not the gateway default), and built-in provider names cannot be
+shadowed. `machina providers list|remove|models` manages them; `remove`
+deletes every trace - the store entry, its cached catalog, and the `.env` key
+line - and if it was the active provider the session falls back to
+`openrouter` with a visible notice. Metadata lives in
+`~/.machina/providers.json` (0600).
 
 Example non-secret defaults for an Ollama installation:
 

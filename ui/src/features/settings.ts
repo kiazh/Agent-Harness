@@ -187,9 +187,14 @@ async function addProvider(host: FeatureHost, rest: string): Promise<void> {
 
 async function removeProvider(host: FeatureHost, rest: string): Promise<void> {
 	let name = rest.trim().toLowerCase();
+	let listed: ProvidersListResult | undefined;
+	try {
+		listed = await host.request<ProvidersListResult>("providers.list");
+	} catch {
+		listed = undefined;
+	}
+	const named = listed?.providers.filter((p) => p.kind === "named") ?? [];
 	if (!name) {
-		const result = await host.request<ProvidersListResult>("providers.list");
-		const named = result.providers.filter((p) => p.kind === "named");
 		if (!named.length) {
 			host.print("No user-added providers to remove (built-in providers cannot be removed).", "warning");
 			return;
@@ -205,17 +210,56 @@ async function removeProvider(host: FeatureHost, rest: string): Promise<void> {
 		if (!choice) return;
 		name = choice.value;
 	}
-	const confirmed = await confirm(host, `Remove provider "${name}"? Its .env key entry is cleared.`, "Remove");
+	const info = named.find((p) => p.name === name);
+	const traces = describeProviderTraces(name, info);
+	const question = `Remove provider "${name}"? Deletes ${traces}.${info?.selected ? " It is the active provider — falls back to openrouter." : ""}`;
+	const confirmed = await confirm(host, question, "Remove");
 	if (!confirmed) return;
 	try {
 		const result = await host.request<ProviderRemoveResult>("providers.remove", { name });
-		host.print(
-			`Provider "${result.provider}" removed${result.switchedTo ? `; switched to ${result.switchedTo}` : ""}.`,
-			"success",
-		);
+		// The current session pins model/provider at creation: when it was
+		// pinned to the removed provider, re-pin it to the fallback so the
+		// next turn cannot route to a provider that no longer exists.
+		const session = host.session();
+		if (result.switchedTo && session && session.provider?.toLowerCase() === name) {
+			await host.request("session.setModel", {
+				sessionId: session.id,
+				provider: result.switchedTo,
+				...(result.modelResetTo ? { model: result.modelResetTo } : {}),
+			});
+		}
+		host.print(removalSummary(result), "success");
+		if (result.switchedTo) {
+			host.print(
+				`Active provider fell back to ${result.switchedTo}${result.modelResetTo ? ` (model ${result.modelResetTo})` : ""}. Pick a new default with /provider and /models.`,
+				"warning",
+			);
+		}
 	} catch (error) {
 		host.print(`Could not remove ${name}: ${error instanceof Error ? error.message : String(error)}`, "error");
 	}
+}
+
+/** What a removal deletes, for the confirm copy (best-effort from providers.list). */
+function describeProviderTraces(name: string, info?: ProviderInfo): string {
+	const keyEnv = info?.apiKeyEnv ?? `MACHINA_PROVIDER_${name.toUpperCase().replace(/-/g, "_")}_API_KEY`;
+	const models = info?.modelsCount ?? 0;
+	return `the store entry, the ${keyEnv} .env line, ${models} cached model(s), and the registry entry`;
+}
+
+/** Exactly what the gateway cleaned, from the removal report. */
+function removalSummary(result: ProviderRemoveResult): string {
+	const cleanup = result.cleanup;
+	if (!cleanup) {
+		return `Provider "${result.provider}" removed${result.switchedTo ? `; switched to ${result.switchedTo}` : ""}.`;
+	}
+	const bits: string[] = ["store entry"];
+	if (cleanup.envKey) {
+		bits.push(cleanup.envLineRemoved ? `${cleanup.envKey} line in .env` : `${cleanup.envKey} (no .env line found)`);
+	}
+	if (cleanup.cachedModels) bits.push(`${cleanup.cachedModels} cached model(s)`);
+	bits.push("registry entry");
+	return `Provider "${result.provider}" removed — ${bits.join(", ")}.`;
 }
 
 function personaError(error: unknown): string {
@@ -416,7 +460,8 @@ export const settingsCommands: Command[] = [
 				host.print(`Reasoning effort: ${config.reasoning_effort || "off (provider default)"}`, "plain");
 				return;
 			}
-			const result = await host.request<EffortSetResult>("models.setEffort", { effort: value });
+			const session = host.session();
+			const result = await host.request<EffortSetResult>("models.setEffort", session ? { effort: value, sessionId: session.id } : { effort: value });
 			host.print(
 				`Reasoning effort: ${result.effort ?? "off (provider default)"} · supported for ${result.model || result.provider}: ${result.supported.join("/")}`,
 				"success",

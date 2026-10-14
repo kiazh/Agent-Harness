@@ -5,9 +5,15 @@
 // logged, or kept in history. `secrets.set` applies immediately and saves
 // to the git-ignored `.env` (persist:true). Run `machina setup` once for
 // first-launch configuration of the same file.
+//
+// The rows are the static catalog (secrets.list) plus one row per user-added
+// provider from providers.list: a provider with a key contributes its
+// derived `MACHINA_PROVIDER_<NAME>_API_KEY`; a keyless local endpoint gets a
+// non-editable "no key (local endpoint)" row (nothing to set or clear).
+// Ordering stays stable: catalog keys, then named providers in list order.
 
 import { table } from "../format.ts";
-import type { SecretsListResult, SecretsSetResult } from "../protocol.ts";
+import type { ProvidersListResult, SecretsListResult, SecretsSetResult } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
 import { confirm, options, type Command, type FeatureHost } from "./types.ts";
 
@@ -32,12 +38,64 @@ const KNOWN_KEYS: Array<[string, string]> = [
 	["MACHINA_MODEL", "Default model identifier"],
 ];
 
-function statusTable(secrets: SecretsListResult["secrets"]): string {
+/** One /keys row: a catalog key or a user-added provider's derived key. */
+export interface KeyRow {
+	key: string;
+	status: string;
+	set: boolean;
+	/** False for keyless-local provider rows: nothing to set or clear. */
+	editable: boolean;
+	description: string;
+	/** User-added provider name for provider rows (absent for catalog keys). */
+	provider?: string;
+}
+
+function statusTable(rows: KeyRow[]): string {
 	return table(
 		["Key", "Status", "Description"],
-		secrets.map((s) => [s.key, s.set ? "set" : "not set", s.description]),
+		rows.map((row) => [row.key, row.status, row.description]),
 		40,
 	);
+}
+
+/**
+ * Merge the gateway's static key catalog with the user-added providers'
+ * derived env keys. A provider without a key on a loopback base URL is
+ * keyless by design and gets a non-editable row instead of an empty set
+ * flow. providers.list failures (older gateway) leave the static rows.
+ */
+export async function loadKeyRows(host: FeatureHost): Promise<{ rows: KeyRow[]; envFile: string }> {
+	const { secrets, envFile } = await host.request<SecretsListResult>("secrets.list");
+	const rows: KeyRow[] = secrets.map((secret) => ({
+		key: secret.key,
+		status: secret.set ? "set" : "not set",
+		set: secret.set,
+		editable: true,
+		description: secret.description,
+	}));
+	let listed: ProvidersListResult | undefined;
+	try {
+		listed = await host.request<ProvidersListResult>("providers.list");
+	} catch {
+		listed = undefined;
+	}
+	if (listed) {
+		const seen = new Set(rows.map((row) => row.key));
+		for (const provider of listed.providers) {
+			if (provider.kind !== "named" || !provider.apiKeyEnv || seen.has(provider.apiKeyEnv)) continue;
+			const keyless = provider.keylessLocal === true && provider.keySet !== true;
+			seen.add(provider.apiKeyEnv);
+			rows.push({
+				key: provider.apiKeyEnv,
+				status: keyless ? "no key (local endpoint)" : provider.keySet ? "set" : "not set",
+				set: provider.keySet === true,
+				editable: !keyless,
+				description: `${provider.name} (user-added provider)${provider.baseUrl ? ` · ${provider.baseUrl}` : ""}`,
+				provider: provider.name,
+			});
+		}
+	}
+	return { rows, envFile };
 }
 
 /** Strip a secret from error text so failures never leak the value. */
@@ -68,8 +126,8 @@ export const keysCommand: Command = {
 			return;
 		}
 		if (sub === "list") {
-			const { secrets, envFile } = await host.request<SecretsListResult>("secrets.list");
-			host.print(`${statusTable(secrets)}\n\nFile: ${envFile}\nValues are never shown. Use /keys set KEY VALUE to update one.\nChatGPT-account models need no key — sign in with /auth instead.`, "plain");
+			const { rows, envFile } = await loadKeyRows(host);
+			host.print(`${statusTable(rows)}\n\nFile: ${envFile}\nValues are never shown. Use /keys set KEY VALUE to update one.\nChatGPT-account models need no key — sign in with /auth instead.`, "plain");
 			return;
 		}
 		if (sub === "set") {
@@ -104,8 +162,8 @@ export const keysCommand: Command = {
 };
 
 async function resolveKey(host: FeatureHost, prefix: string): Promise<string> {
-	const { secrets } = await host.request<SecretsListResult>("secrets.list");
-	const keys = secrets.map((s) => s.key);
+	const { rows } = await loadKeyRows(host);
+	const keys = rows.map((row) => row.key);
 	const exact = keys.find((k) => k === prefix.trim().toUpperCase());
 	if (exact) return exact;
 	const matches = keys.filter((k) => k.startsWith(prefix.trim().toUpperCase()));
@@ -116,19 +174,26 @@ async function resolveKey(host: FeatureHost, prefix: string): Promise<string> {
 
 async function openMenu(host: FeatureHost): Promise<void> {
 	for (;;) {
-		const { secrets } = await host.request<SecretsListResult>("secrets.list");
+		const { rows } = await loadKeyRows(host);
 		const choice = await host.pick(
 			"API keys (values never shown)",
-			secrets.map((s) => ({
-				value: s.key,
-				label: `${s.key} — ${s.set ? "set" : "not set"}`,
-				description: s.description,
+			rows.map((row) => ({
+				value: row.key,
+				label: `${row.key} — ${row.status}`,
+				description: row.description,
 			})),
 		);
 		if (!choice) return;
-		const info = secrets.find((s) => s.key === choice.value);
+		const info = rows.find((row) => row.key === choice.value);
 		if (!info) return;
-		const action = await host.pick(`${info.key} (${info.set ? "set" : "not set"})`, [
+		if (!info.editable) {
+			host.print(
+				`${info.key}: ${info.description} — no key is needed (or settable) here. Remove the provider with /provider remove ${info.provider}.`,
+				"info",
+			);
+			continue;
+		}
+		const action = await host.pick(`${info.key} (${info.status})`, [
 			{ value: "set", label: info.set ? "Replace…" : "Set…", description: "Enter a new value (masked, never shown)" },
 			{ value: "clear", label: "Clear", description: "Remove from this session and .env" },
 			{ value: "back", label: "Back", description: "Return to the key list" },

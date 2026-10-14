@@ -176,11 +176,28 @@ export interface ProviderAddResult {
 	fetchError: string | null;
 }
 
+/** Exactly what `providers.remove` cleaned (absent on older gateways). */
+export interface ProviderCleanup {
+	storeEntry: boolean;
+	/** Derived env name when the provider had one (never a value). */
+	envKey: string | null;
+	/** True when the `.env` line existed and was deleted. */
+	envLineRemoved: boolean;
+	/** True when the live process env var was set and removed. */
+	envVarRemoved: boolean;
+	cachedModels: number;
+	/** Dynamic-registry membership dropped with the store entry. */
+	registryEntry: boolean;
+}
+
 export interface ProviderRemoveResult {
 	provider: string;
 	removed: boolean;
 	selected: string;
 	switchedTo: string | null;
+	/** Model after an active-provider fallback (null when unchanged/absent). */
+	modelResetTo?: string | null;
+	cleanup?: ProviderCleanup;
 }
 
 export interface MemoryInfo {

@@ -1,22 +1,29 @@
-// Model menu: curated list, plus the REAL provider catalogs when available.
+// Model menu: provider-grouped, catalog-first, curated fallback.
 //
-// `/models` (no args) asks the gateway for the selected provider's catalog
-// (models.list). ChatGPT-account providers return the live Codex catalog
-// with per-model reasoning efforts and context windows; user-added named
-// providers return their pulled `/models` list. When a provider has no
-// catalog (built-in direct families, older gateway, fetch failure) the
-// curated list below remains the offline fallback.
+// `/models` (no args) opens one searchable picker whose rows are grouped by
+// provider. The session's selected provider comes first; every other provider
+// (built-ins and user-added named entries) follows in its own section.
+// Catalogs come from the gateway (models.list) — the live ChatGPT/Codex
+// catalog with per-model reasoning efforts and context windows, and
+// user-added providers' pulled `/models` lists. Providers without a discovery
+// endpoint keep their curated offline rows, which stay fallback-only.
 //
-// `/models catalog` prints the selected provider's catalog as a table
-// instead of opening the picker.
+// The menu filter matches label, value and description, so typing a provider
+// ("deepseek") or a model family ("gpt") narrows to those rows; section
+// headers yield while a filter is active.
+//
+// Cross-provider picks are never silent: if the same model id exists under
+// the current provider that row wins, otherwise a one-line confirm asks
+// before the provider is switched. `/models <query>` searches all groups;
+// `/models catalog` prints the selected provider's catalog as a table.
 
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { keyValues, table } from "../format.ts";
-import type { ConfigSetResult, ModelsListResult } from "../protocol.ts";
+import type { ConfigSetResult, ModelsListResult, ProvidersListResult } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
-import type { Command, FeatureHost } from "./types.ts";
+import { confirm, type Command, type FeatureHost } from "./types.ts";
 
-interface ModelEntry {
+export interface ModelEntry {
 	model: string;
 	provider: "openrouter" | "openai" | "anthropic" | "chatgpt" | "google" | "mistral" | "groq" | "together" | "deepseek" | "xai" | "opencode" | "custom" | "ollama" | string;
 	description: string;
@@ -78,12 +85,17 @@ export function catalogDescription(entry: ModelsListResult["models"][number]): s
 	return bits.join(" · ") || "provider catalog";
 }
 
-/** Ask the gateway for the selected provider's models; undefined when the
+/** Ask the gateway for the request session's models; undefined when the
  *  gateway cannot answer (older server or transport error) so callers can
- *  fall back to the curated list. */
+ *  fall back to the curated list. Session identity lets a resumed session
+ *  list ITS pinned provider (round-3 review finding 10). */
 export async function fetchCatalog(host: FeatureHost, refresh = false): Promise<ModelsListResult | undefined> {
+	const session = host.session();
+	const params: Record<string, unknown> = {};
+	if (refresh) params.refresh = true;
+	if (session) params.sessionId = session.id;
 	try {
-		return await host.request<ModelsListResult>("models.list", refresh ? { refresh: true } : {});
+		return await host.request<ModelsListResult>("models.list", params);
 	} catch {
 		return undefined;
 	}
@@ -97,12 +109,150 @@ export function catalogToEntries(result: ModelsListResult): ModelEntry[] {
 	}));
 }
 
+// ─── provider-grouped listing ────────────────────────────────────────────────
+
+/** One provider's rows in the grouped model picker. */
+export interface ModelGroup {
+	provider: string;
+	/** "builtin" | "named" (from providers.list; named = user-added). */
+	kind: string;
+	/** True for the session's selected provider (rendered first). */
+	current: boolean;
+	entries: ModelEntry[];
+	/** True when entries came from the provider catalog, false for curated fallback rows. */
+	fromCatalog: boolean;
+	/** Catalog source ("live" | "cache" | "fallback" | "none") when known. */
+	source: string | null;
+	/** Why live discovery did not answer, when the gateway said so. */
+	fetchError: string | null;
+}
+
+export interface GroupedModels {
+	current: string;
+	groups: ModelGroup[];
+}
+
+/** A picker row: a model entry, or a non-selectable provider section header. */
+export type ModelPickerRow = SelectItem & { section?: true };
+
 function toSelectItem(e: ModelEntry): SelectItem {
 	return {
 		value: `${e.provider}::${e.model}`,
 		label: `${e.model} (${e.provider})`,
 		description: e.description,
 	};
+}
+
+/**
+ * Pull every provider's catalog and assemble the grouped listing.
+ *
+ * One `providers.list` decides the provider order (the session's selected
+ * provider first, then the gateway's order — user-added named entries
+ * included). Every provider is then asked for its catalog in parallel:
+ * built-ins without a discovery endpoint answer instantly with an empty
+ * list, user-added providers answer from their TTL cache (pulling only when
+ * stale), and chatgpt answers from its TTL-cached Codex catalog. Providers
+ * the gateway cannot answer for keep their curated fallback rows.
+ *
+ * Older gateways without `providers.list` keep the legacy single-provider
+ * catalog call; the groups then come from the curated list order.
+ */
+export async function fetchModelGroups(host: FeatureHost): Promise<GroupedModels> {
+	const sessionProvider = (host.session()?.provider ?? "").trim().toLowerCase();
+	let listed: ProvidersListResult | undefined;
+	try {
+		listed = await host.request<ProvidersListResult>("providers.list");
+	} catch {
+		listed = undefined;
+	}
+	const current = sessionProvider || (listed?.selected ?? "").trim().toLowerCase() || "openrouter";
+	const sessionId = host.session()?.id;
+
+	const kinds = new Map<string, string>();
+	const names: string[] = [];
+	const push = (name: string) => {
+		if (name && !names.includes(name)) names.push(name);
+	};
+	push(current);
+	if (listed) {
+		for (const provider of listed.providers) {
+			kinds.set(provider.name, provider.kind);
+			push(provider.name);
+		}
+	} else {
+		for (const entry of CURATED_MODELS) push(entry.provider);
+	}
+
+	const results = new Map<string, ModelsListResult>();
+	if (listed) {
+		const settled = await Promise.allSettled(
+			names.map(async (name) => {
+				const params: Record<string, unknown> = { provider: name };
+				if (sessionId) params.sessionId = sessionId;
+				const result = await host.request<ModelsListResult>("models.list", params);
+				return { name, result };
+			}),
+		);
+		for (const outcome of settled) {
+			if (outcome.status === "fulfilled") {
+				results.set(outcome.value.name, outcome.value.result);
+			}
+		}
+	} else {
+		const catalog = await fetchCatalog(host);
+		if (catalog) results.set(catalog.provider || current, catalog);
+	}
+
+	const groups = names.map((name): ModelGroup => {
+		const curated = CURATED_MODELS.filter((entry) => entry.provider === name);
+		const catalog = results.get(name);
+		const fromCatalog = catalog !== undefined && catalog.models.length > 0;
+		return {
+			provider: name,
+			kind: kinds.get(name) ?? (curated.length ? "builtin" : "named"),
+			current: name === current,
+			entries: fromCatalog ? catalogToEntries(catalog) : curated,
+			fromCatalog,
+			source: catalog?.source ?? null,
+			fetchError: catalog?.fetchError ?? null,
+		};
+	});
+	return { current, groups };
+}
+
+/** Picker rows: each non-empty group gets a dim section header, then its
+ *  rows. Header values can never collide with a model value (provider names
+ *  cannot start with "_"). */
+export function buildModelPickerRows(groups: ModelGroup[]): ModelPickerRow[] {
+	const rows: ModelPickerRow[] = [];
+	for (const group of groups) {
+		if (!group.entries.length) continue;
+		rows.push({
+			value: `__section__::${group.provider}`,
+			label: `── ${group.provider}${group.current ? " (current)" : ""} · ${group.entries.length} model(s) ──`,
+			section: true,
+		});
+		for (const entry of group.entries) rows.push(toSelectItem(entry));
+	}
+	return rows;
+}
+
+/** Narrow groups to entries matching *query* (provider name, model id or
+ *  description), dropping empty groups. */
+export function filterModelGroups(groups: ModelGroup[], query: string): ModelGroup[] {
+	const q = query.trim().toLowerCase();
+	if (!q) return groups;
+	return groups
+		.map((group) => ({
+			...group,
+			entries: group.entries.filter(
+				(entry) =>
+					entry.model.toLowerCase().includes(q) ||
+					entry.provider.toLowerCase().includes(q) ||
+					entry.description.toLowerCase().includes(q),
+			),
+		}))
+		.filter((group) => group.entries.length > 0);
 }
 
 /** Open the curated-model picker; returns the chosen entry (or undefined). */
@@ -124,6 +274,77 @@ export function filterCuratedModels(query: string): ModelEntry[] {
 			e.provider.includes(q) ||
 			e.description.toLowerCase().includes(q),
 	);
+}
+
+/**
+ * Apply a picked row. Crossing providers is never silent: the same model id
+ * under the current provider always wins, and any real switch asks a
+ * one-line confirm first. Returns the applied entry (undefined on cancel).
+ */
+export async function applyGroupedPick(host: FeatureHost, grouped: GroupedModels, value: string): Promise<ModelEntry | undefined> {
+	const separator = value.indexOf("::");
+	if (separator <= 0) return undefined;
+	const provider = value.slice(0, separator);
+	const model = value.slice(separator + 2);
+	const entries = grouped.groups.flatMap((group) => group.entries);
+	const picked = entries.find((entry) => entry.provider === provider && entry.model === model);
+	if (!picked) return undefined;
+	let target = picked;
+	if (picked.provider !== grouped.current) {
+		const shadow = entries.find((entry) => entry.provider === grouped.current && entry.model === picked.model);
+		if (shadow) {
+			host.print(`"${picked.model}" also exists under ${grouped.current} — keeping the current provider.`, "info");
+			target = shadow;
+		} else {
+			const ok = await confirm(
+				host,
+				`Switch provider ${grouped.current} → ${picked.provider} for "${picked.model}"?`,
+				"Switch",
+			);
+			if (!ok) {
+				host.print("Provider unchanged.", "plain");
+				return undefined;
+			}
+			host.print(`Switching provider: ${grouped.current} → ${picked.provider}`, "info");
+		}
+	}
+	await applyModel(host, target);
+	const group = grouped.groups.find((candidate) => candidate.provider === target.provider);
+	if (group?.fromCatalog) {
+		host.print(`Catalog: ${group.entries.length} model(s) from ${group.provider} (${group.source})`, "plain");
+	}
+	if (group?.fetchError) {
+		host.print(`Live catalog for ${group.provider} failed: ${group.fetchError}`, "warning");
+	}
+	return target;
+}
+
+/** Open the grouped picker; applies the selection through applyGroupedPick. */
+export async function openGroupedModelPicker(host: FeatureHost, grouped: GroupedModels, warnMissingCurrent = true): Promise<void> {
+	const currentGroup = grouped.groups.find((group) => group.provider === grouped.current);
+	if (warnMissingCurrent && (!currentGroup || !currentGroup.entries.length)) {
+		const reason = currentGroup?.fetchError ? `: ${currentGroup.fetchError}` : "";
+		host.print(
+			`No live catalog for provider "${grouped.current}"${reason}. Other providers are listed below; use /default-model <id> for anything off-list.`,
+			"warning",
+		);
+	}
+	const rows = buildModelPickerRows(grouped.groups);
+	if (!rows.length) {
+		host.print("No models available from any provider right now. Use /default-model <id> to set one directly.", "warning");
+		return;
+	}
+	const choice = await host.pick("Models (Enter to apply)", rows);
+	if (!choice) return;
+	const applied = await applyGroupedPick(host, grouped, choice.value);
+	if (!applied) return;
+	const hints: Array<[string, unknown]> = [];
+	if (applied.provider === "chatgpt") {
+		hints.push(["Efforts", "ChatGPT models accept low/medium/high/xhigh/max per model — see /models catalog"]);
+	}
+	hints.push(["Off-list", "Use /default-model <id> for any other model id"]);
+	hints.push(["Keys", "Missing provider key? See /keys"]);
+	host.print(keyValues(hints), "plain");
 }
 
 async function printCatalog(host: FeatureHost): Promise<void> {
@@ -152,7 +373,7 @@ async function printCatalog(host: FeatureHost): Promise<void> {
 
 export const modelsCommand: Command = {
 	name: "models",
-	description: "Pick a model (catalog for chatgpt/added providers, curated menu otherwise)",
+	description: "Pick a model by provider group (catalog first, curated fallback)",
 	argumentHint: "[search|catalog]",
 	getArgumentCompletions: (prefix: string) => {
 		const typed = prefix.trimStart().toLowerCase();
@@ -168,51 +389,16 @@ export const modelsCommand: Command = {
 			await printCatalog(host);
 			return;
 		}
+		const grouped = await fetchModelGroups(host);
 		if (!sub) {
-			const catalog = await fetchCatalog(host);
-			if (catalog?.models.length) {
-				const entries = catalogToEntries(catalog);
-				const entry = await pickCuratedModel(host, entries);
-				if (!entry) return;
-				host.print(`Catalog: ${entries.length} model(s) from ${catalog.provider} (${catalog.source})`, "plain");
-				await applyModel(host, entry);
-				host.print(
-					keyValues([
-						["Efforts", "ChatGPT models accept low/medium/high/xhigh/max per model — see /models catalog"],
-						["Off-list", "Use /default-model <id> for any other model id"],
-						["Keys", "Missing provider key? See /keys"],
-					]),
-					"plain",
-				);
-				return;
-			}
-			const entries = CURATED_MODELS;
-			const entry = await pickCuratedModel(host, entries);
-			if (!entry) return;
-			await applyModel(host, entry);
-			host.print(
-				keyValues([
-					["Off-list", "Use /default-model <id> for any other model id"],
-					["Keys", "Missing provider key? See /keys"],
-				]),
-				"plain",
-			);
+			await openGroupedModelPicker(host, grouped);
 			return;
 		}
-		const entries = filterCuratedModels(args);
-		if (!entries.length) {
-			host.print(`No curated model matches "${args.trim()}". Use /default-model <id> for anything off-list.`, "warning");
+		const matches = filterModelGroups(grouped.groups, args);
+		if (!matches.length) {
+			host.print(`No model matches "${args.trim()}" across providers. Use /default-model <id> for anything off-list.`, "warning");
 			return;
 		}
-		const entry = await pickCuratedModel(host, entries);
-		if (!entry) return;
-		await applyModel(host, entry);
-		host.print(
-			keyValues([
-				["Off-list", "Use /default-model <id> for any other model id"],
-				["Keys", "Missing provider key? See /keys"],
-			]),
-			"plain",
-		);
+		await openGroupedModelPicker(host, { current: grouped.current, groups: matches }, false);
 	},
 };

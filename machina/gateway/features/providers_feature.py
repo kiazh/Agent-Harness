@@ -2,15 +2,21 @@
 
 Surfaces the real catalogs to the UI:
 
-* ``models.list`` — the selected provider's models. ChatGPT-account
+* ``models.list`` — the request session's models. ChatGPT-account
   providers return the live per-account Codex catalog (slugs, per-model
   reasoning efforts, context windows; TTL-cached, with the Codex CLI cache
   or the bundled verified snapshot as honest fallbacks and a
   ``fetchError``/``source`` describing which one answered). User-added
   providers return their pulled OpenAI-compatible ``/models`` catalog.
-* ``models.setEffort`` — validate one reasoning effort against the
-  selected model's catalog entry (ChatGPT) or the shared wire vocabulary
-  (other providers) and apply it.
+  The provider is resolved from the request's session identity (explicit
+  ``sessionId``, else the session the client last created/resumed), so a
+  resumed session pinned to another route lists ITS provider; an explicit
+  ``provider`` parameter still wins for cross-provider listings.
+* ``models.setEffort`` — validate one reasoning effort against the request
+  session's pinned model catalog entry (ChatGPT) or the shared wire
+  vocabulary (other providers) and apply it. Unset aliases (``off``,
+  ``none``, ``default``, ``auto``) clear the setting instead of failing
+  provider validation.
 * ``providers.list/add/remove`` — manage user-added named providers. Keys
   are handled by the same mechanism ``/keys`` uses (git-ignored ``.env``,
   0600 writes); the JSON store keeps metadata only.
@@ -24,10 +30,11 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
-from machina.core.config import config
+from machina.core.config import DEFAULTS, config
 from machina.core.exceptions import ValidationError
 from machina.core.provider import catalog
 from machina.core.provider.specs import PROVIDER_SPECS
+from machina.core.session import session_manager
 from machina.gateway.errors import INVALID_PARAMS, RpcError
 from machina.gateway.features._common import _bool, _str
 from machina.security import providers as store
@@ -109,10 +116,37 @@ async def _named_models(provider: str, refresh: bool) -> dict[str, Any]:
     )
 
 
+async def _session_route(gw: Gateway, params: dict[str, Any]) -> tuple[str, str]:
+    """The (provider, model) a model command acts on.
+
+    Explicit session identity wins; otherwise the session the client most
+    recently opened (``session.create`` / ``session.resume``) is consulted.
+    A resumed session can pin a route the gateway defaults do not carry,
+    and its route is what the next turn will use (round-3 review finding
+    10). The gateway defaults are the final fallback.
+    """
+    session = None
+    if params.get("sessionId") is not None:
+        session = await gw.get_session(params)
+    else:
+        opened = gw.opened_session_id()
+        if opened is not None:
+            session = await session_manager.get(opened)
+    if session is not None:
+        provider = str(session.provider or "").strip().lower()
+        if provider:
+            return provider, str(session.model or "").strip()
+    return str(gw.provider or "").strip().lower(), str(gw.model or "").strip()
+
+
 async def models_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Models for a provider (default: the gateway's selected one)."""
+    """Models for a provider (default: the request session's pinned one)."""
     gw.require_db()
-    provider = str(params.get("provider") or gw.provider or "").strip().lower()
+    explicit = str(params.get("provider") or "").strip().lower()
+    if explicit:
+        provider = explicit
+    else:
+        provider, _model = await _session_route(gw, params)
     if not provider:
         raise RpcError(INVALID_PARAMS, "provider is required")
     refresh = _bool(params, "refresh")
@@ -128,7 +162,7 @@ async def models_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def models_set_effort(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Validate + apply a reasoning effort for the selected provider/model."""
+    """Validate + apply a reasoning effort for the request session's route."""
     gw.require_db()
     raw = params.get("effort")
     if raw is None:
@@ -137,9 +171,13 @@ async def models_set_effort(gw: Gateway, params: dict[str, Any]) -> dict[str, An
         effort = raw.strip().lower()
     else:
         raise RpcError(INVALID_PARAMS, "effort must be a string")
+    # The UI advertises "off"; every unset alias means "provider default"
+    # and clears the setting instead of failing provider validation
+    # (round-3 review finding 11).
+    if effort in catalog.UNSET_EFFORT_SENTINELS:
+        effort = ""
     persist = _bool(params, "persist")
-    provider = str(gw.provider or "").strip().lower()
-    model = str(gw.model or "").strip()
+    provider, model = await _session_route(gw, params)
     if provider == "chatgpt":
         try:
             normalized = catalog.validate_effort(model, effort)
@@ -236,16 +274,41 @@ async def providers_add(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def providers_remove(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
-    """Remove a named provider (never a built-in) and deselect it if active."""
+    """Remove a named provider (never a built-in) and every trace it left.
+
+    The store call deletes the entry (with its cached model list), the
+    derived ``.env`` key line, the live env var, and — because ``PROVIDERS``
+    consults the store live — its dynamic-registry membership. When the
+    removed provider was the gateway's active one, both provider and model
+    fall back to the shipped defaults so the next turn cannot route to a
+    provider that no longer exists; the response reports the cleanup and the
+    fallback for a visible notice.
+    """
     gw.require_db()
     name = _str(params, "name", max_len=64).lower()
-    if name not in store.provider_names():
-        raise RpcError(INVALID_PARAMS, f"unknown user-added provider: {name}")
-    removed = await asyncio.to_thread(store.remove_provider, name)
-    if not removed:
+    report = await asyncio.to_thread(store.remove_provider, name)
+    if not report or not report.get("storeEntry"):
         raise RpcError(INVALID_PARAMS, f"unknown user-added provider: {name}")
     switched: str | None = None
+    model_reset: str | None = None
     if str(gw.provider or "").strip().lower() == name:
         gw.provider = "openrouter"
-        switched = "openrouter"
-    return {"provider": name, "removed": True, "selected": gw.provider, "switchedTo": switched}
+        switched = str(gw.provider)
+        gw.model = str(DEFAULTS["model"])
+        model_reset = gw.model
+    cleanup = {
+        "storeEntry": bool(report.get("storeEntry")),
+        "apiKeyEnv": report.get("apiKeyEnv"),
+        "envLineRemoved": bool(report.get("envLineRemoved")),
+        "envVarRemoved": bool(report.get("envVarRemoved")),
+        "cachedModels": int(report.get("cachedModels") or 0),
+        "registryEntry": bool(report.get("registryEntry")),
+    }
+    return {
+        "provider": name,
+        "removed": True,
+        "selected": gw.provider,
+        "switchedTo": switched,
+        "modelResetTo": model_reset,
+        "cleanup": cleanup,
+    }

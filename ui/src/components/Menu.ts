@@ -9,6 +9,21 @@ import { isSelectionRow, selectionBar, theme } from "../theme.ts";
 
 export type { SelectItem };
 
+/**
+ * A non-selectable section header row for grouped menus (e.g. the provider
+ * sections in the model picker). Marked rows render dim and are skipped by
+ * ↑/↓/home/end/page keys and Enter; a typed filter hides them so search
+ * results stay a flat, navigable list. Purely additive: menus without marked
+ * rows behave exactly as before.
+ */
+export interface MenuSectionItem extends SelectItem {
+	section: true;
+}
+
+function isSection(item: SelectItem): boolean {
+	return (item as { section?: unknown }).section === true;
+}
+
 export interface MenuOptions {
 	hint?: string;
 	/** Explicit row cap; the live viewport still bounds it. Omit for the full viewport. */
@@ -48,7 +63,12 @@ export class Menu implements Component {
 		this.hint = options.hint ?? (this.multiSelect ? "↑↓ move · space check · enter review · esc cancel" : "enter select · esc back");
 		this.visibleRows = options.visibleRows === undefined ? undefined : Math.max(1, options.visibleRows);
 		this.tui = options.tui;
-		this.selectedValue = options.initialValue ?? items[0]?.value;
+		const initial = options.initialValue === undefined
+			? undefined
+			: items.find((item) => item.value === options.initialValue);
+		this.selectedValue = initial && !isSection(initial)
+			? initial.value
+			: items.find((item) => !isSection(item))?.value;
 	}
 
 	/** Currently applied filter text (for tests and budget restores). */
@@ -57,7 +77,12 @@ export class Menu implements Component {
 	}
 
 	getSelectedItem(): SelectItem | null {
-		return this.filtered().find((item) => item.value === this.selectedValue) ?? null;
+		return this.selectable().find((item) => item.value === this.selectedValue) ?? null;
+	}
+
+	/** Rows navigation can land on: filtered items minus section headers. */
+	private selectable(): SelectItem[] {
+		return this.filtered().filter((item) => !isSection(item));
 	}
 
 	/** Update the row budget cap (e.g. on resize), preserving the selection. */
@@ -69,13 +94,16 @@ export class Menu implements Component {
 	filtered(): SelectItem[] {
 		const query = this.filter.toLowerCase();
 		if (!query) return [...this.items];
+		// Section headers exist to organize the unfiltered view; a search is
+		// a flat result list (and never matches a header itself).
 		return this.items.filter((item) =>
+			!isSection(item) &&
 			`${item.label ?? item.value} ${item.value} ${item.description ?? ""}`.toLowerCase().includes(query),
 		);
 	}
 
 	private clampSelection(): void {
-		const visible = this.filtered();
+		const visible = this.selectable();
 		if (!visible.some((item) => item.value === this.selectedValue)) {
 			this.selectedValue = visible[0]?.value;
 			const current = this.getSelectedItem();
@@ -91,7 +119,7 @@ export class Menu implements Component {
 	}
 
 	private move(delta: number): void {
-		const visible = this.filtered();
+		const visible = this.selectable();
 		if (visible.length === 0) return;
 		const at = visible.findIndex((item) => item.value === this.selectedValue);
 		const next = Math.max(0, Math.min(visible.length - 1, (at < 0 ? 0 : at) + delta));
@@ -99,7 +127,7 @@ export class Menu implements Component {
 	}
 
 	private jump(to: "start" | "end"): void {
-		const visible = this.filtered();
+		const visible = this.selectable();
 		if (visible.length === 0) return;
 		this.select((to === "start" ? visible[0] : visible.at(-1))!.value);
 	}
@@ -127,7 +155,7 @@ export class Menu implements Component {
 	handleMouse(event: TuiMouseEvent): ReturnType<NonNullable<Component["handleMouse"]>> {
 		if (!this.multiSelect || event.button !== "left") return undefined;
 		const item = this.visibleWindow(this.filtered())[event.y - 2];
-		if (!item) return undefined;
+		if (!item || isSection(item)) return undefined;
 		if (event.type === "click") {
 			this.select(item.value);
 			this.toggle(item.value);
@@ -198,7 +226,11 @@ export class Menu implements Component {
 		const total = Math.max(0, width);
 		const visible = this.filtered();
 		const selected = this.getSelectedItem()?.value;
-		const count = theme.dim(`(${visible.length}/${this.items.length}${this.multiSelect ? ` · ${this.checked.size} checked` : ""})`);
+		// Section headers are chrome, not items: counts and navigation only
+		// see selectable rows.
+		const rows = visible.filter((item) => !isSection(item)).length;
+		const totalItems = this.items.filter((item) => !isSection(item)).length;
+		const count = theme.dim(`(${rows}/${totalItems}${this.multiSelect ? ` · ${this.checked.size} checked` : ""})`);
 		const out = [truncateToWidth(`${theme.dim(this.title)} ${count}`, content)];
 		out.push(
 			this.filter
@@ -211,6 +243,10 @@ export class Menu implements Component {
 			// Live budget: follow the constructed cap and the viewport so the
 			// selection and cancel hint stay visible on short windows.
 			for (const item of this.visibleWindow(visible)) {
+				if (isSection(item)) {
+					out.push(truncateToWidth(theme.dim(item.label ?? item.value), content));
+					continue;
+				}
 				const label = `${this.multiSelect ? (this.checked.has(item.value) ? "[x] " : "[ ] ") : ""}${item.label ?? item.value}`;
 				const head = item.value === selected
 					? `${ICONS.selectedMarker} ${label}`

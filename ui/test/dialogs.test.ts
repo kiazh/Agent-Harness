@@ -384,6 +384,47 @@ test("bare output with nothing retained stays local and quiet", async (t) => {
 	assert.equal(requests.length, before, "inspection never hits the gateway");
 });
 
+test("provider section headers organize a menu without becoming selectable rows", () => {
+	const rows = [
+		{ value: "__section__::chatgpt", label: "── chatgpt (current) · 2 model(s) ──", section: true },
+		{ value: "chatgpt::gpt-a", label: "gpt-a (chatgpt)" },
+		{ value: "chatgpt::gpt-b", label: "gpt-b (chatgpt)" },
+		{ value: "__section__::deepseek", label: "── deepseek · 1 model(s) ──", section: true },
+		{ value: "deepseek::deepseek-chat", label: "deepseek-chat (deepseek)" },
+	];
+	const menu = new Menu("Models", rows, {});
+	let selected = "";
+	let cancelled = 0;
+	menu.onSelect = (item) => void (selected = item.value);
+	menu.onCancel = () => void cancelled++;
+	// The initial selection is the first selectable row, never a header.
+	assert.equal(menu.getSelectedItem()?.value, "chatgpt::gpt-a");
+	menu.handleInput("\x1b[B");
+	assert.equal(menu.getSelectedItem()?.value, "chatgpt::gpt-b");
+	menu.handleInput("\x1b[B");
+	assert.equal(menu.getSelectedItem()?.value, "deepseek::deepseek-chat", "arrows skip headers");
+	menu.handleInput("\r");
+	assert.equal(selected, "deepseek::deepseek-chat");
+	// Counts ignore headers; headers render dim without the selection marker.
+	const frame = menu.render(80).map((line) => stripTerminalSequences(line)).join("\n");
+	assert.match(frame, /\(3\/3\)/);
+	assert.match(frame, /── chatgpt \(current\)/);
+	assert.doesNotMatch(frame, /❯ ──/);
+	// A typed filter drops headers and keeps every matching model row.
+	menu.handleInput("deepseek");
+	assert.deepEqual(menu.filtered().map((row) => row.value), ["deepseek::deepseek-chat"]);
+	const filtered = menu.render(80).map((line) => stripTerminalSequences(line)).join("\n");
+	assert.doesNotMatch(filtered, /── deepseek/);
+	// A menu with only a header has nothing to select and Esc still cancels.
+	const headerOnly = new Menu("Models", [rows[0]!], {});
+	headerOnly.onCancel = () => void cancelled++;
+	assert.equal(headerOnly.getSelectedItem(), null);
+	headerOnly.handleInput("\r");
+	assert.equal(selected, "deepseek::deepseek-chat", "Enter on a header selects nothing");
+	headerOnly.handleInput("\x1b");
+	assert.equal(cancelled, 1);
+});
+
 test("I05 menus filter across label, value and description with honest empty states", () => {
 	const items = [
 		{ value: "alpha", label: "Alpha session", description: "first" },

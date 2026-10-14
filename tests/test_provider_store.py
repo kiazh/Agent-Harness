@@ -49,6 +49,10 @@ def test_names_and_urls_are_validated(store_env):
     with pytest.raises(store.ProviderStoreError):
         store.add_provider("openai", "http://127.0.0.1:1/v1")  # reserved built-in
     with pytest.raises(store.ProviderStoreError):
+        store.add_provider("OpenAI", "http://127.0.0.1:1/v1")  # case-insensitive too
+    with pytest.raises(store.ProviderStoreError):
+        store.add_provider("chatgpt", "http://127.0.0.1:1/v1")
+    with pytest.raises(store.ProviderStoreError):
         store.add_provider("ok-name", "ftp://host/v1")
     with pytest.raises(store.ProviderStoreError):
         store.add_provider("ok-name", "http://user:pass@host/v1")
@@ -100,17 +104,43 @@ def test_update_preserves_models_and_created_at(store_env):
     assert store.get_provider_entry("acme")["base_url"].endswith(":9001/v1")
 
 
-def test_remove_clears_the_key_entry(store_env):
+def test_remove_deletes_every_trace_and_reports(store_env):
     store.add_provider(
         "acme", "http://127.0.0.1:9000/v1", api_key="sk-x", env_file=store_env["env"]
     )
-    assert store.remove_provider("acme") is True
-    assert store.remove_provider("acme") is False
+    store.save_models("acme", [{"id": "m1"}, {"id": "m2"}])
+    report = store.remove_provider("acme")
+    assert report == {
+        "provider": "acme",
+        "storeEntry": True,
+        "apiKeyEnv": "MACHINA_PROVIDER_ACME_API_KEY",
+        "envLineRemoved": True,
+        "envVarRemoved": True,
+        "cachedModels": 2,
+        "registryEntry": True,
+    }
+    # Store entry (with its cached model list), env var, and .env line are gone.
+    assert store.get_provider_entry("acme") is None
     assert store.provider_names() == ()
     assert "MACHINA_PROVIDER_ACME_API_KEY" not in os.environ
     env_text = store_env["env"].read_text(encoding="utf-8")
-    assert "MACHINA_PROVIDER_ACME_API_KEY=" in env_text  # blanked, not deleted
+    assert "MACHINA_PROVIDER_ACME_API_KEY" not in env_text  # deleted, not blanked
     assert "sk-x" not in env_text
+    # Idempotent + honest: a second removal has nothing left to clean.
+    assert store.remove_provider("acme") is None
+
+
+def test_remove_keeps_unrelated_env_lines_and_reports_missing_traces(store_env):
+    store_env["env"].write_text("# unrelated\nOPENROUTER_API_KEY=sk-or-keep\n", encoding="utf-8")
+    store.add_provider("acme", "http://127.0.0.1:9000/v1", env_file=store_env["env"])
+    report = store.remove_provider("acme")
+    assert report is not None
+    assert report["envLineRemoved"] is False  # no key was ever stored
+    assert report["envVarRemoved"] is False
+    assert report["cachedModels"] == 0
+    env_text = store_env["env"].read_text(encoding="utf-8")
+    assert "# unrelated" in env_text
+    assert "OPENROUTER_API_KEY=sk-or-keep" in env_text
 
 
 def test_corrupt_store_reads_as_empty(store_env):
@@ -283,3 +313,69 @@ def test_named_provider_readiness_keyless_local_is_ready(store_env, monkeypatch)
     report = runtime._detect_providers()
     assert report["chat_provider"] == "ready"
     assert "no key (local endpoint)" in report["chat_provider_reason"]
+
+
+# ─── env_file.remove_env_values (the line-deletion counterpart) ─────────────
+
+
+def test_remove_env_values_deletes_only_target_lines(store_env):
+    from machina.security.env_file import read_env_values, remove_env_values
+
+    env = store_env["env"]
+    env.write_text(
+        '# keep this comment\nA_KEY=1\nB_KEY="quoted value"\nC_KEY=\n',
+        encoding="utf-8",
+    )
+    removed = remove_env_values(["A_KEY", "MISSING_KEY"], path=env)
+    assert removed == ["A_KEY"]
+    text = env.read_text(encoding="utf-8")
+    assert "# keep this comment" in text
+    assert "A_KEY" not in text
+    assert 'B_KEY="quoted value"' in text  # unrelated lines untouched
+    assert "C_KEY=" in text
+    assert read_env_values(env).get("B_KEY") == "quoted value"
+    assert remove_env_values(["A_KEY"], path=env) == []  # idempotent
+    with pytest.raises(ValueError):
+        remove_env_values(["bad key!"], path=env)
+
+
+# ─── CLI removal: traces + configured-provider fallback ─────────────────────
+
+
+def test_cli_remove_cleans_traces_and_falls_back(store_env, monkeypatch, tmp_path):
+    import importlib
+
+    from typer.testing import CliRunner
+
+    from machina.cli import app
+    from machina.security.env_file import set_env_values
+
+    # machina.core.config is shadowed by the singleton on the package; reach
+    # the module itself for the DEFAULT_CONFIG_PATH patch.
+    config_module = importlib.import_module("machina.core.config")
+    config = config_module.config
+    monkeypatch.setattr(config_module, "DEFAULT_CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(config, "provider", config.get("provider"))
+    monkeypatch.setattr(config, "model", config.get("model"))
+    monkeypatch.setenv("MACHINA_PROVIDER", "acme")
+    monkeypatch.setenv("MACHINA_MODEL", "m1")
+    store.add_provider(
+        "acme", "https://api.example.com/v1", api_key="sk-x", env_file=store_env["env"]
+    )
+    store.save_models("acme", [{"id": "m1"}])
+    set_env_values({"MACHINA_PROVIDER": "acme", "MACHINA_MODEL": "m1"}, path=store_env["env"])
+
+    result = CliRunner().invoke(app, ["providers", "remove", "acme", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "MACHINA_PROVIDER_ACME_API_KEY line in .env" in result.output
+    assert "1 cached model(s)" in result.output
+    assert "fell back to openrouter" in result.output
+    assert store.get_provider_entry("acme") is None
+    env_text = store_env["env"].read_text(encoding="utf-8")
+    assert "MACHINA_PROVIDER_ACME_API_KEY" not in env_text
+    assert "MACHINA_PROVIDER=openrouter" in env_text
+    assert f"MACHINA_MODEL={config_module.DEFAULTS['model']}" in env_text
+    assert config.get("provider") == "openrouter"
+    assert config.get("model") == config_module.DEFAULTS["model"]
+    assert (tmp_path / "config.yaml").is_file()

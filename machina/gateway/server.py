@@ -184,6 +184,11 @@ class Gateway:
         self.runtime = runtime if runtime is not None else runtime_services
         self.model: str = config.get("model")
         self.provider: str = config.get("provider")
+        # Round-3 review finding 10: the last session the client created or
+        # resumed. Model commands without explicit session identity resolve
+        # that session's pinned route before falling back to the gateway
+        # defaults — a resumed session can pin another provider/model.
+        self._opened_session_id: uuid.UUID | None = None
         self.closing = False
         self._db_ready = False
         self._job_runner = None
@@ -439,6 +444,14 @@ class Gateway:
             raise RpcError(SESSION_NOT_FOUND, f"session {sid} not found")
         return session
 
+    def opened_session_id(self) -> uuid.UUID | None:
+        """Session whose pinned route model commands default to (round-3 F10).
+
+        Set by ``session.create`` / ``session.resume``; when the session no
+        longer resolves the callers fall back to the gateway defaults.
+        """
+        return self._opened_session_id
+
     def _set_provider(self, value: Any) -> None:
         if value not in PROVIDERS:
             raise RpcError(INVALID_PARAMS, f"provider must be one of: {', '.join(PROVIDERS)}")
@@ -542,6 +555,7 @@ class Gateway:
             provider=provider,
             context_budget=config.get("context_budget"),
         )
+        self._opened_session_id = session.id
         try:
             from machina.gateway.features.mode import grant_full_default
 
@@ -576,6 +590,7 @@ class Gateway:
     async def _session_resume(self, params: dict[str, Any]) -> dict[str, Any]:
         self.require_db()
         session = await self.get_session(params)
+        self._opened_session_id = session.id
         chunks = await context_manager.get_transcript_chunks(session.id)
         # W5: get_transcript_chunks has no LIMIT; the REST session endpoint
         # bounds history at 200 chunks (machina/api/routes/sessions.py). Slice

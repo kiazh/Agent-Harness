@@ -21,7 +21,13 @@ FIXTURE = Path(__file__).resolve().parent / "fixtures" / "model_catalog_chatgpt.
 
 
 def _gw(provider: str = "chatgpt", model: str = "gpt-6.1-sol") -> SimpleNamespace:
-    return SimpleNamespace(require_db=lambda: None, provider=provider, model=model)
+    return SimpleNamespace(
+        require_db=lambda: None,
+        provider=provider,
+        model=model,
+        # No client-opened session by default: the gateway defaults stand in.
+        opened_session_id=lambda: None,
+    )
 
 
 @pytest.fixture
@@ -113,6 +119,58 @@ async def test_models_list_rejects_unknown_provider(sandbox):
         await feature.models_list(_gw(provider="ghost"), {})
 
 
+async def test_models_list_resolves_the_opened_session_route(sandbox, monkeypatch):
+    """Round-3 F10: without explicit identity, the last created/resumed
+    session's pinned provider answers — not the gateway default."""
+    import uuid
+    from unittest.mock import AsyncMock
+
+    from machina.core.models import Session
+    from machina.core.provider import catalog
+
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    models = catalog.parse_catalog(payload, source="live")
+    monkeypatch.setattr(catalog, "fetch_catalog_for_account", lambda **kwargs: models)
+    session = Session(id=uuid.uuid4(), title="resumed", model="gpt-6.1-sol", provider="chatgpt")
+    monkeypatch.setattr(feature.session_manager, "get", AsyncMock(return_value=session))
+
+    gw = _gw(provider="openrouter", model="openrouter/free")
+    gw.opened_session_id = lambda: session.id
+    out = await feature.models_list(gw, {})
+    assert out["provider"] == "chatgpt"
+    assert [row["id"] for row in out["models"]] == ["gpt-6.1-sol", "gpt-6-luna"]
+
+
+async def test_models_list_explicit_session_and_provider_win(sandbox):
+    import uuid
+    from unittest.mock import AsyncMock
+
+    from machina.core.models import Session
+
+    session = Session(id=uuid.uuid4(), title="resumed", model="gpt-6.1-sol", provider="chatgpt")
+    gw = _gw(provider="openrouter", model="openrouter/free")
+    gw.get_session = AsyncMock(return_value=session)
+    # Explicit session identity resolves the pinned provider.
+    out = await feature.models_list(gw, {"sessionId": str(session.id)})
+    assert out["provider"] == "chatgpt"
+    assert gw.get_session.await_count == 1
+    # An explicit provider parameter still wins (cross-provider listings).
+    out = await feature.models_list(gw, {"sessionId": str(session.id), "provider": "openai"})
+    assert out["provider"] == "openai"
+    assert out["source"] == "none"
+
+
+async def test_models_list_falls_back_when_the_opened_session_is_gone(sandbox, monkeypatch):
+    import uuid
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(feature.session_manager, "get", AsyncMock(return_value=None))
+    gw = _gw(provider="openrouter", model="openrouter/free")
+    gw.opened_session_id = lambda: uuid.uuid4()
+    out = await feature.models_list(gw, {})
+    assert out["provider"] == "openrouter"
+
+
 # ─── models.setEffort ───────────────────────────────────────────────────────
 
 
@@ -154,6 +212,48 @@ async def test_set_effort_off_clears(sandbox, monkeypatch):
     assert config.get("reasoning_effort") == ""
 
 
+async def test_set_effort_unset_aliases_clear_outside_chatgpt(sandbox):
+    """Round-3 F11: the UI advertises ``off``; every unset alias clears the
+    setting for non-ChatGPT providers instead of failing validation."""
+    from machina.core.config import config
+
+    gw = _gw(provider="openrouter", model="openrouter/free")
+    for alias in ("off", "OFF", "none", "default", "auto", ""):
+        config.set("reasoning_effort", "high")
+        out = await feature.models_set_effort(gw, {"effort": alias})
+        assert out["effort"] is None, alias
+        assert config.get("reasoning_effort") == "", alias
+
+
+async def test_set_effort_validates_against_the_opened_session_route(sandbox, monkeypatch):
+    """Round-3 F10: effort levels validate against the resumed session's
+    pinned model (``max`` is valid there, invalid for the gw defaults)."""
+    import uuid
+    from unittest.mock import AsyncMock
+
+    from machina.core.models import Session
+
+    _seed_live_catalog(monkeypatch)
+    session = Session(id=uuid.uuid4(), title="resumed", model="gpt-6-luna", provider="chatgpt")
+    monkeypatch.setattr(feature.session_manager, "get", AsyncMock(return_value=session))
+    gw = _gw(provider="openrouter", model="openrouter/free")
+    gw.opened_session_id = lambda: session.id
+
+    out = await feature.models_set_effort(gw, {"effort": "max"})
+    assert out["provider"] == "chatgpt"
+    assert out["model"] == "gpt-6-luna"
+    assert out["effort"] == "max"
+    assert "max" in out["supported"]
+
+    cleared = await feature.models_set_effort(gw, {"effort": "off"})
+    assert cleared["effort"] is None
+
+    # The same effort is still rejected when the session route is not ChatGPT.
+    rejected = _gw(provider="openrouter", model="openrouter/free")
+    with pytest.raises(RpcError):
+        await feature.models_set_effort(rejected, {"effort": "max"})
+
+
 # ─── providers.list / add / remove ──────────────────────────────────────────
 
 
@@ -161,6 +261,7 @@ async def test_providers_list_reports_builtin_and_named(sandbox):
     from machina.security import providers as store
 
     store.add_provider("acme", "http://127.0.0.1:9000/v1", api_key="sk-1")
+    store.save_models("acme", [{"id": "m1"}, {"id": "m2"}])
     out = await feature.providers_list(_gw(provider="acme"), {})
     assert out["selected"] == "acme"
     names = [row["name"] for row in out["providers"]]
@@ -170,6 +271,9 @@ async def test_providers_list_reports_builtin_and_named(sandbox):
     assert acme["keySet"] is True
     assert acme["keylessLocal"] is True  # 127.0.0.1
     assert acme["selected"] is True
+    # The /keys merge in the UI reads exactly these fields.
+    assert acme["apiKeyEnv"] == "MACHINA_PROVIDER_ACME_API_KEY"
+    assert acme["modelsCount"] == 2
 
 
 async def test_providers_add_saves_key_and_pulls_models(sandbox, monkeypatch):
@@ -217,19 +321,103 @@ async def test_providers_add_rejects_reserved_names(sandbox):
 
 
 async def test_providers_remove_deselects_the_active_one(sandbox):
+    from machina.core.config import DEFAULTS
     from machina.security import providers as store
 
     store.add_provider("acme", "http://127.0.0.1:9000/v1")
-    gw = _gw(provider="acme")
+    gw = _gw(provider="acme", model="acme-model")
     out = await feature.providers_remove(gw, {"name": "acme"})
     assert out["removed"] is True
     assert out["switchedTo"] == "openrouter"
+    assert out["selected"] == "openrouter"
+    assert out["modelResetTo"] == DEFAULTS["model"]
     assert gw.provider == "openrouter"
+    assert gw.model == DEFAULTS["model"]
     with pytest.raises(RpcError):
         await feature.providers_remove(gw, {"name": "acme"})
     # Built-ins can never be removed through this path.
     with pytest.raises(RpcError):
         await feature.providers_remove(gw, {"name": "chatgpt"})
+
+
+async def test_providers_remove_cleans_every_trace_and_reports(sandbox):
+    from machina.core.provider import PROVIDERS
+    from machina.security import providers as store
+
+    store.add_provider("acme", "https://api.example.com/v1", api_key="sk-1")
+    store.save_models("acme", [{"id": "m1"}, {"id": "m2"}])
+    assert "acme" in PROVIDERS
+    gw = _gw(provider="openrouter", model="openrouter/free")
+
+    out = await feature.providers_remove(gw, {"name": "acme"})
+
+    assert out["switchedTo"] is None
+    assert out["modelResetTo"] is None
+    assert out["cleanup"] == {
+        "storeEntry": True,
+        "apiKeyEnv": "MACHINA_PROVIDER_ACME_API_KEY",
+        "envLineRemoved": True,
+        "envVarRemoved": True,
+        "cachedModels": 2,
+        "registryEntry": True,
+    }
+    # Store entry + cached models, .env line, live env var, registry row: all gone.
+    assert store.get_provider_entry("acme") is None
+    assert "acme" not in PROVIDERS
+    assert "MACHINA_PROVIDER_ACME_API_KEY" not in os.environ
+    env_text = Path(os.environ["MACHINA_ENV_FILE"]).read_text(encoding="utf-8")
+    assert "MACHINA_PROVIDER_ACME_API_KEY" not in env_text
+    assert "sk-1" not in env_text
+    # Idempotent and honest: nothing left to remove.
+    with pytest.raises(RpcError):
+        await feature.providers_remove(gw, {"name": "acme"})
+
+
+async def test_providers_remove_reports_missing_traces_honestly(sandbox):
+    from machina.security import providers as store
+
+    store.add_provider("acme", "http://127.0.0.1:9000/v1")  # keyless, no .env line
+    out = await feature.providers_remove(_gw(provider="openrouter"), {"name": "acme"})
+    assert out["cleanup"]["envLineRemoved"] is False
+    assert out["cleanup"]["envVarRemoved"] is False
+    assert out["cleanup"]["cachedModels"] == 0
+
+
+# ─── dynamic /keys entries: derived provider env names through secrets.* ────
+
+
+class _FakeGW:
+    def require_db(self) -> None:
+        return None
+
+
+async def test_secrets_accept_provider_env_keys(sandbox, monkeypatch):
+    """keys.ts merges MACHINA_PROVIDER_<NAME>_API_KEY rows; the gateway must
+    accept those derived names on set/clear while control-plane names stay
+    refused."""
+    from machina.gateway.features.secrets import secrets_clear, secrets_set
+    from machina.security.env_file import read_env_values
+
+    monkeypatch.delenv("MACHINA_PROVIDER_ACME_API_KEY", raising=False)
+    out = await secrets_set(
+        _FakeGW(),  # type: ignore[arg-type]
+        {"key": "machina_provider_acme_api_key", "value": "sk-acme", "persist": True},
+    )
+    assert out["key"] == "MACHINA_PROVIDER_ACME_API_KEY"
+    assert os.environ["MACHINA_PROVIDER_ACME_API_KEY"] == "sk-acme"
+    assert read_env_values().get("MACHINA_PROVIDER_ACME_API_KEY") == "sk-acme"
+
+    cleared = await secrets_clear(
+        _FakeGW(),
+        {"key": "MACHINA_PROVIDER_ACME_API_KEY"},  # type: ignore[arg-type]
+    )
+    assert cleared == {"key": "MACHINA_PROVIDER_ACME_API_KEY", "set": False}
+    assert "MACHINA_PROVIDER_ACME_API_KEY" not in os.environ
+    assert read_env_values().get("MACHINA_PROVIDER_ACME_API_KEY", "") == ""
+
+    for key in ("MACHINA_GATEWAY_TOKEN", "MACHINA_PROVIDER_ACME", "MACHINA_PROVIDER_API_KEY"):
+        with pytest.raises(RpcError):
+            await secrets_set(_FakeGW(), {"key": key, "value": "x"})  # type: ignore[arg-type]
 
 
 # ─── dynamic registry through the UNTOUCHED gateway validation sites ────────
@@ -266,3 +454,57 @@ async def test_session_set_model_accepts_named_provider(sandbox, monkeypatch):
     gw = SimpleNamespace(require_db=lambda: None, get_session=AsyncMock(return_value=session))
     result = await feature.session_set_model(gw, {"sessionId": str(session.id), "provider": "acme"})
     assert result["provider"] == "acme"
+
+
+# ─── round-3 review findings 10/11: resumed-session route acceptance ────────
+
+
+async def test_resumed_session_route_drives_models_and_effort(sandbox, monkeypatch):
+    """The in-process twin of docs/verification/proofs/codebase_review_round3_
+    2026-10-14/session-config.py: after session.resume the model commands
+    follow the resumed session's pinned ChatGPT route (round-3 F10), and the
+    advertised ``off`` alias clears instead of failing (round-3 F11)."""
+    import uuid
+    from unittest.mock import AsyncMock
+
+    from machina.core.config import config
+    from machina.core.models import Session
+    from machina.core.provider import catalog
+    from machina.gateway.server import Gateway
+
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    models = catalog.parse_catalog(payload, source="live")
+    monkeypatch.setattr(catalog, "fetch_catalog_for_account", lambda **kwargs: models)
+    session = Session(
+        id=uuid.uuid4(), title="resumed account chat", model="gpt-6.1-sol", provider="chatgpt"
+    )
+    monkeypatch.setattr(
+        "machina.gateway.server.session_manager.get", AsyncMock(return_value=session)
+    )
+    monkeypatch.setattr(
+        "machina.gateway.server.context_manager.get_transcript_chunks",
+        AsyncMock(return_value=[]),
+    )
+
+    gw = Gateway(lambda frame: None, owns_db=False, inherit_env_token=False)
+    gw._db_ready = True
+    gw.model = "openrouter/free"
+    gw.provider = "openrouter"
+
+    resumed = await gw._session_resume({"sessionId": str(session.id)})
+    assert resumed["session"]["provider"] == "chatgpt"
+
+    # Listing follows the resumed route, not the gateway default.
+    listing = await gw._methods["models.list"]({})
+    assert listing["provider"] == "chatgpt"
+    assert "gpt-6.1-sol" in [row["id"] for row in listing["models"]]
+
+    # Effort validates against the resumed model (max is ChatGPT-only here).
+    accepted = await gw._methods["models.setEffort"]({"effort": "max"})
+    assert accepted["provider"] == "chatgpt"
+    assert accepted["model"] == "gpt-6.1-sol"
+    assert "max" in accepted["supported"]
+
+    cleared = await gw._methods["models.setEffort"]({"effort": "off"})
+    assert cleared["effort"] is None
+    assert config.get("reasoning_effort") == ""

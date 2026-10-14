@@ -18,6 +18,7 @@ __all__ = [
     "PROVIDER_KEYS",
     "find_env_file",
     "read_env_values",
+    "remove_env_values",
     "set_env_values",
 ]
 
@@ -173,6 +174,15 @@ def _quote(value: str) -> str:
     return value
 
 
+def _env_line_key(line: str) -> str:
+    """The KEY of a dotenv line, or '' for comments/blank/non-assignments."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        return ""
+    key = stripped.partition("=")[0].strip()
+    return key if _KEY_RE.match(key) else ""
+
+
 def set_env_values(
     updates: dict[str, str],
     path: Path | None = None,
@@ -202,10 +212,7 @@ def set_env_values(
         raise OSError(f".env not found: {target}")
     seen: set[str] = set()
     for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key = stripped.partition("=")[0].strip()
+        key = _env_line_key(line)
         if key in normalized:
             lines[i] = f"{key}={_quote(normalized[key])}"
             seen.add(key)
@@ -223,6 +230,19 @@ def set_env_values(
     )
     if not explicit and not _is_inside_allowed(parent):
         raise ValueError(f".env parent escapes allowed roots: {target}")
+    return _write_env_lines(target, lines)
+
+
+def _write_env_lines(target: Path, lines: list[str]) -> Path:
+    """Atomically replace *target* with ``lines`` at 0600 (shared writer).
+
+    Same-write discipline for set_env_values and remove_env_values: a
+    pid-unique temp path, os.replace on the same filesystem, and 0600
+    enforced after the replace (repairing a legacy world-readable file).
+    No flock: any lock would be released before the replace, so it would
+    protect nothing (review 2026-10-14); concurrent writers are
+    last-writer-wins by design.
+    """
     target.parent.mkdir(parents=True, exist_ok=True)
     data = "\n".join(lines) + "\n"
     tmp = target.parent / (target.name + f".tmp.{os.getpid()}")
@@ -241,10 +261,6 @@ def set_env_values(
             pass
         raise
     try:
-        # No flock: the temp path is pid-unique and any lock would be released
-        # before the replace, so it protected nothing (review 2026-10-14).
-        # Atomicity comes from os.replace on the same filesystem; concurrent
-        # writers are last-writer-wins by design.
         os.replace(tmp, target)
         try:
             os.chmod(target, 0o600)
@@ -257,3 +273,44 @@ def set_env_values(
         except OSError:
             pass
     return target
+
+
+def remove_env_values(keys: list[str] | tuple[str, ...], path: Path | None = None) -> list[str]:
+    """Delete ``KEY=...`` lines from a dotenv file; returns the removed keys.
+
+    The provider-removal counterpart of :func:`set_env_values`: unlike
+    ``secrets.clear`` (which blanks the value), removal deletes the line so
+    no trace remains. Comments, blank lines, and unrelated entries survive;
+    a missing file or absent keys is a no-op. Writes follow the same atomic
+    0600 discipline as :func:`set_env_values`.
+    """
+    normalized = {_validate_key(k) for k in keys}
+    if not normalized:
+        return []
+    explicit = path is not None
+    target = path or find_env_file()
+    if not explicit:
+        _ensure_inside_allowed(target)
+    if not target.is_file():
+        return []
+    if target.stat().st_size > _ENV_MAX_BYTES:
+        raise ValueError(f".env file exceeds {_ENV_MAX_BYTES} bytes")
+    removed: set[str] = set()
+    kept: list[str] = []
+    for line in target.read_text(encoding="utf-8").splitlines():
+        key = _env_line_key(line)
+        if key in normalized:
+            removed.add(key)
+            continue
+        kept.append(line)
+    if not removed:
+        return []
+    parent = (
+        target.parent.resolve()
+        if target.parent.exists()
+        else (Path.cwd() / target.parent).resolve()
+    )
+    if not explicit and not _is_inside_allowed(parent):
+        raise ValueError(f".env parent escapes allowed roots: {target}")
+    _write_env_lines(target, kept)
+    return sorted(removed)

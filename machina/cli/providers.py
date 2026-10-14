@@ -8,8 +8,9 @@ Commands:
   key through the same ``.env`` idiom ``/keys`` uses (0600, never echoed;
   ``--no-key`` for keyless local endpoints), then pull and print its
   ``/models`` catalog.
-* ``machina providers remove NAME`` — remove the entry and clear its ``.env``
-  key line (``--yes`` skips the confirm).
+* ``machina providers remove NAME`` — delete the entry, its ``.env`` key
+  line, and its cached models; when it was the configured provider, fall
+  back to openrouter visibly (``--yes`` skips the confirm).
 * ``machina providers models [PROVIDER]`` — print the catalog for a provider:
   the live ChatGPT/Codex catalog for ``chatgpt`` (per-model efforts + context
   windows) or a named provider's pulled ``/models`` list.
@@ -22,19 +23,21 @@ other Machina credential.
 from __future__ import annotations
 
 import json as json_lib
+import os
 
 import typer
 from rich.markup import escape
 from rich.table import Table
 
 from machina.cli.output import console
-from machina.core.config import config
+from machina.core.config import DEFAULTS, config
 from machina.core.provider.catalog import (
     cached_catalog,
     fetch_catalog_for_account,
     visible_models,
 )
 from machina.security import providers as store
+from machina.security.env_file import read_env_values, set_env_values
 
 app = typer.Typer(
     name="providers",
@@ -221,18 +224,86 @@ def remove_provider(
     name: str = typer.Argument(..., help="Provider name to remove."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
 ) -> None:
-    """Remove a user-added provider; its .env key line is cleared."""
+    """Remove a provider and every trace: store, .env key line, cached models."""
     normalized = name.strip().lower()
-    if normalized not in store.provider_names():
+    entry = store.get_provider_entry(normalized)
+    if entry is None:
         console.print(f"[red]Unknown user-added provider: {escape(normalized)}[/red]")
         raise typer.Exit(EXIT_FAILED)
-    if not yes and not typer.confirm(f"Remove provider {normalized!r} and clear its key entry?"):
+    key_env = str(entry.get("api_key_env") or "") or (
+        f"MACHINA_PROVIDER_{normalized.upper().replace('-', '_')}_API_KEY"
+    )
+    model_count = len(entry.get("models") or [])
+    active = str(config.get("provider") or "").strip().lower() == normalized
+    question = (
+        f"Remove provider {normalized!r}? Deletes the store entry, the {key_env} .env line, "
+        f"{model_count} cached model(s), and the registry entry."
+    )
+    if active:
+        question += " It is the configured provider — everything falls back to openrouter."
+    if not yes and not typer.confirm(question):
         raise typer.Exit(EXIT_OK)
-    removed = store.remove_provider(normalized)
-    if not removed:
-        console.print(f"[red]Could not remove {escape(normalized)}.[/red]")
+    report = store.remove_provider(normalized)
+    if report is None:
+        console.print(f"[red]Could not remove {escape(normalized)} (already gone).[/red]")
         raise typer.Exit(EXIT_FAILED)
-    console.print(f"Provider {escape(normalized)} removed.")
+    console.print(f"Provider {escape(normalized)} removed: {_cleanup_text(report)}.")
+    if active:
+        _fall_back_from_removed_provider(normalized)
+
+
+def _cleanup_text(report: dict[str, object]) -> str:
+    bits = ["store entry"]
+    env_key = str(report.get("apiKeyEnv") or "")
+    if env_key:
+        bits.append(
+            f"{env_key} line in .env"
+            if report.get("envLineRemoved")
+            else f"{env_key} (no .env line found)"
+        )
+    count = report.get("cachedModels")
+    if isinstance(count, int) and count:
+        bits.append(f"{count} cached model(s)")
+    bits.append("registry entry")
+    return ", ".join(bits)
+
+
+def _fall_back_from_removed_provider(name: str) -> None:
+    """The configured provider is gone: persist the safe defaults, visibly.
+
+    Mirrors the gateway's removal fallback — provider and model reset to the
+    shipped defaults so the next run cannot route to something that no longer
+    exists. Environment lines that would shadow config.yaml are kept in sync
+    where they exist.
+    """
+    config.set("provider", "openrouter", persist=True)
+    config.set("model", DEFAULTS["model"], persist=True)
+    # Keep the live process view consistent with what was just persisted
+    # (config.get checks the environment before config.yaml).
+    os.environ["MACHINA_PROVIDER"] = "openrouter"
+    os.environ["MACHINA_MODEL"] = DEFAULTS["model"]
+    try:
+        present = read_env_values()
+        updates = {
+            key: value
+            for key, value in (
+                ("MACHINA_PROVIDER", "openrouter"),
+                ("MACHINA_MODEL", DEFAULTS["model"]),
+            )
+            if key in present
+        }
+        if updates:
+            set_env_values(updates)
+    except (OSError, ValueError) as error:
+        console.print(
+            f"[yellow]Could not update .env defaults ({type(error).__name__}); "
+            "edit MACHINA_PROVIDER/MACHINA_MODEL manually.[/yellow]"
+        )
+    console.print(
+        f"[yellow]Configured provider {escape(name)} is gone; fell back to openrouter "
+        f"(model {escape(DEFAULTS['model'])}). Pick a new default with /provider and /models, "
+        "or machina --provider/--model.[/yellow]"
+    )
 
 
 @app.command("models")

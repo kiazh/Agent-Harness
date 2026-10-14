@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import TYPE_CHECKING, Any
 
 from machina.gateway.errors import INVALID_PARAMS, RpcError
@@ -35,10 +36,17 @@ _ALLOWED_SECRET_KEYS: frozenset[str] = frozenset(
     key for key, _description in (*PROVIDER_KEYS, *MANAGED_ENV_KEYS)
 )
 
+# User-added providers derive their env name from the store
+# (``machina.security.providers.api_key_env``): MACHINA_PROVIDER_<NAME>_API_KEY.
+# The whole shape is disjoint from every control-plane variable, so accepting
+# it keeps /keys able to set/clear provider keys added via /provider or the
+# CLI without widening the allowlist to arbitrary MACHINA_* names.
+_PROVIDER_ENV_KEY_RE = re.compile(r"^MACHINA_PROVIDER_[A-Z][A-Z0-9_]*_API_KEY$")
+
 
 def _require_managed_key(key: str) -> str:
     """Validate a key against the catalog allowlist, with a clear error."""
-    if key not in _ALLOWED_SECRET_KEYS:
+    if key not in _ALLOWED_SECRET_KEYS and not _PROVIDER_ENV_KEY_RE.match(key):
         supported = ", ".join(sorted(_ALLOWED_SECRET_KEYS))
         raise RpcError(
             INVALID_PARAMS,

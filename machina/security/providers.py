@@ -34,7 +34,12 @@ from urllib.parse import urlparse
 import httpx
 
 from machina.observability.diagnostics import record_failure
-from machina.security.env_file import find_env_file, read_env_values, set_env_values
+from machina.security.env_file import (
+    find_env_file,
+    read_env_values,
+    remove_env_values,
+    set_env_values,
+)
 from machina.security.secrets import get_secret, invalidate_secret_cache
 
 __all__ = [
@@ -254,28 +259,50 @@ def add_provider(
     return dict(entry)
 
 
-def remove_provider(name: str) -> bool:
-    """Remove a provider; its ``.env`` key entry is blanked (not deleted).
+def remove_provider(name: str) -> dict[str, Any] | None:
+    """Remove a provider and every trace it left behind.
 
-    Returns True when an entry was removed. The blank key line is left in
-    place so a re-add under the same name starts from a clean slate while
-    unrelated ``.env`` content is untouched (same idiom as ``secrets.clear``).
+    Deleting the store entry also drops the cached model list and the
+    dynamic registry membership (``PROVIDERS`` consults the store live).
+    The derived ``MACHINA_PROVIDER_<NAME>_API_KEY`` env name is resolved and
+    its line is *deleted* from ``.env`` (not blanked, unlike
+    ``secrets.clear``) so removal leaves no trace; the live process variable
+    and the secret cache are cleared too.
+
+    Returns a cleanup report, or ``None`` when the provider was not
+    registered (idempotent: a second removal cleans nothing and says so by
+    reporting ``None``). The report stays honest when a trace was already
+    gone (e.g. ``envLineRemoved`` is False when ``.env`` had no line).
     """
     normalized = str(name or "").strip().lower()
     store = load_store()
     entry = _entry_or_none(store, normalized)
     if entry is None:
-        return False
+        return None
+    env_name = str(entry.get("api_key_env") or "")
+    cached_models = len(entry.get("models") or []) if isinstance(entry.get("models"), list) else 0
     del store["providers"][normalized]
     _save_store(store)
-    env_name = str(entry.get("api_key_env") or "")
+    env_line_removed = False
+    env_var_removed = False
     if env_name:
-        with suppress(Exception):
+        try:
             if find_env_file().is_file() and env_name in read_env_values():
-                set_env_values({env_name: ""})
-        os.environ.pop(env_name, None)
+                env_line_removed = bool(remove_env_values([env_name]))
+        except (OSError, ValueError) as exc:
+            # Best-effort, but never silent: the report says the line survived.
+            record_failure("security.providers.remove_env", exc)
+        env_var_removed = os.environ.pop(env_name, None) is not None
         invalidate_secret_cache()
-    return True
+    return {
+        "provider": normalized,
+        "storeEntry": True,
+        "apiKeyEnv": env_name or None,
+        "envLineRemoved": env_line_removed,
+        "envVarRemoved": env_var_removed,
+        "cachedModels": cached_models,
+        "registryEntry": True,
+    }
 
 
 def _normalize_models(models: Any) -> list[dict[str, Any]]:

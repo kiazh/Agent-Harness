@@ -15,6 +15,7 @@ const ALIASES: Record<string, string> = {
 	set: "config",
 	compact: "compress",
 	model: "default-model",
+	providers: "provider",
 };
 
 export interface ParsedCommand {
