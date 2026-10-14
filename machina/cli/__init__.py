@@ -9,6 +9,7 @@ command rendered with Rich.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -247,12 +248,26 @@ def chat(
                 )
                 raise typer.Exit(EXIT_FAILED)
             ownership_lost = asyncio.Event()
+            # R04b: ownership loss must stop the running work immediately —
+            # the same contract as gateway/server.py and
+            # api/routes/streaming.py, whose on_lost hooks cancel the task
+            # that drives the stream. Cancelling this task interrupts
+            # agent.run_stream at its current await; a flag checked only
+            # after the next yielded event would let a delayed effect
+            # execute after loss.
+            _owned_task = asyncio.current_task()
+
+            def _cancel_owned_work() -> None:
+                if _owned_task is not None:
+                    _owned_task.cancel()
+
             renew_task = asyncio.create_task(
                 renewal_loop(
                     session.id,
                     turn_token,
                     interval_s=CLI_TURN_RENEW_INTERVAL_SECONDS,
                     ownership_lost=ownership_lost,
+                    on_lost=_cancel_owned_work,
                 ),
                 name=f"cli-turn-renew-{turn_id}",
             )
@@ -285,23 +300,43 @@ def chat(
 
                 final = None
                 streamed_parts: list[str] = []
-                async for event in agent.run_stream(session.id, message, verbose=False):
-                    if ownership_lost.is_set():
-                        break
-                    if event.type == "text":
-                        streamed_parts.append(event.content)
-                        console.out(event.content, end="", highlight=False)
-                    elif event.type == "tool_call" and verbose:
-                        console.print(f"\n[yellow]→ {escape(event.tool_name)}[/yellow]")
-                    elif event.type == "tool_result" and verbose:
-                        preview = str(event.tool_result)[:120].replace("\n", " ")
-                        console.print(f"[dim]  ← {escape(preview)}[/dim]")
-                    elif event.type == "done":
-                        final = event.response
+                # aclosing: the generator is finalized on every exit path —
+                # including cancellation — BEFORE the claim is released below
+                # and before the provider/database close, never at event-loop
+                # shutdown after them.
+                async with contextlib.aclosing(
+                    agent.run_stream(session.id, message, verbose=False)
+                ) as stream:
+                    async for event in stream:
+                        if ownership_lost.is_set():
+                            break
+                        if event.type == "text":
+                            streamed_parts.append(event.content)
+                            console.out(event.content, end="", highlight=False)
+                        elif event.type == "tool_call" and verbose:
+                            console.print(f"\n[yellow]→ {escape(event.tool_name)}[/yellow]")
+                        elif event.type == "tool_result" and verbose:
+                            preview = str(event.tool_result)[:120].replace("\n", " ")
+                            console.print(f"[dim]  ← {escape(preview)}[/dim]")
+                        elif event.type == "done":
+                            final = event.response
                 console.print()
+            except asyncio.CancelledError:
+                # Loss cancels this task through _cancel_owned_work: that is
+                # the requested stop, and the cleanup below still runs. Any
+                # other cancellation is not ours to swallow.
+                if not ownership_lost.is_set():
+                    raise
             finally:
                 renew_task.cancel()
-                await asyncio.gather(renew_task, return_exceptions=True)
+                try:
+                    await asyncio.gather(renew_task, return_exceptions=True)
+                except asyncio.CancelledError:
+                    # A loss cancellation can still be pending if it raced
+                    # into cleanup; the loss event already recorded it — the
+                    # claim must still be released.
+                    if not ownership_lost.is_set():
+                        raise
                 try:
                     await end_turn(session.id, turn_token)
                 except Exception as release_error:

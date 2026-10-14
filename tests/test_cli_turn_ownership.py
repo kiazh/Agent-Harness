@@ -7,6 +7,9 @@ outcome path it exercises) into behavioral assertions:
 * R04 — ``chat --session`` acquires the shared session-turn claim (renewed for
   the turn, released owner-matched) and rejects a session owned by another
   transport instead of calling ``agent.run_stream()`` under a foreign owner.
+* R04b — mid-turn ownership loss cancels the task driving ``agent.run_stream``
+  immediately (no delayed effect after loss), and generator cleanup runs
+  before the claim is released and before the database closes.
 * R05 — session deletion uses the mutation-claim protocol: a live turn or a
   foreign mutation claim refuses the delete; a free session is claimed,
   deleted, and released.
@@ -142,6 +145,110 @@ def test_chat_claims_turn_while_streaming_and_releases_it(monkeypatch):
     assert owner is not None and owner["kind"] == "turn", "CLI must hold the shared turn claim"
     assert turns._local_owner(session.id) is None, "the claim is released when the run ends"
     assert result.output.count("Hello") == 1, "streamed answers are not printed twice"
+
+
+# ─── R04b: ownership loss cancels the active stream immediately ─────────────
+
+
+class _DelayedEffectAgent:
+    """Streams with a delayed effect that must not survive ownership loss.
+
+    The live generator is retained on the instance (as real transports keep a
+    handle for cancellation), so its ``finally`` cannot pass the ordering
+    checks by accident: without an explicit close it only finalizes when the
+    loop shuts down — after claim release and database closure, exactly the
+    P1 finding.
+    """
+
+    def __init__(self) -> None:
+        self.provider = SimpleNamespace(model="mock")
+        self.timeline: list[str] = []
+        self.effects: list[str] = []
+        self.owner_at_close: dict | None = None
+        self.closed = False
+        self._live_stream = None
+
+    def run_stream(self, session_id, message, verbose=False):
+        self._live_stream = self._stream(session_id)
+        return self._live_stream
+
+    async def _stream(self, session_id):
+        try:
+            # Long enough that the failing renewal (interval below) signals
+            # loss while this delay is pending: the effect after it must
+            # never run once ownership is gone.
+            await asyncio.sleep(0.5)
+            self.effects.append("delayed effect after ownership loss")
+            yield StreamEvent(type="text", content="must not stream")
+        finally:
+            self.closed = True
+            self.owner_at_close = turns._local_owner(session_id)
+            self.timeline.append("generator.close")
+
+
+def _lost_renewal_run(monkeypatch, session, agent) -> tuple:
+    """Invoke ``chat`` with a renewal that loses ownership on every tick."""
+    _stub_cli(monkeypatch, session, agent)
+    monkeypatch.setattr(cli, "CLI_TURN_RENEW_INTERVAL_SECONDS", 0.01)
+    renew_calls: list[dict] = []
+
+    async def failing_renew(session_id, token):
+        renew_calls.append({"session_id": session_id, "token": token})
+        return False
+
+    monkeypatch.setattr(turns, "renew_turn", failing_renew)
+    real_end_turn = turns.end_turn
+
+    async def recording_end_turn(session_id, token):
+        agent.timeline.append("release")
+        return await real_end_turn(session_id, token)
+
+    monkeypatch.setattr(turns, "end_turn", recording_end_turn)
+
+    async def recording_db_close():
+        agent.timeline.append("db.close")
+
+    monkeypatch.setattr(cli.db, "close", recording_db_close)
+
+    result = runner.invoke(cli.app, ["chat", "hello", "--session", str(session.id), "--quiet"])
+    return result, renew_calls
+
+
+def test_chat_ownership_loss_cancels_active_work_before_delayed_effect(monkeypatch):
+    """P1: loss must cancel the running stream, not wait for the next yield."""
+    session = _session()
+    agent = _DelayedEffectAgent()
+
+    result, renew_calls = _lost_renewal_run(monkeypatch, session, agent)
+
+    assert renew_calls, "the failing renewal must have been consulted (loss path fired)"
+    assert agent.effects == [], (
+        "a delayed effect must never execute after ownership was lost — the CLI "
+        "must cancel the task driving agent.run_stream instead of flag-checking "
+        "only on the next streamed yield"
+    )
+    assert agent.closed, "the stream generator is finalized"
+    assert agent.owner_at_close is not None and agent.owner_at_close.get("kind") == "turn", (
+        "generator cleanup runs while the CLI still holds the turn claim"
+    )
+    assert turns._local_owner(session.id) is None, "the claim is still released"
+    assert result.exit_code == cli.EXIT_FAILED
+    flat = " ".join(result.output.split())
+    assert "ownership was lost" in flat, result.output
+    assert "must not stream" not in flat
+
+
+def test_chat_ownership_loss_closes_generator_before_release_and_db_close(monkeypatch):
+    """P1: cleanup ordering — generator closed before claim release/db close."""
+    session = _session()
+    agent = _DelayedEffectAgent()
+
+    _lost_renewal_run(monkeypatch, session, agent)
+
+    assert agent.timeline == ["generator.close", "release", "db.close"], (
+        "on loss the generator must be closed before the claim is released and "
+        "before the database closes (pre-fix it finalized after db.close)"
+    )
 
 
 # ─── R05: deletion must claim a mutation slot ───────────────────────────────
