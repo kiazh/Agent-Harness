@@ -1,0 +1,5 @@
+logout_result {"removed": true, "status": {"signedIn": false, "source": "fixture"}}
+pending_after_logout False
+pending_after_gateway_close False
+credential_recreated_after_logout False
+events ["auth.chatgpt.failed"]

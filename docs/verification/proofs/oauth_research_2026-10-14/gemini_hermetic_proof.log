@@ -1,0 +1,21 @@
+2026-10-14 16:01:02,011 [AUDIT] {"timestamp": 1792008062.011657, "event": "llm_stream_start", "provider": "gemini", "model": "gemini-2.5-pro", "message_count": 1}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 16:01:02,013 [AUDIT] {"timestamp": 1792008062.013935, "event": "llm_stream_complete", "provider": "gemini", "model": "gemini-2.5-pro-001", "tool_calls": 0}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 16:01:02,014 [AUDIT] {"timestamp": 1792008062.0145311, "event": "llm_stream_start", "provider": "gemini", "model": "gemini-2.5-pro", "message_count": 1}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 16:01:02,014 [AUDIT] {"timestamp": 1792008062.014951, "event": "llm_stream_error", "provider": "gemini", "model": "gemini-2.5-pro"}
+Audit event dropped before the writer started; event was not persisted
+started 2026-10-14 16:01:02 (python 3.14.5)
+[auth] client_id is the gemini-cli OSS registration (681255809395…, installed-app secret documented non-secret)
+[import] ~/.gemini/oauth_creds.json read-only; store=/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-gemini-proof-osyryrun/.machina/auth/gemini.json mode=0600
+[import] status={"email": null, "expired": false, "expires_at": 1792011662.01, "last_refresh": "2026-10-14T20:01:02.010513Z", "project": null, "signed_in": true, "source": "machina"}
+[wire] loadCodeAssist -> allowedTiers=[standard(isDefault)], no project yet
+[wire] onboardUser(tierId=standard) -> operation in flight
+[wire] streamGenerateContent?alt=sse auth=Bearer <redacted> project=proof-project model=gemini-2.5-pro contents=1
+[stream] done model=gemini-2.5-pro-001 content='machina gemini proof ok' usage={'prompt_tokens': 8, 'completion_tokens': 5, 'total_tokens': 13}
+[onboard] wire order: /v1internal:loadCodeAssist -> /v1internal:onboardUser -> /v1internal/operations/onboard-1 -> /v1internal:streamGenerateContent
+[onboard] project persisted on the Machina store (reused on later calls)
+[typed] gemini_not_eligible: This Google account is not eligible for Cloud Code Assist via the Gemini CLI flow (INELIGIBLE_TIER); Google stopped serving consumer tiers (free, Google AI Pro, Ultra) through this flow on 2026-06-18; a Gemini Code Assist Standard/Enterprise (or equivalent Workspace) license is required.
+[pass] hermetic Gemini proof ok (import + onboarding + stream + typed ineligibility)
+[manual] with a Code Assist Standard/Enterprise license: machina auth gemini login && machina chat -p gemini -m gemini-2.5-pro

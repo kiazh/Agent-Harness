@@ -1,0 +1,15 @@
+2026-10-14 16:01:01,763 [AUDIT] {"timestamp": 1792008061.76376, "event": "llm_stream_start", "provider": "claude", "model": "claude-sonnet-4-5", "message_count": 1}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 16:01:01,765 [AUDIT] {"timestamp": 1792008061.7654579, "event": "llm_stream_complete", "provider": "claude", "model": "claude-sonnet-4-5", "tool_calls": 0}
+Audit event dropped before the writer started; event was not persisted
+started 2026-10-14 16:01:01 (python 3.14.5)
+[import] source=~/.claude/.credentials.json (read-only)
+[import] store=/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-claude-proof-dw_ntkru/.machina/auth/claude.json mode=0600
+[import] status={"expired": false, "expires_at": 1792011661.762, "last_refresh": "2026-10-14T20:01:01.762667Z", "scopes": ["user:inference"], "signed_in": true, "source": "machina", "subscription_type": "max"}
+[import] Claude Code file untouched (bytes + mtime unchanged)
+[wire] POST /v1/messages auth=Bearer <redacted> beta=claude-code-20250219,oauth-2025-04-20 ua=claude-code/2.1.150 (external, cli) x-app=cli x-api-key=absent
+[refresh] 401 -> store refresh (scripted stand-in; wire shape proven in tests)
+[wire] POST /v1/messages auth=Bearer <redacted> beta=claude-code-20250219,oauth-2025-04-20 ua=claude-code/2.1.150 (external, cli) x-app=cli x-api-key=absent
+[stream] done model=claude-sonnet-4-5 content='machina claude proof ok' usage={'prompt_tokens': 9, 'completion_tokens': 4, 'total_tokens': 13}
+[pass] hermetic Claude proof ok (import + identity + 401 refresh + stream)
+[manual] sign in for real with: machina auth claude login  (or --import-claude / --manual)

@@ -1,0 +1,51 @@
+2026-10-14 16:10:44,467 [AUDIT] {"timestamp": 1792008644.467765, "event": "permission_pending", "request_id": "dc6587140485407ca86535d65e3f3d13", "session_id": "", "turn_id": "", "agent_id": "", "operation": "file.read", "tool": "read_file", "mode": "ask", "digest_prefix": "8fbc02e447002ae3", "reason": "sensitive capability requires explicit approval: credential_access"}
+Audit event dropped before the writer started; event was not persisted
+=== A. ORIGINAL auth-security.py, unmodified ===
+STORE_PATH /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-auth-security-review-qdbezaxh/workspace/auth/chatgpt.json
+READ_DECISION pending
+Traceback (most recent call last):
+  File "/Users/shadow/machina/docs/verification/proofs/codebase_review_round3_2026-10-14/auth-security.py", line 87, in <module>
+    asyncio.run(workspace_read())
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/Users/shadow/machina/docs/verification/proofs/codebase_review_round3_2026-10-14/auth-security.py", line 39, in workspace_read
+    await permission_broker.guard(request)
+  File "/Users/shadow/machina/machina/permissions/broker.py", line 180, in guard
+    return await self._guard_headless(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/shadow/machina/machina/permissions/broker.py", line 202, in _guard_headless
+    raise NeedsApproval(approval)
+machina.permissions.broker.NeedsApproval: needs_approval:8ed401a2a3d14e1abb2de69dc09ea904
+
+=== B1. workspace_read (verbatim section) ===
+STORE_PATH /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-auth-security-review-sh3zetiu/workspace/auth/chatgpt.json
+READ_DECISION pending
+WORKSPACE_READ_BLOCKED NeedsApproval
+RAW_STORE_CONTAINS_REFRESH True
+REDACTION_CONTAINS_REFRESH False
+
+=== B2. concurrent_refresh (verbatim section) ===
+ORIGINAL_FIXTURE_RAISED BrokenBarrierError
+
+=== B2'. refresh race, fixture barrier neutralized ===
+REFRESH_POST_COUNT 1 SAME_OLD_REFRESH True
+REFRESH_RESULTS ['SYNTHETIC_REFRESH_fresh_ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'SYNTHETIC_REFRESH_fresh_ABCDEFGHIJKLMNOPQRSTUVWXYZ']
+
+=== B3. resurrection_after_logout (verbatim section) ===
+LOGOUT_STORE_REMOVED True
+STORE_RESURRECTED False
+
+=== C. ORIGINAL auth-lifecycle.py, unmodified ===
+logout_result {"removed": true, "status": {"signedIn": false, "source": "fixture"}}
+pending_after_logout False
+pending_after_gateway_close False
+credential_recreated_after_logout False
+events ["auth.chatgpt.failed"]

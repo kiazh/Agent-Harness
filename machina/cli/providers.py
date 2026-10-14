@@ -36,6 +36,7 @@ from machina.core.provider.catalog import (
     fetch_catalog_for_account,
     visible_models,
 )
+from machina.core.provider.specs import PROVIDERS
 from machina.security import providers as store
 from machina.security.env_file import read_env_values, set_env_values
 
@@ -73,21 +74,7 @@ def _provider_rows() -> list[dict[str, object]]:
             "models": None,
             "selected": name == selected,
         }
-        for name in (
-            "openrouter",
-            "openai",
-            "anthropic",
-            "google",
-            "mistral",
-            "groq",
-            "together",
-            "deepseek",
-            "xai",
-            "opencode",
-            "chatgpt",
-            "custom",
-            "ollama",
-        )
+        for name in PROVIDERS
     ]
     for name in store.provider_names():
         entry = store.get_provider_entry(name) or {}

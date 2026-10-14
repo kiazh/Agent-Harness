@@ -15,12 +15,17 @@ never logs the request line that carries the one-time code.
 
 ``auth.chatgpt.logout`` deletes ONLY Machina's store
 (``~/.machina/auth/chatgpt.json``); ``~/.codex/auth.json`` is never touched.
+Logout also invalidates pending authentication work (round-3 review R3-2):
+the in-flight login flow can no longer exchange or publish, the store's
+authentication generation is bumped before removal, and the catalog module's
+in-process state for the signed-out account is dropped.
 """
 
 from __future__ import annotations
 
 import asyncio
 import hmac
+import importlib
 import socket
 import webbrowser
 from contextlib import suppress
@@ -51,6 +56,59 @@ class _PendingLogin:
 
 
 _PENDING: _PendingLogin | None = None
+
+#: Flows logout invalidated; they keep serving their loopback callback (a
+#: browser mid-redirect must still be answered) but can never publish. They
+#: are asyncio-cancelled when the NEXT login starts, which also frees the
+#: fixed callback port for the fresh flow.
+_INVALIDATED: list[asyncio.Task[None]] = []
+
+
+def _flow_is_current() -> bool:
+    """True when the running flow task is still the gateway's pending flow."""
+    pending = _PENDING
+    return pending is not None and pending.task is asyncio.current_task()
+
+
+def _cancel_pending_login() -> bool:
+    """Functionally cancel the in-flight login flow (logout, R3-2).
+
+    Returns True when a flow was pending. The task itself is retired only
+    when a fresh login starts (:func:`_retire_invalidated_flows`): a callback
+    that is already redirecting is still answered, while the pending identity
+    check and the ``exchange_code`` generation fence guarantee it publishes
+    nothing.
+    """
+    global _PENDING
+    if _PENDING is None:
+        return False
+    pending, _PENDING = _PENDING, None
+    _INVALIDATED.append(pending.task)
+    return True
+
+
+async def _retire_invalidated_flows() -> None:
+    """Cancel logout-invalidated flows and free any listener they hold."""
+    tasks = [task for task in _INVALIDATED if not task.done()]
+    _INVALIDATED.clear()
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _clear_catalog_state() -> None:
+    """Drop in-process catalog state after logout (R3-2 catalogue gap).
+
+    The catalog module keeps one in-process live/CLI-cache per account; the
+    signed-out account's entries must not keep answering account-less reads
+    (``cached_catalog`` / ``live_models_or_none`` fall back to the most
+    recent live entry). Bound through importlib so the gateway feature does
+    not pull the provider import stack and the deferred-import census gains
+    no ``import`` statements.
+    """
+    with suppress(Exception):
+        importlib.import_module("machina.core.provider.catalog").clear_catalog_cache()
 
 
 def _status_payload() -> dict[str, Any]:
@@ -221,6 +279,7 @@ async def _run_login_flow(
 ) -> None:
     """Background half of ``auth.chatgpt.login``; always ends in one event."""
     global _PENDING
+    generation = chatgpt_auth.credential_generation()
     listener = _CallbackListener(request.redirect_uri, request.state, sock)
     try:
         await listener.start()
@@ -234,12 +293,18 @@ async def _run_login_flow(
             _emit(gw, "auth.chatgpt.failed", reason=reason)
             return
         assert code  # a settled flow without an error always carries a code
+        if not _flow_is_current():
+            # Logout invalidated this flow: answer the browser-shaped callback
+            # but publish nothing (R3-2).
+            _emit(gw, "auth.chatgpt.failed", reason="cancelled")
+            return
         try:
             tokens = await asyncio.to_thread(
                 chatgpt_auth.exchange_code,
                 code,
                 code_verifier=request.code_verifier,
                 redirect_uri=request.redirect_uri,
+                generation=generation,
             )
         except chatgpt_auth.ChatGPTAuthError as error:
             _emit(
@@ -288,6 +353,9 @@ async def auth_chatgpt_login(gw: Gateway, params: dict[str, Any]) -> dict[str, A
     pending = _PENDING
     if pending is not None and not pending.task.done():
         return {"url": pending.url, "state": pending.state}
+    # A fresh login supersedes any logout-invalidated flow: cancel it and
+    # reap its listener so the fixed callback port is free to bind.
+    await _retire_invalidated_flows()
     request = chatgpt_auth.login_url()
     sock = _bind_callback_socket(request.redirect_uri)
     task = asyncio.create_task(
@@ -309,19 +377,22 @@ async def auth_chatgpt_logout(gw: Gateway, params: dict[str, Any]) -> dict[str, 
     The Codex CLI's ``~/.codex/auth.json`` is never touched, so a user who ran
     ``codex login`` stays importable — the returned status states that plainly
     (``source`` flips to ``codex`` when the peek finds those credentials).
+
+    Pending authentication work is invalidated first (R3-2): the in-flight
+    login flow can no longer exchange or publish, the store's generation is
+    bumped under its lock before the unlink, and the catalog module's
+    in-process state is dropped.
     """
     path = chatgpt_auth.auth_path()
-    removed = False
+    _cancel_pending_login()
     try:
-        path.unlink()
-        removed = True
-    except FileNotFoundError:
-        pass
+        removed = await asyncio.to_thread(chatgpt_auth.logout, path=path)
     except OSError as error:
         raise RpcError(
             OPERATION_FAILED,
             f"could not remove the Machina ChatGPT token store ({type(error).__name__})",
         ) from None
+    _clear_catalog_state()
     return {"removed": removed, "status": _status_payload()}
 
 

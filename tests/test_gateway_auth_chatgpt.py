@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 from contextlib import suppress
 
+import httpx
 import pytest
 
 from machina.core.config import config
@@ -63,9 +64,11 @@ def fake_home(monkeypatch, tmp_path):
 async def no_pending_login():
     """No flow leaks across tests; a live listener is always cancelled."""
     feature._PENDING = None
+    feature._INVALIDATED.clear()
     yield
     pending = feature._PENDING
     feature._PENDING = None
+    feature._INVALIDATED.clear()
     if pending is not None and not pending.task.done():
         pending.task.cancel()
         with suppress(asyncio.CancelledError):
@@ -344,6 +347,115 @@ async def test_logout_removes_only_machina_store(fake_home):
     again = await harness.call("auth.chatgpt.logout")
     assert again["removed"] is False
     assert again["status"]["source"] == "codex"
+
+
+async def test_logout_cancels_pending_login_and_late_callback_cannot_sign_in(
+    fake_home, monkeypatch
+):
+    """R3-2: a callback that arrives after logout must publish nothing."""
+    port = _free_port()
+    _install_login(monkeypatch, port)
+    exchanged: list[str] = []
+
+    def fake_exchange(code, **kwargs):  # pragma: no cover - must not run
+        exchanged.append(code)
+        raise AssertionError("a logout-invalidated callback must never exchange")
+
+    monkeypatch.setattr(chatgpt_auth, "exchange_code", fake_exchange)
+    harness = _Harness()
+
+    await harness.call("auth.chatgpt.login", {"no_browser": True})
+    pending = feature._PENDING
+    assert pending is not None
+
+    result = await harness.call("auth.chatgpt.logout")
+
+    assert result["removed"] is False  # nothing was signed in
+    assert feature._PENDING is None, "logout must cancel the pending flow"
+    # The invalidated flow still answers the redirecting browser...
+    status, _ = await asyncio.to_thread(
+        _open_callback, f"http://127.0.0.1:{port}/auth/callback?code=late-code&state=gw-state"
+    )
+    assert status == 200
+    await asyncio.wait_for(pending.task, timeout=5)
+    # ...but never exchanges, and emits a failed event instead of completed.
+    assert exchanged == []
+    events = harness.events()
+    assert [event["type"] for event in events] == ["auth.chatgpt.failed"]
+    assert events[0]["reason"] == "cancelled"
+    assert not (fake_home / ".machina" / "auth" / "chatgpt.json").exists()
+
+
+async def test_logout_generation_fences_a_late_exchange(fake_home, monkeypatch):
+    """R3-2: the security layer refuses a stale-generation publication."""
+    store = fake_home / ".machina" / "auth" / "chatgpt.json"
+    chatgpt_auth.save_tokens(_tokens(), store)
+    harness = _Harness()
+    generation = chatgpt_auth.credential_generation()
+
+    result = await harness.call("auth.chatgpt.logout")
+    assert result["removed"] is True
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("a fenced exchange must not reach the network")
+
+    with pytest.raises(chatgpt_auth.ChatGPTAuthError) as error:
+        chatgpt_auth.exchange_code(
+            "late-code",
+            code_verifier="verifier",
+            path=store,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            generation=generation,
+        )
+    assert error.value.code == "chatgpt_auth_cancelled"
+    assert not store.exists(), "a late callback must not recreate the store"
+
+
+async def test_logout_clears_in_process_catalog_state(fake_home, monkeypatch):
+    """R3-2 follow-up: the signed-out account's catalog entries must not answer."""
+    from machina.core.provider import catalog
+
+    store = fake_home / ".machina" / "auth" / "chatgpt.json"
+    chatgpt_auth.save_tokens(_tokens(account="acct-machina"), store)
+    seeded = catalog.parse_catalog(
+        {"models": [{"slug": "gpt-fixture", "visibility": "list"}]}, source="live"
+    )
+    monkeypatch.setattr(catalog, "fetch_live_catalog", lambda *args, **kwargs: seeded)
+    catalog.refresh_live_catalog("opaque-access", "acct-machina", force=True)
+    assert catalog.live_models_or_none("acct-machina") is not None
+
+    harness = _Harness()
+    result = await harness.call("auth.chatgpt.logout")
+    assert result["removed"] is True
+
+    assert catalog.live_models_or_none("acct-machina") is None
+    assert catalog.live_models_or_none() is None
+
+
+async def test_fresh_login_after_logout_retires_the_invalidated_flow(fake_home, monkeypatch):
+    """R3-2: the next login supersedes the invalidated flow and binds anew."""
+    port = _free_port()
+    calls: list[str] = []
+    _counting_login(monkeypatch, port, calls)
+    monkeypatch.setattr(chatgpt_auth, "exchange_code", lambda code, **kwargs: _tokens())
+    harness = _Harness()
+
+    await harness.call("auth.chatgpt.login", {"no_browser": True})
+    first = feature._PENDING
+    assert first is not None
+    await harness.call("auth.chatgpt.logout")
+    assert feature._PENDING is None
+
+    port2 = _free_port()
+    _counting_login(monkeypatch, port2, calls)
+    second = await harness.call("auth.chatgpt.login", {"no_browser": True})
+    assert calls == ["login_url", "login_url"]
+    assert second["state"] == "gw-state"
+    pending = feature._PENDING
+    assert pending is not None
+    pending.task.cancel()
+    with suppress(asyncio.CancelledError):
+        await pending.task
 
 
 async def test_import_codex_reports_the_resulting_status(fake_home):

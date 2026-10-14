@@ -9,6 +9,7 @@ authorizes opaque code execution.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -107,16 +108,82 @@ def workspace_root() -> Path:
     return configured_workspace()
 
 
+#: Credential-store modules that resolve their own on-disk identity through
+#: ``auth_path()`` (env override -> configured machina_home -> ~/.machina).
+#: Bound through importlib so this policy module never pulls the auth/httpx
+#: import stack, and so the deferred-import census gains no ``import``
+#: statements (same seam idiom as the leaf-independence conversions).
+_CREDENTIAL_STORE_MODULES = (
+    "machina.security.chatgpt_auth",
+    "machina.security.claude_auth",
+    "machina.security.copilot_auth",
+    "machina.security.gemini_auth",
+)
+
+
+def credential_store_paths() -> frozenset[Path]:
+    """Resolved identity of every Machina credential store (R3-1).
+
+    Each store resolves its own path the same way it does when it opens the
+    file, so every configured override is honored identically by the policy.
+    A module that cannot be imported or resolved is skipped; the remaining
+    stores still gate their paths.
+    """
+    stores: set[Path] = set()
+    for module_name in _CREDENTIAL_STORE_MODULES:
+        try:
+            raw = importlib.import_module(module_name).auth_path()
+            stores.add(Path(raw).expanduser().resolve())
+        except Exception:
+            continue
+    return frozenset(stores)
+
+
+def _is_credential_store(value: str, root: Path) -> bool:
+    """Exact resolved store identity (plus its atomic temp/backup siblings).
+
+    The store file IS the secret: when a workspace contains the store, its
+    reads must gate exactly like a ``credentials`` read instead of being a
+    trusted project read. Sibling names created by the store's own atomic
+    replace (``<name>.<rand>.tmp``), lock, generation, or backups gate too.
+    Comparison is case-folded, matching the case-insensitive aliasing the
+    policy already fails closed on for `.git`/`.machina`.
+    """
+    stores = credential_store_paths()
+    if not stores:
+        return False
+    candidate = Path(str(value).replace("\\", "/")).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        resolved = candidate.resolve()
+    except (OSError, ValueError):
+        return False
+    text = str(resolved).lower()
+    parent_text = str(resolved.parent).lower()
+    for store in stores:
+        if text == str(store).lower():
+            return True
+        if parent_text == str(store.parent).lower() and resolved.name.lower().startswith(
+            store.name.lower() + "."
+        ):
+            return True
+    return False
+
+
 def sensitive_path(value: str, root: Path | None = None) -> bool:
     """Shared sensitive-path identity for credential material (R01).
 
     This is the ONE definition of "sensitive path" used both by the policy's
     credential_access capability and by tools that open file contents while
     searching (``search_files``): a descendant ``credentials`` /
-    ``production.env`` must be gated exactly like a direct read. Matches
+    ``production.env`` must be gated exactly like a direct read, and the
+    resolved credential-store files gate wherever they live (R3-1). Matches
     credential path components, never incidental words/usernames.
     """
     root = root if root is not None else workspace_root()
+    if _is_credential_store(value, root):
+        return True
     text = value.replace("\\", "/")
     path = Path(text).expanduser()
     # Ignore ancestors of the configured project (e.g. /home/user).

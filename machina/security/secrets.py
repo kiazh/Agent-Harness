@@ -139,6 +139,20 @@ def _resolve_secret(name: str, *, env_names: tuple[str, ...] | None = None) -> s
     return value
 
 
+def remember_secret_value(value: str) -> None:
+    """Register an exact credential value for outbound redaction.
+
+    Shared registry used by ``get_secret`` and by credential stores that
+    persist tokens themselves (ChatGPT OAuth store, round-3 review R3-1), so
+    a saved/loaded token VALUE is redactable in tool results and logs even
+    when it arrives outside a named-secret resolution.
+    """
+    text = str(value or "")
+    if text:
+        with _redaction_lock:
+            _redaction_values.add(text)
+
+
 def get_secret(name: str, *, env_names: tuple[str, ...] | None = None) -> str | None:
     """Resolve a credential and remember its exact bytes for outbound redaction.
 
@@ -147,8 +161,7 @@ def get_secret(name: str, *, env_names: tuple[str, ...] | None = None) -> str | 
     """
     value = _resolve_secret(name, env_names=env_names)
     if value:
-        with _redaction_lock:
-            _redaction_values.add(value)
+        remember_secret_value(value)
     return value
 
 

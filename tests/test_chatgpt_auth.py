@@ -10,7 +10,9 @@ import base64
 import hashlib
 import json
 import stat
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -451,3 +453,210 @@ def test_store_path_stays_writable_directory_permissions(fake_home):
     assert auth_dir.exists()
     assert stat.S_IMODE(auth_dir.stat().st_mode) == 0o700
     assert Path(chatgpt_auth.auth_path()).name == "chatgpt.json"
+
+
+# ─── redaction registration (R3-1) ──────────────────────────────────────────
+
+
+def _opaque_tokens(suffix: str = "old") -> dict:
+    """Non-JWT values so only the exact-value registry can redact them."""
+    return {
+        "access_token": f"SYNTHETIC_ACCESS_{suffix}_ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        "refresh_token": f"SYNTHETIC_REFRESH_{suffix}_ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        "account_id": "synthetic-account",
+        "expires_at": time.time() - 300,
+    }
+
+
+def test_saved_and_loaded_token_values_are_redactable(tmp_path):
+    from machina.memory.redaction import redact_secrets
+
+    tokens = _opaque_tokens()
+    store = tmp_path / "chatgpt.json"
+    chatgpt_auth.save_tokens(tokens, store)
+    for field in ("access_token", "refresh_token"):
+        # Bare values: no regex pattern matches these strings, so a redaction
+        # here proves the credential boundary registered the exact bytes.
+        assert redact_secrets(tokens[field]).text == "[REDACTED_SECRET]"
+
+    assert chatgpt_auth.load_tokens(store) is not None  # load boundary too
+    raw = store.read_text()
+    assert tokens["access_token"] in raw  # sanity: raw store content has them
+    redacted = redact_secrets(raw).text
+    assert tokens["access_token"] not in redacted
+    assert tokens["refresh_token"] not in redacted
+
+
+# ─── serialization + generation fence (R3-2/R3-3) ───────────────────────────
+
+
+def test_refresh_serializes_concurrent_callers_to_one_exchange(tmp_path):
+    target = tmp_path / "chatgpt.json"
+    chatgpt_auth.save_tokens(_opaque_tokens(), target)
+    lock = threading.Lock()
+    requests: list[str] = []
+    start = threading.Barrier(2)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        supplied = parse_qs(request.content.decode())["refresh_token"][0]
+        with lock:
+            requests.append(supplied)
+        time.sleep(0.2)  # hold the store lock so the peer must wait it out
+        return httpx.Response(
+            200,
+            json={
+                "access_token": _opaque_tokens("fresh")["access_token"],
+                "refresh_token": _opaque_tokens("fresh")["refresh_token"],
+            },
+        )
+
+    def call() -> str:
+        with _mock_client(handler) as client:
+            start.wait(timeout=10)
+            try:
+                return chatgpt_auth.refresh(_opaque_tokens(), path=target, client=client)[
+                    "refresh_token"
+                ]
+            except ChatGPTAuthError as error:  # pragma: no cover - the race bug
+                return f"ERROR:{error.code}"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: call(), range(2)))
+
+    assert requests == [_opaque_tokens()["refresh_token"]], "one exchange only"
+    fresh = _opaque_tokens("fresh")["refresh_token"]
+    assert results == [fresh, fresh], "both callers get the rotated pair"
+    assert chatgpt_auth.load_tokens(target)["refresh_token"] == fresh
+
+
+def test_refresh_late_response_never_resurrects_a_removed_store(tmp_path):
+    target = tmp_path / "chatgpt.json"
+    chatgpt_auth.save_tokens(_opaque_tokens(), target)
+    dispatched = threading.Event()
+    release = threading.Event()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        dispatched.set()
+        assert release.wait(timeout=5)
+        return httpx.Response(
+            200,
+            json={
+                "access_token": _opaque_tokens("fresh")["access_token"],
+                "refresh_token": _opaque_tokens("fresh")["refresh_token"],
+            },
+        )
+
+    def call() -> dict:
+        with _mock_client(handler) as client:
+            return chatgpt_auth.refresh(_opaque_tokens(), path=target, client=client)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(call)
+        assert dispatched.wait(timeout=5)
+        target.unlink()  # logout (raw removal) while the response is in flight
+        release.set()
+        updated = future.result(timeout=5)
+
+    # The caller keeps the fresh in-memory pair; the store stays removed.
+    assert updated["refresh_token"] == _opaque_tokens("fresh")["refresh_token"]
+    assert not target.exists()
+
+
+def test_logout_bumps_generation_durably_and_fences_late_exchange(tmp_path):
+    target = tmp_path / "chatgpt.json"
+    chatgpt_auth.save_tokens(_opaque_tokens(), target)
+    generation = chatgpt_auth.credential_generation(target)
+
+    removed = chatgpt_auth.logout(path=target)
+
+    assert removed is True
+    assert not target.exists()
+    assert chatgpt_auth.credential_generation(target) == generation + 1
+    generation_file = tmp_path / "chatgpt.json.generation"
+    assert int(generation_file.read_text().strip()) == generation + 1
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("a fenced exchange must publish nothing")
+
+    with pytest.raises(ChatGPTAuthError) as excinfo:
+        chatgpt_auth.exchange_code(
+            "code",
+            code_verifier="verifier",
+            path=target,
+            client=_mock_client(handler),
+            generation=generation,
+        )
+    assert excinfo.value.code == "chatgpt_auth_cancelled"
+    assert not target.exists(), "a late callback must not recreate the store"
+
+
+def test_exchange_code_publishes_with_the_current_generation(tmp_path):
+    target = tmp_path / "chatgpt.json"
+    generation = chatgpt_auth.credential_generation(target)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": _opaque_tokens("login")["access_token"],
+                "refresh_token": _opaque_tokens("login")["refresh_token"],
+            },
+        )
+
+    tokens = chatgpt_auth.exchange_code(
+        "code",
+        code_verifier="verifier",
+        path=target,
+        client=_mock_client(handler),
+        generation=generation,
+    )
+    assert tokens["refresh_token"] == _opaque_tokens("login")["refresh_token"]
+    assert chatgpt_auth.load_tokens(target) is not None
+
+
+def test_exchange_code_refuses_to_clobber_a_store_that_changed(tmp_path):
+    target = tmp_path / "chatgpt.json"
+    chatgpt_auth.save_tokens(_opaque_tokens("existing"), target)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # A peer logout removes the store while the exchange is in flight.
+        target.unlink()
+        return httpx.Response(
+            200,
+            json={
+                "access_token": _opaque_tokens("late")["access_token"],
+                "refresh_token": _opaque_tokens("late")["refresh_token"],
+            },
+        )
+
+    with pytest.raises(ChatGPTAuthError) as excinfo:
+        chatgpt_auth.exchange_code(
+            "code", code_verifier="verifier", path=target, client=_mock_client(handler)
+        )
+    assert excinfo.value.code == "chatgpt_auth_cancelled"
+    assert not target.exists()
+
+
+def test_invalidate_credentials_without_a_store_still_bumps(tmp_path):
+    target = tmp_path / "chatgpt.json"
+    before = chatgpt_auth.credential_generation(target)
+    after = chatgpt_auth.invalidate_credentials(target)
+    assert after == before + 1
+    assert chatgpt_auth.credential_generation(target) == after
+
+
+def test_import_from_codex_refuses_after_a_concurrent_logout(fake_home, monkeypatch):
+    codex_dir = fake_home / ".codex"
+    codex_dir.mkdir()
+    (codex_dir / "auth.json").write_text(json.dumps({"tokens": _tokens()}))
+    store = fake_home / ".machina" / "auth" / "chatgpt.json"
+    real_read = chatgpt_auth._read_codex_tokens
+
+    def read_then_invalidate(*args, **kwargs):
+        tokens = real_read(*args, **kwargs)
+        chatgpt_auth.invalidate_credentials(store)  # logout lands mid-import
+        return tokens
+
+    monkeypatch.setattr(chatgpt_auth, "_read_codex_tokens", read_then_invalidate)
+    assert chatgpt_auth.import_from_codex() is None
+    assert not store.exists(), "a logout-fenced import must publish nothing"

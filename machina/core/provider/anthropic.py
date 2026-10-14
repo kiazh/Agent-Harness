@@ -51,6 +51,9 @@ class AnthropicProvider(LLMProvider):
     BASE_URL = "https://api.anthropic.com"
     API_VERSION = "2023-06-01"
     DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
+    # Audit/metrics/rate-limit label; the Claude subscription subclass shares
+    # every code path but must not report itself as the API-key provider.
+    PROVIDER_NAME = "anthropic"
 
     def __init__(
         self,
@@ -63,7 +66,7 @@ class AnthropicProvider(LLMProvider):
             raise ValidationError("ANTHROPIC_API_KEY not set")
         self.model = model or self.DEFAULT_MODEL
         self._default_effort = normalize_reasoning_effort(reasoning_effort)
-        self._rate_limiter = _get_rate_limiter("anthropic")
+        self._rate_limiter = _get_rate_limiter(self.PROVIDER_NAME)
         self.client = httpx.AsyncClient(
             base_url=self.BASE_URL,
             headers={
@@ -235,7 +238,7 @@ class AnthropicProvider(LLMProvider):
         if stream:
             payload["stream"] = True
         _log_prompt_cache_breakpoints(
-            "anthropic",
+            self.PROVIDER_NAME,
             model,
             system=cache_breakpoints and bool(system),
             tools=tools_marked,
@@ -277,14 +280,16 @@ class AnthropicProvider(LLMProvider):
             logger.debug("cache hit for anthropic model=%s", model)
             return cached
 
-        audit_log("llm_call_start", provider="anthropic", model=model, message_count=len(messages))
+        audit_log(
+            "llm_call_start", provider=self.PROVIDER_NAME, model=model, message_count=len(messages)
+        )
 
         reservation_id = None
         if session_id is not None and agent_id is not None:
             reservation_id = await usage_store.reserve(
                 session_id,
                 agent_id,
-                "anthropic",
+                self.PROVIDER_NAME,
                 model,
                 messages,
                 tools or [],
@@ -303,7 +308,7 @@ class AnthropicProvider(LLMProvider):
             )
             if reservation_id is not None:
                 await usage_store.finish(reservation_id, failed=True)
-            audit_log("llm_call_error", provider="anthropic", model=model, error=str(e))
+            audit_log("llm_call_error", provider=self.PROVIDER_NAME, model=model, error=str(e))
             raise
 
         duration_ms = (time.monotonic() - start) * 1000
@@ -315,7 +320,9 @@ class AnthropicProvider(LLMProvider):
             )
             if reservation_id is not None:
                 await usage_store.finish(reservation_id, failed=True)
-            audit_log("llm_call_error", provider="anthropic", model=model, error="no_content")
+            audit_log(
+                "llm_call_error", provider=self.PROVIDER_NAME, model=model, error="no_content"
+            )
             raise ProviderError(f"Anthropic returned no content for {model}: {detail or data}")
 
         content, tool_calls = self._from_response_blocks(data.get("content", []))
@@ -336,7 +343,7 @@ class AnthropicProvider(LLMProvider):
             await usage_store.finish(reservation_id, usage, model=data.get("model", model))
         audit_log(
             "llm_call_complete",
-            provider="anthropic",
+            provider=self.PROVIDER_NAME,
             model=data.get("model", model),
             prompt_tokens=usage["prompt_tokens"],
             completion_tokens=usage["completion_tokens"],
@@ -379,7 +386,10 @@ class AnthropicProvider(LLMProvider):
         )
 
         audit_log(
-            "llm_stream_start", provider="anthropic", model=model, message_count=len(messages)
+            "llm_stream_start",
+            provider=self.PROVIDER_NAME,
+            model=model,
+            message_count=len(messages),
         )
 
         reservation_id = None
@@ -387,7 +397,7 @@ class AnthropicProvider(LLMProvider):
             reservation_id = await usage_store.reserve(
                 session_id,
                 agent_id,
-                "anthropic",
+                self.PROVIDER_NAME,
                 model,
                 messages,
                 tools or [],
@@ -504,7 +514,7 @@ class AnthropicProvider(LLMProvider):
         except Exception as e:
             if reservation_id is not None:
                 await usage_store.finish(reservation_id, failed=True)
-            audit_log("llm_stream_error", provider="anthropic", model=model, error=str(e))
+            audit_log("llm_stream_error", provider=self.PROVIDER_NAME, model=model, error=str(e))
             raise
 
         tool_calls = [
@@ -544,7 +554,10 @@ class AnthropicProvider(LLMProvider):
         if reservation_id is not None:
             await usage_store.finish(reservation_id, usage, model=resolved_model)
         audit_log(
-            "llm_stream_complete", provider="anthropic", model=model, tool_calls=len(tool_calls)
+            "llm_stream_complete",
+            provider=self.PROVIDER_NAME,
+            model=model,
+            tool_calls=len(tool_calls),
         )
         raw: dict[str, Any] = {}
         if native_content:

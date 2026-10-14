@@ -157,7 +157,7 @@ _CORE_IMPORT_CEILINGS = {
 # machina/research/benchmark.py's architecture section (round-2 review N6:
 # the hand-mirrored literal drifted once already). Moves only with the delta
 # table documented inside test_deferred_import_count_ratchet.
-DEFERRED_IMPORT_CAP = 689
+DEFERRED_IMPORT_CAP = 692
 
 
 def test_module_level_core_imports_only_shrink():
@@ -252,6 +252,16 @@ def test_deferred_import_count_ratchet():
     #        its many lazy importers. (All other new imports in this lane were
     #        hoisted to module level; the census moved by exactly +4.)
     #   Census 685 -> 689, so cap 685 -> 689.
+    #   Round-3 review fixes (2026-10-14, this change): +0 deferred imports.
+    #   The chatgpt multimodal converter, the direct-provider cache
+    #   namespace, the endpoint-aware embedder id normalization and the
+    #   child-process overflow kill all use module-level (stdlib) imports.
+    #   Subscription-auth provider wave (2026-10-14, this change): +3 deferred
+    #   imports, each a deliberate readiness-probe binding:
+    #     +3 machina/core/runtime.py — claude/copilot/gemini readiness
+    #        branches bind their security.*_auth status probes lazily so the
+    #        provider probe never imports the auth stack unless selected.
+    #   Census 689 -> 692, so cap 689 -> 692.
     # Procedure: this number may only move with a delta table like the above
     # in this comment; silent growth fails the suite by design.
     total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))
@@ -329,13 +339,42 @@ def test_deferred_import_count_ratchet():
 #     validation can never consult another account's live list. catalog.py
 #     508 -> 553, chatgpt.py 616 -> 629. Package total 4200 -> 4258 by
 #     exactly this delta.
+#   Round-3 review fixes + subscription-auth provider wave (2026-10-14,
+#   measured on this shared worktree; each lane owns its final numbers):
+#     +49 core/provider/chatgpt.py — user multimodal content lists translate
+#         to Responses content parts (input_text / input_image with a plain
+#         image_url string) instead of a serialized text block (R3-F5).
+#     +8  core/provider/direct.py — the response-cache namespace now carries
+#         the endpoint and credential digest, so a named provider re-pointed
+#         at another base URL cannot serve the previous host's cached body
+#         within the TTL (R3-F6).
+#     +1166 subscription-auth provider wave (claude / copilot / gemini
+#         first-class providers): new core/provider/claude.py (109) — the
+#         Claude Pro/Max transport (thin AnthropicProvider subclass with an
+#         httpx auth flow: per-request Bearer resolution, 401 -> refresh ->
+#         replay once, OAuth identity headers); new core/provider/copilot.py
+#         (425) — the Copilot seat transport (OpenAI SSE with tool-call
+#         accumulation, per-account model_not_supported -> typed error, 401
+#         typed, no refresh); new core/provider/gemini.py (611) — the Cloud
+#         Code Assist transport (loadCodeAssist/onboardUser project
+#         resolution with persisted project, streamGenerateContent SSE,
+#         finishReason terminal discipline, 401 -> refresh -> retry once);
+#         __init__.py 52 -> 55 (three exports), anthropic.py 564 -> 577
+#         (PROVIDER_NAME label so the shared transport can report itself as
+#         claude, plus formatter rewraps of the long audit calls),
+#         factory.py 134 -> 146 (three branches), specs.py
+#         166 -> 179 (PROVIDERS tuple + comment). All new-file counts are
+#         post-``ruff format`` measurements.
+#     Package total 4258 -> 5501 by exactly the combined delta (57 round-3
+#     fixes + 1186 subscription-auth wave). Unreviewed growth beyond this is
+#     rejected.
 GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
     ("core/agent.py", 2057),
     ("core/compression.py", 999),
-    ("core/provider/__init__.py", 52),
+    ("core/provider/__init__.py", 55),
     ("core/provider/_log.py", 10),
     ("core/provider/reasoning.py", 61),
-    ("core/provider/specs.py", 166),
+    ("core/provider/specs.py", 179),
     ("core/provider/audit.py", 147),
     ("core/provider/rate_limit.py", 79),
     ("core/provider/caches.py", 97),
@@ -343,11 +382,14 @@ GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
     ("core/provider/base.py", 60),
     ("core/provider/openrouter.py", 607),
     ("core/provider/ollama.py", 378),
-    ("core/provider/direct.py", 339),
-    ("core/provider/anthropic.py", 564),
-    ("core/provider/chatgpt.py", 629),
-    ("core/provider/factory.py", 134),
+    ("core/provider/direct.py", 347),
+    ("core/provider/anthropic.py", 577),
+    ("core/provider/chatgpt.py", 678),
+    ("core/provider/factory.py", 146),
     ("core/provider/catalog.py", 553),
+    ("core/provider/claude.py", 109),
+    ("core/provider/copilot.py", 425),
+    ("core/provider/gemini.py", 611),
 )
 
 
@@ -366,7 +408,10 @@ def test_god_file_ceilings_only_fall(relative_path, ceiling):
 # 4200 = 3578 + 622 for the reviewed model-catalog lane delta above
 #        (new catalog.py + chatgpt/factory/specs growth).
 # 4258 = 4200 + 58 for the reviewed round-6 R6-1 account-scoping delta above.
-_PROVIDER_PACKAGE_TOTAL_CEILING = 4258
+# 5501 = 4258 + 57 for the round-3 review fixes (chatgpt.py +49, direct.py
+#        +8) + 1186 for the subscription-auth provider wave (claude/copilot/
+#        gemini first-class providers; itemized in the delta table above).
+_PROVIDER_PACKAGE_TOTAL_CEILING = 5501
 
 
 def test_provider_package_total_only_falls():

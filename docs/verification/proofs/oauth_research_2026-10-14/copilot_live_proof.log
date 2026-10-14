@@ -1,0 +1,38 @@
+started 2026-10-14 16:00:54 (python 3.14.5)
+[auth] gh token present: prefix=gho_ len=40 fingerprint=f08ab8e8efde411e (value never printed)
+[auth] machina store before: {"account": null, "last_refresh": "2026-10-14T19:58:00.060342Z", "signed_in": true, "source": "machina", "token_family": "gho"}
+[wire] GET /models -> HTTP 200
+[wire] live model menu: 55 models; sample=['claude-fable-5', 'claude-fable-5.1', 'claude-haiku-4.5', 'claude-haiku-5.5', 'claude-opus-4.8', 'claude-opus-4.8-fast']
+[wire] legacy copilot_internal/v2/token -> HTTP 403 (not used)
+[auth] resolved token family=gho account=None store=/Users/shadow/.machina/auth/copilot.json
+[auth] machina store after: {"account": null, "last_refresh": "2026-10-14T19:58:00.060342Z", "signed_in": true, "source": "machina", "token_family": "gho"}
+2026-10-14 16:00:59,649 [AUDIT] {"timestamp": 1792008059.6489751, "event": "llm_stream_start", "provider": "copilot", "model": "gpt-4o", "message_count": 2}
+Audit event dropped before the writer started; event was not persisted
+[text] text delta: 'Mach'
+[text] text delta: 'ina'
+[text] text delta: ' Cop'
+[text] text delta: 'ilot'
+[text] text delta: ' is'
+[text] text delta: ' designed'
+[text] text delta: ' for'
+[text] text delta: ' assistance'
+[text] text delta: ','
+[text] text delta: ' but'
+[text] text delta: ' proof'
+[text] text delta: ' depends'
+[text] text delta: ' on'
+[text] text delta: ' specific'
+[text] text delta: ' use'
+[text] text delta: ' cases'
+[text] text delta: '.'
+2026-10-14 16:01:00,634 [AUDIT] {"timestamp": 1792008060.634625, "event": "llm_stream_complete", "provider": "copilot", "model": "gpt-4o", "tool_calls": 0}
+Audit event dropped before the writer started; event was not persisted
+[text] done model=gpt-4o content='Machina Copilot is designed for assistance, but proof depends on specific use cases.' tool_calls=0 usage={"completion_tokens": 17, "prompt_tokens": 27, "total_tokens": 44}
+2026-10-14 16:01:00,635 [AUDIT] {"timestamp": 1792008060.635, "event": "llm_stream_start", "provider": "copilot", "model": "gpt-4o", "message_count": 1}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 16:01:01,452 [AUDIT] {"timestamp": 1792008061.452121, "event": "llm_stream_complete", "provider": "copilot", "model": "gpt-4o", "tool_calls": 1}
+Audit event dropped before the writer started; event was not persisted
+[tool] done model=gpt-4o content='' tool_calls=1 usage={"completion_tokens": 14, "prompt_tokens": 56, "total_tokens": 70}
+[tool] tool calls: [{"function": {"arguments": "{\"city\":\"Paris\"}", "name": "get_weather"}, "id": "call_58ImVraJ5mD9jtmLwxovkUaQ", "type": "function"}]
+[pass] live Copilot subscription calls completed through the provider
+exit=0 elapsed=6.7s

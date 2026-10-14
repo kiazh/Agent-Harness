@@ -307,6 +307,88 @@ def test_sensitive_search_operand_requires_credential_access(workspace):
     assert "credential_access" in decision.reason
 
 
+# 2026-10-14 review R3-1: the ChatGPT token store now resolves to
+# <machina_home>/auth/chatgpt.json (or the MACHINA_CHATGPT_AUTH_FILE
+# override). When a workspace CONTAINS the store, reading it was classified
+# as a trusted project read and returned the refresh token; it must gate
+# exactly like a credentials file instead.
+
+
+def _use_store_at(workspace, monkeypatch, path):
+    monkeypatch.delenv("MACHINA_CHATGPT_AUTH_FILE", raising=False)
+    monkeypatch.setattr(config, "machina_home", str(path))
+    store = path / "auth" / "chatgpt.json"
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_text("{}", encoding="utf-8")
+    return store
+
+
+def test_resolved_chatgpt_store_requires_credential_access(workspace, monkeypatch):
+    _use_store_at(workspace, monkeypatch, workspace)
+
+    request = build_request(operation="file.read", targets=["auth/chatgpt.json"])
+    decision = decide(request)
+    assert decision.verdict == "pending"
+    assert "credential_access" in decision.reason
+
+
+def test_chatgpt_store_env_override_is_protected(workspace, monkeypatch):
+    override = workspace / "private" / "tokens.json"
+    override.parent.mkdir(parents=True)
+    override.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("MACHINA_CHATGPT_AUTH_FILE", str(override))
+
+    request = build_request(operation="file.read", targets=["private/tokens.json"])
+    decision = decide(request)
+    assert decision.verdict == "pending"
+    assert "credential_access" in decision.reason
+
+
+def test_chatgpt_store_atomic_siblings_are_protected(workspace, monkeypatch):
+    _use_store_at(workspace, monkeypatch, workspace)
+
+    for name in ("chatgpt.json.abc123.tmp", "chatgpt.json.generation"):
+        request = build_request(operation="file.read", targets=[f"auth/{name}"])
+        decision = decide(request)
+        assert decision.verdict == "pending", name
+        assert "credential_access" in decision.reason
+
+
+def test_terminal_read_of_the_chatgpt_store_requires_credential_access(workspace, monkeypatch):
+    _use_store_at(workspace, monkeypatch, workspace)
+
+    request = build_request(
+        tool="terminal", **action_for_tool("terminal", {"command": "cat auth/chatgpt.json"})
+    )
+    decision = decide(request)
+    assert decision.verdict == "pending"
+    assert "credential_access" in decision.reason
+
+
+def test_unrelated_file_named_chatgpt_json_stays_routine(workspace, monkeypatch, tmp_path):
+    monkeypatch.delenv("MACHINA_CHATGPT_AUTH_FILE", raising=False)
+    monkeypatch.setattr(config, "machina_home", str(tmp_path / "home"))
+    docs = workspace / "docs"
+    docs.mkdir()
+    (docs / "chatgpt.json").write_text("documentation", encoding="utf-8")
+
+    request = build_request(operation="file.read", targets=["docs/chatgpt.json"])
+    assert decide(request).verdict == "allowed"
+
+
+def test_search_predicate_uses_the_resolved_store_identity(workspace, monkeypatch):
+    from machina.permissions.policy import sensitive_path
+
+    store = _use_store_at(workspace, monkeypatch, workspace)
+    docs = workspace / "docs"
+    docs.mkdir(exist_ok=True)
+    (docs / "chatgpt.json").write_text("documentation", encoding="utf-8")
+
+    # search_files gates each opened file through this exact predicate.
+    assert sensitive_path(str(store)) is True
+    assert sensitive_path(str(docs / "chatgpt.json")) is False
+
+
 # 2026-10-14 review R02: `cp -R source/. target` overwrites
 # target/.git/config exactly like the direct write that already pauses.
 def test_recursive_copy_reaching_protected_descendants_requires_review(workspace):

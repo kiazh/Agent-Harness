@@ -117,11 +117,14 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
 }
 
 # Every chat provider the harness can route to: OpenRouter (multi-model),
-# the direct families above, Anthropic (native API), local Ollama, ChatGPT
-# subscription accounts (Codex protocol; auth-file based, no API key), and
-# "custom" — any OpenAI-compatible endpoint configured via CUSTOM_BASE_URL
-# (built dynamically in factory.py, so it is deliberately absent from
-# PROVIDER_SPECS, the fixed vendor table).
+# the direct families above, Anthropic (native API), ChatGPT subscription
+# accounts (Codex protocol; auth-file based, no API key), Claude Pro/Max
+# subscription accounts (Claude Code OAuth; auth-file based), GitHub Copilot
+# seats (GitHub token; auth-file based), Gemini Code Assist licenses
+# (gemini-cli Cloud Code Assist OAuth; auth-file based), and "custom" — any
+# OpenAI-compatible endpoint configured via CUSTOM_BASE_URL (built dynamically
+# in factory.py, so it is deliberately absent from PROVIDER_SPECS, the fixed
+# vendor table).
 #
 # User-added named providers (machina.security.providers store, Phase B) are
 # also deliberately absent from this tuple: ``PROVIDERS`` is a registry whose
@@ -162,5 +165,15 @@ def provider_names() -> tuple[str, ...]:
 
 
 PROVIDERS: tuple[str, ...] = _ProviderRegistry(
-    ("openrouter", *tuple(PROVIDER_SPECS), "anthropic", "chatgpt", "custom", "ollama")
+    (
+        "openrouter",
+        *tuple(PROVIDER_SPECS),
+        "anthropic",
+        "chatgpt",
+        "claude",
+        "copilot",
+        "gemini",
+        "custom",
+        "ollama",
+    )
 )

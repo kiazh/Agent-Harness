@@ -1,0 +1,39 @@
+$ machina auth --help
+                                                                                
+ Usage: machina auth [OPTIONS] COMMAND [ARGS]...                                
+                                                                                
+ Sign in to subscription LLM providers (chatgpt, claude, copilot, gemini).      
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ login    Sign in with your ChatGPT account (browser PKCE flow).              │
+│ status   Show ChatGPT sign-in status; exit 0 when signed in, 1 otherwise.    │
+│ logout   Remove Machina's ChatGPT token store (never ~/.codex/auth.json).    │
+│ chatgpt  Sign in to your ChatGPT account for the chatgpt provider.           │
+│ claude   Sign in to your Claude Pro/Max subscription for the claude          │
+│          provider.                                                           │
+│ copilot  Sign in to your GitHub Copilot seat for the copilot provider.       │
+│ gemini   Sign in to your Gemini Code Assist license for the gemini provider. │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+$ machina auth claude status
+Claude subscription
+  Status: not signed in
+  Sign in with machina auth claude login, or import the
+  Claude Code login with machina auth claude login --import-claude.
+
+$ machina auth copilot status
+GitHub Copilot
+  Status: signed in (Machina token store)
+  Account: unknown
+  Token family: gho
+  Last refresh: 2026-10-14T19:58:00.060342Z
+
+$ machina auth gemini status
+Gemini (Cloud Code Assist)
+  Status: not signed in
+  Sign in with machina auth gemini login, or import the
+  gemini-cli login with machina auth gemini login --import-gemini.

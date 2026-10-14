@@ -167,6 +167,21 @@ def test_logout_removes_only_machina_store_and_never_codex(fake_home):
     assert codex_file.exists()
 
 
+def test_logout_bumps_the_authentication_generation(fake_home):
+    """R3-2: CLI logout fences in-flight login/refresh publication."""
+    store = fake_home / ".machina" / "auth" / "chatgpt.json"
+    chatgpt_auth.save_tokens(_tokens(), store)
+    before = chatgpt_auth.credential_generation(store)
+
+    result = runner.invoke(auth_cli.app, ["logout"])
+
+    assert result.exit_code == 0, result.output
+    assert not store.exists()
+    assert chatgpt_auth.credential_generation(store) == before + 1
+    generation_file = store.with_name(store.name + ".generation")
+    assert int(generation_file.read_text().strip()) == before + 1
+
+
 def test_logout_honors_auth_file_override(fake_home, monkeypatch, tmp_path):
     override = tmp_path / "custom-store.json"
     chatgpt_auth.save_tokens(_tokens(), override)
@@ -239,10 +254,16 @@ def _install_login(monkeypatch, port: int, *, state: str = "cli-state") -> None:
 def test_login_settles_from_a_real_local_callback(fake_home, monkeypatch):
     port = _free_port()
     _install_login(monkeypatch, port)
-    seen: dict[str, str] = {}
+    seen: dict[str, object] = {}
 
     def fake_exchange(code, *, code_verifier, redirect_uri, **kwargs):
-        seen.update(code=code, code_verifier=code_verifier, redirect_uri=redirect_uri)
+        seen.update(
+            code=code,
+            code_verifier=code_verifier,
+            redirect_uri=redirect_uri,
+            # R3-2: the flow's captured generation must reach the exchange.
+            generation=kwargs.get("generation"),
+        )
         return {**_tokens(account="acct-flow"), "account_id": "acct-flow"}
 
     monkeypatch.setattr(chatgpt_auth, "exchange_code", fake_exchange)
@@ -262,6 +283,7 @@ def test_login_settles_from_a_real_local_callback(fake_home, monkeypatch):
         "code": "test-code",
         "code_verifier": "cli-verifier",
         "redirect_uri": f"http://127.0.0.1:{port}/auth/callback",
+        "generation": 0,
     }
     assert "https://auth.example/authorize?state=cli-state" in result.output
     assert "acct-flow" in result.output
