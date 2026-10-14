@@ -915,40 +915,23 @@ class Gateway:
         # renewal failure means the claim lapsed — owned effects stop via
         # the loss signal. Crash expiry recovery is preserved (a dead
         # worker renews nothing and its claim becomes reclaimable).
-        _renew_stop = asyncio.Event()
         _ownership_lost = self._turn_ownership_lost.setdefault(turn_id, asyncio.Event())
         _owned_task = asyncio.current_task()
+        from machina.core.turns import TurnOwnership as _TurnOwnership
 
-        async def _renew_loop() -> None:
-            from machina.core.turns import renew_turn as _renew
+        _owner = _TurnOwnership(session_id, turn_id, owned_token, ownership_lost=_ownership_lost)
 
-            token = owned_token
-            if not token:
-                return
-            while not _renew_stop.is_set():
-                try:
-                    await asyncio.wait_for(_renew_stop.wait(), timeout=CLAIM_RENEW_INTERVAL_SECONDS)
-                except TimeoutError:
-                    pass
-                if _renew_stop.is_set():
-                    return
-                try:
-                    ok = await _renew(session_id, token)
-                except Exception:
-                    ok = False
-                if ok:
-                    continue
-                logger.warning("Turn %s lost ownership; stopping effects", turn_id)
-                _ownership_lost.set()
-                from machina.core.metrics import metrics
+        def _on_ownership_lost() -> None:
+            # Stop owned effects FIRST: the cancel is the critical effect and
+            # must not be skippable by an emit failure. The frame (correct
+            # protocol name: turn.ownership_lost, underscore) follows.
+            if _owned_task is not None:
+                _owned_task.cancel()
+            emit("turn.ownership_lost", reason="claim_renewal_failed")
 
-                metrics.increment_counter("turn.ownership_lost")
-                emit("turn.ownership_lost", reason="claim_renewal_failed")
-                if _owned_task is not None:
-                    _owned_task.cancel()
-                return
-
-        _renew_task = asyncio.create_task(_renew_loop())
+        _renew_task = _owner.start_renewal(
+            interval_s=CLAIM_RENEW_INTERVAL_SECONDS, on_lost=_on_ownership_lost
+        )
         try:
             try:
                 # AH-021/AH-022: resolve the session's stored model/provider and
@@ -1124,10 +1107,11 @@ class Gateway:
                         self._record_stage(turn_id, "releasing_ownership", session_id=sid)
                         # RF4-C1 hotfix: stop renewal BEFORE release. A cancellation
                         # delivered while releasing previously skipped the
-                        # _renew_stop.set() below, orphaning the renewal loop and
+                        # renewal-stop below, orphaning the renewal loop and
                         # keeping an unreleased claim renewed forever (permanent
                         # TURN_IN_PROGRESS lock until process restart).
-                        _renew_stop.set()
+                        if _renew_task is not None and not _renew_task.done():
+                            _renew_task.cancel()
                         # Owner-token release on EVERY exit (success/failure/cancel/timeout).
                         # Stale-safe: only this turn's token clears its own claim.
                         try:
@@ -1168,7 +1152,8 @@ class Gateway:
             # joined (a delayed spurious turn.ownership_lost could land after
             # message.complete) and _cancel_requested kept the turn id.
             # AH-AUDIT-013: stop/join renewal during release (never leaks).
-            _renew_stop.set()
+            if _renew_task is not None and not _renew_task.done():
+                _renew_task.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(_renew_task), timeout=5)
             except (TimeoutError, asyncio.CancelledError, Exception):

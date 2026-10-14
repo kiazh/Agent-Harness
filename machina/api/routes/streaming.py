@@ -93,45 +93,21 @@ async def _stream_session(
     async def _ensure_renewal() -> None:
         if _renew_state.get("task") is not None:
             return
-        _renew_stop = asyncio.Event()
-        _renew_state["stop"] = _renew_stop
+        from machina.core.turns import TurnOwnership as _TurnOwnership
 
-        async def _renew_loop() -> None:
-            from machina.core.turns import renew_turn as _renew_stream_claim
+        owner = _TurnOwnership(
+            sid, str(turn_token or ""), turn_token, ownership_lost=_ownership_lost
+        )
 
-            while not _renew_stop.is_set():
-                try:
-                    await asyncio.wait_for(_renew_stop.wait(), timeout=_renew_interval)
-                except TimeoutError:
-                    pass
-                if _renew_stop.is_set():
-                    return
-                try:
-                    if await _renew_stream_claim(sid, turn_token):
-                        continue
-                    logger.warning("SSE turn lost ownership for session %s", session_id)
-                except Exception:
-                    logger.warning("SSE claim renewal failed for session %s", session_id)
-                _ownership_lost.set()
-                from machina.core.metrics import metrics
+        def _on_lost() -> None:
+            active = _renew_state.get("active")
+            if active is not None:
+                active.cancel()
 
-                metrics.increment_counter("turn.ownership_lost")
-                active = _renew_state.get("active")
-                if active is not None:
-                    active.cancel()
-                return
-
-        _renew_state["task"] = asyncio.create_task(_renew_loop())
+        _renew_state["task"] = owner.start_renewal(interval_s=_renew_interval, on_lost=_on_lost)
 
     async def _stop_renewal() -> None:
-        _renew_stop = _renew_state.pop("stop", None)
         _renew_task = _renew_state.pop("task", None)
-        if _renew_stop is not None:
-            try:
-                _renew_stop.set()
-            except Exception as _boundary_error:
-                # Optional fallback preserves the primary outcome; report no payload.
-                record_failure("app.create_app", _boundary_error)
         if _renew_task is not None and not _renew_task.done():
             _renew_task.cancel()
         if _renew_task is not None:

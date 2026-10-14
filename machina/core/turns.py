@@ -20,18 +20,22 @@ Design (5.3 corrective):
 - Nested delegation never deadlocks: children run on their own sessions;
   parent-context recording uses direct inserts, never the parent's claim.
 
-Backwards-compatible module functions delegate to SessionTurnCoordinator.
-"""
+Module functions are the only surface: the never-adopted SessionTurnCoordinator
+indirection was deleted (review M4)."""
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading as _threading
 import uuid
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 
 from machina.core.metrics import metrics
 from machina.observability.diagnostics import record_failure
+
+logger = logging.getLogger(__name__)
 
 TURN_TTL_SECONDS = 360
 MUTATION_TTL_SECONDS = 120
@@ -501,6 +505,56 @@ async def mutation_lock(session_id: uuid.UUID):
         yield
 
 
+async def renewal_loop(
+    session_id: uuid.UUID,
+    token: str | None,
+    *,
+    interval_s: float,
+    ttl_s: int = TURN_TTL_SECONDS,
+    ownership_lost: asyncio.Event,
+    on_lost: Callable[[], None] | None = None,
+) -> None:
+    """Periodic claim renewal shared by every long-running transport (AH-AUDIT-013).
+
+    ``renew_turn`` absorbs transient DB errors into False (fail closed), so a
+    single False (or a raised error — ownership uncertainty, never a retry
+    signal) means the claim is no longer provably ours: set the loss event,
+    count the metric, run the transport-specific ``on_lost`` effects, and
+    stop. Stop the loop by cancelling its task — every transport already
+    joins the task during release.
+
+    ``ttl_s`` bounds the renewal cadence; the renew call itself keeps
+    renew_turn's public two-argument shape (its default TTL), which every
+    transport shares.
+    """
+    if not token:
+        return
+    while True:
+        await asyncio.sleep(min(interval_s, ttl_s / 3))
+        try:
+            ok = await renew_turn(session_id, token)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Fail closed exactly like the two former inline loops: an error in
+            # the renewal path is ownership uncertainty, not a retry signal
+            # (renew_turn itself maps transient DB errors to False internally).
+            ok = False
+        if ok:
+            continue
+        logger.warning("Turn %s lost ownership; stopping effects", session_id)
+        ownership_lost.set()
+        metrics.increment_counter("turn.ownership_lost")
+        if on_lost is not None:
+            try:
+                on_lost()
+            except Exception as _boundary_error:
+                # The loss event + metric are already recorded; a transport
+                # callback failure must never suppress loss handling itself.
+                record_failure("turns.renewal_loop.on_lost", _boundary_error)
+        return
+
+
 class TurnOwnership:
     """Logical turn slot with approval-aware waiting (Phase 6).
 
@@ -515,13 +569,22 @@ class TurnOwnership:
     claim lapses and becomes reclaimable).
     """
 
-    def __init__(self, session_id: uuid.UUID, turn_id: str, token: str | None = None) -> None:
+    def __init__(
+        self,
+        session_id: uuid.UUID,
+        turn_id: str,
+        token: str | None = None,
+        ownership_lost: asyncio.Event | None = None,
+    ) -> None:
         self.session_id = session_id
         self.turn_id = turn_id
         self.token = token
         self._approval_event = asyncio.Event()
         self._approval_event.set()  # no wait by default
-        self.ownership_lost = asyncio.Event()
+        # Callers that already publish a per-turn loss event (gateway map, SSE
+        # transport) pass it in so the primitive and their readers share ONE
+        # event; standalone callers get a fresh one.
+        self.ownership_lost = ownership_lost or asyncio.Event()
         self._renew_task: asyncio.Task | None = None
 
     async def wait_for_approval(self, timeout: float) -> bool:
@@ -541,28 +604,31 @@ class TurnOwnership:
         self._approved = approved
         self._approval_event.set()
 
-    def start_renewal(self, interval_s: float = 60.0, ttl_s: int = TURN_TTL_SECONDS) -> None:
-        """Begin periodic claim renewal; idempotent."""
+    def start_renewal(
+        self,
+        interval_s: float = 60.0,
+        ttl_s: int = TURN_TTL_SECONDS,
+        on_lost: Callable[[], None] | None = None,
+    ) -> asyncio.Task | None:
+        """Begin periodic claim renewal through the shared primitive; idempotent.
+
+        Always returns the renewal task (which exits immediately when this
+        owner has no token) so transports can join or cancel it uniformly.
+        """
         if self._renew_task is not None and not self._renew_task.done():
-            return
-        if not self.token:
-            return
-
-        async def _heartbeat() -> None:
-            while True:
-                await asyncio.sleep(min(interval_s, ttl_s / 3))
-                try:
-                    ok = await renew_turn(self.session_id, self.token, ttl_s=ttl_s)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    ok = False
-                if ok:
-                    continue
-                self.ownership_lost.set()
-                return
-
-        self._renew_task = asyncio.create_task(_heartbeat(), name=f"turn-renew-{self.turn_id}")
+            return self._renew_task
+        self._renew_task = asyncio.create_task(
+            renewal_loop(
+                self.session_id,
+                self.token,
+                interval_s=interval_s,
+                ttl_s=ttl_s,
+                ownership_lost=self.ownership_lost,
+                on_lost=on_lost,
+            ),
+            name=f"turn-renew-{self.turn_id}",
+        )
+        return self._renew_task
 
     async def stop_renewal(self) -> None:
         """Stop and join the renewal task (called during release)."""
@@ -588,25 +654,3 @@ class TurnOwnership:
             "parent_turn": self.turn_id,
             "authorized": True,
         }
-
-
-class SessionTurnCoordinator:
-    """Shared coordinator object (Phase B/6). Module functions delegate here."""
-
-    async def begin_turn(self, session_id: uuid.UUID, **kw) -> str | None:
-        return await try_begin_turn(session_id, **kw)
-
-    async def finish_turn(self, session_id: uuid.UUID, token: str | None) -> bool:
-        return await end_turn(session_id, token)
-
-    def locked(self, session_id: uuid.UUID) -> bool:
-        return turn_locked(session_id)
-
-    async def active(self, session_id: uuid.UUID) -> bool:
-        return await turn_active(session_id)
-
-    def mutation(self, session_id: uuid.UUID):
-        return mutation_lock(session_id)
-
-
-session_turn_coordinator = SessionTurnCoordinator()

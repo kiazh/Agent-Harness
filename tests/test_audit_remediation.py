@@ -454,6 +454,35 @@ def test_013_db_less_renewal_and_ownership():
     asyncio.run(_scenario())
 
 
+def test_renewal_loop_reports_loss_through_the_shared_primitive(monkeypatch):
+    """One primitive for every transport: a False renewal sets the loss event,
+    counts the metric, invokes on_lost, and stops (review M4 adoption)."""
+    import asyncio
+    import uuid
+
+    from machina.core import turns as t
+
+    async def _scenario():
+        lost = asyncio.Event()
+        calls = []
+
+        async def _false_renew(*_args, **_kwargs):
+            return False
+
+        monkeypatch.setattr(t, "renew_turn", _false_renew)
+        await t.renewal_loop(
+            uuid.uuid4(),
+            "token",
+            interval_s=0.01,
+            ownership_lost=lost,
+            on_lost=lambda: calls.append("lost"),
+        )
+        assert lost.is_set()
+        assert calls == ["lost"]
+
+    asyncio.run(_scenario())
+
+
 def test_013_turn_ownership_renewal_lifecycle():
     import uuid
 
