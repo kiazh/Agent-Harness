@@ -464,3 +464,21 @@ Consolidated tree: **3,531 passed, 0 failed, 1 skipped, 1 xfailed**;
   **8 PASS / 0 FAIL / 0 SKIP** (proof: docs/verification/proofs/2026-10-14-e2e-gate.*,
   re-committed). Suite on the same tree: **3,734 passed / 0 failed**; ruff
   green (493 files).
+
+## 14. Standing directives (owner, 2026-10-14)
+
+- **Continuous holistic review**: the principal-engineer/charter review
+  (10-section format, read-only, evidence-based) runs as a STANDING role in
+  rounds keyed to every wave of landings and every refactoring stage: audit
+  the freshly frozen tree + the newest diffs for cross-lane coherence,
+  end-to-end integrity, dead/duplicated/speculative code, layer drift, and
+  regression of the staged plan; report findings ranked with smallest safe
+  corrections; fixes are dispatched from those findings and re-audited.
+  Round 1 (findings H1/H2/M1-M7/L1-L5 + staged plan) is in the session
+  record; rounds resume in the same reviewer session to keep context.
+- **Skills always active**: learned skills publish enabled (no blocking
+  human approval); `/skills proposals` is a post-hoc review/rollback queue;
+  safety = versioned/revertible + audited + caps + verifier + eval-net;
+  permission/authority/security-classified material never auto-applies.
+- **Local-first**: only the agent LLM API may be paid; everything else has
+  a local or self-hosted path (see sections 11-13 and the interop proofs).
