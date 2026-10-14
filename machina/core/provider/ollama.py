@@ -283,6 +283,7 @@ class OllamaProvider(LLMProvider):
 
         content_parts: list[str] = []
         tool_calls: list[dict] = []
+        saw_terminal = False
 
         try:
             async with _stream_with_retry(self.client, "/api/chat", payload) as resp:
@@ -328,7 +329,15 @@ class OllamaProvider(LLMProvider):
                             tool_calls.append(call)
 
                     if data.get("done"):
+                        saw_terminal = True
                         break
+            if not saw_terminal:
+                # A clean EOF without a ``done: true`` frame is a truncation:
+                # partial text and tool calls must not be reported as a
+                # successful completion.
+                raise ProviderError(
+                    f"Ollama stream ended without a terminal done frame for {model or self.model}"
+                )
         except Exception as e:
             if reservation_id is not None:
                 await usage_store.finish(reservation_id, failed=True)

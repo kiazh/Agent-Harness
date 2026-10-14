@@ -202,6 +202,28 @@ async def test_response_cache_tracks_effective_output_and_sampling_parameters(pr
     assert provider.client.post.await_count == 4
 
 
+def _anthropic_stream_client(lines):
+    """Mock client whose stream yields Anthropic SSE lines (terminal included)."""
+    response = MagicMock()
+    response.status_code = 200
+    response.headers = {}
+    response.raise_for_status = MagicMock()
+
+    async def _lines():
+        for line in lines:
+            yield line
+
+    response.aiter_lines = _lines
+
+    @asynccontextmanager
+    async def stream(*args, **kwargs):
+        yield response
+
+    client = MagicMock()
+    client.stream.side_effect = stream
+    return client
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_anthropic_direct_reservation_covers_thinking_output(monkeypatch, streaming):
@@ -216,7 +238,14 @@ async def test_anthropic_direct_reservation_covers_thinking_output(monkeypatch, 
     }
     messages = [{"role": "user", "content": "hello"}]
     if streaming:
-        provider.client.stream = _stream_provider([]).client.stream
+        provider.client = _anthropic_stream_client(
+            [
+                "event: message_start",
+                'data: {"message": {"model": "test-model", "usage": {"input_tokens": 1}}}',
+                "event: message_stop",
+                'data: {"type": "message_stop"}',
+            ]
+        )
         _ = [event async for event in provider.stream_complete(messages, **kwargs)]
         payload = provider.client.stream.call_args.kwargs["json"]
     else:

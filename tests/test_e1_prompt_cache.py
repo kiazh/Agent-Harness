@@ -220,6 +220,8 @@ def _anthropic_sse() -> httpx.Response:
         'data: {"delta":{"type":"text_delta","text":"OK"}}\n\n'
         "event: message_delta\n"
         'data: {"usage":{"output_tokens":3}}\n\n'
+        "event: message_stop\n"
+        'data: {"type":"message_stop"}\n\n'
     )
     return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
 

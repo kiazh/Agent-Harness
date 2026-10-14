@@ -7,6 +7,7 @@ no network, deterministic, and close to the production call path.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import uuid
@@ -21,6 +22,7 @@ from cachetools import TTLCache
 from machina.core import provider as provider_module
 from machina.core.exceptions import ProviderError, ValidationError
 from machina.core.models import LLMResponse, ToolDefinition
+from machina.core.prompt import PROVIDER_CONTENT_KEY, append_tool_messages
 from machina.core.provider import (
     PROVIDER_SPECS,
     AnthropicProvider,
@@ -328,6 +330,7 @@ async def test_anthropic_stream_retries_429_with_retry_after(make, record_sleep)
                 "message_delta",
                 {"type": "message_delta", "delta": {}, "usage": {"output_tokens": 1}},
             ),
+            ("message_stop", {"type": "message_stop"}),
         )
 
     provider = make.anthropic(handler)
@@ -536,6 +539,281 @@ async def test_openrouter_stream_finish_reason_without_done_completes(make):
     events = [event async for event in provider.stream_complete(MESSAGES)]
     assert events[-1].type == "done"
     assert events[-1].response.content == "ok"
+
+
+# ─── R08: Anthropic/Ollama clean EOF without their terminal marker fails ────
+
+
+async def test_anthropic_stream_without_message_stop_raises(make):
+    """R08: a text delta then clean EOF is a truncation, not a completion."""
+    body = (
+        "event: content_block_delta\n"
+        "data: "
+        + json.dumps(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "partial answer"},
+            }
+        )
+        + "\n\n"
+    )
+    provider = make.anthropic(lambda request: httpx.Response(200, text=body))
+    with pytest.raises(ProviderError, match="message_stop"):
+        _ = [event async for event in provider.stream_complete(MESSAGES)]
+
+
+async def test_ollama_stream_done_false_clean_eof_raises(make):
+    """R08: ``done: false`` followed by clean EOF is a truncation."""
+    body = json.dumps({"message": {"content": "partial answer"}, "done": False}) + "\n"
+    provider = make.ollama(lambda request: httpx.Response(200, text=body))
+    with pytest.raises(ProviderError, match="done frame"):
+        _ = [event async for event in provider.stream_complete(MESSAGES)]
+
+
+async def test_anthropic_truncated_tool_use_stream_raises_before_done(make):
+    """R08: accumulated tool calls must not be accepted without message_stop."""
+    provider = make.anthropic(
+        lambda request: _anthropic_sse(
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "tool_use", "id": "c1", "name": "clock"},
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": "{}"},
+                },
+            ),
+        )
+    )
+    events = []
+    with pytest.raises(ProviderError, match="message_stop"):
+        async for event in provider.stream_complete(MESSAGES, tools=TOOLS):
+            events.append(event)
+    assert events == []
+
+
+async def test_anthropic_truncated_stream_finishes_reservation_failed(make, monkeypatch):
+    """R08: truncation uses conservative accounting (failed reservation)."""
+    ledger = _UsageLedger()
+    monkeypatch.setattr("machina.core.provider.anthropic.usage_store", ledger)
+    body = (
+        "event: content_block_delta\n"
+        "data: "
+        + json.dumps(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "partial"},
+            }
+        )
+        + "\n\n"
+    )
+    provider = make.anthropic(lambda request: httpx.Response(200, text=body))
+    with pytest.raises(ProviderError):
+        _ = [
+            event
+            async for event in provider.stream_complete(
+                MESSAGES, session_id=uuid.uuid4(), agent_id="agent"
+            )
+        ]
+    assert list(ledger.statuses.values()) == ["error"]
+
+
+async def test_ollama_truncated_stream_finishes_reservation_failed(make, monkeypatch):
+    """R08: truncation uses conservative accounting (failed reservation)."""
+    ledger = _UsageLedger()
+    monkeypatch.setattr("machina.core.provider.ollama.usage_store", ledger)
+    body = json.dumps({"message": {"content": "partial"}, "done": False}) + "\n"
+    provider = make.ollama(lambda request: httpx.Response(200, text=body))
+    with pytest.raises(ProviderError):
+        _ = [
+            event
+            async for event in provider.stream_complete(
+                MESSAGES, session_id=uuid.uuid4(), agent_id="agent"
+            )
+        ]
+    assert list(ledger.statuses.values()) == ["error"]
+
+
+# ─── R06: Anthropic thinking blocks survive tool continuations ──────────────
+
+NATIVE_THINKING_AND_TOOL = [
+    {"type": "thinking", "thinking": "fixture reasoning", "signature": "fixture-signature"},
+    {"type": "tool_use", "id": "fixture-call", "name": "clock", "input": {}},
+]
+
+
+def _follow_up_assistant_blocks(provider, messages, reasoning_effort=None):
+    payload = provider._payload(messages, provider.model, 0.7, 4096, TOOLS, reasoning_effort, False)
+    blocks = [
+        block
+        for message in payload["messages"]
+        if message["role"] == "assistant"
+        for block in message["content"]
+    ]
+    return payload, blocks
+
+
+async def test_anthropic_complete_preserves_thinking_blocks_in_continuation(make):
+    """R06: the tool-result request replays signed thinking + tool_use verbatim."""
+    provider = make.anthropic(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "type": "message",
+                "model": AnthropicProvider.DEFAULT_MODEL,
+                "content": copy.deepcopy(NATIVE_THINKING_AND_TOOL),
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+    provider._default_effort = "medium"
+    messages = [{"role": "user", "content": "r06 read the clock"}]
+    response = await provider.complete(messages, tools=TOOLS)
+    append_tool_messages(messages, response, response.tool_calls[0], "12:00")
+
+    payload, blocks = _follow_up_assistant_blocks(provider, messages)
+
+    assert blocks == NATIVE_THINKING_AND_TOOL
+    assert response.raw[PROVIDER_CONTENT_KEY] == NATIVE_THINKING_AND_TOOL
+    assert payload["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+    # The preserved blocks are provider-internal: the wire message keeps only
+    # role/content (never the carrier key).
+    assert all(set(message) == {"role", "content"} for message in payload["messages"])
+
+
+async def test_anthropic_stream_preserves_thinking_blocks_in_continuation(make):
+    """R06: streaming accumulation keeps the signed thinking block too."""
+    provider = make.anthropic(
+        lambda request: _anthropic_sse(
+            (
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "model": AnthropicProvider.DEFAULT_MODEL,
+                        "usage": {"input_tokens": 1},
+                    },
+                },
+            ),
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "thinking", "thinking": ""},
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "thinking_delta", "thinking": "fixture reasoning"},
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "signature_delta", "signature": "fixture-signature"},
+                },
+            ),
+            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {"type": "tool_use", "id": "fixture-call", "name": "clock"},
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "input_json_delta", "partial_json": "{}"},
+                },
+            ),
+            ("content_block_stop", {"type": "content_block_stop", "index": 1}),
+            (
+                "message_delta",
+                {"type": "message_delta", "delta": {}, "usage": {"output_tokens": 2}},
+            ),
+            ("message_stop", {"type": "message_stop"}),
+        )
+    )
+    provider._default_effort = "medium"
+    messages = [{"role": "user", "content": "r06 stream the clock"}]
+    events = [event async for event in provider.stream_complete(messages, tools=TOOLS)]
+    response = events[-1].response
+    append_tool_messages(messages, response, response.tool_calls[0], "12:00")
+
+    payload, blocks = _follow_up_assistant_blocks(provider, messages)
+
+    assert blocks == NATIVE_THINKING_AND_TOOL
+    assert events[-1].response.content == ""
+    assert payload["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+
+
+async def test_anthropic_complete_preserves_redacted_thinking_blocks(make):
+    """R06: redacted thinking blocks are opaque and replayed unchanged."""
+    redacted = [
+        {"type": "redacted_thinking", "data": "fixture-redacted"},
+        {"type": "tool_use", "id": "fixture-call", "name": "clock", "input": {"zone": "utc"}},
+    ]
+    provider = make.anthropic(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "type": "message",
+                "model": AnthropicProvider.DEFAULT_MODEL,
+                "content": copy.deepcopy(redacted),
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+    provider._default_effort = "medium"
+    messages = [{"role": "user", "content": "r06 redacted thinking"}]
+    response = await provider.complete(messages, tools=TOOLS)
+    append_tool_messages(messages, response, response.tool_calls[0], "12:00")
+
+    _payload, blocks = _follow_up_assistant_blocks(provider, messages)
+
+    assert blocks == redacted
+
+
+def test_anthropic_reconstruction_fallback_without_provider_content():
+    """Messages without native blocks keep the OpenAI-shape reconstruction."""
+    _system, out = AnthropicProvider._to_anthropic_messages(
+        [
+            {
+                "role": "assistant",
+                "content": "calling",
+                "tool_calls": [
+                    {
+                        "id": "t1",
+                        "type": "function",
+                        "function": {"name": "clock", "arguments": '{"a": 1}'},
+                    }
+                ],
+            }
+        ]
+    )
+    assert out[0]["content"] == [
+        {"type": "text", "text": "calling"},
+        {"type": "tool_use", "id": "t1", "name": "clock", "input": {"a": 1}},
+    ]
 
 
 # ─── W6: Ollama complete guards a missing message + reservation ─────────────

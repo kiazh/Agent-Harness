@@ -24,11 +24,13 @@ assembled text byte-identical (pinned by ``tests/test_v2_triage_hints.py``).
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 from typing import Any
 
 __all__ = [
+    "PROVIDER_CONTENT_KEY",
     "TOOL_RESULT_STALE_HEAD",
     "TOOL_RESULT_STALE_TAIL",
     "TOOL_RESULT_STALE_CAP",
@@ -71,6 +73,12 @@ _TOOL_RESULT_STALE_CAP = TOOL_RESULT_STALE_CAP
 # Positionally addressed skill pages must keep resolving their offsets.
 SKILL_PAGE_RE = re.compile(r"^(Skill \S+|ECC resource \S+) \[\d+:\d+/\d+\]:")
 _SKILL_PAGE_RE = SKILL_PAGE_RE
+# Provider-native content blocks ride on ``LLMResponse.raw`` under this key and
+# are copied onto the assistant message by :func:`append_tool_messages` so the
+# next tool-continuation request can replay them verbatim (Anthropic extended
+# thinking requires the original signed ``thinking`` blocks alongside
+# ``tool_use``; normalizing to OpenAI-style shapes would drop them).
+PROVIDER_CONTENT_KEY = "provider_content"
 
 
 def stale_tool_preview(content: str) -> str:
@@ -153,17 +161,26 @@ _request_context_tokens = request_context_tokens
 def append_tool_messages(
     messages: list[dict[str, Any]], response, tc: dict[str, Any], content: str
 ) -> None:
-    """Append one assistant batch followed by each of its tool results."""
+    """Append one assistant batch followed by each of its tool results.
+
+    When the provider returned native content blocks (``response.raw`` carries
+    :data:`PROVIDER_CONTENT_KEY`), they are copied onto the assistant message
+    so the continuation request can replay them verbatim — Anthropic rejects
+    tool continuations whose signed ``thinking`` blocks have been dropped.
+    """
     # The execution loop replays results in provider order. Only its first
     # result introduces the assistant message; later results share it.
     if not response.tool_calls or tc is response.tool_calls[0]:
-        messages.append(
-            {
-                "role": "assistant",
-                "content": response.content,
-                "tool_calls": response.tool_calls or [tc],
-            }
-        )
+        assistant: dict[str, Any] = {
+            "role": "assistant",
+            "content": response.content,
+            "tool_calls": response.tool_calls or [tc],
+        }
+        raw = getattr(response, "raw", None)
+        native = raw.get(PROVIDER_CONTENT_KEY) if isinstance(raw, dict) else None
+        if isinstance(native, list) and native:
+            assistant[PROVIDER_CONTENT_KEY] = copy.deepcopy(native)
+        messages.append(assistant)
     messages.append(
         {
             "role": "tool",

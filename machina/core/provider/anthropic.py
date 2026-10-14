@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import time
 import uuid
@@ -15,6 +16,7 @@ from machina.core.exceptions import ProviderError, ValidationError
 from machina.core.images import anthropic_content
 from machina.core.metrics import metrics
 from machina.core.models import LLMResponse, StreamEvent, ToolDefinition
+from machina.core.prompt import PROVIDER_CONTENT_KEY
 from machina.core.provider._log import logger
 from machina.core.provider.audit import audit_log
 from machina.core.provider.base import LLMProvider
@@ -104,6 +106,15 @@ class AnthropicProvider(LLMProvider):
                 continue
             tool_calls = msg.get("tool_calls")
             if role == "assistant" and tool_calls:
+                native = msg.get(PROVIDER_CONTENT_KEY)
+                if isinstance(native, list) and native:
+                    # Replay the provider-native blocks verbatim. Anthropic
+                    # requires the original signed thinking/redacted_thinking
+                    # blocks to accompany tool_use on a continuation while
+                    # extended thinking is enabled; rebuilding them from the
+                    # OpenAI-style fields would drop the signatures.
+                    out.append({"role": "assistant", "content": copy.deepcopy(native)})
+                    continue
                 blocks: list[dict[str, Any]] = []
                 if msg.get("content"):
                     blocks.append({"type": "text", "text": str(msg.get("content"))})
@@ -149,6 +160,16 @@ class AnthropicProvider(LLMProvider):
                     }
                 )
         return "".join(texts), tool_calls
+
+    @staticmethod
+    def _provider_content(content: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Deep-copy native Anthropic blocks for verbatim replay.
+
+        Extended thinking requires the original signed ``thinking`` /
+        ``redacted_thinking`` blocks on the tool-continuation request, so they
+        must survive normalization instead of becoming OpenAI-style shapes.
+        """
+        return [copy.deepcopy(block) for block in content or [] if isinstance(block, dict)]
 
     def _thinking_payload(
         self, reasoning_effort: str | None, max_tokens: int, temperature: float
@@ -322,11 +343,15 @@ class AnthropicProvider(LLMProvider):
             total_tokens=usage["total_tokens"],
             tool_calls=len(tool_calls),
         )
+        native_blocks = self._provider_content(data.get("content", []))
+        raw = {**data}
+        if native_blocks:
+            raw[PROVIDER_CONTENT_KEY] = native_blocks
         response = LLMResponse(
             content=content,
             model=data.get("model", model),
             usage=usage,
-            raw=data,
+            raw=raw,
             tool_calls=tool_calls,
         )
         _cache_put(ckey, response)
@@ -371,9 +396,11 @@ class AnthropicProvider(LLMProvider):
 
         text_parts: list[str] = []
         blocks: dict[int, dict[str, Any]] = {}
+        native_blocks: dict[int, dict[str, Any]] = {}
         input_tokens = 0
         output_tokens = 0
         resolved_model = model
+        saw_terminal = False
         try:
             async with _stream_with_retry(self.client, "/v1/messages", payload) as resp:
                 resp.raise_for_status()
@@ -381,6 +408,8 @@ class AnthropicProvider(LLMProvider):
                 async for line in resp.aiter_lines():
                     if line.startswith("event: "):
                         event_type = line[7:].strip()
+                        if event_type == "message_stop":
+                            saw_terminal = True
                         continue
                     if not line.startswith("data: "):
                         continue
@@ -405,24 +434,73 @@ class AnthropicProvider(LLMProvider):
                     elif event_type == "content_block_start":
                         idx = data.get("index", 0)
                         block = data.get("content_block", {})
-                        if block.get("type") == "tool_use":
+                        if not isinstance(block, dict):
+                            continue
+                        block_type = block.get("type")
+                        if block_type == "tool_use":
                             blocks[idx] = {
                                 "id": block.get("id", ""),
                                 "name": block.get("name", ""),
                                 "arguments": "",
                             }
+                            native_blocks[idx] = {
+                                "type": "tool_use",
+                                "id": block.get("id", ""),
+                                "name": block.get("name", ""),
+                                "_arguments": "",
+                            }
+                        elif block_type == "text":
+                            native_blocks[idx] = {"type": "text", "text": block.get("text", "")}
+                        elif block_type == "thinking":
+                            native_blocks[idx] = {
+                                "type": "thinking",
+                                "thinking": block.get("thinking", ""),
+                                "signature": block.get("signature", ""),
+                            }
+                        elif block_type == "redacted_thinking":
+                            native_blocks[idx] = copy.deepcopy(block)
                     elif event_type == "content_block_delta":
                         idx = data.get("index", 0)
                         delta = data.get("delta", {})
-                        if delta.get("type") == "text_delta" and delta.get("text"):
+                        if not isinstance(delta, dict):
+                            continue
+                        delta_type = delta.get("type")
+                        native = native_blocks.get(idx)
+                        if delta_type == "text_delta" and delta.get("text"):
                             text_parts.append(delta["text"])
                             yield StreamEvent(type="text", content=delta["text"])
-                        elif delta.get("type") == "input_json_delta" and delta.get("partial_json"):
+                            if native is not None and native.get("type") == "text":
+                                native["text"] += delta["text"]
+                        elif delta_type == "thinking_delta" and delta.get("thinking"):
+                            if native is not None and native.get("type") == "thinking":
+                                native["thinking"] += delta["thinking"]
+                        elif delta_type == "signature_delta" and delta.get("signature"):
+                            if native is not None and native.get("type") == "thinking":
+                                native["signature"] += delta["signature"]
+                        elif delta_type == "input_json_delta" and delta.get("partial_json"):
                             blocks.setdefault(idx, {"id": "", "name": "", "arguments": ""})[
                                 "arguments"
                             ] += delta["partial_json"]
+                            if native is None or native.get("type") != "tool_use":
+                                native = {
+                                    "type": "tool_use",
+                                    "id": "",
+                                    "name": "",
+                                    "_arguments": "",
+                                }
+                                native_blocks[idx] = native
+                            native["_arguments"] += delta["partial_json"]
                     elif event_type == "message_delta":
                         output_tokens = data.get("usage", {}).get("output_tokens", output_tokens)
+                    elif event_type == "message_stop" or data.get("type") == "message_stop":
+                        saw_terminal = True
+            if not saw_terminal:
+                # A clean EOF without ``message_stop`` is a truncation: the
+                # partial text must not be reported as a successful answer.
+                raise ProviderError(
+                    f"Anthropic stream ended without a terminal message_stop event "
+                    f"for {resolved_model}"
+                )
         except Exception as e:
             if reservation_id is not None:
                 await usage_store.finish(reservation_id, failed=True)
@@ -438,6 +516,26 @@ class AnthropicProvider(LLMProvider):
             for _, b in sorted(blocks.items())
             if b.get("name") or b.get("arguments")
         ]
+        native_content: list[dict[str, Any]] = []
+        for _, native in sorted(native_blocks.items()):
+            if native.get("type") != "tool_use":
+                native_content.append(native)
+                continue
+            raw_arguments = native.get("_arguments", "")
+            parsed_input: Any = {}
+            if raw_arguments:
+                try:
+                    parsed_input = json.loads(raw_arguments)
+                except (json.JSONDecodeError, TypeError):
+                    parsed_input = {}
+            native_content.append(
+                {
+                    "type": "tool_use",
+                    "id": native.get("id", ""),
+                    "name": native.get("name", ""),
+                    "input": parsed_input if isinstance(parsed_input, dict) else {},
+                }
+            )
         usage = {
             "prompt_tokens": input_tokens,
             "completion_tokens": output_tokens,
@@ -448,12 +546,16 @@ class AnthropicProvider(LLMProvider):
         audit_log(
             "llm_stream_complete", provider="anthropic", model=model, tool_calls=len(tool_calls)
         )
+        raw: dict[str, Any] = {}
+        if native_content:
+            raw[PROVIDER_CONTENT_KEY] = native_content
         yield StreamEvent(
             type="done",
             response=LLMResponse(
                 content="".join(text_parts),
                 model=resolved_model,
                 usage=usage,
+                raw=raw,
                 tool_calls=tool_calls,
             ),
         )
