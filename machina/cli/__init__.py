@@ -77,6 +77,62 @@ def _parse_uuid(s: str) -> uuid.UUID | None:
         return None
 
 
+# Documented headless ``chat`` exit statuses (see the command docstring).
+EXIT_OK = 0
+EXIT_FAILED = 1
+# Click/Typer reserves 2 for usage errors; paused-for-approval is distinct.
+EXIT_PAUSED = 3
+# Claim renewal cadence for headless CLI turns (gateway/SSE use the same).
+CLI_TURN_RENEW_INTERVAL_SECONDS = 30.0
+
+
+def _report_terminal_response(final, streamed_parts: list[str]) -> int:
+    """Display the terminal response; return the chat command's exit status.
+
+    R14: the terminal ``AgentResponse`` is authoritative. Failure diagnostics
+    and approval pauses are surfaced even when the provider stream emitted no
+    text deltas, canonical content the stream never displayed is printed once
+    (never duplicating an answer that already streamed), and the outcome
+    selects the documented exit status: completed → 0, failed → EXIT_FAILED,
+    paused for approval → EXIT_PAUSED.
+    """
+    if final is None:
+        return EXIT_OK
+    content = str(getattr(final, "content", "") or "")
+    streamed = "".join(streamed_parts)
+    if content.strip() and content.strip() not in streamed:
+        # Error/pause paths return their diagnostic as terminal content
+        # without text frames; print it so it is visible exactly once.
+        console.print()
+        console.out(content, highlight=False)
+    pauses = [
+        pause
+        for pause in (getattr(final, "needs_approval", None) or [])
+        if isinstance(pause, dict) and pause.get("request_id")
+    ]
+    if pauses:
+        from machina.protocol import approval_summary
+
+        output.error(
+            "Turn paused for approval; it did not run to completion.",
+            "Resolve the request, then resume the session.",
+        )
+        for pause in pauses:
+            summary = approval_summary(pause)
+            detail = summary.get("operation", "")
+            if summary.get("target"):
+                detail = f"{detail} — {summary['target']}" if detail else summary["target"]
+            line = f"  [yellow]request {escape(summary.get('requestId', ''))}[/yellow]"
+            if detail:
+                line += f" ({escape(detail)})"
+            console.print(line)
+        return EXIT_PAUSED
+    if str(getattr(final, "outcome", "completed") or "completed") == "failed":
+        output.error("Turn failed.")
+        return EXIT_FAILED
+    return EXIT_OK
+
+
 async def _resolve_session(session_id: str | None):
     """Return the named session, or the last active one; exit with a message otherwise."""
     if session_id:
@@ -116,7 +172,13 @@ def chat(
     interactive: bool = typer.Option(False, "--interactive", "-i", help="Open the interactive UI"),
     mode: str = typer.Option(None, "--mode", help="Execution mode: ask|workspace|sandbox|full"),
 ):
-    """Send one message to the agent (or open the UI with -i)."""
+    """Send one message to the agent (or open the UI with -i).
+
+    Exit statuses: 0 completed, 1 failed (including a session already busy
+    with another live turn), 3 paused — the turn is waiting for an approval
+    decision. Paused/failed runs point at the terminal response, never only
+    at the session ID.
+    """
     if mode is not None:
         normalized = mode.strip().lower()
         if normalized not in ("ask", "workspace", "sandbox", "full"):
@@ -168,51 +230,104 @@ def chat(
                 session = await session_manager.create(title=message[:50], goal=message[:100])
                 output.muted(f"New session: {session.id}")
 
-            # Same shared factory as gateway/REST/jobs (definition, shared
-            # memory/RAG, authority). Headless: no approver → broker returns
-            # structured needs_approval instead of hanging.
-            try:
-                from machina.core.agent_factory import build_agent_for_session
+            # R04: headless chat is a first-class transport — claim the shared
+            # session turn before building or streaming anything, so a live
+            # gateway/REST/job/CLI owner rejects this prompt instead of
+            # interleaving transcript writes and tool effects. The claim is
+            # renewed for the whole turn and released owner-matched (same
+            # coordinator idiom as gateway/server.py and api/routes/streaming.py).
+            from machina.core.turns import end_turn, renewal_loop, try_begin_turn
 
-                agent = await build_agent_for_session(
-                    session, provider_override=provider, model_override=model
-                )
-                llm = agent.provider
-                _provider_name = provider or session.provider or config.get("provider")
-            except ValueError as e:
+            turn_id = uuid.uuid4().hex[:12]
+            turn_token = await try_begin_turn(session.id, turn_id=turn_id)
+            if not turn_token:
                 output.error(
-                    f"Provider error: {e}",
-                    "Check your provider configuration with `machina config`.",
+                    f"Session {session.id} is busy: another turn is already running for it.",
+                    "Wait for it to finish (or stop it in the UI), then retry.",
                 )
-                raise typer.Exit(1) from None
-
-            if verbose:
-                output.muted(f"Model: {llm.model} ({_provider_name})")
+                raise typer.Exit(EXIT_FAILED)
+            ownership_lost = asyncio.Event()
+            renew_task = asyncio.create_task(
+                renewal_loop(
+                    session.id,
+                    turn_token,
+                    interval_s=CLI_TURN_RENEW_INTERVAL_SECONDS,
+                    ownership_lost=ownership_lost,
+                ),
+                name=f"cli-turn-renew-{turn_id}",
+            )
+            try:
+                # Same shared factory as gateway/REST/jobs (definition, shared
+                # memory/RAG, authority). Headless: no approver → broker returns
+                # structured needs_approval instead of hanging.
                 try:
-                    output.muted(f"Mode: {config.get('execution_mode')} (backend: host)")
-                except Exception:
-                    pass
-            console.print()
+                    from machina.core.agent_factory import build_agent_for_session
 
-            final = None
-            async for event in agent.run_stream(session.id, message, verbose=False):
-                if event.type == "text":
-                    console.out(event.content, end="", highlight=False)
-                elif event.type == "tool_call" and verbose:
-                    console.print(f"\n[yellow]→ {escape(event.tool_name)}[/yellow]")
-                elif event.type == "tool_result" and verbose:
-                    preview = str(event.tool_result)[:120].replace("\n", " ")
-                    console.print(f"[dim]  ← {escape(preview)}[/dim]")
-                elif event.type == "done":
-                    final = event.response
-            console.print()
+                    agent = await build_agent_for_session(
+                        session, provider_override=provider, model_override=model
+                    )
+                    llm = agent.provider
+                    _provider_name = provider or session.provider or config.get("provider")
+                except ValueError as e:
+                    output.error(
+                        f"Provider error: {e}",
+                        "Check your provider configuration with `machina config`.",
+                    )
+                    raise typer.Exit(1) from None
 
+                if verbose:
+                    output.muted(f"Model: {llm.model} ({_provider_name})")
+                    try:
+                        output.muted(f"Mode: {config.get('execution_mode')} (backend: host)")
+                    except Exception:
+                        pass
+                console.print()
+
+                final = None
+                streamed_parts: list[str] = []
+                async for event in agent.run_stream(session.id, message, verbose=False):
+                    if ownership_lost.is_set():
+                        break
+                    if event.type == "text":
+                        streamed_parts.append(event.content)
+                        console.out(event.content, end="", highlight=False)
+                    elif event.type == "tool_call" and verbose:
+                        console.print(f"\n[yellow]→ {escape(event.tool_name)}[/yellow]")
+                    elif event.type == "tool_result" and verbose:
+                        preview = str(event.tool_result)[:120].replace("\n", " ")
+                        console.print(f"[dim]  ← {escape(preview)}[/dim]")
+                    elif event.type == "done":
+                        final = event.response
+                console.print()
+            finally:
+                renew_task.cancel()
+                await asyncio.gather(renew_task, return_exceptions=True)
+                try:
+                    await end_turn(session.id, turn_token)
+                except Exception as release_error:
+                    from machina.observability.diagnostics import record_failure
+
+                    record_failure("cli.chat.release_turn", release_error)
+                    logger.warning(
+                        "Session %s turn claim release failed: %s", session.id, release_error
+                    )
+
+            if ownership_lost.is_set():
+                output.error(
+                    "Turn ownership was lost while running; stopped instead of "
+                    "interleaving with the session's new owner.",
+                )
+                raise typer.Exit(EXIT_FAILED)
+
+            status = _report_terminal_response(final, streamed_parts)
             if final is not None and verbose:
                 output.muted(
                     f"Iterations: {final.iterations} | Tool calls: {len(final.tool_calls)} "
                     f"| Tokens: {final.tokens_used}"
                 )
             output.muted(f"Session ID: {session.id}")
+            if status != EXIT_OK:
+                raise typer.Exit(status)
         finally:
             # Fire-and-forget consolidation/review tasks need the live
             # provider AND a live pool — drain them before either closes, or
@@ -514,7 +629,11 @@ def delete(
     session_id: str = typer.Argument(..., help="Session ID to delete"),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
 ):
-    """Permanently delete a session and all its context chunks."""
+    """Permanently delete a session and all its context chunks.
+
+    Refused while another owner (gateway/REST/job/CLI turn) holds the session:
+    the same mutation-claim protocol as gateway and REST deletion applies.
+    """
 
     async def _delete():
         await db.connect()
@@ -539,7 +658,36 @@ def delete(
                     console.print("[dim]Cancelled.[/dim]")
                     return
 
-            deleted = await session_manager.delete(sid)
+            # R05: deletion is a mutation on a shared session — use the same
+            # protocol as gateway/REST (gateway/features/sessions.py,
+            # api/routes/sessions.py): refuse while a turn is live, claim a
+            # mutation slot, re-check under the claim, delete, then release
+            # owner-matched so a foreign owner is never unlocked.
+            from machina.core.turns import begin_mutation, end_mutation, turn_active
+
+            if await turn_active(sid):
+                output.error(
+                    f"Session {session_id} has an active turn.",
+                    "Stop it before deleting, then retry.",
+                )
+                raise typer.Exit(EXIT_FAILED)
+            token = await begin_mutation(sid)
+            if not token:
+                output.error(
+                    f"Session {session_id} is busy: another owner holds it.",
+                    "Wait for it to finish, then retry.",
+                )
+                raise typer.Exit(EXIT_FAILED)
+            try:
+                if await turn_active(sid):
+                    output.error(
+                        f"Session {session_id} has an active turn.",
+                        "Stop it before deleting, then retry.",
+                    )
+                    raise typer.Exit(EXIT_FAILED)
+                deleted = await session_manager.delete(sid)
+            finally:
+                await end_mutation(sid, token)
             if deleted:
                 console.print(f"[green]Session {session_id} deleted.[/green]")
             else:
