@@ -4,6 +4,7 @@ import { stripTerminalSequences, type SelectItem } from "@earendil-works/pi-tui"
 import { parseCommand } from "../src/commands.ts";
 import { type AskTextOptions, type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "../src/features/index.ts";
 import { resolvePrefix, table } from "../src/format.ts";
+import { listAllSessions, type SessionListHost } from "../src/features/sessions.ts";
 import type { ConfigResult, HistoryEntry, SessionInfo } from "../src/protocol.ts";
 import type { OAuthProgressHandle, OAuthProgressOptions } from "../src/features/types.ts";
 
@@ -853,6 +854,52 @@ test("/resume with a prefix resolves via paginated session.list", async () => {
 	// Should have resolved the prefix and resumed
 	const resumeCall = host.calls.find((c) => c.method === "session.resume")!;
 	assert.equal(resumeCall.params.sessionId, oldSessionId);
+});
+
+// ─── M2: one bounded cursor scanner for every session scan ─────────────────
+
+test("listAllSessions walks every page to the end of the list", async () => {
+	const request = (async (method: string, params: Record<string, unknown> = {}) => {
+		assert.equal(method, "session.list");
+		assert.equal(params.limit, 200);
+		return params.cursor === undefined
+			? { sessions: [{ id: "aaaa" }, { id: "bbbb" }], nextCursor: "page-2" }
+			: { sessions: [{ id: "cccc" }] };
+	}) as SessionListHost["request"];
+	const seen: number[] = [];
+	const sessions = await listAllSessions({ request }, { maxPages: 5, onPage: (page) => seen.push(page.length) });
+	assert.deepEqual(sessions.map((session) => session.id), ["aaaa", "bbbb", "cccc"]);
+	assert.deepEqual(seen, [2, 1], "onPage sees each fetched page exactly once");
+});
+
+test("listAllSessions honors maxPages and throws one bounded error", async () => {
+	let requests = 0;
+	await assert.rejects(
+		listAllSessions(
+			{
+				request: (async () => {
+					requests++;
+					return { sessions: [], nextCursor: `cursor-${requests}` };
+				}) as SessionListHost["request"],
+			},
+			{ maxPages: 3 },
+		),
+		/Too many sessions to scan \(3 pages\)/,
+	);
+	assert.equal(requests, 3, "fetches exactly maxPages pages, never more");
+});
+
+test("/agents sessions shares the bounded scanner", async () => {
+	const host = new FakeHost();
+	let requests = 0;
+	host.responses["session.list"] = () => {
+		requests++;
+		return { sessions: [], nextCursor: `cursor-${requests}` };
+	};
+	await run("/agents sessions", host);
+	assert.equal(requests, 10, "the family picker stops at its page budget");
+	assert.match(host.last().text, /Too many sessions to scan/);
+	assert.equal(host.pickTitles.length, 0, "no picker opens after a failed scan");
 });
 
 test("format helpers", () => {

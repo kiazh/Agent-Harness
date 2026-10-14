@@ -58,8 +58,13 @@ export class AppShell {
 		this.rebuild();
 	}
 
-	/** Session tab strip above the composer; undefined hides it entirely. */
+	/**
+	 * Session tab strip above the composer; undefined hides it entirely.
+	 * Idempotent: passing the current component (or undefined) is a no-op,
+	 * so callers can sync unconditionally without rebuilding the root.
+	 */
 	setTabs(component?: Component): void {
+		if (component === this.tabs) return;
 		this.tabs = component;
 		this.rebuild();
 	}

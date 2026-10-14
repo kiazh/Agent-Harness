@@ -3,10 +3,14 @@
 // through a real TuiAltScreen against a fake terminal (dialogs.test.ts
 // pattern) so the strip's visibility is asserted on actual screen lines.
 //
-// Pinned merge rule (see app.ts switchTo/tailEntries): a hidden session's
-// buffered tail is the conversation suffix and WINS over the freshly fetched
-// history; matching trailing history entries are trimmed so a completed turn
-// or settled tool renders exactly once.
+// Pinned merge rule (see tail.ts): a hidden session's buffered tail is the
+// conversation suffix and WINS over the freshly fetched history; matching
+// trailing history entries are trimmed so a completed turn or settled tool
+// renders exactly once.
+//
+// Delegation is non-streaming (agent.run): a delegated child never streams
+// frames of its own. Discovery runs on the parent's `delegate` tool.complete
+// or a turn-start frame from an unfamiliar session — never on every frame.
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -303,21 +307,71 @@ test("(e) the strip stays hidden for single-session use", async (t) => {
 
 // ─── lazy discovery + /agents sessions menu ────────────────────────────────
 
-test("an event from an unknown child lazily adds its tab once the list shows the parent link", async (t) => {
+test("an unknown child's turn start lazily adds its tab once the list shows the parent link", async (t) => {
 	const { app, tui, client } = await boot({ sessions: [MAIN] });
 	t.after(() => app.exit());
 	await settle();
 	tui.renderNow(true);
 	assert.doesNotMatch(screenOf(tui), /researcher/);
 
-	// The delegated child appears in the session list after creation; its
-	// first streamed event triggers a throttled family refresh.
+	// Delegation is non-streaming: the child's work arrives as the parent's
+	// `delegate` tool.complete (pinned in the next test). A turn-start frame
+	// from an unfamiliar session is the other discovery trigger: one bounded
+	// refresh, and the matching parent link in the list adds the tab.
 	client.sessions = [MAIN, CHILD];
+	client.emit(CHILD.id, "c9", { type: "message.start" });
 	client.emit(CHILD.id, "c9", { type: "message.delta", text: "late child" });
 	await settle();
 	tui.renderNow(true);
 	assert.match(screenOf(tui), /researcher: find X/, "matching parent link adds the tab lazily");
-	assert.equal(internals(app).sessionTails.get(CHILD.id)?.blocks.length, 1, "the event is buffered for switching");
+	assert.equal(internals(app).sessionTails.get(CHILD.id)?.blocks.length, 1, "the delta is buffered for switching");
+});
+
+test("a parent's delegate tool.complete discovers the new child tab", async (t) => {
+	const { app, tui, client } = await boot({ sessions: [MAIN] });
+	t.after(() => app.exit());
+	await settle();
+	tui.renderNow(true);
+	assert.doesNotMatch(screenOf(tui), /researcher/);
+
+	// The delegated child is created server-side by agent.run and never
+	// streams to this TUI. It is listed by the time the parent's delegate
+	// tool completes, so that completion is what adds the tab.
+	client.sessions = [MAIN, CHILD];
+	client.emit(MAIN.id, "m9", { type: "tool.complete", id: "tool-d", name: "delegate", result: "done", isError: false });
+	await settle();
+	tui.renderNow(true);
+	assert.match(screenOf(tui), /researcher: find X/, "the delegate completion adds the child tab");
+});
+
+test("only turn starts scan for an unknown session, and a foreign id is negatively cached", async (t) => {
+	const { app, client } = await boot({ sessions: [MAIN] });
+	t.after(() => app.exit());
+	await settle();
+	const listCalls = () => client.requests.filter((request) => request.method === "session.list").length;
+	const baseline = listCalls();
+
+	// Deltas (or any non-turn-start frame) from an unfamiliar session are
+	// not discovery triggers.
+	client.emit(UNRELATED.id, "u1", { type: "message.delta", text: "foreign" });
+	await settle();
+	assert.equal(listCalls(), baseline, "a foreign delta never scans the catalog");
+
+	// A turn-start frame scans once…
+	client.emit(UNRELATED.id, "u1", { type: "message.start" });
+	await settle();
+	assert.equal(listCalls(), baseline + 1, "a turn-start frame scans once");
+
+	// …and the negative result is cached: later turn starts never rescan it.
+	// Move the clock past the throttle window so only the cache can suppress.
+	const realNow = Date.now;
+	let now = realNow();
+	Date.now = () => now;
+	t.after(() => { Date.now = realNow; });
+	now += 60_000;
+	client.emit(UNRELATED.id, "u2", { type: "message.start" });
+	await settle();
+	assert.equal(listCalls(), baseline + 1, "a foreign session is negatively cached");
 });
 
 test("/agents sessions lists the family and switches to the picked child", async (t) => {

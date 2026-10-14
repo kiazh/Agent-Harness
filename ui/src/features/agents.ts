@@ -2,42 +2,10 @@
 // delegate (run a task on another agent).
 
 import { keyValues, shortId, table, when } from "../format.ts";
-import type { AgentInfo, AgentHistoryResult, AgentSaveResult, DelegationResult, ResumeResult, SessionInfo, SessionListResult } from "../protocol.ts";
+import type { AgentInfo, AgentHistoryResult, AgentSaveResult, DelegationResult, ResumeResult } from "../protocol.ts";
+import { listFamilySessions } from "../family.ts";
 import { splitSub } from "../commands.ts";
-import { confirm, options, requireArgs, requireSession, type Command, type FeatureHost } from "./types.ts";
-
-/** Upper bound on cursor pages scanned for the family (sessions.ts pattern). */
-const MAX_FAMILY_LIST_PAGES = 10;
-
-/**
- * The current session's agent family: the family root (the current session's
- * parent, or the current session itself) plus every listed session whose
- * `parentSessionId` is that root. Paginated bound like /sessions; filtered
- * client-side. Children of a child stay out (single-level rule, see App).
- */
-async function listFamilySessions(host: FeatureHost, current: SessionInfo): Promise<SessionInfo[]> {
-	const rootId = current.parentSessionId ?? current.id;
-	const members = new Map<string, SessionInfo>();
-	let cursor: string | undefined;
-	for (let page = 0; ; page++) {
-		const result = await host.request<SessionListResult & { nextCursor?: string }>("session.list", {
-			limit: 200,
-			...(cursor ? { cursor } : {}),
-		});
-		for (const session of result.sessions) {
-			if (session.id === rootId || session.parentSessionId === rootId) members.set(session.id, session);
-		}
-		if (!result.nextCursor) break;
-		if (page + 1 >= MAX_FAMILY_LIST_PAGES) {
-			throw new Error(`Too many sessions to scan (${MAX_FAMILY_LIST_PAGES} pages); try /resume <id>.`);
-		}
-		cursor = result.nextCursor;
-	}
-	members.set(current.id, current); // the visible session always wins
-	const root = members.get(rootId) ?? current;
-	const children = [...members.values()].filter((session) => session.id !== rootId);
-	return [root, ...children];
-}
+import { confirm, options, requireArgs, requireSession, type Command } from "./types.ts";
 
 export const agentsCommand: Command = {
 	name: "agents",
