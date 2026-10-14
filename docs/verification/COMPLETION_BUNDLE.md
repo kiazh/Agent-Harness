@@ -579,3 +579,37 @@ read-only references.
   TUI clipboard truth; README truth refresh; slop cleanup; Stages 0-5 of
   the consolidation plan. Standing directives (§14) govern what runs
   continuously from here.
+
+## 17. Final certification + close-out (2026-10-14, evening)
+
+- **Standing review: rounds 1-5 complete, plan EXHAUSTED.** Round 5 (full
+  tree, all skills incl. code-reviewer/adversarial/senior-qa/diagnose/
+  senior-secops) returned "definition-of-done MET" with a small fix list,
+  all now closed: F5 oversized auth-callback headers (`c25e451`,
+  discrimination-verified pin), F6/F8/N3' README truth + provider UI
+  discoverability + comment drift (`2d7400f`), F2 runner extraction +
+  F3 wheel-anchor refusal + N1' state flock + N2' output redaction + F7
+  hint (`c1550f9`; census 685/685).
+- **Final certification (frozen tree, commit `c1550f9`)**: e2e gate
+  **j1-j9: 9 PASS / 0 FAIL / 0 SKIP**; backend suite **3,989 passed /
+  0 failed**; standalone UI **398 tests / 392 pass / 0 fail**; ruff check +
+  format green (512 files); architecture ratchets green (deferred 685/685,
+  mcp_server 0/0, tools 21/21, skills 4/4).
+- **Delivered across this era**: always-on skill learning with a safety
+  envelope (auto-publish/audit/revert/precision); agent subagent UI
+  (footer count + Down menu) with buffered live tails; Machina MCP server +
+  conversational mcp_connect/disconnect (approval-gated) + installer/
+  setup/doctor interop (OpenCode/Codex/Hermes, zero writes unless
+  explicit); ChatGPT-account provider (own subscription usage, live-proven,
+  sign-in via CLI `machina auth` and TUI `/auth`); free-model routing
+  (generic keyless `custom` provider + OpenCode Zen preset; live proof via
+  Hermes's local endpoint); TUI clipboard truth; full 2026-10-14 review
+  remediation + 6 re-verification fixes; Stages 0-5 consolidation.
+- **Accepted risks recorded (round-5 §10)**: ChatGPT transport follows the
+  open-source Codex wire (typed drift errors); token store plaintext 0600
+  like the Codex CLI's own; full-mode authority bypasses per-action
+  approval by design (ask/workspace/sandbox always pause); loopback-callback
+  local-race model; family listing bound; npm transient (unproduced, watch);
+  prior entries unchanged.
+- **Standing directives (§14) remain in force** for everything after this
+  close-out.

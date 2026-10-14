@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "tool": "tools/e2e_gate.py",
-  "generated_at_utc": "2026-10-14T14:58:26Z",
-  "command_line": "/Users/shadow/machina/.venv/bin/python tools/e2e_gate.py --json /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/e2e_run/j1_j9_final.json",
+  "generated_at_utc": "2026-10-14T18:36:04Z",
+  "command_line": "/Users/shadow/machina/.venv/bin/python tools/e2e_gate.py --json /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/e2e_run/j1_j9_closeout.json",
   "repo_root": "/Users/shadow/machina",
   "git": {
-    "git_head": "45dcb8d",
+    "git_head": "c1550f9",
     "status_short": [
       "?? docs/verification/CODEBASE_REVIEW_2026-10-13.md",
       "?? docs/verification/CODEBASE_REVIEW_2026-10-14.md"
@@ -13,7 +13,7 @@
     "status_sha256_16": "e8ce2cfba7c39435"
   },
   "venv_python": "/Users/shadow/machina/.venv/bin/python",
-  "scratch_root": "/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-4i16zk5_",
+  "scratch_root": "/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-3x6zrtrn",
   "journeys_selected": [
     "j1",
     "j2",
@@ -31,12 +31,12 @@
       "title": "memory-roundtrip (chat -> consolidate -> memories row + cursor)",
       "status": "PASS",
       "reason": "",
-      "started_at": "2026-10-14T14:58:26Z",
-      "finished_at": "2026-10-14T14:58:42Z",
-      "duration_seconds": 16.029,
+      "started_at": "2026-10-14T18:36:04Z",
+      "finished_at": "2026-10-14T18:36:15Z",
+      "duration_seconds": 11.82,
       "commands": [
-        "cd /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-4i16zk5_/j1 && machina chat --session 069e4c26-48c5-493e-aa9a-b68fa06c4663 \"<facts prompt>\"",
-        "/Users/shadow/machina/.venv/bin/python -c \"<build_agent_for_session + _consolidate_memories>\" 069e4c26-48c5-493e-aa9a-b68fa06c4663"
+        "cd /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-3x6zrtrn/j1 && machina chat --session d75cbcf6-5561-4f56-a86b-fc287828be1d \"<facts prompt>\"",
+        "/Users/shadow/machina/.venv/bin/python -c \"<build_agent_for_session + _consolidate_memories>\" d75cbcf6-5561-4f56-a86b-fc287828be1d"
       ],
       "checks": [
         {
@@ -54,7 +54,7 @@
           "expected": "stderr free of ['InterfaceError', 'Memory extraction failed']",
           "observed": {
             "hits": [],
-            "stderr_excerpt": "ls\": 0}\nAudit event dropped before the writer started; event was not persisted\n2026-10-14 10:58:40,888 [AUDIT] {\"timestamp\": 1791989920.888024, \"event\": \"memory_consolidate\", \"session_id\": \"069e4c26-48c5-493e-aa9a-b68fa06c4663\", \"agent_id\": \"harness\", \"chunks_processed\": 4, \"candidates_extracted\": 1, \"new_memories_written\": 0}\nAudit event dropped before the writer started; event was not persisted\n"
+            "stderr_excerpt": "false}\nAudit event dropped before the writer started; event was not persisted\n2026-10-14 14:36:14,296 [AUDIT] {\"timestamp\": 1792002974.2967098, \"event\": \"memory_consolidate\", \"session_id\": \"d75cbcf6-5561-4f56-a86b-fc287828be1d\", \"agent_id\": \"harness\", \"chunks_processed\": 2, \"candidates_extracted\": 1, \"new_memories_written\": 1}\nAudit event dropped before the writer started; event was not persisted\n"
           }
         },
         {
@@ -81,9 +81,9 @@
         {
           "name": "memory_content_fixture",
           "ok": true,
-          "expected": "memories row content contains 'Zephyrine4226'",
+          "expected": "memories row content contains 'Zephyrine6521'",
           "observed": [
-            "User adopted a pet turtle named Zephyrine4226."
+            "User adopted a pet turtle named Zephyrine6521."
           ]
         },
         {
@@ -91,40 +91,40 @@
           "ok": true,
           "expected": "sessions.state.mem_consolidated_up_to has id + at",
           "observed": {
-            "id": "1cbe905a-3259-4898-988b-55ca2fcde923",
-            "at": "2026-10-14T14:58:39.656722+00:00"
+            "id": "e99a8892-805a-412f-b30b-9cb746fd7d6d",
+            "at": "2026-10-14T18:36:12.160369+00:00"
           }
         }
       ],
       "observed": {
-        "session_id": "069e4c26-48c5-493e-aa9a-b68fa06c4663",
-        "fixture_fact": "pet turtle named Zephyrine4226",
-        "cli_wall_seconds": 12.984,
-        "cli_reply_excerpt": "epseek)\nMode: workspace (backend: host)\n\nI'll store that fact.\n→ remember\n  ← Memory stored: [8d4372a0-cc6f-400a-8567-8eacbaf70970] (fact, \nimportance=0.50) User adopted a pet turtle named Zephyrine4\nNOTED\nIterations: 2 | Tool calls: 1 | Tokens: 13314\nSession ID: 069e4c26-48c5-493e-aa9a-b68fa06c4663",
+        "session_id": "d75cbcf6-5561-4f56-a86b-fc287828be1d",
+        "fixture_fact": "pet turtle named Zephyrine6521",
+        "cli_wall_seconds": 10.086,
+        "cli_reply_excerpt": "Resuming session: d75cbcf6-5561-4f56-a86b-fc287828be1d\nModel: deepseek-chat (deepseek)\nMode: workspace (backend: host)\n\nNOTED\nIterations: 1 | Tool calls: 0 | Tokens: 7231\nSession ID: d75cbcf6-5561-4f56-a86b-fc287828be1d",
         "cursor_after_cli": {
-          "id": "1cbe905a-3259-4898-988b-55ca2fcde923",
-          "at": "2026-10-14T14:58:39.656722+00:00"
+          "id": "e99a8892-805a-412f-b30b-9cb746fd7d6d",
+          "at": "2026-10-14T18:36:12.160369+00:00"
         },
         "memory_count_after_cli": 1,
         "session_found": true,
         "memory_count_final": 1,
         "memories": [
           {
-            "content": "User adopted a pet turtle named Zephyrine4226.",
+            "content": "User adopted a pet turtle named Zephyrine6521.",
             "category": "fact",
-            "importance": 0.5,
-            "created_at": "2026-10-14T14:58:37.749359+00:00"
+            "importance": 0.8249999999982639,
+            "created_at": "2026-10-14T18:36:14.287080+00:00"
           }
         ],
         "cursor_final": {
-          "id": "1cbe905a-3259-4898-988b-55ca2fcde923",
-          "at": "2026-10-14T14:58:39.656722+00:00"
+          "id": "e99a8892-805a-412f-b30b-9cb746fd7d6d",
+          "at": "2026-10-14T18:36:12.160369+00:00"
         },
         "revoked_grants": 1,
         "revoke_ok": true
       },
       "notes": [
-        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-4i16zk5_",
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-3x6zrtrn",
         "budget: 300s wall-clock (bounded steps sum)"
       ]
     },
@@ -133,11 +133,11 @@
       "title": "web-research-rag (real web_research -> context_chunks for source)",
       "status": "PASS",
       "reason": "",
-      "started_at": "2026-10-14T14:58:42Z",
-      "finished_at": "2026-10-14T14:58:51Z",
-      "duration_seconds": 9.258,
+      "started_at": "2026-10-14T18:36:15Z",
+      "finished_at": "2026-10-14T18:36:21Z",
+      "duration_seconds": 5.395,
       "commands": [
-        "registry.execute(\"web_research\", query=\"python json encoder and decoder documentation\", limit=1) in-session 6f86de55-45ee-4968-b19d-02a244f86a54"
+        "registry.execute(\"web_research\", query=\"python json encoder and decoder documentation\", limit=1) in-session 5583ea59-ed48-476f-b68b-18a59cbcb4da"
       ],
       "checks": [
         {
@@ -157,7 +157,7 @@
         }
       ],
       "observed": {
-        "session_id": "6f86de55-45ee-4968-b19d-02a244f86a54",
+        "session_id": "5583ea59-ed48-476f-b68b-18a59cbcb4da",
         "attempts": 1,
         "tool_exit_code": 0,
         "tool_result_preview": "Web research for 'python json encoder and decoder documentation':\n\n1. json — JSON encoder and decoder — Python 3.15.0 documentation — https://docs.python.org/3/library/json.html (saved to this session)\njson — JSON encoder and decoder — Python 3.15.0 documentation Theme Auto Light Dark Table of Contents json — JSON encoder and decoder Basic Usage Encoders and Decoders Exceptions Standard Compliance",
@@ -172,7 +172,7 @@
         "revoke_ok": true
       },
       "notes": [
-        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-4i16zk5_",
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-3x6zrtrn",
         "budget: 240s wall-clock (bounded steps sum)"
       ]
     },
@@ -181,11 +181,11 @@
       "title": "web-crawl (real web_crawl -> indexed chunks for source)",
       "status": "PASS",
       "reason": "",
-      "started_at": "2026-10-14T14:58:51Z",
-      "finished_at": "2026-10-14T14:58:56Z",
-      "duration_seconds": 4.623,
+      "started_at": "2026-10-14T18:36:21Z",
+      "finished_at": "2026-10-14T18:36:24Z",
+      "duration_seconds": 3.503,
       "commands": [
-        "registry.execute(\"web_crawl\", url=\"https://docs.python.org/3/library/json.html\", max_pages=1, max_depth=0) in-session 5c05c129-54d7-482f-a228-82d04bfe42ad"
+        "registry.execute(\"web_crawl\", url=\"https://docs.python.org/3/library/json.html\", max_pages=1, max_depth=0) in-session e50d2145-300b-4e21-b2bd-48af5fcd057a"
       ],
       "checks": [
         {
@@ -205,7 +205,7 @@
         }
       ],
       "observed": {
-        "session_id": "5c05c129-54d7-482f-a228-82d04bfe42ad",
+        "session_id": "e50d2145-300b-4e21-b2bd-48af5fcd057a",
         "tool_exit_code": 0,
         "tool_result_preview": "Crawl of 'https://docs.python.org/3/library/json.html':\n\n1. https://docs.python.org/3/library/json.html (saved to this session)\njson — JSON encoder and decoder — Python 3.15.0 documentation Theme Auto Light Dark Table of Contents json — JSON encoder and decoder Basic Usage Encoders and Decoders Exceptions Standard Compliance and Interoperability Character Encodings Infinite and NaN Number Values R",
         "chunks_for_source": 16,
@@ -213,7 +213,7 @@
         "revoke_ok": true
       },
       "notes": [
-        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-4i16zk5_",
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-3x6zrtrn",
         "budget: 240s wall-clock (bounded steps sum)"
       ]
     },
@@ -222,9 +222,9 @@
       "title": "mcp-firecrawl (connector connect -> execute_call scrape -> markdown)",
       "status": "PASS",
       "reason": "",
-      "started_at": "2026-10-14T14:58:56Z",
-      "finished_at": "2026-10-14T14:59:06Z",
-      "duration_seconds": 9.821,
+      "started_at": "2026-10-14T18:36:24Z",
+      "finished_at": "2026-10-14T18:36:29Z",
+      "duration_seconds": 4.278,
       "commands": [
         "os.environ['FIRECRAWL_API_URL']='http://localhost:3002'; connect_authorized(service,'firecrawl',...) + execute_call(service,'firecrawl__firecrawl_scrape',{'url':'https://example.com','formats':['markdown']})"
       ],
@@ -250,7 +250,7 @@
       ],
       "observed": {
         "firecrawl_api_url": "http://localhost:3002",
-        "session_id": "59e6dc39-11e4-43e1-852d-a81dab0da0b7",
+        "session_id": "f1abb7c8-3553-4ac4-9932-edb9898fcd18",
         "script_exit_code": 0,
         "tool": "firecrawl__firecrawl_scrape",
         "text_len": 1424,
@@ -262,7 +262,7 @@
         "revoke_ok": true
       },
       "notes": [
-        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-4i16zk5_",
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-3x6zrtrn",
         "budget: 300s wall-clock (bounded steps sum)"
       ]
     },
@@ -271,11 +271,11 @@
       "title": "cli-smoke (machina chat exit 0, no InterfaceError / extraction failure)",
       "status": "PASS",
       "reason": "",
-      "started_at": "2026-10-14T14:59:06Z",
-      "finished_at": "2026-10-14T14:59:09Z",
-      "duration_seconds": 3.768,
+      "started_at": "2026-10-14T18:36:29Z",
+      "finished_at": "2026-10-14T18:36:32Z",
+      "duration_seconds": 3.27,
       "commands": [
-        "cd /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-4i16zk5_/j5 && machina chat \"Reply with exactly: OK\" -q"
+        "cd /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-3x6zrtrn/j5 && machina chat \"Reply with exactly: OK\" -q"
       ],
       "checks": [
         {
@@ -293,7 +293,7 @@
           "expected": "stderr free of ['InterfaceError', 'Memory extraction failed']",
           "observed": {
             "hits": [],
-            "stderr_excerpt": "-chat\", \"message_count\": 2}\nAudit event dropped before the writer started; event was not persisted\n2026-10-14 10:59:09,659 [AUDIT] {\"timestamp\": 1791989949.659182, \"event\": \"llm_call_complete\", \"provider\": \"deepseek\", \"model\": \"deepseek-flash\", \"prompt_tokens\": 202, \"completion_tokens\": 1, \"total_tokens\": 203, \"tool_calls\": 0}\nAudit event dropped before the writer started; event was not persisted\n"
+            "stderr_excerpt": "-chat\", \"message_count\": 2}\nAudit event dropped before the writer started; event was not persisted\n2026-10-14 14:36:32,155 [AUDIT] {\"timestamp\": 1792002992.155505, \"event\": \"llm_call_complete\", \"provider\": \"deepseek\", \"model\": \"deepseek-flash\", \"prompt_tokens\": 202, \"completion_tokens\": 1, \"total_tokens\": 203, \"tool_calls\": 0}\nAudit event dropped before the writer started; event was not persisted\n"
           }
         },
         {
@@ -301,17 +301,17 @@
           "ok": true,
           "expected": "stdout contains \"OK\" (the requested reply)",
           "observed": {
-            "stdout_excerpt": "New session: ea9d9903-764a-41a9-9b5e-19e13176d133\n\nOK\nSession ID: ea9d9903-764a-41a9-9b5e-19e13176d133"
+            "stdout_excerpt": "New session: 9d8f096b-5e98-4e0e-88d2-1e5b356aeee5\n\nOK\nSession ID: 9d8f096b-5e98-4e0e-88d2-1e5b356aeee5"
           }
         }
       ],
       "observed": {
-        "cli_wall_seconds": 3.767,
+        "cli_wall_seconds": 3.269,
         "stdout_contains_ok": true,
-        "stdout_excerpt": "New session: ea9d9903-764a-41a9-9b5e-19e13176d133\n\nOK\nSession ID: ea9d9903-764a-41a9-9b5e-19e13176d133"
+        "stdout_excerpt": "New session: 9d8f096b-5e98-4e0e-88d2-1e5b356aeee5\n\nOK\nSession ID: 9d8f096b-5e98-4e0e-88d2-1e5b356aeee5"
       },
       "notes": [
-        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-4i16zk5_",
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-3x6zrtrn",
         "budget: 300s wall-clock (bounded steps sum)"
       ]
     },
@@ -320,14 +320,14 @@
       "title": "compaction-triggers (SSE auto + gateway auto + explicit compress; archive/summary/state)",
       "status": "PASS",
       "reason": "",
-      "started_at": "2026-10-14T14:59:09Z",
-      "finished_at": "2026-10-14T14:59:58Z",
-      "duration_seconds": 48.867,
+      "started_at": "2026-10-14T18:36:32Z",
+      "finished_at": "2026-10-14T18:37:12Z",
+      "duration_seconds": 40.212,
       "commands": [
         "/Users/shadow/machina/.venv/bin/python -c \"<context_manager.add_chunks_batch: 6 seeds + 1 document>\"",
-        "MACHINA_API_KEY=<redacted> /Users/shadow/machina/.venv/bin/python -m machina.api --host 127.0.0.1 --port 63777",
-        "POST http://127.0.0.1:63777/api/v1/sessions/bddf9f24-759f-4a6d-b7ab-44a4184c2739/prompt (SSE, X-API-Key set)",
-        "cd /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-4i16zk5_/j6 && machina compress bddf9f24-759f-4a6d-b7ab-44a4184c2739",
+        "MACHINA_API_KEY=<redacted> /Users/shadow/machina/.venv/bin/python -m machina.api --host 127.0.0.1 --port 49368",
+        "POST http://127.0.0.1:49368/api/v1/sessions/e2ea401d-3d3b-4e87-ab08-ba9f990e7191/prompt (SSE, X-API-Key set)",
+        "cd /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-3x6zrtrn/j6 && machina compress e2ea401d-3d3b-4e87-ab08-ba9f990e7191",
         "/Users/shadow/machina/.venv/bin/python -c \"<context_manager.add_chunks_batch: gateway session>\"",
         "MACHINA_GATEWAY_TOKEN=<redacted> /Users/shadow/machina/.venv/bin/python -m machina.gateway"
       ],
@@ -346,8 +346,8 @@
         {
           "name": "sse_turn_a_text",
           "ok": true,
-          "expected": "streamed text contains the requested reply 'OK575A'",
-          "observed": "OK575AOK575A"
+          "expected": "streamed text contains the requested reply 'OK151A'",
+          "observed": "OK151AOK151A"
         },
         {
           "name": "auto_compaction_after_sse",
@@ -357,23 +357,23 @@
             "ok": true,
             "session_found": true,
             "summary_count": 1,
-            "latest_summary_id": "a5a24019-25b3-44d0-b826-eb19f47458bd",
+            "latest_summary_id": "c2438aef-ed2f-48a3-8c11-47ceb9120b07",
             "archive_count": 8,
             "archived_chunk_ids": [
-              "091c1a48-96b5-4b72-9b48-9aadc83c99f6",
-              "18f9d85c-f2c6-481e-9fa9-26395e29ec03",
-              "1c5ef9fa-6194-47f4-934b-a0276ebaa103",
-              "324491bc-37f5-4338-ba7c-617c6aa4b99e",
-              "d29137ba-9e4b-441d-bc18-d4d668506d6c",
-              "dff93625-ec6e-42da-9ff5-d4bf4b20d912",
-              "7d1796b0-614a-431e-94a6-e013a58f2f3c",
-              "f252d84b-1717-41cb-a50a-cdc4e3fd02f9"
+              "0aab03d2-ccfa-4460-86c5-d70c1d78337c",
+              "1c706bf7-9130-423d-9cbb-795be357d1c5",
+              "3b5d17cd-283e-4542-b090-8eb3af4f6eb7",
+              "56c51c42-9d78-47af-ba48-a7606674f504",
+              "8f6e30df-5095-4933-ab55-218bdedb9da7",
+              "b7ba901e-8cdb-449b-979e-324858e04c55",
+              "204183ca-09ef-4370-9bab-81dc7dd7bea3",
+              "d0ec20f6-c7b9-474e-89ba-69c3a09c950f"
             ],
             "document_present": true,
             "document_archived": false,
             "claim_owner": null,
             "claim_kind": null,
-            "last_auto_compact_tokens": 436
+            "last_auto_compact_tokens": 443
           }
         },
         {
@@ -382,14 +382,14 @@
           "expected": "archived compressed rows include seeded conversational chunks and never the document",
           "observed": {
             "archived": [
-              "091c1a48-96b5-4b72-9b48-9aadc83c99f6",
-              "18f9d85c-f2c6-481e-9fa9-26395e29ec03",
-              "1c5ef9fa-6194-47f4-934b-a0276ebaa103",
-              "324491bc-37f5-4338-ba7c-617c6aa4b99e",
-              "7d1796b0-614a-431e-94a6-e013a58f2f3c",
-              "d29137ba-9e4b-441d-bc18-d4d668506d6c",
-              "dff93625-ec6e-42da-9ff5-d4bf4b20d912",
-              "f252d84b-1717-41cb-a50a-cdc4e3fd02f9"
+              "0aab03d2-ccfa-4460-86c5-d70c1d78337c",
+              "1c706bf7-9130-423d-9cbb-795be357d1c5",
+              "204183ca-09ef-4370-9bab-81dc7dd7bea3",
+              "3b5d17cd-283e-4542-b090-8eb3af4f6eb7",
+              "56c51c42-9d78-47af-ba48-a7606674f504",
+              "8f6e30df-5095-4933-ab55-218bdedb9da7",
+              "b7ba901e-8cdb-449b-979e-324858e04c55",
+              "d0ec20f6-c7b9-474e-89ba-69c3a09c950f"
             ],
             "seeded_count": 6,
             "seeded_intersection": 6
@@ -420,7 +420,7 @@
           "expected": "second user message is durably stored before the no-progress window",
           "observed": {
             "user_tokens": {
-              "OK737B": true
+              "OK875B": true
             }
           }
         },
@@ -431,17 +431,17 @@
           "observed": {
             "before": {
               "summary_count": 1,
-              "latest_summary_id": "a5a24019-25b3-44d0-b826-eb19f47458bd",
+              "latest_summary_id": "c2438aef-ed2f-48a3-8c11-47ceb9120b07",
               "archive_count": 8,
-              "last_auto_compact_tokens": 436
+              "last_auto_compact_tokens": 443
             },
             "after": {
               "summary_count": 1,
-              "latest_summary_id": "a5a24019-25b3-44d0-b826-eb19f47458bd",
+              "latest_summary_id": "c2438aef-ed2f-48a3-8c11-47ceb9120b07",
               "archive_count": 8,
-              "last_auto_compact_tokens": 436
+              "last_auto_compact_tokens": 443
             },
-            "waited_seconds": 20.636
+            "waited_seconds": 20.502
           }
         },
         {
@@ -457,7 +457,7 @@
           "name": "cli_compress_reports_result",
           "ok": true,
           "expected": "CLI reports a 'Context compressed: N chunks' result line",
-          "observed": "Session: bddf9f24-759f-4a6d-b7ab-44a4184c2739 (1943 tokens)\n✓ Context compressed: 3 chunks → 4 chunks, 443 → 83 tokens (18.7% ratio, method:\nllm_summarize)\n"
+          "observed": "Session: e2ea401d-3d3b-4e87-ab08-ba9f990e7191 (1950 tokens)\n✓ Context compressed: 3 chunks → 4 chunks, 450 → 75 tokens (16.7% ratio, method:\nllm_summarize)\n"
         },
         {
           "name": "explicit_compress_shares_core",
@@ -467,29 +467,29 @@
             "ok": true,
             "session_found": true,
             "summary_count": 1,
-            "latest_summary_id": "3e61360b-4de6-4523-b138-9f78b7c81bec",
+            "latest_summary_id": "a4d84f4b-d8a5-40b2-87b9-bbb114fbb52e",
             "archive_count": 14,
             "archived_chunk_ids": [
-              "091c1a48-96b5-4b72-9b48-9aadc83c99f6",
-              "18f9d85c-f2c6-481e-9fa9-26395e29ec03",
-              "1c5ef9fa-6194-47f4-934b-a0276ebaa103",
-              "324491bc-37f5-4338-ba7c-617c6aa4b99e",
-              "d29137ba-9e4b-441d-bc18-d4d668506d6c",
-              "dff93625-ec6e-42da-9ff5-d4bf4b20d912",
-              "7d1796b0-614a-431e-94a6-e013a58f2f3c",
-              "f252d84b-1717-41cb-a50a-cdc4e3fd02f9",
-              "a5a24019-25b3-44d0-b826-eb19f47458bd",
-              "dff93625-ec6e-42da-9ff5-d4bf4b20d912",
-              "7d1796b0-614a-431e-94a6-e013a58f2f3c",
-              "f252d84b-1717-41cb-a50a-cdc4e3fd02f9",
-              "71049f2d-465b-4b9c-a83e-5d2a6d12fbe7",
-              "6188aa08-4d2e-4c0c-adf9-0120eae5a572"
+              "0aab03d2-ccfa-4460-86c5-d70c1d78337c",
+              "1c706bf7-9130-423d-9cbb-795be357d1c5",
+              "3b5d17cd-283e-4542-b090-8eb3af4f6eb7",
+              "56c51c42-9d78-47af-ba48-a7606674f504",
+              "8f6e30df-5095-4933-ab55-218bdedb9da7",
+              "b7ba901e-8cdb-449b-979e-324858e04c55",
+              "204183ca-09ef-4370-9bab-81dc7dd7bea3",
+              "d0ec20f6-c7b9-474e-89ba-69c3a09c950f",
+              "b7ba901e-8cdb-449b-979e-324858e04c55",
+              "c2438aef-ed2f-48a3-8c11-47ceb9120b07",
+              "204183ca-09ef-4370-9bab-81dc7dd7bea3",
+              "d0ec20f6-c7b9-474e-89ba-69c3a09c950f",
+              "393602f6-2b47-47ee-ab2a-6d48b81d53dc",
+              "8f9e209e-8906-4346-baf4-50edb5c64e34"
             ],
             "document_present": true,
             "document_archived": false,
             "claim_owner": null,
             "claim_kind": null,
-            "last_auto_compact_tokens": 436
+            "last_auto_compact_tokens": 443
           }
         },
         {
@@ -506,7 +506,7 @@
           "expected": "gateway accepts the prompt and returns a turnId",
           "observed": {
             "result": {
-              "turnId": "81118850888d"
+              "turnId": "8bbddb5302c4"
             },
             "error": null
           }
@@ -520,8 +520,8 @@
         {
           "name": "gateway_reply_fixture",
           "ok": true,
-          "expected": "message.complete.text contains 'OK594D'",
-          "observed": "OK594D"
+          "expected": "message.complete.text contains 'OK406D'",
+          "observed": "OK406D"
         },
         {
           "name": "auto_compaction_after_gateway_turn",
@@ -531,36 +531,36 @@
             "ok": true,
             "session_found": true,
             "summary_count": 1,
-            "latest_summary_id": "5ce83425-74c5-4239-b383-4085c1e9ba1a",
+            "latest_summary_id": "94293534-3e25-42a8-92aa-a7c4912325a3",
             "archive_count": 8,
             "archived_chunk_ids": [
-              "0a8f6543-c15f-4201-8d5f-960286962dff",
-              "3bc9f87e-27b1-40d7-9375-8bee52359ba4",
-              "3f746b8e-8f59-4b7d-a7f5-65ce5150b202",
-              "7706971e-b0b2-46b0-b636-56fb5218854f",
-              "7d5648b7-b21f-4960-9c08-7796e47461e3",
-              "af0e17c1-4305-491e-b8a8-4b2a0022e931",
-              "1ef25d75-6e45-49e2-ac2b-06337bbe0d9a",
-              "0e3285c2-014f-49f0-9580-5aa113d9b32d"
+              "1d157585-cfc2-4953-a309-172a3a93f789",
+              "5d4ef384-f23b-4117-a907-78efbeb08ccf",
+              "7170bb00-5c38-4674-9060-09c2427a484c",
+              "80639e63-5dc0-4e78-815f-ff6d7a58152b",
+              "dad66023-11bc-43cd-aa2d-f888ebcd9d21",
+              "de197c6c-0c1e-476d-85a2-7f2c7186ccf5",
+              "88e08718-7df1-4638-bdd8-ee0f1caeb561",
+              "f16cfc7c-59d4-4a16-bbbf-c410be992071"
             ],
             "document_present": true,
             "document_archived": false,
             "claim_owner": null,
             "claim_kind": null,
-            "last_auto_compact_tokens": 460
+            "last_auto_compact_tokens": 448
           }
         }
       ],
       "observed": {
-        "marker": "W6SEED1450",
-        "session_id": "bddf9f24-759f-4a6d-b7ab-44a4184c2739",
+        "marker": "W6SEED3355",
+        "session_id": "e2ea401d-3d3b-4e87-ab08-ba9f990e7191",
         "seeded_chunk_count": 6,
-        "document_id": "417b4523-c0f8-4f39-9372-8267bae2c826",
+        "document_id": "0cab54a0-a28f-45cb-8f75-8f749ae185db",
         "server": {
-          "port": 63777,
+          "port": 49368,
           "attempt": 1,
           "ready": true,
-          "waited_seconds": 1.033,
+          "waited_seconds": 1.051,
           "last_status": 200
         },
         "sse_turn_a": {
@@ -575,34 +575,34 @@
             "error": 1,
             "done": 1
           },
-          "wall_seconds": 3.485,
+          "wall_seconds": 2.744,
           "error": "",
-          "text_excerpt": "OK575A",
-          "done_content_excerpt": "OK575A"
+          "text_excerpt": "OK151A",
+          "done_content_excerpt": "OK151A"
         },
         "phase_a_compaction": {
           "ok": true,
           "session_found": true,
           "summary_count": 1,
-          "latest_summary_id": "a5a24019-25b3-44d0-b826-eb19f47458bd",
+          "latest_summary_id": "c2438aef-ed2f-48a3-8c11-47ceb9120b07",
           "archive_count": 8,
           "archived_chunk_ids": [
-            "091c1a48-96b5-4b72-9b48-9aadc83c99f6",
-            "18f9d85c-f2c6-481e-9fa9-26395e29ec03",
-            "1c5ef9fa-6194-47f4-934b-a0276ebaa103",
-            "324491bc-37f5-4338-ba7c-617c6aa4b99e",
-            "d29137ba-9e4b-441d-bc18-d4d668506d6c",
-            "dff93625-ec6e-42da-9ff5-d4bf4b20d912",
-            "7d1796b0-614a-431e-94a6-e013a58f2f3c",
-            "f252d84b-1717-41cb-a50a-cdc4e3fd02f9"
+            "0aab03d2-ccfa-4460-86c5-d70c1d78337c",
+            "1c706bf7-9130-423d-9cbb-795be357d1c5",
+            "3b5d17cd-283e-4542-b090-8eb3af4f6eb7",
+            "56c51c42-9d78-47af-ba48-a7606674f504",
+            "8f6e30df-5095-4933-ab55-218bdedb9da7",
+            "b7ba901e-8cdb-449b-979e-324858e04c55",
+            "204183ca-09ef-4370-9bab-81dc7dd7bea3",
+            "d0ec20f6-c7b9-474e-89ba-69c3a09c950f"
           ],
           "document_present": true,
           "document_archived": false,
           "claim_owner": null,
           "claim_kind": null,
-          "last_auto_compact_tokens": 436
+          "last_auto_compact_tokens": 443
         },
-        "phase_a_waited_seconds": 3.324,
+        "phase_a_waited_seconds": 2.645,
         "sse_turn_b": {
           "status": 200,
           "media_type": "text/event-stream; charset=utf-8",
@@ -615,93 +615,93 @@
             "error": 1,
             "done": 1
           },
-          "wall_seconds": 3.536,
+          "wall_seconds": 2.488,
           "error": "",
-          "text_excerpt": "OK737B",
-          "done_content_excerpt": "OK737B"
+          "text_excerpt": "OK875B",
+          "done_content_excerpt": "OK875B"
         },
         "phase_b_stable_window": {
           "before": {
             "summary_count": 1,
-            "latest_summary_id": "a5a24019-25b3-44d0-b826-eb19f47458bd",
+            "latest_summary_id": "c2438aef-ed2f-48a3-8c11-47ceb9120b07",
             "archive_count": 8,
-            "last_auto_compact_tokens": 436
+            "last_auto_compact_tokens": 443
           },
           "after": {
             "summary_count": 1,
-            "latest_summary_id": "a5a24019-25b3-44d0-b826-eb19f47458bd",
+            "latest_summary_id": "c2438aef-ed2f-48a3-8c11-47ceb9120b07",
             "archive_count": 8,
-            "last_auto_compact_tokens": 436
+            "last_auto_compact_tokens": 443
           },
-          "waited_seconds": 20.636
+          "waited_seconds": 20.502
         },
-        "cli_compress_excerpt": "Session: bddf9f24-759f-4a6d-b7ab-44a4184c2739 (1943 tokens)\n✓ Context compressed: 3 chunks → 4 chunks, 443 → 83 tokens (18.7% ratio, method:\nllm_summarize)\n",
+        "cli_compress_excerpt": "Session: e2ea401d-3d3b-4e87-ab08-ba9f990e7191 (1950 tokens)\n✓ Context compressed: 3 chunks → 4 chunks, 450 → 75 tokens (16.7% ratio, method:\nllm_summarize)\n",
         "phase_c_explicit_compress": {
           "ok": true,
           "session_found": true,
           "summary_count": 1,
-          "latest_summary_id": "3e61360b-4de6-4523-b138-9f78b7c81bec",
+          "latest_summary_id": "a4d84f4b-d8a5-40b2-87b9-bbb114fbb52e",
           "archive_count": 14,
           "archived_chunk_ids": [
-            "091c1a48-96b5-4b72-9b48-9aadc83c99f6",
-            "18f9d85c-f2c6-481e-9fa9-26395e29ec03",
-            "1c5ef9fa-6194-47f4-934b-a0276ebaa103",
-            "324491bc-37f5-4338-ba7c-617c6aa4b99e",
-            "d29137ba-9e4b-441d-bc18-d4d668506d6c",
-            "dff93625-ec6e-42da-9ff5-d4bf4b20d912",
-            "7d1796b0-614a-431e-94a6-e013a58f2f3c",
-            "f252d84b-1717-41cb-a50a-cdc4e3fd02f9",
-            "a5a24019-25b3-44d0-b826-eb19f47458bd",
-            "dff93625-ec6e-42da-9ff5-d4bf4b20d912",
-            "7d1796b0-614a-431e-94a6-e013a58f2f3c",
-            "f252d84b-1717-41cb-a50a-cdc4e3fd02f9",
-            "71049f2d-465b-4b9c-a83e-5d2a6d12fbe7",
-            "6188aa08-4d2e-4c0c-adf9-0120eae5a572"
+            "0aab03d2-ccfa-4460-86c5-d70c1d78337c",
+            "1c706bf7-9130-423d-9cbb-795be357d1c5",
+            "3b5d17cd-283e-4542-b090-8eb3af4f6eb7",
+            "56c51c42-9d78-47af-ba48-a7606674f504",
+            "8f6e30df-5095-4933-ab55-218bdedb9da7",
+            "b7ba901e-8cdb-449b-979e-324858e04c55",
+            "204183ca-09ef-4370-9bab-81dc7dd7bea3",
+            "d0ec20f6-c7b9-474e-89ba-69c3a09c950f",
+            "b7ba901e-8cdb-449b-979e-324858e04c55",
+            "c2438aef-ed2f-48a3-8c11-47ceb9120b07",
+            "204183ca-09ef-4370-9bab-81dc7dd7bea3",
+            "d0ec20f6-c7b9-474e-89ba-69c3a09c950f",
+            "393602f6-2b47-47ee-ab2a-6d48b81d53dc",
+            "8f9e209e-8906-4346-baf4-50edb5c64e34"
           ],
           "document_present": true,
           "document_archived": false,
           "claim_owner": null,
           "claim_kind": null,
-          "last_auto_compact_tokens": 436
+          "last_auto_compact_tokens": 443
         },
-        "phase_c_waited_seconds": 0.308,
+        "phase_c_waited_seconds": 0.27,
         "server_stop": {
           "exit_code": -15,
-          "stderr_excerpt": "mode.py:105 (end_turn_scope)\n2026-10-14 10:59:20,045 [AUDIT] {\"timestamp\": 1791989960.045768, \"event\": \"llm_call_start\", \"provider\": \"deepseek\", \"model\": \"deepseek-chat\", \"message_count\": 2}\nINFO:     Shutting down\nINFO:     Waiting for application shutdown.\nboundary failed: scheduler.stop error_type=CancelledError\nINFO:     Application shutdown complete.\nINFO:     Finished server process [75093]\n"
+          "stderr_excerpt": "amp\": 1792003001.5823371, \"event\": \"llm_call_complete\", \"provider\": \"deepseek\", \"model\": \"deepseek-flash\", \"prompt_tokens\": 206, \"completion_tokens\": 1, \"total_tokens\": 207, \"tool_calls\": 0}\nINFO:     Shutting down\nINFO:     Waiting for application shutdown.\nboundary failed: scheduler.stop error_type=CancelledError\nINFO:     Application shutdown complete.\nINFO:     Finished server process [25633]\n"
         },
-        "gateway_session_id": "deeab058-5ca8-46d3-866f-761900873b95",
+        "gateway_session_id": "f811e599-8c99-4288-8f30-cde4ba9e2148",
         "phase_d_gateway_compaction": {
           "ok": true,
           "session_found": true,
           "summary_count": 1,
-          "latest_summary_id": "5ce83425-74c5-4239-b383-4085c1e9ba1a",
+          "latest_summary_id": "94293534-3e25-42a8-92aa-a7c4912325a3",
           "archive_count": 8,
           "archived_chunk_ids": [
-            "0a8f6543-c15f-4201-8d5f-960286962dff",
-            "3bc9f87e-27b1-40d7-9375-8bee52359ba4",
-            "3f746b8e-8f59-4b7d-a7f5-65ce5150b202",
-            "7706971e-b0b2-46b0-b636-56fb5218854f",
-            "7d5648b7-b21f-4960-9c08-7796e47461e3",
-            "af0e17c1-4305-491e-b8a8-4b2a0022e931",
-            "1ef25d75-6e45-49e2-ac2b-06337bbe0d9a",
-            "0e3285c2-014f-49f0-9580-5aa113d9b32d"
+            "1d157585-cfc2-4953-a309-172a3a93f789",
+            "5d4ef384-f23b-4117-a907-78efbeb08ccf",
+            "7170bb00-5c38-4674-9060-09c2427a484c",
+            "80639e63-5dc0-4e78-815f-ff6d7a58152b",
+            "dad66023-11bc-43cd-aa2d-f888ebcd9d21",
+            "de197c6c-0c1e-476d-85a2-7f2c7186ccf5",
+            "88e08718-7df1-4638-bdd8-ee0f1caeb561",
+            "f16cfc7c-59d4-4a16-bbbf-c410be992071"
           ],
           "document_present": true,
           "document_archived": false,
           "claim_owner": null,
           "claim_kind": null,
-          "last_auto_compact_tokens": 460
+          "last_auto_compact_tokens": 448
         },
-        "phase_d_waited_seconds": 4.275,
+        "phase_d_waited_seconds": 2.828,
         "gateway_stop": {
           "exit_code": 0,
-          "stderr_excerpt": "s\": 549, \"tool_calls\": 0}\nINFO machina.audit: {\"timestamp\": 1791989994.652034, \"event\": \"llm_call_complete\", \"provider\": \"deepseek\", \"model\": \"deepseek-flash\", \"prompt_tokens\": 496, \"completion_tokens\": 53, \"total_tokens\": 549, \"tool_calls\": 0}\nDEBUG machina.gateway.server: → shutdown (id=3)\nINFO machina.gateway.server: Gateway shutdown requested\nDEBUG machina.gateway.server: ← shutdown ok (id=3)\n"
+          "stderr_excerpt": "s\": 537, \"tool_calls\": 0}\nINFO machina.audit: {\"timestamp\": 1792003030.285561, \"event\": \"llm_call_complete\", \"provider\": \"deepseek\", \"model\": \"deepseek-flash\", \"prompt_tokens\": 496, \"completion_tokens\": 41, \"total_tokens\": 537, \"tool_calls\": 0}\nDEBUG machina.gateway.server: → shutdown (id=3)\nINFO machina.gateway.server: Gateway shutdown requested\nDEBUG machina.gateway.server: ← shutdown ok (id=3)\n"
         },
         "revoked_grants": 1,
         "revoke_ok": true
       },
       "notes": [
-        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-4i16zk5_",
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-3x6zrtrn",
         "budget: 720s wall-clock (bounded steps sum)"
       ]
     },
@@ -710,14 +710,14 @@
       "title": "turn-parity (SSE turn -> stdio gateway turn -> SSE turn; frames, transcript, claims)",
       "status": "PASS",
       "reason": "",
-      "started_at": "2026-10-14T14:59:58Z",
-      "finished_at": "2026-10-14T15:00:15Z",
-      "duration_seconds": 16.322,
+      "started_at": "2026-10-14T18:37:12Z",
+      "finished_at": "2026-10-14T18:37:24Z",
+      "duration_seconds": 11.495,
       "commands": [
-        "MACHINA_API_KEY=<redacted> /Users/shadow/machina/.venv/bin/python -m machina.api --host 127.0.0.1 --port 64209",
-        "POST http://127.0.0.1:64209/api/v1/sessions (provider=not-a-provider, X-API-Key set)",
-        "POST http://127.0.0.1:64209/api/v1/sessions (X-API-Key set, provider=deepseek)",
-        "POST http://127.0.0.1:64209/api/v1/sessions/e038db4e-006d-492c-86c9-446984547e54/prompt (SSE, X-API-Key set)",
+        "MACHINA_API_KEY=<redacted> /Users/shadow/machina/.venv/bin/python -m machina.api --host 127.0.0.1 --port 49434",
+        "POST http://127.0.0.1:49434/api/v1/sessions (provider=not-a-provider, X-API-Key set)",
+        "POST http://127.0.0.1:49434/api/v1/sessions (X-API-Key set, provider=deepseek)",
+        "POST http://127.0.0.1:49434/api/v1/sessions/2d4632eb-48da-4aec-a4ef-bfa0b0924331/prompt (SSE, X-API-Key set)",
         "MACHINA_GATEWAY_TOKEN=<redacted> /Users/shadow/machina/.venv/bin/python -m machina.gateway"
       ],
       "checks": [
@@ -736,7 +736,7 @@
           "expected": "real HTTP session create returns a session id",
           "observed": {
             "status": 200,
-            "session_id": "e038db4e-006d-492c-86c9-446984547e54"
+            "session_id": "2d4632eb-48da-4aec-a4ef-bfa0b0924331"
           }
         },
         {
@@ -758,8 +758,8 @@
         {
           "name": "sse_turn_a_text",
           "ok": true,
-          "expected": "SSE streamed text contains 'PARITY3677A'",
-          "observed": "PARITY3677APARITY3677A"
+          "expected": "SSE streamed text contains 'PARITY5975A'",
+          "observed": "PARITY5975APARITY5975A"
         },
         {
           "name": "gateway_initialize",
@@ -775,7 +775,7 @@
           "expected": "gateway prompt.submit accepted on the SSE-created session (cross-process claim release)",
           "observed": {
             "result": {
-              "turnId": "9ce4ab575cb5"
+              "turnId": "016b39847224"
             },
             "error": null
           }
@@ -783,9 +783,9 @@
         {
           "name": "gateway_message_complete",
           "ok": true,
-          "expected": "gateway emits message.complete carrying 'PARITY3677B'",
+          "expected": "gateway emits message.complete carrying 'PARITY5975B'",
           "observed": {
-            "text_excerpt": "PARITY3677B",
+            "text_excerpt": "PARITY5975B",
             "counts": {
               "message.start": 1,
               "usage": 1,
@@ -851,9 +851,9 @@
             "user_message_count": 3,
             "assistant_message_count": 3,
             "user_tokens": {
-              "PARITY3677A": true,
-              "PARITY3677B": true,
-              "PARITY3677C": true
+              "PARITY5975A": true,
+              "PARITY5975B": true,
+              "PARITY5975C": true
             }
           }
         },
@@ -868,21 +868,21 @@
       ],
       "observed": {
         "server": {
-          "port": 64209,
+          "port": 49434,
           "attempt": 1,
           "ready": true,
-          "waited_seconds": 1.022,
+          "waited_seconds": 1.044,
           "last_status": 200
         },
         "configured_route": {
           "provider": "deepseek",
           "model": "deepseek-chat"
         },
-        "session_id": "e038db4e-006d-492c-86c9-446984547e54",
+        "session_id": "2d4632eb-48da-4aec-a4ef-bfa0b0924331",
         "tokens": {
-          "a": "PARITY3677A",
-          "b": "PARITY3677B",
-          "c": "PARITY3677C"
+          "a": "PARITY5975A",
+          "b": "PARITY5975B",
+          "c": "PARITY5975C"
         },
         "sse_turn_a": {
           "status": 200,
@@ -896,12 +896,12 @@
             "error": 1,
             "done": 1
           },
-          "wall_seconds": 4.187,
+          "wall_seconds": 3.001,
           "error": "",
-          "text_excerpt": "PARITY3677A",
-          "done_content_excerpt": "PARITY3677A"
+          "text_excerpt": "PARITY5975A",
+          "done_content_excerpt": "PARITY5975A"
         },
-        "gateway_turn_id": "9ce4ab575cb5",
+        "gateway_turn_id": "016b39847224",
         "gateway_event_type_counts": {
           "message.start": 1,
           "usage": 1,
@@ -918,7 +918,7 @@
               }
             ]
           },
-          "waited_seconds": 0.32
+          "waited_seconds": 0.316
         },
         "sse_turn_c": {
           "status": 200,
@@ -932,34 +932,34 @@
             "error": 1,
             "done": 1
           },
-          "wall_seconds": 2.612,
+          "wall_seconds": 2.655,
           "error": "",
-          "text_excerpt": "PARITY3677C",
-          "done_content_excerpt": "PARITY3677C"
+          "text_excerpt": "PARITY5975C",
+          "done_content_excerpt": "PARITY5975C"
         },
         "transcript": {
           "ok": true,
           "user_message_count": 3,
           "assistant_message_count": 3,
           "user_tokens": {
-            "PARITY3677A": true,
-            "PARITY3677B": true,
-            "PARITY3677C": true
+            "PARITY5975A": true,
+            "PARITY5975B": true,
+            "PARITY5975C": true
           }
         },
         "gateway_stop": {
           "exit_code": 0,
-          "stderr_excerpt": "losing_owned_clients\nDEBUG machina.gateway.server: Turn 9ce4ab575cb5 stage: releasing_ownership\nDEBUG machina.gateway.server: Turn 9ce4ab575cb5 stage: answer_complete\nDEBUG machina.gateway.server: Turn 9ce4ab575cb5 stage: compaction_maintenance\nDEBUG machina.gateway.server: → shutdown (id=3)\nINFO machina.gateway.server: Gateway shutdown requested\nDEBUG machina.gateway.server: ← shutdown ok (id=3)\n"
+          "stderr_excerpt": "losing_owned_clients\nDEBUG machina.gateway.server: Turn 016b39847224 stage: releasing_ownership\nDEBUG machina.gateway.server: Turn 016b39847224 stage: answer_complete\nDEBUG machina.gateway.server: Turn 016b39847224 stage: compaction_maintenance\nDEBUG machina.gateway.server: → shutdown (id=3)\nINFO machina.gateway.server: Gateway shutdown requested\nDEBUG machina.gateway.server: ← shutdown ok (id=3)\n"
         },
         "server_stop": {
           "exit_code": -15,
-          "stderr_excerpt": "tamp\": 1791990013.828246, \"event\": \"llm_call_complete\", \"provider\": \"deepseek\", \"model\": \"deepseek-flash\", \"prompt_tokens\": 210, \"completion_tokens\": 1, \"total_tokens\": 211, \"tool_calls\": 0}\nINFO:     Shutting down\nINFO:     Waiting for application shutdown.\nboundary failed: scheduler.stop error_type=CancelledError\nINFO:     Application shutdown complete.\nINFO:     Finished server process [75476]\n"
+          "stderr_excerpt": "tamp\": 1792003043.022389, \"event\": \"llm_call_complete\", \"provider\": \"deepseek\", \"model\": \"deepseek-flash\", \"prompt_tokens\": 210, \"completion_tokens\": 1, \"total_tokens\": 211, \"tool_calls\": 0}\nINFO:     Shutting down\nINFO:     Waiting for application shutdown.\nboundary failed: scheduler.stop error_type=CancelledError\nINFO:     Application shutdown complete.\nINFO:     Finished server process [25844]\n"
         },
         "revoked_grants": 0,
         "revoke_ok": true
       },
       "notes": [
-        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-4i16zk5_",
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-3x6zrtrn",
         "budget: 600s wall-clock (bounded steps sum)"
       ]
     },
@@ -968,11 +968,11 @@
       "title": "provider-facade (config route -> real call via usage_store -> llm_usage row + status)",
       "status": "PASS",
       "reason": "",
-      "started_at": "2026-10-14T15:00:15Z",
-      "finished_at": "2026-10-14T15:00:18Z",
-      "duration_seconds": 3.115,
+      "started_at": "2026-10-14T18:37:24Z",
+      "finished_at": "2026-10-14T18:37:26Z",
+      "duration_seconds": 2.715,
       "commands": [
-        "/Users/shadow/machina/.venv/bin/python -c \"<get_provider + usage_store.complete_call>\" session=2c18df41-8827-490f-a8a1-e3dc76970c1a",
+        "/Users/shadow/machina/.venv/bin/python -c \"<get_provider + usage_store.complete_call>\" session=5a9964c1-535f-4a05-bc0e-cdc883e01af6",
         "cd /Users/shadow/machina && machina status"
       ],
       "checks": [
@@ -1016,8 +1016,8 @@
         {
           "name": "reply_fixture",
           "ok": true,
-          "expected": "completion content contains 'PROV1743'",
-          "observed": "PROV1743"
+          "expected": "completion content contains 'PROV2370'",
+          "observed": "PROV2370"
         },
         {
           "name": "usage_known",
@@ -1073,7 +1073,7 @@
           "name": "cli_status_chat_provider_line",
           "ok": true,
           "expected": "status output includes the 'Chat provider' capability line",
-          "observed": "ory extraction: ready\n  Document RAG: ready; 21 indexed documents\n  Reranker: local (configured; pipeline not initialized)\n  Automatic compaction: enabled\n  Sandbox: unknown\n  Jobs awaiting approval: 0\n  Research training: offline, not part of chat runtime\n\nRun `machina` to open the interactive UI.\n"
+          "observed": "ory extraction: ready\n  Document RAG: ready; 23 indexed documents\n  Reranker: local (configured; pipeline not initialized)\n  Automatic compaction: enabled\n  Sandbox: unknown\n  Jobs awaiting approval: 0\n  Research training: offline, not part of chat runtime\n\nRun `machina` to open the interactive UI.\n"
         }
       ],
       "observed": {
@@ -1081,8 +1081,8 @@
           "provider": "deepseek",
           "model": "deepseek-chat"
         },
-        "session_id": "2c18df41-8827-490f-a8a1-e3dc76970c1a",
-        "fixture_token": "PROV1743",
+        "session_id": "5a9964c1-535f-4a05-bc0e-cdc883e01af6",
+        "fixture_token": "PROV2370",
         "provider_call": {
           "exit_code": 0,
           "selected": "deepseek",
@@ -1101,12 +1101,12 @@
           "completion_tokens": 4,
           "accounted_tokens": 16
         },
-        "cli_status_excerpt": ": host\n  Chat provider: unknown\n  Memory retrieval: dense+sparse (onnx:BAAI/bge-small-en-v1.5)\n  Memory extraction: ready\n  Document RAG: ready; 21 indexed documents\n  Reranker: local (configured; pipeline not initialized)\n  Automatic compaction: enabled\n  Sandbox: unknown\n  Jobs awaiting approval: 0\n  Research training: offline, not part of chat runtime\n\nRun `machina` to open the interactive UI.\n",
+        "cli_status_excerpt": ": host\n  Chat provider: unknown\n  Memory retrieval: dense+sparse (onnx:BAAI/bge-small-en-v1.5)\n  Memory extraction: ready\n  Document RAG: ready; 23 indexed documents\n  Reranker: local (configured; pipeline not initialized)\n  Automatic compaction: enabled\n  Sandbox: unknown\n  Jobs awaiting approval: 0\n  Research training: offline, not part of chat runtime\n\nRun `machina` to open the interactive UI.\n",
         "revoked_grants": 1,
         "revoke_ok": true
       },
       "notes": [
-        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-4i16zk5_",
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-3x6zrtrn",
         "budget: 300s wall-clock (bounded steps sum)"
       ]
     },
@@ -1115,12 +1115,12 @@
       "title": "opencode-mcp (opencode run -> machina_chat tool call -> Machina session row contains token)",
       "status": "PASS",
       "reason": "",
-      "started_at": "2026-10-14T15:00:18Z",
-      "finished_at": "2026-10-14T15:00:30Z",
-      "duration_seconds": 12.235,
+      "started_at": "2026-10-14T18:37:26Z",
+      "finished_at": "2026-10-14T18:37:36Z",
+      "duration_seconds": 9.499,
       "commands": [
         "opencode mcp list",
-        "opencode run --standalone --auto --format json \"Use the machina_chat tool exactly once. Pass it this prompt: Reply with exactly MCPJ9-953441 and nothing else. Then return the machina_chat tool output.\""
+        "opencode run --standalone --auto --format json \"Use the machina_chat tool exactly once. Pass it this prompt: Reply with exactly MCPJ9-173932 and nothing else. Then return the machina_chat tool output.\""
       ],
       "checks": [
         {
@@ -1150,7 +1150,7 @@
           "ok": true,
           "expected": "opencode output carries the token returned through machina_chat",
           "observed": {
-            "token": "MCPJ9-953441",
+            "token": "MCPJ9-173932",
             "matched": true
           }
         },
@@ -1161,19 +1161,19 @@
           "observed": {
             "matches": [
               {
-                "session_id": "fcc249c7-27e1-4474-a418-70720ca9097d",
+                "session_id": "028e18a9-e0c0-4113-9929-f271d717998b",
                 "chunk_type": "assistant_message",
-                "title": "Reply with exactly MCPJ9-953441 and nothing else.",
-                "created_at": "2026-10-14T15:00:26.917226+00:00"
+                "title": "Reply with exactly MCPJ9-173932 and nothing else.",
+                "created_at": "2026-10-14T18:37:33.665040+00:00"
               },
               {
-                "session_id": "fcc249c7-27e1-4474-a418-70720ca9097d",
+                "session_id": "028e18a9-e0c0-4113-9929-f271d717998b",
                 "chunk_type": "user_message",
-                "title": "Reply with exactly MCPJ9-953441 and nothing else.",
-                "created_at": "2026-10-14T15:00:25.552842+00:00"
+                "title": "Reply with exactly MCPJ9-173932 and nothing else.",
+                "created_at": "2026-10-14T18:37:32.695077+00:00"
               }
             ],
-            "scanned": 58
+            "scanned": 56
           }
         }
       ],
@@ -1181,31 +1181,31 @@
         "opencode_bin": "/Users/shadow/.opencode/bin/opencode",
         "mcp_list_exit_code": 0,
         "mcp_list_has_machina": true,
-        "token": "MCPJ9-953441",
+        "token": "MCPJ9-173932",
         "opencode_exit_code": 0,
         "opencode_timed_out": false,
-        "opencode_wall_seconds": 11.648,
-        "opencode_output_excerpt": "xt\",\"timestamp\":1791990029693,\"sessionID\":\"ses_ec5124bbeffeA6oLEdOXdaEPbD\",\"part\":{\"id\":\"prt_13aeddd10002JUnu1js6fDOJvA\",\"sessionID\":\"ses_ec5124bbeffeA6oLEdOXdaEPbD\",\"messageID\":\"msg_13aedd840001VA345xr2X3AZrN\",\"type\":\"text\",\"text\":\"The machina_chat tool was called exactly once. Its output:\\n\\n```json\\n{\\\"status\\\": \\\"completed\\\", \\\"session_id\\\": \\\"fcc249c7-27e1-4474-a418-70720ca9097d\\\", \\\"reply\\\": \\\"MCPJ9-953441\\\", \\\"truncated\\\": false}\\n```\",\"time\":{\"start\":1791990029585,\"end\":1791990029693}}}\n",
+        "opencode_wall_seconds": 8.982,
+        "opencode_output_excerpt": "2e0de283360f\"}}\n{\"type\":\"text\",\"timestamp\":1792003055628,\"sessionID\":\"ses_ec44b7f2fffe4x7Hr13CS2rNPf\",\"part\":{\"id\":\"prt_13bb49fac001wmOgkLm6xQ3aot\",\"sessionID\":\"ses_ec44b7f2fffe4x7Hr13CS2rNPf\",\"messageID\":\"msg_13bb49caa001wTXVqkEcv6bkl4\",\"type\":\"text\",\"text\":\"The machina_chat tool returned:\\n\\n```json\\n{\\\"status\\\": \\\"completed\\\", \\\"session_id\\\": \\\"028e18a9-e0c0-4113-9929-f271d717998b\\\", \\\"reply\\\": \\\"MCPJ9-173932\\\", \\\"truncated\\\": false}\\n```\",\"time\":{\"start\":1792003055532,\"end\":1792003055628}}}\n",
         "machina_chat_marker_present": true,
         "db_assert_exit_code": 0,
-        "db_scanned_chunks": 58,
+        "db_scanned_chunks": 56,
         "db_sessions_with_token": [
           {
-            "session_id": "fcc249c7-27e1-4474-a418-70720ca9097d",
+            "session_id": "028e18a9-e0c0-4113-9929-f271d717998b",
             "chunk_type": "assistant_message",
-            "title": "Reply with exactly MCPJ9-953441 and nothing else.",
-            "created_at": "2026-10-14T15:00:26.917226+00:00"
+            "title": "Reply with exactly MCPJ9-173932 and nothing else.",
+            "created_at": "2026-10-14T18:37:33.665040+00:00"
           },
           {
-            "session_id": "fcc249c7-27e1-4474-a418-70720ca9097d",
+            "session_id": "028e18a9-e0c0-4113-9929-f271d717998b",
             "chunk_type": "user_message",
-            "title": "Reply with exactly MCPJ9-953441 and nothing else.",
-            "created_at": "2026-10-14T15:00:25.552842+00:00"
+            "title": "Reply with exactly MCPJ9-173932 and nothing else.",
+            "created_at": "2026-10-14T18:37:32.695077+00:00"
           }
         ]
       },
       "notes": [
-        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-4i16zk5_",
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-3x6zrtrn",
         "budget: 420s wall-clock (bounded steps sum)"
       ]
     }
