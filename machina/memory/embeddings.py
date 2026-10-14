@@ -89,7 +89,8 @@ def embedding_status() -> dict[str, str]:
         "mode": "keyword-only",
         "reason": reason,
         "next": (
-            "install the local runtime (pip install 'Machina[embeddings-local]') "
-            "or set OPENAI_API_KEY for dense retrieval"
+            "enable dense retrieval with a local runtime "
+            "(pip install 'Machina[embeddings-onnx]' or 'Machina[embeddings-local]' "
+            "and set MACHINA_EMBEDDING_BACKEND), or set OPENAI_API_KEY"
         ),
     }

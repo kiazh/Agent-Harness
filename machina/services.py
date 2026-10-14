@@ -602,16 +602,26 @@ async def status_summary() -> dict[str, Any]:
         workspace = _cfg.get("workspace_root") or _cfg.get("machina_home") or ""
         # AH-AUDIT-036: status derives from the actual shared component
         # identity when initialized; otherwise an honestly labeled
-        # expectation (key presence alone never claims healthy selection).
+        # expectation from the resolved selection (key/config presence alone
+        # never claims healthy selection).
         reranker = "passthrough"
         try:
             from machina.tools import rag as _rag_tools
 
             _shared = _rag_tools._rag_pipeline
             if _shared is not None:
-                reranker = _shared.reranker_identity().get("reranker", "passthrough")
-            elif _cfg.get("cohere_api_key"):
-                reranker = "cohere (key set, pipeline not initialized)"
+                identity = _shared.reranker_identity()
+                value = identity.get("reranker", "passthrough")
+                detail = identity.get("detail", "")
+                # Backend + bound model; passthrough reasons stay short so the
+                # status line reads as a state, not a log dump.
+                reranker = f"{value}:{detail}" if detail and value != "passthrough" else value
+            else:
+                from machina.rag.reranker import resolve_reranker_selection
+
+                selection = resolve_reranker_selection()
+                if selection.kind != "none":
+                    reranker = f"{selection.kind} (configured; pipeline not initialized)"
         except Exception as _boundary_error:
             # Optional fallback preserves the primary outcome; report no payload.
             record_failure("services.status_summary", _boundary_error)

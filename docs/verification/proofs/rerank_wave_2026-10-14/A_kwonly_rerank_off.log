@@ -1,0 +1,55 @@
+============================================================
+Machina offline benchmark
+============================================================
+
+## locomo
+  dataset: /Users/shadow/.machina/locomo/locomo10.json
+  conversations: 10
+  questions: 1986
+  baseline_tfidf:
+    k=5: {"evidence_recall": 0.44, "hit_rate": 0.477, "mrr": 0.354, "mean_retrieved_bytes": 1078.6}
+    k=10: {"evidence_recall": 0.51, "hit_rate": 0.555, "mrr": 0.365, "mean_retrieved_bytes": 2102.0}
+  production_archive_search:
+    evidence_recall: 0.425
+    hit_rate: 0.461
+    mrr: 0.345
+    k: 5
+    search_mode: keyword-only x1982
+    components: {"keyword-only": {"evidence_recall": 0.4249, "hit_rate": 0.4608, "mrr": 0.3447, "questions": 1977}}
+  production_archive_search_k10:
+    evidence_recall: 0.493
+    hit_rate: 0.536
+    mrr: 0.355
+    k: 10
+    search_mode: keyword-only x1982
+    components: {"keyword-only": {"evidence_recall": 0.4926, "hit_rate": 0.5362, "mrr": 0.355, "questions": 1977}}
+  production_session_recall:
+    evidence_recall: 0.425
+    hit_rate: 0.461
+    mrr: 0.345
+    mean_latency_ms: 11.0
+    k: 5
+  comparison:
+    note: same questions, same k=5: TF-IDF baseline vs production engines
+    baseline: {"evidence_recall": 0.44, "hit_rate": 0.477, "mrr": 0.354, "mean_retrieved_bytes": 1078.6}
+    archive: {"evidence_recall": 0.425, "hit_rate": 0.461, "mrr": 0.345, "k": 5, "search_mode": "keyword-only x1982", "components": {"keyword-only": {"evidence_recall": 0.4249, "hit_rate": 0.4608, "mrr": 0.3447, "questions": 1977}}}
+    session_recall: {"evidence_recall": 0.425, "hit_rate": 0.461, "mrr": 0.345, "mean_latency_ms": 11.0, "k": 5}
+  status: OK
+  _section_seconds: 94.52
+
+## comparisons
+  incident_vs_now:
+    incident: 2,119,552 tokens, 228 calls, 25 post-ask recalls, no report
+    now: provider_calls=None, recall_calls=None, artifact_written=None
+  memory_baseline_vs_production:
+    note: same questions, same k=5: TF-IDF baseline vs production engines
+    baseline: {"evidence_recall": 0.44, "hit_rate": 0.477, "mrr": 0.354, "mean_retrieved_bytes": 1078.6}
+    archive: {"evidence_recall": 0.425, "hit_rate": 0.461, "mrr": 0.345, "k": 5, "search_mode": "keyword-only x1982", "components": {"keyword-only": {"evidence_recall": 0.4249, "hit_rate": 0.4608, "mrr": 0.3447, "questions": 1977}}}
+    session_recall: {"evidence_recall": 0.425, "hit_rate": 0.461, "mrr": 0.345, "mean_latency_ms": 11.0, "k": 5}
+  cross_tool_vs_opencode:
+    status: PROTOCOL — not directly comparable by construction
+    why: OpenCode has no LoCoMo-style persistent-memory implementation to run the same questions through, and this benchmark cannot drive another agent harness headlessly. Comparing token counts across different systems without a shared task is not a measurement.
+    fair_axes: ["same-task delivery: tokens/calls/wall-time to produce the same artifact (this benchmark's replay harness is the task definition)", "memory quality: LoCoMo recall@k/MRR of each system's memory engine"]
+    how_to_fill: run the identical replay task and LoCoMo dataset through the other system with its own harness, then compare rows here
+
+done.

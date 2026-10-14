@@ -143,7 +143,7 @@ Type `/` for commands. Management commands open pickers or forms; `?` on empty i
 ## What is included
 
 - Streaming agent execution through the CLI, TUI/gateway and HTTP API, with cancellation, session ownership and bounded cleanup.
-- Persistent conversations, context compaction, memory search and document retrieval. Semantic retrieval runs through an OpenAI-compatible endpoint or the optional zero-API local `model2vec` runtime (`pip install 'Machina[embeddings-local]'`; backend `auto` is local-first). Keyword retrieval is available without either.
+- Persistent conversations, context compaction, memory search and document retrieval. Semantic retrieval runs through an OpenAI-compatible endpoint or an optional zero-API local runtime (`pip install 'Machina[embeddings-onnx]'` for in-process ONNX, or `'Machina[embeddings-local]'` for static model2vec; backend `auto` is local-first). LoCoMo measurement keeps dense retrieval opt-in (`embedding_backend=off` default): keyword retrieval is available without either.
 - File, shell, web, memory and document tools, subject to the permission broker and the selected execution backend.
 - Deterministic directory learning: the read-only `learn_directory` tool builds a bounded, cached repository digest (totals, largest modules, entry points, tests, import hubs) with **no model calls**; repeat calls are served from the content-hash cache.
 - **42 curated ECC skills**, bundled offline and selected by task evidence. Relevant excerpts are disclosed progressively rather than injecting the entire library into each prompt.
@@ -268,7 +268,7 @@ Stdio runs on the host and is refused in sandbox mode. HTTP redirects and enviro
 | Provider transport | httpx | Cloud/local model APIs, streaming, timeouts and HTTP boundaries |
 | Cloud models | OpenRouter and direct vendor adapters | Provider/model selection without requiring a single hosted platform |
 | Local models | Ollama | Local inference through an accessible Ollama service |
-| Document embeddings | OpenAI-compatible or local model2vec (`embeddings-local` extra) | Semantic document/memory retrieval; `auto` is local-first: explicit endpoint, then local runtime, then an API key |
+| Document embeddings | OpenAI-compatible or local ONNX/model2vec (`embeddings-onnx`/`embeddings-local` extras) | Semantic document/memory retrieval; off by default (LoCoMo: dense below keyword-only at k=5); `auto` is local-first: explicit endpoint, then ONNX, then model2vec, then an API key |
 | Document reranking | Cohere or passthrough fallback | Optional reranking after retrieval |
 | Web search and extraction | DuckDuckGo by default; optional SearXNG; direct HTTP text extraction | Search/fetch tools with network policy checks and session-scoped web research in RAG |
 | MCP | Python MCP SDK **2.3.0**, stdio and Streamable HTTP | Reviewed server connection and native remote tool execution |
@@ -388,9 +388,15 @@ Important settings include `DATABASE_URL`, `MACHINA_PROVIDER`, `MACHINA_MODEL`, 
 | `MACHINA_PROVIDER` | Chat provider adapter | `openrouter` |
 | `MACHINA_MODEL` | Model identifier | `openrouter/free`; availability is provider-dependent |
 | `MACHINA_REASONING_EFFORT` | Requested reasoning depth | Blank uses provider default |
-| `MACHINA_EMBEDDING_BACKEND` | Dense-retrieval embedding backend | `auto` (endpoint → local model2vec → OpenAI/OpenRouter fallback → keyword-only); `local`, `openai` or `off` force a choice |
-| `MACHINA_EMBEDDING_MODEL` | Embedding model id for the selected backend | Blank uses the backend default (`text-embedding-3-small` or `minishlab/potion-base-8M`) |
+| `MACHINA_EMBEDDING_BACKEND` | Dense-retrieval embedding backend | `off` (keyword-only default; LoCoMo showed static and bge-small dense hybrids below keyword-only at k=5). `auto` = endpoint → local ONNX → local model2vec → OpenAI/OpenRouter keys; `onnx`, `local`, `openai` force a choice |
+| `MACHINA_EMBEDDING_MODEL` | Embedding model id for the selected backend | Blank uses the backend default (`text-embedding-3-small`, `BAAI/bge-small-en-v1.5` or `minishlab/potion-base-8M`) |
 | `MACHINA_EMBEDDING_BASE_URL` | Explicit OpenAI-compatible embedding endpoint (llama.cpp, Ollama, LM Studio) | Blank; keyless local servers are supported |
+| `MACHINA_RERANKER_BACKEND` | Cross-encoder reranker backend | `none` (opt-in; local ONNX on LoCoMo keyword-only: Δrecall +0.015, ΔMRR +0.022, p50 ~250 ms). `auto` = local ONNX → Cohere key; `local`, `cohere`, `http` force a choice |
+| `MACHINA_RERANKER_LOCAL_MODEL` | Local ONNX reranker model | Blank uses `Xenova/ms-marco-MiniLM-L-12-v2`; e.g. `BAAI/bge-reranker-v2-m3-int8` for multilingual |
+| `MACHINA_RERANKER_HTTP_URL` | Local llama.cpp `/v1/rerank` endpoint (`llama-server --reranking`) | Blank; host and port of your server |
+| `MACHINA_RERANKER_HTTP_MODEL` | Model name sent to the HTTP reranker | Blank; server-defined label |
+| `MACHINA_RRF_KEYWORD_WEIGHT` | Hybrid-search RRF weight for the keyword branch | `1.0` |
+| `MACHINA_RRF_DENSE_WEIGHT` | Hybrid-search RRF weight for the dense branch | `0.25` (measured: keeps bge-small recall +0.013 while limiting MRR drag to −0.011 vs keyword-only; 1.0 dragged MRR −0.033) |
 | `MACHINA_EXECUTION_MODE` | Default mode for new sessions | `ask` |
 | `MACHINA_PERSONA_DESCRIPTION` | Requested tone and character | Empty; maximum 2,000 characters |
 | `MACHINA_MEMORY_ENABLED` | Automatic memory integration | `true` |
@@ -672,7 +678,7 @@ Machina/
 | MCP stdio refuses sandbox mode | Host stdio is outside that execution boundary; choose a supported transport/backend configuration |
 | MCP asks for approval in full mode | Untrusted remote calls still need exact consent; trusted reads require an explicit verified allowlist |
 | Persona appears unchanged in a conversation | Saved defaults apply through the profile/context; inspect `/persona` and `/growth`, and distinguish requested persona from trial revisions |
-| Semantic retrieval is absent | Install the local runtime (`pip install 'Machina[embeddings-local]'`), configure `MACHINA_EMBEDDING_BASE_URL`, or set `OPENAI_API_KEY`; lexical retrieval remains available |
+| Semantic retrieval is absent | Install a local runtime (`pip install 'Machina[embeddings-onnx]'` or `'Machina[embeddings-local]'`) and enable it (`MACHINA_EMBEDDING_BACKEND=onnx` or `local`), configure `MACHINA_EMBEDDING_BASE_URL`, or set `OPENAI_API_KEY`; lexical retrieval remains available |
 | Animation is distracting | Set `MACHINA_UI_REDUCED_MOTION=1` |
 | Database/UI tests skip | Configure the dedicated test DSN and real gateway prerequisites; skipped tests are not passing evidence |
 

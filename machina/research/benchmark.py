@@ -202,9 +202,35 @@ def _locomo(args: argparse.Namespace) -> dict:
                 archive = await evaluate_archive_retrieval(conversations, k=5)
                 archive_k10 = await evaluate_archive_retrieval(conversations, k=10)
                 recall, latency_ms = await evaluate_session_recall(conversations, k=5)
-                return archive, archive_k10, recall, latency_ms
+                rerank_result = None
+                rerank_error = ""
+                if getattr(args, "locomo_rerank", False):
+                    try:
+                        from machina.rag.reranker import (
+                            build_reranker,
+                            resolve_reranker_selection,
+                        )
 
-            archive, archive_k10, recall, latency_ms = asyncio.run(_with_db())
+                        selection = resolve_reranker_selection()
+                        if selection.kind == "none":
+                            rerank_error = selection.reason or "no reranker backend available"
+                        else:
+                            reranker = build_reranker(selection)
+                            try:
+                                rerank_result = await evaluate_archive_retrieval(
+                                    conversations, k=5, reranker=reranker
+                                )
+                            finally:
+                                close = getattr(reranker, "close", None)
+                                if callable(close):
+                                    await close()
+                    except Exception as exc:
+                        rerank_error = f"{type(exc).__name__}: {exc}"
+                return archive, archive_k10, recall, latency_ms, rerank_result, rerank_error
+
+            archive, archive_k10, recall, latency_ms, rerank_result, rerank_error = asyncio.run(
+                _with_db()
+            )
             result["production_archive_search"] = {
                 "evidence_recall": round(archive.evidence_recall, 3),
                 "hit_rate": round(archive.hit_rate, 3),
@@ -230,6 +256,32 @@ def _locomo(args: argparse.Namespace) -> dict:
                 "mean_latency_ms": round(latency_ms, 1),
                 "k": recall.k,
             }
+            if getattr(args, "locomo_rerank", False):
+                if rerank_result is not None:
+                    result["production_archive_search_rerank"] = {
+                        "evidence_recall": round(rerank_result.evidence_recall, 3),
+                        "hit_rate": round(rerank_result.hit_rate, 3),
+                        "mrr": round(rerank_result.mean_reciprocal_rank, 3),
+                        "k": rerank_result.k,
+                        "search_mode": rerank_result.search_mode,
+                        "components": rerank_result.components,
+                        "rerank": rerank_result.rerank_stats,
+                    }
+                    result["rerank_comparison"] = {
+                        "note": "same questions, k=5: archive search rerank off vs on",
+                        "recall_delta": round(
+                            rerank_result.evidence_recall - archive.evidence_recall, 4
+                        ),
+                        "hit_delta": round(rerank_result.hit_rate - archive.hit_rate, 4),
+                        "mrr_delta": round(
+                            rerank_result.mean_reciprocal_rank - archive.mean_reciprocal_rank, 4
+                        ),
+                    }
+                else:
+                    result["production_archive_search_rerank"] = {
+                        "status": "SKIPPED",
+                        "reason": rerank_error or "reranker unavailable",
+                    }
             result["comparison"] = {
                 "note": "same questions, same k=5: TF-IDF baseline vs production engines",
                 "baseline": result["baseline_tfidf"]["k=5"],
@@ -400,6 +452,14 @@ def main(argv: list[str] | None = None) -> int:
         "--locomo-db",
         action="store_true",
         help="also run LoCoMo through production archive search + session recall (needs DB)",
+    )
+    parser.add_argument(
+        "--locomo-rerank",
+        action="store_true",
+        help=(
+            "also replay archive search with the configured reranker and report the "
+            "rerank off/on delta (status counts prove the reranker ran)"
+        ),
     )
     parser.add_argument(
         "--section",

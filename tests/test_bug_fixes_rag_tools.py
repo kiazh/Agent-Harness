@@ -157,17 +157,29 @@ class TestBug13CdNotInAllowlist:
 
 def test_shared_pipeline_logs_traceback_on_cohere_failure(monkeypatch, caplog):
     """A failed Cohere build degrades to passthrough with its traceback logged."""
+    from machina.core.config import config
     from machina.rag.reranker import IdentityReranker
     from machina.tools import rag as rag_tools
 
-    monkeypatch.setattr(rag_tools, "_cohere_configured", lambda: True)
+    real_get = config.get
+    state = {"reranker_backend": "cohere", "cohere_api_key": "cohere-key-X"}
 
-    def boom():
-        raise RuntimeError("cohere init boom")
+    def fake_get(key=None):
+        if key in state:
+            return state[key]
+        return real_get(key)
 
-    monkeypatch.setattr("machina.rag.reranker.CohereReranker", boom)
+    class BoomCohereReranker:
+        DEFAULT_MODEL = "rerank-v3.5"
+
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("cohere init boom")
+
+    monkeypatch.setattr(config, "get", fake_get)
+    monkeypatch.setattr("machina.rag.reranker.CohereReranker", BoomCohereReranker)
     pipeline = rag_tools._build_shared_pipeline()
     assert isinstance(pipeline._reranker, IdentityReranker)
+    assert "cohere unavailable" in pipeline._reranker.reason
     assert any("RuntimeError" in (record.exc_text or "") for record in caplog.records)
 
 
@@ -186,9 +198,13 @@ def test_shared_pipeline_rebuilds_when_cohere_key_identity_changes(monkeypatch):
     def fake_get(key=None):
         if key == "cohere_api_key":
             return keys["value"]
+        if key == "reranker_backend":
+            return "cohere"
         return real_get(key)
 
     class FakeCohereReranker:
+        DEFAULT_MODEL = "rerank-v3.5"
+
         def __init__(self, *args, **kwargs):
             self.api_key = keys["value"]
 

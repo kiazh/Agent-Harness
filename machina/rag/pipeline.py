@@ -86,9 +86,32 @@ class RAGConfig:
     top_k: int = 10
     retrieval_top_k: int = 50
     rrf_k: int = 60
+    # Per-branch RRF fusion weights (measured on LoCoMo; neutral = 1.0).
+    # ``rrf_keyword_weight`` scales the PostgreSQL FTS branch,
+    # ``rrf_dense_weight`` scales the dense branch, so a weak dense model
+    # cannot drag the fused ranking below keyword-only quality.
+    rrf_keyword_weight: float = 1.0
+    rrf_dense_weight: float = 1.0
     enable_embeddings: bool = True
     enable_reranking: bool = True
     enable_hybrid_search: bool = True
+
+
+def _default_rag_config() -> RAGConfig:
+    """RAGConfig with process-level tuning (RRF weights) read from config.
+
+    Explicit ``RAGConfig(...)`` constructions stay deterministic; only the
+    default path inherits the measured process-wide fusion weights.
+    """
+    config = RAGConfig()
+    try:
+        from machina.core.config import config as _cfg
+
+        config.rrf_keyword_weight = float(_cfg.get("rrf_keyword_weight"))
+        config.rrf_dense_weight = float(_cfg.get("rrf_dense_weight"))
+    except Exception as e:
+        logger.debug("RRF weights unavailable, defaults kept: %s", e)
+    return config
 
 
 class RAGPipeline:
@@ -119,7 +142,7 @@ class RAGPipeline:
         loader: FileLoader | None = None,
         config: RAGConfig | None = None,
     ) -> None:
-        self._config = config or RAGConfig()
+        self._config = config or _default_rag_config()
         self._search_cache: dict[tuple, tuple[float, list[SearchResult]]] = {}
         self._embedding_space_cache: dict[tuple, tuple[float, str]] = {}
         # AH-AUDIT-032: keyword-capable pipeline with no embedder. Dense
@@ -144,6 +167,8 @@ class RAGPipeline:
             rrf_k=self._config.rrf_k,
             top_k=self._config.retrieval_top_k,
             final_top_k=self._config.top_k,
+            dense_weight=self._config.rrf_dense_weight,
+            keyword_weight=self._config.rrf_keyword_weight,
         )
         self._loader = loader or FileLoader()
 
@@ -154,15 +179,25 @@ class RAGPipeline:
     def reranker_identity(self) -> dict[str, str]:
         """Actual reranker identity for honest status (AH-AUDIT-036).
 
-        Derived from the instantiated component, never from key presence
-        alone. A present credential is not evidence the component is
-        selected or functioning.
+        Derived from the instantiated component's ``backend`` marker, never
+        from key presence alone. A present credential is not evidence the
+        component is selected or functioning; a passthrough exposes the
+        reason it fell back.
         """
         try:
-            name = type(self._reranker).__name__
-            if "Cohere" in name:
-                return {"reranker": "cohere", "detail": getattr(self._reranker, "_model", "")}
-            return {"reranker": "passthrough", "detail": name}
+            reranker = self._reranker
+            name = type(reranker).__name__
+            backend = getattr(reranker, "backend", "") or (
+                "cohere" if "Cohere" in name else "passthrough"
+            )
+            if backend == "cohere":
+                return {"reranker": "cohere", "detail": getattr(reranker, "_model", "")}
+            if backend == "passthrough":
+                detail = getattr(reranker, "reason", "") or name
+                return {"reranker": "passthrough", "detail": detail}
+            if backend == "unknown":
+                return {"reranker": "unknown", "detail": name}
+            return {"reranker": backend, "detail": getattr(reranker, "model_name", "")}
         except Exception:
             return {"reranker": "unknown", "detail": ""}
 

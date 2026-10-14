@@ -291,6 +291,18 @@ class OpenAIEmbedder(Embedder):
         return len(self._cache)
 
 
+def _zero_pad_rows(rows: list[list[float]], width: int) -> list[list[float]]:
+    """Zero-pad shorter vectors so they fit the fixed storage width.
+
+    Zero padding leaves cosine similarity unchanged, so dense search works
+    against the fixed ``vector(1536)`` schema without a migration.
+    """
+    for row in rows:
+        if len(row) < width:
+            row.extend([0.0] * (width - len(row)))
+    return rows
+
+
 class LocalEmbedder(Embedder):
     """Zero-API local embeddings via model2vec static models (pure NumPy).
 
@@ -378,12 +390,7 @@ class LocalEmbedder(Embedder):
             show_progress_bar=False,
             use_multiprocessing=False,
         )
-        rows = vectors.tolist()
-        width = self.dimensions
-        if rows and len(rows[0]) < width:
-            for row in rows:
-                row.extend([0.0] * (width - len(row)))
-        return rows
+        return _zero_pad_rows(vectors.tolist(), self.dimensions)
 
     async def embed(self, text: str) -> list[float]:
         """Embed a single text (model weights load lazily on first call)."""
@@ -429,11 +436,155 @@ class LocalEmbedder(Embedder):
             self._model = None
 
 
+class OnnxEmbedder(Embedder):
+    """Zero-API local embeddings via fastembed ONNX models (no torch).
+
+    Default model: ``BAAI/bge-small-en-v1.5`` (384-d native, MIT-licensed
+    ONNX build served by fastembed). ``fastembed`` is imported and the model
+    weights load lazily on the first embed call — never at import or
+    construction — and the loaded model is reused for every later call on
+    the instance. ``close()`` unloads the model; the next call reloads it
+    from the local cache.
+
+    Storage note: machina's pgvector columns are fixed ``vector(1536)``, so
+    vectors are zero-padded to ``EMBEDDING_DIMENSIONS`` (default 1536);
+    ``native_dimensions`` reports the model's real width.
+    """
+
+    DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
+    DEFAULT_PAD_DIMENSIONS = 1536
+    DEFAULT_BATCH_SIZE = 64
+    # Known native widths: lets dimensions/native_dimensions answer without
+    # forcing a model download. Unknown ids fall back to the loaded model.
+    NATIVE_DIMENSIONS: dict[str, int] = {
+        "BAAI/bge-small-en-v1.5": 384,
+        "BAAI/bge-base-en-v1.5": 768,
+        "BAAI/bge-large-en-v1.5": 1024,
+        "sentence-transformers/all-MiniLM-L6-v2": 384,
+        "snowflake/snowflake-arctic-embed-xs": 384,
+        "snowflake/snowflake-arctic-embed-s": 384,
+        "snowflake/snowflake-arctic-embed-m": 768,
+        "jinaai/jina-embeddings-v2-small-en": 512,
+    }
+
+    def __init__(
+        self,
+        model: str | None = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        pad_to: int | None = None,
+        cache_dir: str | None = None,
+        threads: int | None = None,
+    ) -> None:
+        self._model_id = (model or "").strip() or self.DEFAULT_MODEL
+        self._batch_size = batch_size
+        self._cache_dir = cache_dir
+        self._threads = threads
+        env_pad = os.getenv("EMBEDDING_DIMENSIONS", "")
+        if pad_to is None:
+            pad_to = int(env_pad) if env_pad.isdigit() else self.DEFAULT_PAD_DIMENSIONS
+        self._pad_to = pad_to
+        self._model = None
+        self._native_dimensions: int | None = None
+        self._dimensions: int | None = None
+        self._load_lock = threading.Lock()
+
+    @property
+    def model_name(self) -> str:
+        return self._model_id
+
+    @property
+    def native_dimensions(self) -> int:
+        """The model's real output width (before storage padding)."""
+        if self._native_dimensions is None:
+            known = self.NATIVE_DIMENSIONS.get(self._model_id)
+            if known is None:
+                model = self._load_model()
+                known = int(model.embedding_size) if model.embedding_size else None
+                if not known:
+                    raise ValueError(f"cannot determine embedding width for {self._model_id!r}")
+            self._native_dimensions = known
+        return self._native_dimensions
+
+    @property
+    def dimensions(self) -> int:
+        """Effective (stored) width: padded when the schema is wider."""
+        if self._dimensions is None:
+            native = self.native_dimensions
+            self._dimensions = self._pad_to if self._pad_to >= native else native
+        return self._dimensions
+
+    def _load_model(self):
+        """Import/load fastembed and the ONNX weights once (thread-safe)."""
+        if self._model is None:
+            with self._load_lock:
+                if self._model is None:
+                    from fastembed import TextEmbedding
+
+                    kwargs: dict = {}
+                    if self._cache_dir:
+                        kwargs["cache_dir"] = self._cache_dir
+                    if self._threads:
+                        kwargs["threads"] = self._threads
+                    self._model = TextEmbedding(self._model_id, **kwargs)
+        return self._model
+
+    def _encode(self, texts: list[str]) -> list[list[float]]:
+        """Blocking encode (runs on a worker thread) with storage padding."""
+        model = self._load_model()
+        vectors = [
+            vector.tolist() for vector in model.embed(list(texts), batch_size=self._batch_size)
+        ]
+        return _zero_pad_rows(vectors, self.dimensions)
+
+    async def embed(self, text: str) -> list[float]:
+        """Embed a single text (model weights load lazily on first call)."""
+        if not text:
+            return [0.0] * self.dimensions
+        return (await self.embed_batch([text]))[0]
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Embed a batch; empty strings map to zero vectors, like the API backends."""
+        if not texts:
+            return []
+        results: list[list[float] | None] = [None] * len(texts)
+        pending: list[str] = []
+        pending_indices: list[int] = []
+        for index, text in enumerate(texts):
+            if text:
+                pending.append(text)
+                pending_indices.append(index)
+            else:
+                results[index] = [0.0] * self.dimensions
+        if pending:
+            _core_symbol("machina.core.provider", "audit_log")(
+                "rag_embed_start", model=self._model_id, count=len(pending), provider="onnx"
+            )
+            try:
+                encoded = await asyncio.to_thread(self._encode, pending)
+            except Exception as e:
+                _core_symbol("machina.core.provider", "audit_log")(
+                    "rag_embed_error", model=self._model_id, error=str(e)
+                )
+                logger.error("ONNX embedding call failed: %s", e)
+                raise
+            for index, vector in zip(pending_indices, encoded, strict=True):
+                results[index] = vector
+            _core_symbol("machina.core.provider", "audit_log")(
+                "rag_embed_complete", model=self._model_id, count=len(encoded)
+            )
+        return results  # type: ignore[return-value]
+
+    async def close(self) -> None:
+        """Unload the ONNX model; the next embed call reloads from cache."""
+        with self._load_lock:
+            self._model = None
+
+
 @dataclass(frozen=True)
 class EmbeddingSettings:
     """Resolved embedding backend choice (config-only; never loads a model)."""
 
-    kind: str  # "openai" | "local" | "none"
+    kind: str  # "openai" | "onnx" | "local" | "none"
     model: str = ""
     base_url: str = ""
     backend: str = "auto"  # configured embedding_backend value
@@ -446,6 +597,16 @@ def local_embedder_available() -> bool:
         from importlib.util import find_spec
 
         return find_spec("model2vec") is not None
+    except Exception:
+        return False
+
+
+def onnx_embedder_available() -> bool:
+    """Whether the optional fastembed runtime (in-process ONNX) is importable."""
+    try:
+        from importlib.util import find_spec
+
+        return find_spec("fastembed") is not None
     except Exception:
         return False
 
@@ -466,13 +627,15 @@ def resolve_embedding_settings() -> EmbeddingSettings:
     Selection matrix for ``embedding_backend``:
 
     - ``off``    → none (keyword-only, explicit).
-    - ``local``  → local model2vec when installed, else none.
+    - ``onnx``   → local fastembed ONNX model when installed, else none.
+    - ``local``  → local model2vec static model when installed, else none.
     - ``openai`` → OpenAI-compatible server; a key is required unless an
       explicit ``embedding_base_url`` names a keyless local server.
     - ``auto``   → an explicit ``embedding_base_url`` first (OpenAI-compatible
-      local server, keyless allowed); then the local model2vec runtime
-      (local-first design rule: embedding compute stays on-host); then
-      OpenAI/OpenRouter credentials as a fallback; else none.
+      local server, keyless allowed); then the local fastembed ONNX runtime;
+      then the local model2vec runtime (local-first design rule: embedding
+      compute stays on-host); then OpenAI/OpenRouter credentials as a
+      fallback; else none.
 
     The configured ``embedding_model`` is honored by whichever backend is
     selected. Availability is an import spec check only — no model loads.
@@ -480,7 +643,7 @@ def resolve_embedding_settings() -> EmbeddingSettings:
     backend = (_config_value("embedding_backend", "auto") or "auto").strip().lower()
     model = _config_value("embedding_model").strip()
     base_url = _config_value("embedding_base_url").strip()
-    if backend not in ("auto", "local", "openai", "off"):
+    if backend not in ("auto", "local", "onnx", "openai", "off"):
         return EmbeddingSettings(
             "none", backend=backend, reason=f"unknown embedding_backend {backend!r}"
         )
@@ -499,6 +662,15 @@ def resolve_embedding_settings() -> EmbeddingSettings:
             base_url=base_url or OpenAIEmbedder.DEFAULT_BASE_URL,
             backend=backend,
         )
+    if backend == "onnx":
+        if not onnx_embedder_available():
+            return EmbeddingSettings(
+                "none",
+                model=model or OnnxEmbedder.DEFAULT_MODEL,
+                backend=backend,
+                reason="embedding_backend=onnx but fastembed is not installed",
+            )
+        return EmbeddingSettings("onnx", model=model or OnnxEmbedder.DEFAULT_MODEL, backend=backend)
     if backend == "local":
         if not local_embedder_available():
             return EmbeddingSettings(
@@ -518,6 +690,8 @@ def resolve_embedding_settings() -> EmbeddingSettings:
             base_url=base_url,
             backend=backend,
         )
+    if onnx_embedder_available():
+        return EmbeddingSettings("onnx", model=model or OnnxEmbedder.DEFAULT_MODEL, backend=backend)
     if local_embedder_available():
         return EmbeddingSettings(
             "local", model=model or LocalEmbedder.DEFAULT_MODEL, backend=backend
@@ -543,6 +717,8 @@ def build_embedder(settings: EmbeddingSettings | None = None) -> Embedder | None
         logger.info("no embedding backend: %s", resolved.reason)
         return None
     try:
+        if resolved.kind == "onnx":
+            return OnnxEmbedder(model=resolved.model)
         if resolved.kind == "local":
             return LocalEmbedder(model=resolved.model)
         return OpenAIEmbedder(model=resolved.model, base_url=resolved.base_url)

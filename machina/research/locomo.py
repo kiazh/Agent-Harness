@@ -11,6 +11,7 @@ import asyncio
 import json
 import math
 import re
+import statistics
 import time
 import uuid
 from collections import Counter
@@ -56,6 +57,9 @@ class RetrievalMetrics:
     # Per-path scores measured on the same questions/index (archive eval):
     # {"dense": {...}, "keyword-only": {...}, "hybrid": {...}}.
     components: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Reranker evidence (empty when reranking was not exercised): backend,
+    # model, status counts (applied/fallback/passthrough/skipped) and latency.
+    rerank_stats: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -212,10 +216,47 @@ def _component_metrics(metrics: RetrievalMetrics) -> dict[str, Any]:
     }
 
 
+def _archive_chunk_text(chunk: Any) -> str:
+    """Best-effort candidate text for reranking across chunk payload shapes.
+
+    Archived turns store ``content`` while RAG documents store ``text``.
+    """
+    try:
+        payload = chunk.payload if isinstance(chunk.payload, dict) else {}
+    except Exception:
+        return ""
+    for key in ("text", "content"):
+        value = payload.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _rrf_weights() -> tuple[float, float]:
+    """Process-level RRF weights (keyword, dense); neutral on any failure."""
+    try:
+        from machina.core.config import config
+
+        return (
+            float(config.get("rrf_keyword_weight")),
+            float(config.get("rrf_dense_weight")),
+        )
+    except Exception:
+        return (1.0, 1.0)
+
+
+def _candidate_chunks(candidates: Sequence[Any]) -> list[Any]:
+    """Chunk objects from either SearchResult items or (chunk, score) tuples."""
+    return [item.chunk if hasattr(item, "chunk") else item[0] for item in candidates]
+
+
 async def evaluate_archive_retrieval(
     conversations: Sequence[Conversation],
     *,
     k: int = 5,
+    reranker: Any | None = None,
+    keyword_weight: float | None = None,
+    dense_weight: float | None = None,
 ) -> RetrievalMetrics:
     """Replay annotated turns through the actual PostgreSQL archive search.
 
@@ -223,11 +264,20 @@ async def evaluate_archive_retrieval(
     turn is embedded through the production memory embedder (the same shared
     instance queries use) and archived with its vector. Each question is then
     answered by read-only dense recall AND PostgreSQL FTS over the same rows,
-    fused with the production RRF (``machina.rag.search.rrf_fuse``). Dense
-    and keyword rankings are scored separately in ``components`` so "dense
-    was measured" is verifiable; the fused ranking is the headline metric,
-    mirroring how production hybrid search answers queries when an embedder
-    exists. Without a provider the original keyword-only path runs.
+    fused with the production weighted RRF (``machina.rag.search.rrf_fuse``).
+    Dense and keyword rankings are scored separately in ``components`` so
+    "dense was measured" is verifiable; the fused ranking is the headline
+    metric, mirroring how production hybrid search answers queries when an
+    embedder exists. Without a provider the keyword-only path runs.
+
+    When ``reranker`` is provided, the fused (or keyword-only) candidate list
+    is reranked exactly like ``RAGPipeline._finish_search`` (candidates →
+    reranker → top k, fallback preserves retrieval order) and the pre/post
+    rankings are both scored (``hybrid`` vs ``hybrid+rerank``), with status
+    counts in ``rerank_stats`` proving the reranker actually ran.
+
+    RRF weights default to the process config (``rrf_keyword_weight`` /
+    ``rrf_dense_weight``) so the benchmark measures production semantics.
 
     A connected, initialized database is required. Temporary sessions and
     archive rows are deleted after each conversation, including on failure.
@@ -238,12 +288,20 @@ async def evaluate_archive_retrieval(
     from machina.memory.embeddings import embed_query, embed_texts
     from machina.rag.search import rrf_fuse
 
+    if keyword_weight is None or dense_weight is None:
+        config_kw, config_dn = _rrf_weights()
+        keyword_weight = config_kw if keyword_weight is None else keyword_weight
+        dense_weight = config_dn if dense_weight is None else dense_weight
+
     depth = max(_ARCHIVE_RETRIEVAL_DEPTH, k)
     rankings: list[list[str]] = []
+    fused_rankings: list[list[str]] = []
     dense_rankings: list[list[str]] = []
     keyword_rankings: list[list[str]] = []
     modes: Counter[str] = Counter()
     query_seconds: list[float] = []
+    rerank_counts: Counter[str] = Counter()
+    rerank_seconds: list[float] = []
     for conversation in conversations:
         session = await session_manager.create(title="LoCoMo retrieval evaluation")
         try:
@@ -265,6 +323,56 @@ async def evaluate_archive_retrieval(
                     agent_id="benchmark",
                     chunk_type="dialogue",
                 )
+
+            async def _rerank_ids(candidates: list, query: str) -> list[str]:
+                """Rerank candidates like production; fallback keeps order."""
+                chunks = _candidate_chunks(candidates)
+                if len(chunks) <= k:
+                    rerank_counts["skipped"] += 1
+                    return [identifiers[chunk.id] for chunk in chunks[:k]]
+                # Production parity: RAGPipeline._finish_search reranks only
+                # the k*2 candidates it retrieved (candidate depth beyond that
+                # is never reranked), so mirror that depth here.
+                chunks = chunks[: 2 * k]
+                documents = [_archive_chunk_text(chunk) for chunk in chunks]
+                started = time.perf_counter()
+                try:
+                    results = await reranker.rerank(query, documents, top_k=k)
+                except Exception:
+                    rerank_counts["fallback"] += 1
+                    return [identifiers[chunk.id] for chunk in chunks[:k]]
+                finally:
+                    rerank_seconds.append(time.perf_counter() - started)
+                seen = set()
+                valid = []
+                for result in results:
+                    if (
+                        type(result.index) is not int
+                        or not 0 <= result.index < len(chunks)
+                        or result.index in seen
+                        or (
+                            result.score is not None
+                            and (
+                                type(result.score) not in (int, float)
+                                or not math.isfinite(result.score)
+                            )
+                        )
+                    ):
+                        rerank_counts["fallback"] += 1
+                        return [identifiers[chunk.id] for chunk in chunks[:k]]
+                    seen.add(result.index)
+                    valid.append(result)
+                if not valid or any(result.score is None for result in valid):
+                    status = (
+                        "passthrough"
+                        if getattr(reranker, "backend", "") == "passthrough"
+                        else "fallback"
+                    )
+                    rerank_counts[status] += 1
+                    return [identifiers[chunk.id] for chunk in chunks[:k]]
+                rerank_counts["applied"] += 1
+                return [identifiers[chunks[result.index].id] for result in valid]
+
             for question in conversation.questions:
                 if not question.evidence:
                     continue
@@ -280,21 +388,37 @@ async def evaluate_archive_retrieval(
                         session.id, question.text, depth
                     )
                     fused = sorted(
-                        rrf_fuse(dense, sparse), key=lambda result: result.rrf_score, reverse=True
+                        rrf_fuse(
+                            dense,
+                            sparse,
+                            dense_weight=dense_weight,
+                            keyword_weight=keyword_weight,
+                        ),
+                        key=lambda result: result.rrf_score,
+                        reverse=True,
                     )
                     query_seconds.append(time.perf_counter() - started)
+                    fused_ids = [identifiers[result.chunk.id] for result in fused]
+                    fused_rankings.append(fused_ids)
                     dense_rankings.append([identifiers[chunk.id] for chunk, _ in dense])
                     keyword_rankings.append([identifiers[chunk.id] for chunk, _ in sparse])
-                    rankings.append([identifiers[result.chunk.id] for result in fused])
+                    if reranker is not None:
+                        rankings.append(await _rerank_ids(fused, question.text))
+                    else:
+                        rankings.append(fused_ids)
                     modes["hybrid"] += 1
                 else:
+                    fetch_k = depth if reranker is not None else k
                     started = time.perf_counter()
                     matches = await context_manager.search_archive_text(
-                        session.id, question.text, k
+                        session.id, question.text, fetch_k
                     )
                     query_seconds.append(time.perf_counter() - started)
                     keyword_rankings.append([identifiers[chunk.id] for chunk, _ in matches])
-                    rankings.append([identifiers[chunk.id] for chunk, _ in matches])
+                    if reranker is not None:
+                        rankings.append(await _rerank_ids(matches, question.text))
+                    else:
+                        rankings.append([identifiers[chunk.id] for chunk, _ in matches])
                     modes["keyword-only"] += 1
         finally:
             await session_manager.delete(session.id)
@@ -309,14 +433,42 @@ async def evaluate_archive_retrieval(
         components["keyword-only"] = _component_metrics(
             evaluate_rankings(conversations, keyword_rankings, k=k)
         )
-        components["hybrid"] = _component_metrics(metrics)
+        components["hybrid"] = _component_metrics(
+            evaluate_rankings(conversations, fused_rankings, k=k)
+        )
+        if reranker is not None:
+            components["hybrid+rerank"] = _component_metrics(metrics)
         components["hybrid"]["mean_query_latency_ms"] = (
             round(1000 * sum(query_seconds) / len(query_seconds), 2) if query_seconds else 0.0
         )
     elif modes.get("keyword-only"):
-        components["keyword-only"] = _component_metrics(metrics)
+        components["keyword-only"] = _component_metrics(
+            evaluate_rankings(conversations, keyword_rankings, k=k)
+        )
+        if reranker is not None:
+            components["keyword-only+rerank"] = _component_metrics(metrics)
     mode = ",".join(f"{name} x{count}" for name, count in sorted(modes.items()))
-    return replace(metrics, search_mode=mode or "keyword-only", components=components)
+    rerank_stats: dict[str, Any] = {}
+    if reranker is not None:
+        rerank_stats = {
+            "backend": getattr(reranker, "backend", type(reranker).__name__),
+            "model": getattr(reranker, "model_name", ""),
+            "status_counts": dict(sorted(rerank_counts.items())),
+            "mean_latency_ms": (
+                round(1000 * sum(rerank_seconds) / len(rerank_seconds), 2)
+                if rerank_seconds
+                else 0.0
+            ),
+            "p50_latency_ms": (
+                round(1000 * statistics.median(rerank_seconds), 2) if rerank_seconds else 0.0
+            ),
+        }
+    return replace(
+        metrics,
+        search_mode=mode or "keyword-only",
+        components=components,
+        rerank_stats=rerank_stats,
+    )
 
 
 async def evaluate_session_recall(

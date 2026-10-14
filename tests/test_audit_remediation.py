@@ -742,6 +742,9 @@ def test_032_pipeline_without_keys_is_keyword_only(monkeypatch):
     monkeypatch.setattr(
         "machina.rag.embedder.local_embedder_available", lambda: False, raising=False
     )
+    monkeypatch.setattr(
+        "machina.rag.embedder.onnx_embedder_available", lambda: False, raising=False
+    )
     from machina.rag.pipeline import RAGPipeline
 
     pipe = RAGPipeline()

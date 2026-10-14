@@ -116,17 +116,44 @@ DEFAULTS: dict[str, Any] = {
     "rag_enabled": True,
     "streaming": True,
     # Embedding backend for dense retrieval (RAG documents + memory).
-    # "auto": explicit embedding_base_url → OpenAI-compatible endpoint (keyless
-    # local servers allowed); else installed local model2vec runtime →
-    # LocalEmbedder (local-first design rule); else OpenAI/OpenRouter key →
-    # OpenAIEmbedder; else keyword-only.
-    # "local" forces model2vec, "openai" forces the API adapter, "off" forces None.
-    "embedding_backend": "auto",
+    # Default "off": the LoCoMo archive replay showed keyword-only (recall@5
+    # 0.425/MRR 0.345) beating static-model hybrids (potion 0.422/MRR 0.316)
+    # and the bge-small ONNX hybrid (0.415/MRR 0.312) at k=5 — dense stays
+    # opt-in until a model clears the go/no-go bars.
+    # "auto": explicit embedding_base_url → onnx → model2vec → OpenAI/
+    # OpenRouter key → keyword-only (local-first when enabled).
+    # "onnx" forces fastembed, "local" forces model2vec, "openai" forces the
+    # API adapter.
+    "embedding_backend": "off",
     # Model id for the selected backend (empty = backend default:
-    # text-embedding-3-small for OpenAI, minishlab/potion-base-8M for local).
+    # text-embedding-3-small for OpenAI, BAAI/bge-small-en-v1.5 for onnx,
+    # minishlab/potion-base-8M for local).
     "embedding_model": "",
     # Explicit OpenAI-compatible endpoint (llama.cpp, Ollama, LM Studio, ...).
     "embedding_base_url": "",
+    # Cross-encoder reranker for retrieved candidates (local-first, zero-API).
+    # Default "none": the local ONNX MiniLM-L12 reranker improved every
+    # LoCoMo metric but landed below the default-on bars (keyword-only
+    # Δrecall@5 +0.015, ΔMRR +0.022, rerank p50 ~250 ms) — enable with
+    # "local" (or "cohere"/"http" for a llama.cpp /v1/rerank server).
+    # "auto" = local ONNX when installed, then a Cohere key, else passthrough.
+    # Local reranking keeps query/candidate text on-host.
+    "reranker_backend": "none",
+    # Local ONNX reranker model (empty = Xenova/ms-marco-MiniLM-L-12-v2).
+    # Multilingual option: BAAI/bge-reranker-v2-m3-int8 (~0.6 GB).
+    "reranker_local_model": "",
+    # Local llama.cpp /v1/rerank endpoint used by the "http" backend
+    # (e.g. http://127.0.0.1:8080 with `llama-server --reranking`).
+    "reranker_http_url": "",
+    "reranker_http_model": "",
+    "reranker_timeout": 10.0,
+    # RRF fusion weights for hybrid search (dense vs keyword branches).
+    # Measured on LoCoMo with bge-small-ONNX: at 1.0 the dense branch drags
+    # hybrid MRR −0.033 below keyword-only; 0.25 keeps recall +0.013 while
+    # limiting the MRR trail to −0.011. Weights apply only when dense is
+    # enabled (embedding_backend is "off" by default).
+    "rrf_keyword_weight": 1.0,
+    "rrf_dense_weight": 0.25,
     # PILOT (default off): attach Anthropic-style ephemeral prompt-cache
     # breakpoints to the two stable-prefix ends — the final system content
     # block and the last tool schema entry. Provider-dependent: honored by
@@ -223,8 +250,13 @@ def validate_value(key: str, value: Any) -> Any:
         return normalized
     if key == "embedding_backend":
         normalized = str(value).strip().lower()
-        if normalized not in ("auto", "local", "openai", "off"):
-            raise ValueError("embedding_backend must be auto|local|openai|off")
+        if normalized not in ("auto", "local", "onnx", "openai", "off"):
+            raise ValueError("embedding_backend must be auto|local|onnx|openai|off")
+        return normalized
+    if key == "reranker_backend":
+        normalized = str(value).strip().lower()
+        if normalized not in ("auto", "cohere", "local", "http", "none"):
+            raise ValueError("reranker_backend must be auto|cohere|local|http|none")
         return normalized
     if key not in DEFAULTS:
         return value
@@ -288,6 +320,10 @@ def _check_float_bounds(key: str, val: float) -> None:
         raise ValueError(f"temperature must be in range 0.0..2.0, got {val}")
     if key in ("compression_threshold", "compression_target_ratio") and not 0.0 < val <= 1.0:
         raise ValueError(f"{key} must be in range 0.0<..1.0, got {val}")
+    if key == "reranker_timeout" and not 1.0 <= val <= 120.0:
+        raise ValueError(f"reranker_timeout must be in range 1..120, got {val}")
+    if key in ("rrf_keyword_weight", "rrf_dense_weight") and not 0.0 <= val <= 10.0:
+        raise ValueError(f"{key} must be in range 0..10, got {val}")
 
 
 @dataclass
@@ -327,9 +363,19 @@ class Config:
     rag_enabled: bool = True
     streaming: bool = True
     # Embedding backend selection for dense retrieval (RAG + memory).
-    embedding_backend: str = "auto"
+    # Default "off": LoCoMo measurement kept dense models opt-in (see DEFAULTS).
+    embedding_backend: str = "off"
     embedding_model: str = ""
     embedding_base_url: str = ""
+    # Cross-encoder reranker selection (local-first, zero-API; opt-in).
+    reranker_backend: str = "none"
+    reranker_local_model: str = ""
+    reranker_http_url: str = ""
+    reranker_http_model: str = ""
+    reranker_timeout: float = 10.0
+    # RRF fusion weights for hybrid search (dense vs keyword branches).
+    rrf_keyword_weight: float = 1.0
+    rrf_dense_weight: float = 0.25
     prompt_cache_enabled: bool = False
     theme: str = "codex"
     # API keys and service URLs

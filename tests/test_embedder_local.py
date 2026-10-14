@@ -22,6 +22,7 @@ from machina.memory.embeddings import embed_query, embed_texts, embedding_status
 from machina.rag.embedder import (
     EmbeddingSettings,
     LocalEmbedder,
+    OnnxEmbedder,
     OpenAIEmbedder,
     build_embedder,
     close_shared_embedder,
@@ -59,6 +60,7 @@ def _configure(
     openai_key: str = "",
     openrouter_key: str = "",
     local_available: bool = True,
+    onnx_available: bool = False,
 ) -> None:
     fake = _FakeConfig(
         embedding_backend=backend,
@@ -71,16 +73,20 @@ def _configure(
     monkeypatch.setattr(
         embedder_module, "local_embedder_available", lambda: local_available, raising=False
     )
+    monkeypatch.setattr(
+        embedder_module, "onnx_embedder_available", lambda: onnx_available, raising=False
+    )
 
 
 # ─── Config surface ─────────────────────────────────────────────────────────
 
 
 def test_embedding_config_defaults_and_validation():
-    assert DEFAULTS["embedding_backend"] == "auto"
+    assert DEFAULTS["embedding_backend"] == "off"
     assert DEFAULTS["embedding_model"] == ""
     assert DEFAULTS["embedding_base_url"] == ""
     assert validate_value("embedding_backend", "local") == "local"
+    assert validate_value("embedding_backend", "ONNX") == "onnx"
     assert validate_value("embedding_backend", "OFF") == "off"
     with pytest.raises(ValueError, match="embedding_backend"):
         validate_value("embedding_backend", "cohere")
@@ -100,33 +106,49 @@ def test_embedding_config_env_resolution(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("backend", "model", "base_url", "openai_key", "openrouter_key", "local_available", "expected"),
+    (
+        "backend",
+        "model",
+        "base_url",
+        "openai_key",
+        "openrouter_key",
+        "local_available",
+        "onnx_available",
+        "expected",
+    ),
     [
         # off forces None regardless of everything else.
-        ("off", "", "", "", "", True, None),
-        ("off", "", "http://localhost:1234/v1", "sk-x", "", True, None),
-        # auto: no endpoint, no keys -> local when the runtime is installed.
-        ("auto", "", "", "", "", True, "local"),
-        ("auto", "", "", "", "", False, None),
-        # auto: local-first — the on-host runtime wins when installed.
-        ("auto", "", "", "sk-test", "", True, "local"),
-        ("auto", "", "", "", "or-test", True, "local"),
+        ("off", "", "", "", "", True, True, None),
+        ("off", "", "http://localhost:1234/v1", "sk-x", "", True, True, None),
+        # auto: no endpoint, no keys -> onnx when fastembed is installed.
+        ("auto", "", "", "", "", True, True, "onnx"),
+        ("auto", "", "", "", "", False, True, "onnx"),
+        # auto: onnx has precedence over the static model2vec runtime.
+        ("auto", "", "", "", "", True, False, "local"),
+        ("auto", "", "", "", "", False, False, None),
+        # auto: local-first — the on-host runtimes win over API credentials.
+        ("auto", "", "", "sk-test", "", True, True, "onnx"),
+        ("auto", "", "", "", "or-test", True, False, "local"),
         # auto: API credentials are the fallback when no local runtime exists.
-        ("auto", "", "", "sk-test", "", False, "openai"),
-        ("auto", "", "", "", "or-test", False, "openai"),
+        ("auto", "", "", "sk-test", "", False, False, "openai"),
+        ("auto", "", "", "", "or-test", False, False, "openai"),
         # auto: an explicit endpoint is honored first and keyless.
-        ("auto", "", "http://127.0.0.1:8080/v1", "", "", False, "openai"),
+        ("auto", "", "http://127.0.0.1:8080/v1", "", "", False, True, "openai"),
         # auto: an explicit model is honored by whichever backend wins.
-        ("auto", "custom-embed", "", "sk-test", "", True, "local"),
-        ("auto", "other-potion", "", "", "", True, "local"),
+        ("auto", "custom-embed", "", "sk-test", "", True, True, "onnx"),
+        ("auto", "other-potion", "", "", "", True, False, "local"),
         # local forces the runtime; missing dependency -> honest None.
-        ("local", "", "", "", "", True, "local"),
-        ("local", "minishlab/potion-base-4M", "", "", "", True, "local"),
-        ("local", "", "", "", "", False, None),
+        ("local", "", "", "", "", True, True, "local"),
+        ("local", "minishlab/potion-base-4M", "", "", "", True, False, "local"),
+        ("local", "", "", "", "", False, True, None),
+        # onnx forces fastembed; missing dependency -> honest None.
+        ("onnx", "", "", "", "", True, True, "onnx"),
+        ("onnx", "BAAI/bge-base-en-v1.5", "", "", "", False, True, "onnx"),
+        ("onnx", "", "", "", "", True, False, None),
         # openai forces the API adapter; without key or base_url -> None.
-        ("openai", "", "", "sk-test", "", True, "openai"),
-        ("openai", "", "http://localhost:11434/v1", "", "", False, "openai"),
-        ("openai", "", "", "", "", True, None),
+        ("openai", "", "", "sk-test", "", True, True, "openai"),
+        ("openai", "", "http://localhost:11434/v1", "", "", False, False, "openai"),
+        ("openai", "", "", "", "", True, True, None),
     ],
 )
 async def test_factory_selection_matrix(
@@ -137,6 +159,7 @@ async def test_factory_selection_matrix(
     openai_key,
     openrouter_key,
     local_available,
+    onnx_available,
     expected,
 ):
     _configure(
@@ -147,12 +170,16 @@ async def test_factory_selection_matrix(
         openai_key=openai_key,
         openrouter_key=openrouter_key,
         local_available=local_available,
+        onnx_available=onnx_available,
     )
     embedder = build_embedder()
     if expected is None:
         assert embedder is None
         return
-    if expected == "local":
+    if expected == "onnx":
+        assert isinstance(embedder, OnnxEmbedder)
+        assert embedder.model_name == (model or OnnxEmbedder.DEFAULT_MODEL)
+    elif expected == "local":
         assert isinstance(embedder, LocalEmbedder)
         assert embedder.model_name == (model or LocalEmbedder.DEFAULT_MODEL)
     else:
@@ -168,6 +195,14 @@ def test_resolve_reports_reason_when_local_dependency_missing(monkeypatch):
     settings = resolve_embedding_settings()
     assert settings.kind == "none"
     assert "model2vec" in settings.reason
+    assert build_embedder() is None
+
+
+def test_resolve_reports_reason_when_onnx_dependency_missing(monkeypatch):
+    _configure(monkeypatch, backend="onnx", onnx_available=False)
+    settings = resolve_embedding_settings()
+    assert settings.kind == "none"
+    assert "fastembed" in settings.reason
     assert build_embedder() is None
 
 
@@ -246,6 +281,79 @@ async def test_local_embedder_roundtrip_and_zero_padding():
         assert empty[0] == [0.0] * 1536
     finally:
         await embedder.close()
+
+
+# ─── OnnxEmbedder laziness, shape and stubbed fastembed path ────────────────
+
+
+def test_onnx_embedder_is_lazy_and_reports_dimensions():
+    embedder = OnnxEmbedder()
+    assert embedder._model is None
+    # Known model ids answer without a (potentially network-touching) load.
+    assert embedder.native_dimensions == 384
+    assert embedder.dimensions == 1536
+    assert embedder._model is None
+
+
+async def test_onnx_embedder_roundtrip_with_stubbed_fastembed(monkeypatch):
+    """Pins the fastembed call shape without a model download."""
+    import sys
+    import types
+
+    class _FakeTextEmbedding:
+        embedding_size = 384
+
+        def __init__(self, model_name, **kwargs):
+            self.model_name = model_name
+
+        def embed(self, texts, batch_size=64):
+            for text in texts:
+                vector = [float(len(text))] * 384
+                yield _NpArray(vector)
+
+    class _NpArray(list):
+        def tolist(self):
+            return list(self)
+
+    fake_module = types.ModuleType("fastembed")
+    fake_module.TextEmbedding = _FakeTextEmbedding
+    monkeypatch.setitem(sys.modules, "fastembed", fake_module)
+
+    embedder = OnnxEmbedder(model="stub/model", batch_size=2)
+    assert embedder._model is None
+    try:
+        vectors = await embedder.embed_batch(["abc", "de"])
+        assert len(vectors) == 2
+        assert all(len(vector) == 1536 for vector in vectors)
+        assert vectors[0][:384] == [3.0] * 384
+        assert vectors[1][:384] == [2.0] * 384
+        assert all(value == 0.0 for value in vectors[0][384:])
+    finally:
+        await embedder.close()
+    assert embedder._model is None
+
+
+async def test_onnx_embedder_unknown_model_requires_loaded_width(monkeypatch):
+    """An unknown model id must fail honestly when the stub lacks a width."""
+    import sys
+    import types
+
+    class _FakeTextEmbedding:
+        embedding_size = None
+
+        def __init__(self, model_name, **kwargs):
+            pass
+
+        def embed(self, texts, batch_size=64):
+            return iter(())
+
+    fake_module = types.ModuleType("fastembed")
+    fake_module.TextEmbedding = _FakeTextEmbedding
+    monkeypatch.setitem(sys.modules, "fastembed", fake_module)
+
+    embedder = OnnxEmbedder(model="stub/no-width")
+    with pytest.raises(ValueError, match="embedding width"):
+        _ = embedder.dimensions
 
 
 # ─── Shared cached embedder used by memory retrieval ────────────────────────

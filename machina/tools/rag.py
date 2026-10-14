@@ -19,22 +19,13 @@ logger = logging.getLogger(__name__)
 # Global RAG pipeline instance (lazy-initialized)
 _rag_pipeline: RAGPipeline | None = None
 _rag_pipeline_lock = asyncio.Lock()
-# IDENTITY of the shared instance: (digest of the Cohere API key it was
-# built with, (embedding_backend, embedding_model, embedding_base_url)).
-# Rotation of any component — a different nonempty Cohere key or an
-# embedding backend/model/endpoint change — must rebuild the pipeline;
-# comparing presence alone kept the old client (and its old key) serving all
-# later requests (AH-AUDIT-036).
-_rag_pipeline_identity: tuple[str | None, tuple[str, str, str]] | None = None
-
-
-def _cohere_configured() -> bool:
-    try:
-        from machina.core.config import config as _cfg
-
-        return bool(_cfg.get("cohere_api_key"))
-    except Exception:
-        return False
+# IDENTITY of the shared instance: (reranker selection identity, (embedding
+# backend, model, base_url)). Rotation of any component — a different
+# reranker backend/model/endpoint, a rotated Cohere key, or an embedding
+# backend/model/endpoint change — must rebuild the pipeline; comparing
+# presence alone kept the old client (and its old key) serving all later
+# requests (AH-AUDIT-036).
+_rag_pipeline_identity: tuple[tuple[str, str, str, str], tuple[str, str, str]] | None = None
 
 
 def _cohere_key_digest(key: str | None) -> str | None:
@@ -44,20 +35,47 @@ def _cohere_key_digest(key: str | None) -> str | None:
     return hashlib.sha256(str(key).encode("utf-8")).hexdigest()
 
 
-def _current_cohere_identity() -> str | None:
-    """Identity of the Cohere credential currently configured (read fresh)."""
+def _current_reranker_identity() -> tuple[str, str, str, str]:
+    """Resolved reranker selection identity (fresh read; no model loads)."""
     try:
-        from machina.core.config import config as _cfg
+        from machina.rag.reranker import (
+            reranker_selection_identity,
+            resolve_reranker_selection,
+        )
 
-        return _cohere_key_digest(_cfg.get("cohere_api_key"))
+        return reranker_selection_identity(resolve_reranker_selection())
     except Exception:
-        return None
+        return ("none", "", "", "")
 
 
-def _built_cohere_identity(pipeline: RAGPipeline | None) -> str | None:
-    """Identity of the credential the pipeline's reranker was BUILT with."""
+def _built_reranker_identity(
+    pipeline: RAGPipeline | None,
+) -> tuple[str, str, str, str] | None:
+    """Identity of the reranker the pipeline actually BOUND to.
+
+    None means passthrough (or a foreign implementation): the configured
+    identity stays recorded so a failing build is not retried on every
+    request.
+    """
     reranker = getattr(pipeline, "_reranker", None)
-    return _cohere_key_digest(getattr(reranker, "api_key", None))
+    backend = getattr(reranker, "backend", "")
+    if backend == "local-onnx":
+        return ("local", getattr(reranker, "_model_id", "") or "", "", "")
+    if backend == "local-http":
+        return (
+            "http",
+            getattr(reranker, "_model", "") or "",
+            getattr(reranker, "_url", "") or "",
+            "",
+        )
+    if backend == "cohere":
+        return (
+            "cohere",
+            getattr(reranker, "_model", "") or "",
+            "",
+            _cohere_key_digest(getattr(reranker, "api_key", None)) or "",
+        )
+    return None
 
 
 def _current_embedding_identity() -> tuple[str, str, str]:
@@ -74,41 +92,40 @@ def _current_embedding_identity() -> tuple[str, str, str]:
         return ("auto", "", "")
 
 
-def _current_pipeline_identity() -> tuple[str | None, tuple[str, str, str]]:
+def _current_pipeline_identity() -> tuple[tuple[str, str, str, str], tuple[str, str, str]]:
     """Identity of everything the shared pipeline is configured from (fresh read)."""
-    return (_current_cohere_identity(), _current_embedding_identity())
+    return (_current_reranker_identity(), _current_embedding_identity())
 
 
 def _build_shared_pipeline() -> RAGPipeline:
     """Choose the configured reranker (AH-AUDIT-036).
 
-    Cohere is selected only when a key is present AND its client builds;
-    otherwise the pipeline honestly runs passthrough. Explicit disabled
-    mode (enable_reranking=False) is honored by callers via config.
+    Local ONNX reranking is preferred in ``auto`` (zero-API design rule),
+    then a Cohere key, then a configured HTTP endpoint when explicitly
+    selected; a missing runtime or failing client builds a passthrough with
+    the reason recorded. Explicit disabled mode (``reranker_backend=none``)
+    is honored by the resolver.
     """
-    reranker = None
-    if _cohere_configured():
-        try:
-            from machina.rag.reranker import CohereReranker
+    try:
+        from machina.rag.reranker import build_reranker
 
-            reranker = CohereReranker()
-        except Exception as e:
-            logger.warning("Cohere reranker unavailable, passthrough: %s", e, exc_info=True)
-            reranker = None
-    if reranker is None:
+        reranker = build_reranker()
+    except Exception as e:
+        # build_reranker never raises; this boundary keeps construction
+        # crash-free even if a future backend violates that contract.
+        logger.warning("reranker unavailable, passthrough: %s", e, exc_info=True)
         from machina.rag.reranker import IdentityReranker
 
-        reranker = IdentityReranker()
+        reranker = IdentityReranker(reason=f"build failed: {e}")
     return RAGPipeline(reranker=reranker)
 
 
 async def get_rag_pipeline() -> RAGPipeline:
     """Get or create the global RAG pipeline instance.
 
-    Rebuilds when the pipeline IDENTITY changes: the Cohere credential it
-    was built with (rotation to a different nonempty key, appearance, or
-    disappearance) or the configured embedding backend/model/endpoint.
-    Reuses when unchanged.
+    Rebuilds when the pipeline IDENTITY changes: the reranker selection it
+    was built with (backend/model/endpoint or a rotated Cohere key) or the
+    configured embedding backend/model/endpoint. Reuses when unchanged.
     """
     global _rag_pipeline, _rag_pipeline_identity
     current = _current_pipeline_identity()
@@ -118,12 +135,13 @@ async def get_rag_pipeline() -> RAGPipeline:
             if _rag_pipeline is None or _rag_pipeline_identity != current:
                 _rag_pipeline = _build_shared_pipeline()
                 # Record the identity the reranker actually bound to. When the
-                # build fell back without binding a key, keep the configured
-                # identity so a failing client is not rebuilt on every
-                # request; a real rotation changes `current` and still
-                # forces the rebuild. Embedding identity stays config-derived:
-                # build_embedder degrades to keyword-only without changing it.
-                built = _built_cohere_identity(_rag_pipeline)
+                # build fell back to passthrough without binding a backend,
+                # keep the configured identity so a failing runtime is not
+                # retried on every request; a real config/key change changes
+                # `current` and still forces the rebuild. Embedding identity
+                # stays config-derived: build_embedder degrades to
+                # keyword-only without changing it.
+                built = _built_reranker_identity(_rag_pipeline)
                 _rag_pipeline_identity = (
                     built if built is not None else current[0],
                     current[1],

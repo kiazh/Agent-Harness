@@ -434,8 +434,10 @@ def _capabilities_from_report(report: dict[str, Any]) -> list[Capability]:
     if emb == "keyword-only":
         emb_reason = emb_detail or "no embedding provider configured"
         emb_next = (
-            "set OPENAI_API_KEY, configure MACHINA_EMBEDDING_BASE_URL, or install the "
-            "local runtime (pip install 'Machina[embeddings-local]') for dense retrieval"
+            "set OPENAI_API_KEY, configure MACHINA_EMBEDDING_BASE_URL, or enable a "
+            "local runtime (pip install 'Machina[embeddings-onnx]' or "
+            "'Machina[embeddings-local]' and set MACHINA_EMBEDDING_BACKEND) for "
+            "dense retrieval"
         )
     else:
         emb_reason = f"dense retrieval via {emb_detail}" if emb_detail else ""
@@ -459,25 +461,24 @@ def _capabilities_from_report(report: dict[str, Any]) -> list[Capability]:
         )
     )
     # Reranker identity is chosen lazily per pipeline (AH-AUDIT-036); before
-    # any pipeline exists, key presence is the only honest signal. The exact
-    # identity is reported by services.status_summary once initialized.
-    cohere_configured = False
+    # any pipeline exists, the resolved selection is the only honest signal.
+    # The exact identity is reported by services.status_summary once initialized.
     try:
-        from machina.core.config import config as _cfg
+        from machina.rag.reranker import resolve_reranker_selection
 
-        cohere_configured = bool(_cfg.get("cohere_api_key"))
-    except Exception:
-        cohere_configured = False
-    caps.append(
-        Capability(
-            "reranker",
-            "available",
-            "cohere key configured; selected on first RAG use"
-            if cohere_configured
-            else "passthrough (IdentityReranker); set COHERE_API_KEY to enable Cohere rerank",
-            "",
-        )
-    )
+        reranker_selection = resolve_reranker_selection()
+        if reranker_selection.kind == "none":
+            reranker_reason = (
+                "passthrough; install 'Machina[rerank]' for the local ONNX cross-encoder "
+                "or set COHERE_API_KEY"
+            )
+        else:
+            reranker_reason = (
+                f"{reranker_selection.kind} reranker configured; selected on first RAG use"
+            )
+    except Exception as e:
+        reranker_reason = f"reranker selection unavailable: {e}"
+    caps.append(Capability("reranker", "available", reranker_reason, ""))
     caps.append(Capability("compaction", report.get("compaction_config", "enabled"), "", ""))
     caps.append(Capability("skills", "available", "", ""))
     caps.append(

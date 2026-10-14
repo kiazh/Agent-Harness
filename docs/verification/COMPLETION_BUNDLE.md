@@ -388,3 +388,18 @@ Consolidated tree: **3,531 passed, 0 failed, 1 skipped, 1 xfailed**;
   Note: 4 transient `batch_update_access` failures (absorbed by design, best-effort
   access bumps) occurred among ~2k retrievals; a section re-run showed zero recurrences
   and identical recall numbers — pool noise, no result impact.
+
+- **Quality wave: local reranker + ONNX embeddings + weighted RRF (2026-10-14)**.
+  fastembed 0.9 + onnxruntime 1.31 install on Python 3.14; no torch, no paid
+  API anywhere. Full LoCoMo matrix (proofs + summary.md in
+  docs/verification/proofs/rerank_wave_2026-10-14/): measured best fully-local
+  config = bge-small ONNX embeddings (weighted RRF keyword 1.0 / dense 0.25) +
+  local MiniLM-L12 cross-encoder -> recall@5 0.448 / hit 0.481 / MRR 0.373,
+  beating the TF-IDF baseline (0.440/0.477/0.354) and the old production
+  keyword path (0.425/0.461/0.345). Rerank p50 191 ms at production candidate
+  depth; cold start 7.4 s once. **Defaults stay conservative by measurement**:
+  embeddings `off` and reranker `none` for fresh installs (recall and latency
+  bars not cleared for default-on), both available as opt-in; this machine
+  opts in via .env (onnx + local reranker). Suite 3,697 passed / 0 failed;
+  ruff green. Caveats recorded: huggingface-hub pinned <2.0 by fastembed,
+  single-dataset point estimates, L6/thread/batching latency levers untested.

@@ -48,8 +48,10 @@ class HybridSearch:
                                          ├──▶ RRF Fusion ──▶ Results
               → Keyword retrieval (top 50)  ──┘
 
-    RRF formula: RRF(d) = Σ 1 / (k + rank_i(d))
-    Default k=60 (standard for large corpora).
+    RRF formula: RRF(d) = Σ w_i / (k + rank_i(d))
+    Default k=60 (standard for large corpora); w_i are the per-branch
+    weights (``dense_weight`` / ``keyword_weight``, config-driven) that let
+    an unreliable branch contribute without dominating the fusion.
     """
 
     DEFAULT_TOP_K = 50
@@ -61,10 +63,14 @@ class HybridSearch:
         rrf_k: int = DEFAULT_RRF_K,
         top_k: int = DEFAULT_TOP_K,
         final_top_k: int = DEFAULT_FINAL_TOP_K,
+        dense_weight: float = 1.0,
+        keyword_weight: float = 1.0,
     ) -> None:
         self._rrf_k = rrf_k
         self._top_k = top_k
         self._final_top_k = final_top_k
+        self._dense_weight = dense_weight
+        self._keyword_weight = keyword_weight
 
     async def search(
         self,
@@ -269,12 +275,14 @@ class HybridSearch:
         dense_results: list[tuple[ContextChunk, float]],
         sparse_results: list[tuple[ContextChunk, float]],
     ) -> list[SearchResult]:
-        """Fuse dense and sparse results using Reciprocal Rank Fusion.
-
-        RRF(d) = Σ 1 / (k + rank_i(d))
-        where k=60 (default), rank_i is the 1-based rank in result list i.
-        """
-        return rrf_fuse(dense_results, sparse_results, rrf_k=self._rrf_k)
+        """Fuse dense and sparse results using weighted Reciprocal Rank Fusion."""
+        return rrf_fuse(
+            dense_results,
+            sparse_results,
+            rrf_k=self._rrf_k,
+            dense_weight=self._dense_weight,
+            keyword_weight=self._keyword_weight,
+        )
 
     def _row_to_chunk(self, row: asyncpg.Record) -> ContextChunk:
         """Convert a database row to a ContextChunk.
@@ -311,18 +319,24 @@ def rrf_fuse(
     dense_results: list[tuple[ContextChunk, float]],
     sparse_results: list[tuple[ContextChunk, float]],
     rrf_k: int = 60,
+    *,
+    dense_weight: float = 1.0,
+    keyword_weight: float = 1.0,
 ) -> list[SearchResult]:
-    """Reciprocal Rank Fusion over (chunk, score) result lists.
+    """Weighted Reciprocal Rank Fusion over (chunk, score) result lists.
 
-    RRF(d) = Σ 1 / (k + rank_i(d)) with k=60 by default; rank_i is the
-    1-based rank in result list i. Shared by hybrid search and benchmarks so
-    fusion semantics stay identical wherever rankings are combined.
+    RRF(d) = Σ w_i / (k + rank_i(d)) with k=60 by default; rank_i is the
+    1-based rank in result list i, and w_i is that branch's weight
+    (``dense_weight`` / ``keyword_weight``). Weights let a weak branch add
+    candidate recall without dragging the fused ranking below the strong
+    branch; defaults are neutral (1.0). Shared by hybrid search and
+    benchmarks so fusion semantics stay identical wherever rankings combine.
     """
     chunk_scores: dict[uuid.UUID, SearchResult] = {}
 
     # Process dense results
     for rank, (chunk, score) in enumerate(dense_results, start=1):
-        rrf_score = 1.0 / (rrf_k + rank)
+        rrf_score = dense_weight / (rrf_k + rank)
         if chunk.id in chunk_scores:
             chunk_scores[chunk.id].rrf_score += rrf_score
             chunk_scores[chunk.id].dense_score = score
@@ -336,7 +350,7 @@ def rrf_fuse(
 
     # Process sparse results
     for rank, (chunk, score) in enumerate(sparse_results, start=1):
-        rrf_score = 1.0 / (rrf_k + rank)
+        rrf_score = keyword_weight / (rrf_k + rank)
         if chunk.id in chunk_scores:
             chunk_scores[chunk.id].rrf_score += rrf_score
             chunk_scores[chunk.id].sparse_score = score
