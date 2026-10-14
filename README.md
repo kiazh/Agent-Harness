@@ -104,6 +104,10 @@ machina                     # interactive terminal UI
 machina chat "Explain this project"  # one-shot CLI
 ```
 
+A headless `machina chat` turn exits 0 when it completes, 1 when it fails
+(including a session already busy with another live turn) and 3 when it paused
+for an approval decision.
+
 On Windows, activate with `.venv\Scripts\Activate.ps1` in PowerShell. Shell tools depend on the commands installed on your host.
 
 The [installer](install.sh) can provision a local database through Docker or Homebrew where available. Inspect it before execution; it may install dependencies and create local configuration. For an existing checkout:
@@ -143,7 +147,7 @@ Type `/` for commands. Management commands open pickers or forms; `?` on empty i
 ## What is included
 
 - Streaming agent execution through the CLI, TUI/gateway and HTTP API, with cancellation, session ownership and bounded cleanup.
-- Persistent conversations, context compaction, memory search and document retrieval. Semantic retrieval runs through an OpenAI-compatible endpoint or an optional zero-API local runtime (`pip install 'Machina[embeddings-onnx]'` for in-process ONNX, or `'Machina[embeddings-local]'` for static model2vec; backend `auto` is local-first). LoCoMo measurement keeps dense retrieval opt-in (`embedding_backend=off` default): keyword retrieval is available without either.
+- Persistent conversations, context compaction, memory search and document retrieval. Semantic retrieval runs through an OpenAI-compatible endpoint or an optional zero-API local runtime (`pip install 'Machina[embeddings-onnx]'` for in-process ONNX, or `'Machina[embeddings-local]'` for static model2vec; backend `auto` is local-first). Optional local cross-encoder reranking (`'Machina[rerank]'`, or a llama.cpp `/v1/rerank` server) keeps query and candidate text on-host. Both remain opt-in by measurement: the LoCoMo replay set the defaults to keyword-only (`embedding_backend=off`) and no reranker (`reranker_backend=none`), since the dense and reranked variants missed their default-on bars.
 - File, shell, web, memory and document tools, subject to the permission broker and the selected execution backend.
 - Deterministic directory learning: the read-only `learn_directory` tool builds a bounded, cached repository digest (totals, largest modules, entry points, tests, import hubs) with **no model calls**; repeat calls are served from the content-hash cache.
 - **42 curated ECC skills**, bundled offline and selected by task evidence. Relevant excerpts are disclosed progressively rather than injecting the entire library into each prompt.
@@ -172,10 +176,12 @@ semantic similarity. Persona-aware ranking
 can influence which memories are relevant. Neither retrieval nor storage makes
 a model's unsupported claims true: retrieved material remains evidence to assess.
 
-For current web research, `web_research` searches DuckDuckGo by default (or an
-optional configured SearXNG instance), fetches up to three public pages through
-the guarded HTTP fetcher, and indexes their text with source URLs in the active
-session's RAG context. Later turns can retrieve those pages with
+For current web research, `web_research` searches through the configured
+self-hosted SearXNG instance when `SEARXNG_URL` is set (a loopback address is
+allowed, e.g. `http://localhost:8088`) and falls back to keyless DuckDuckGo
+when it is unset or the instance fails; it fetches up to three public pages
+through the guarded HTTP fetcher and indexes their text with source URLs in the
+active session's RAG context. Later turns can retrieve those pages with
 `search_documents`. The indexed research belongs to that session and agent; it
 does not become global knowledge. Use the returned source URLs when citing
 claims. Repeated URLs reuse the saved session snapshot. `web_search` remains
@@ -269,8 +275,8 @@ Stdio runs on the host and is refused in sandbox mode. HTTP redirects and enviro
 | Cloud models | OpenRouter and direct vendor adapters | Provider/model selection without requiring a single hosted platform |
 | Local models | Ollama | Local inference through an accessible Ollama service |
 | Document embeddings | OpenAI-compatible or local ONNX/model2vec (`embeddings-onnx`/`embeddings-local` extras) | Semantic document/memory retrieval; off by default (LoCoMo: dense below keyword-only at k=5); `auto` is local-first: explicit endpoint, then ONNX, then model2vec, then an API key |
-| Document reranking | Cohere or passthrough fallback | Optional reranking after retrieval |
-| Web search and extraction | DuckDuckGo by default; optional SearXNG; direct HTTP text extraction | Search/fetch tools with network policy checks and session-scoped web research in RAG |
+| Document reranking | Local ONNX cross-encoder (`rerank` extra), Cohere API or llama.cpp `/v1/rerank`; passthrough fallback | Optional reranking after retrieval; off by default (measured below the default-on bars) |
+| Web search and extraction | Self-hosted SearXNG preferred when `SEARXNG_URL` is set; keyless DuckDuckGo fallback; direct HTTP text extraction | Search/fetch tools with network policy checks and session-scoped web research in RAG |
 | MCP | Python MCP SDK **2.3.0**, stdio and Streamable HTTP | Reviewed server connection and native remote tool execution |
 | Skills and roles | Bundled Markdown + pinned manifests | 42 curated ECC skills and 71 ECC specialist roles, loaded selectively |
 | Configuration | YAML + environment + python-dotenv | Non-secret defaults and environment-based overrides |
@@ -282,10 +288,17 @@ Stdio runs on the host and is refused in sandbox mode. HTTP redirects and enviro
 | UI verification | TypeScript compiler, node:test, ESLint | UI types, interactions, rendering and gateway integration |
 | Optional workflow research | LangGraph + PostgreSQL checkpoints | Offline comparison utilities; native chat does not require LangGraph |
 
+By design, everything the harness needs has a local path: only the agent's LLM
+API is expected to be a paid external service, while embeddings, reranking and
+web search have in-process or self-hosted runtimes (extras above; SearXNG
+preferred when configured, keyless DuckDuckGo fallback) and Ollama can serve
+chat on-host.
+
 Dependencies and version constraints are declared in [pyproject.toml](pyproject.toml)
-and [ui/package.json](ui/package.json). Cohere reranking, tracing exporters,
-AWS secrets and workflow trials require their corresponding configuration or
-optional dependencies; they are not services started by ordinary chat.
+and [ui/package.json](ui/package.json). Local reranking (`Machina[rerank]`),
+Cohere reranking, tracing exporters, AWS secrets and workflow trials require
+their corresponding configuration or optional dependencies; they are not
+services started by ordinary chat.
 
 ## Architecture
 
@@ -357,8 +370,8 @@ relevant configuration through the [operations guide](OPERATIONS.md).
 In the TUI, `/keys` manages masked credentials, `/provider` chooses the adapter,
 `/models` chooses the session model and `/default-model` saves a future default.
 `/effort` sets reasoning effort where the selected provider supports it. Direct
-adapters use their vendor's key and endpoint. Cohere's key is for optional
-retrieval reranking, not a chat provider.
+adapters use their vendor's key and endpoint. Cohere's key is for the optional
+Cohere reranker, not a chat provider; local ONNX reranking needs no key.
 
 Example non-secret defaults for an Ollama installation:
 
@@ -388,7 +401,7 @@ Important settings include `DATABASE_URL`, `MACHINA_PROVIDER`, `MACHINA_MODEL`, 
 | `MACHINA_PROVIDER` | Chat provider adapter | `openrouter` |
 | `MACHINA_MODEL` | Model identifier | `openrouter/free`; availability is provider-dependent |
 | `MACHINA_REASONING_EFFORT` | Requested reasoning depth | Blank uses provider default |
-| `MACHINA_EMBEDDING_BACKEND` | Dense-retrieval embedding backend | `off` (keyword-only default; LoCoMo showed static and bge-small dense hybrids below keyword-only at k=5). `auto` = endpoint → local ONNX → local model2vec → OpenAI/OpenRouter keys; `onnx`, `local`, `openai` force a choice |
+| `MACHINA_EMBEDDING_BACKEND` | Dense-retrieval embedding backend | `off` (keyword-only default; LoCoMo showed static and bge-small dense hybrids below keyword-only at k=5). `auto` = endpoint → local ONNX → local model2vec → OpenAI/OpenRouter keys → keyword-only; `onnx`, `local`, `openai` force a choice |
 | `MACHINA_EMBEDDING_MODEL` | Embedding model id for the selected backend | Blank uses the backend default (`text-embedding-3-small`, `BAAI/bge-small-en-v1.5` or `minishlab/potion-base-8M`) |
 | `MACHINA_EMBEDDING_BASE_URL` | Explicit OpenAI-compatible embedding endpoint (llama.cpp, Ollama, LM Studio) | Blank; keyless local servers are supported |
 | `MACHINA_RERANKER_BACKEND` | Cross-encoder reranker backend | `none` (opt-in; local ONNX on LoCoMo keyword-only: Δrecall +0.015, ΔMRR +0.022, p50 ~250 ms). `auto` = local ONNX → Cohere key; `local`, `cohere`, `http` force a choice |
@@ -411,7 +424,7 @@ Important settings include `DATABASE_URL`, `MACHINA_PROVIDER`, `MACHINA_MODEL`, 
 | `MACHINA_PROMPT_CACHE_ENABLED` | Prompt-cache breakpoints pilot (Anthropic / OpenRouter-anthropic only; payloads are byte-identical when off) | `false`; awaiting live-provider validation |
 | `MACHINA_MAX_ITERATIONS` | Deprecated; the agent loop is unbounded (no iteration cap) | Ignored |
 | `MACHINA_TURN_TIMEOUT` | Turn deadline in seconds | `300` |
-| `SEARXNG_URL` | Optional SearXNG search endpoint; blank uses DuckDuckGo | blank |
+| `SEARXNG_URL` | SearXNG search endpoint, preferred when set (loopback self-hosts allowed, e.g. `http://localhost:8088`); blank or failing falls back to DuckDuckGo | blank |
 | `MACHINA_TERMINAL_SANDBOX` | Terminal backend setting | `disabled`; configure `local` or `docker` as appropriate |
 | `MACHINA_ENV_FILE` | Alternate secret/environment file | Default resolver uses the project environment file |
 | `MACHINA_UI_DIR` | TUI source directory override | Useful for backend wheel installs |
@@ -527,6 +540,8 @@ training jobs or require research dependencies.
 | Persona retrieval | Persona-aware memory scoring and emotion topology | Retrieval interpretation, not a model's private emotional state |
 | SoulSpec | Manifest/package handling, adapters and permission merging | Unified runtime identity, human style and owned learning; no certification claim |
 | LoCoMo / identity evaluation | Evaluation harnesses and scenarios | Live accuracy studies need authorized provider calls and budgets |
+| Head-to-head harness | `machina/research/head_to_head.py`: 3-task matrix vs OpenCode on the DeepSeek flash layer | One small-N run; model mapping is best-effort; [report](docs/verification/HEAD_TO_HEAD_2026-10-13.md) |
+| Judged QA pilot | `tools/harness_evals_pilot.py`: harness-evals judged LoCoMo QA over production retrieval | Opt-in pilot; ≈$0.36–0.72 per full 1,986-question pass (cache-miss upper bound); [report](docs/verification/HARNESS_EVALS_PILOT.md) |
 | Native vs. LangGraph | Workflow trial and benchmark modules | Optional comparison; native execution remains the default |
 
 Relevant code lives in `machina/memory/`, `machina/soulspec/` and `machina/research/`. Install
@@ -567,11 +582,18 @@ CI covers Python checks, coverage, optional connector transport tests, the UI an
 
 Reproducible numbers for a checkout are regenerated by the unified benchmark:
 `python -m machina.research.benchmark` (offline incident replay, retrieval quality,
-prompt-prefix composition, architecture census — plus the full suite/UI with
-`--with-suite --with-ui`). The LoCoMo memory section needs the external dataset:
-pass `--locomo-data locomo10.json`; add `--locomo-db` to score the same questions
-through the production archive search and cross-session recall. Without the
-dataset the section reports SKIPPED rather than fabricated results.
+LoCoMo memory evaluation, prompt-prefix composition, architecture headroom — plus
+the full suite/UI with `--with-suite --with-ui`). The LoCoMo memory section needs
+the external dataset: pass `--locomo-data locomo10.json`; add `--locomo-db` to
+score the same questions through the production archive search and cross-session
+recall, and `--locomo-rerank` to replay archive search with the configured
+reranker and report the off/on delta. Without the dataset the section reports
+SKIPPED rather than fabricated results. The 2026-10-14 measurement wave set the
+current defaults from that replay: keyword-only stays the default, and the best
+fully-local configuration (bge-small ONNX hybrid, dense weight 0.25, local ONNX
+reranker) reached recall@5 0.448 / MRR 0.373 against the TF-IDF baseline's
+0.440 / 0.354 — still opt-in because dense retrieval and reranking missed their
+isolated default-on bars ([matrix](docs/verification/proofs/rerank_wave_2026-10-14/summary.md)).
 
 The backend CI job excludes `ui_integration` and `workflow_trial` tests. The UI job
 owns typechecking, lint, all UI tests and real gateway restart coverage. Optional
@@ -583,16 +605,20 @@ To run those groups locally, use `python -m pytest -m ui_integration` or
 ### Recorded verification
 
 The 2026-10-13 remediation program (incident fixes, security hardening, delegation
-correctness, retrieval faithfulness, deterministic-first routing) recorded
-**3,479 backend tests passed, 0 failed, 1 skipped, 1 xfailed** (exact command in the
+correctness, retrieval faithfulness, deterministic-first routing) closed out at
+**3,576 backend tests passed, 0 failed, 1 skipped, 1 xfailed** (exact commands in the
 [completion bundle](docs/verification/COMPLETION_BUNDLE.md)), with standalone UI
-checks at **337 passed, 0 failed, 6 skipped** including the real-gateway integration
-group. Fixture-replay metrics, before/after token measurements and the full
-artifact/commit record are in the completion bundle; remaining uncertainties and
-operator-level deferrals are listed there as well.
+checks recorded at **337 passed, 0 failed, 6 skipped**. The 2026-10-14 follow-up
+waves (local ONNX/model2vec retrieval stack, adversarial re-verification) end at
+**3,734 backend tests passed, 0 failed** with a final j1–j8 gate of
+**8 PASS / 0 FAIL / 0 SKIP**. Fixture-replay metrics, before/after token
+measurements and the full artifact/commit record are in the completion bundle;
+remaining uncertainties and operator-level deferrals are listed there as well.
 
-The earlier 2026-10-12 candidate review (HEAD `8c96fe3`) recorded **2,478 backend
-tests passed, 5 skipped**, with **82.12% coverage**, and **326 UI tests passed**.
+The earlier 2026-10-12 candidate review (starting checkout `54d79d5`) recorded
+**2,237 backend tests passed, 5 skipped, 0 failed** with **82.26% coverage**, and a
+standalone UI check of **290 passed, 5 environment-gated skips** (the real-gateway
+wrapper inside that run covered all 295 UI tests).
 These are dated results for their respective checkouts — re-run the commands above
 before trusting them for a later commit or any other platform. Commands, fixture
 scope and pending hosted CI/Docker gates are in
@@ -606,15 +632,20 @@ end state on real components (PostgreSQL rows, indexed RAG chunks, tool and
 API outcomes) and writes its proof to `docs/verification/proofs/`. Run:
 
 ```bash
-python tools/e2e_gate.py                  # j1..j5; j4 skips when Firecrawl is down
+python tools/e2e_gate.py                  # j1..j8; j4 skips when Firecrawl is down
 python tools/e2e_gate.py --journeys j1,j5 # cheap real subset
 python tools/e2e_gate.py --json /tmp/e2e.json
 ```
 
-Journeys j1–j5 cover memory consolidation roundtrip, live web research and
-web crawl into session RAG, the self-hosted Firecrawl MCP path, and a CLI
-smoke check. Exit code is non-zero on any failure; every run writes
-`<UTC date>-e2e-gate.json`/`.md` under `docs/verification/proofs/`. Policy,
+Journeys j1–j8 cover memory consolidation roundtrip, live web research and
+web crawl into session RAG, the self-hosted Firecrawl MCP path, a CLI
+smoke check, compaction triggers across the SSE, gateway and CLI paths,
+cross-transport turn parity, and the provider/usage facade. Exit code is 0
+only when no journey failed (skips allowed), 1 on any failure and 2 on
+usage/environment errors; every run writes
+`<UTC date>-e2e-gate.json`/`.md` under `docs/verification/proofs/`, and the
+latest recorded run (2026-10-14) passed all eight journeys (8 PASS / 0 FAIL /
+0 SKIP; [proof](docs/verification/proofs/2026-10-14-e2e-gate.md)). Policy,
 proof rules and the three adversarial pre-merge personas are in the
 [E2E protocol](docs/verification/E2E_PROTOCOL.md).
 
@@ -645,7 +676,7 @@ Machina/
 ├── ui/test/              # node:test interaction and integration coverage
 ├── skills/               # bundled playbooks and curated ECC skill resources
 ├── tests/                # Python regressions, integration tests and SDK fixtures
-├── tools/                # installer helpers, vendoring and artifact verification
+├── tools/                # installer helpers, E2E gate, pilot runners, vendoring and artifact verification
 ├── docs/                 # feature guides, plans, evidence and handoff
 ├── communications/       # versioned UI/gateway protocol
 ├── install.sh            # source installer
@@ -679,6 +710,7 @@ Machina/
 | MCP asks for approval in full mode | Untrusted remote calls still need exact consent; trusted reads require an explicit verified allowlist |
 | Persona appears unchanged in a conversation | Saved defaults apply through the profile/context; inspect `/persona` and `/growth`, and distinguish requested persona from trial revisions |
 | Semantic retrieval is absent | Install a local runtime (`pip install 'Machina[embeddings-onnx]'` or `'Machina[embeddings-local]'`) and enable it (`MACHINA_EMBEDDING_BACKEND=onnx` or `local`), configure `MACHINA_EMBEDDING_BASE_URL`, or set `OPENAI_API_KEY`; lexical retrieval remains available |
+| Reranking has no effect | It is off by default (`reranker_backend=none`): enable `MACHINA_RERANKER_BACKEND=local` (extra `'Machina[rerank]'`), `cohere` (Cohere key) or `http` (llama.cpp `/v1/rerank` URL) |
 | Animation is distracting | Set `MACHINA_UI_REDUCED_MOTION=1` |
 | Database/UI tests skip | Configure the dedicated test DSN and real gateway prerequisites; skipped tests are not passing evidence |
 
@@ -691,6 +723,7 @@ credentials or private tool output into issue reports.
 - [Operations, migrations, backup and rollback](OPERATIONS.md)
 - [Security model and limitations](SECURITY.md)
 - [Completion bundle — 2026-10-13 remediation record](docs/verification/COMPLETION_BUNDLE.md)
+- [Head-to-head harness comparison](docs/verification/HEAD_TO_HEAD_2026-10-13.md) and [harness-evals judged-QA pilot](docs/verification/HARNESS_EVALS_PILOT.md)
 - [Release notes](CHANGELOG.md) and [release checklist](docs/verification/RELEASE_READINESS.md)
 - [Feature implementation ledger](FEATURE_LEDGER.md)
 - [Historical plans and snapshots](docs/archive/) (superseded; live docs above take precedence)
