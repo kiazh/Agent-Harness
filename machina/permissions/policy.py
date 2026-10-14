@@ -76,7 +76,7 @@ def _digest_of(*parts: str) -> str:
     must pass every material authorization field; see normalize_request.
     """
     h = hashlib.sha256()
-    h.update(b"machina-action-digest-v2\x00")
+    h.update(f"machina-action-digest-{DIGEST_VERSION}".encode() + b"\x00")
     for p in parts:
         encoded = str(p).encode("utf-8", errors="replace")
         h.update(str(len(encoded)).encode("ascii"))
@@ -443,10 +443,6 @@ def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
     ):
         return Decision("pending", "write/exec or out-of-scope access requires approval", req)
     return Decision("pending", "action requires approval", req)
-
-
-# Mutating operations always bind the exact action digest.
-MUTATING_OPS = frozenset({"file.write", "process.exec", "network.fetch"})
 
 
 def _grant_usable(grant: dict, req: ActionRequest) -> bool:

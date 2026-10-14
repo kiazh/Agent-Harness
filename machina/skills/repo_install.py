@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-ALLOWED_HOSTS = frozenset({"github.com"})
 CLONE_TIMEOUT = 120
 MAX_CLONE_BYTES = 100 * 1024 * 1024
 MAX_FILES = 2000

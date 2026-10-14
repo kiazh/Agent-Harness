@@ -11,32 +11,6 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
-# ── reason codes (section 12.1) ──────────────────────────────────────────
-REASON_CODES = frozenset(
-    {
-        "oauth_not_configured",
-        "oauth_discovery_failed",
-        "oauth_unsafe_destination",
-        "oauth_issuer_mismatch",
-        "oauth_resource_mismatch",
-        "oauth_pkce_unsupported",
-        "oauth_client_configuration_required",
-        "oauth_registration_failed",
-        "oauth_scope_not_allowed",
-        "oauth_callback_invalid",
-        "oauth_cancelled",
-        "oauth_expired",
-        "oauth_exchange_failed",
-        "oauth_refresh_failed",
-        "oauth_reauthorization_required",
-        "oauth_storage_unavailable",
-        "oauth_config_changed",
-        "oauth_operation_not_found",
-        "oauth_local_browser_unavailable",
-        "oauth_redirect_unsupported",
-    }
-)
-
 # ── named bounds (section 12.2) ──────────────────────────────────────────
 OAUTH_PREVIEW_DISCOVERY_SECONDS = 20.0
 OAUTH_METADATA_FETCH_SECONDS = 3.0

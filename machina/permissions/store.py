@@ -25,7 +25,6 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 TERMINAL = ("completed", "failed", "cancelled")
-GRANTABLE_OUTCOMES = ("approved",)
 
 
 class _MemoryStore:

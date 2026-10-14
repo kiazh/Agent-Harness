@@ -409,8 +409,7 @@ def redact_secrets(text: str) -> RedactionResult:
 # whole. Bounded by construction: every partial pattern has an explicit max
 # length except PEM blocks, which are capped separately (line-frontier
 # fallback). Formats and bounds are documented below, not "perfect".
-STREAM_TAIL_CHARS = 512  # kept for backwards compat; see MAX_PARTIAL_HOLD
-MAX_PARTIAL_HOLD = 1024
+STREAM_TAIL_CHARS = 512  # stream-tail hold; per-format bounds documented below
 MAX_BUFFERED_PEM = 32 * 1024
 
 # End-anchored partial patterns: each matches a PREFIX of a valid secret that
@@ -681,7 +680,6 @@ class StreamingSecretRedactor:
     """
 
     def __init__(self, tail: int = STREAM_TAIL_CHARS) -> None:
-        self._max_hold = max(64, tail)
         self._buf = ""
 
     def feed(self, delta: str) -> str:
