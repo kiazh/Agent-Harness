@@ -1,7 +1,7 @@
 # Session 5f625662 replay fixture (Stream D)
 
 Incident report: `docs/verification/OPENCODE_SESSION_5F625662_ISSUES.md`.
-Source export: `session-5f625662.md` (12,176 lines / 723,696 bytes).
+Source export: `docs/verification/fixtures/session-5f625662.md` (12,176 lines / 723,696 bytes).
 
 ## What was extracted (bounded: each file < 2KB, total < 10KB)
 

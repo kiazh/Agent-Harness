@@ -97,7 +97,7 @@ Enforcement audit: all 7 execution paths guarded (P6/P7 re-tested against the re
 - Hatchling `force-include` bypasses `[tool.hatch.build] exclude` (verified empirically), so runtime
   telemetry counters can ship in wheels built from a used checkout; `.dockerignore` prunes them from
   image contexts and pyproject documents the limitation. Counters only, no secrets.
-- 2 user stashes + `session-5f625662.md` (tracked, scrubbed) left as-authored by operator.
+- 2 user stashes + `session-5f625662.md` (tracked, scrubbed; relocated to docs/verification/fixtures/ 2026-10-14) left as-authored by operator.
 
 ## 8. Final adversarial pass (post-program)
 

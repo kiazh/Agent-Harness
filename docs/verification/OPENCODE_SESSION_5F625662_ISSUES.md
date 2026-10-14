@@ -19,7 +19,7 @@ productive work while adding progress-aware recovery and observable spend contro
 
 ## Evidence and scope
 
-- Transcript: `session-5f625662.md`, 12,176 lines / 723,696 bytes.
+- Transcript: `docs/verification/fixtures/session-5f625662.md`, 12,176 lines / 723,696 bytes.
 - Session: `5f625662-8480-4688-9580-b919d5f3bbcb`; agent `harness`.
 - Export timestamps: created 12:28:17, last activity 12:44:46, roughly 16m29s.
 - Screenshot supplied by the user shows `deepseek-chat / main / full / ready / 2,119,552 tokens`, repeated recall calls, stopping, and successful export.
