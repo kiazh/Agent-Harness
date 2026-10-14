@@ -127,6 +127,45 @@ def test_streaming_redactor_bearer_split():
         assert "abcdef1234567890XYZ" not in (a + b)
 
 
+def test_streaming_redactor_oversized_open_pem_never_emits_body():
+    """Audit fix: an open PEM block past MAX_BUFFERED_PEM must drop its body
+    behind the standard marker instead of emitting raw body lines."""
+    from machina.memory.redaction import MAX_BUFFERED_PEM, StreamingSecretRedactor
+
+    markers = [f"BODYLINE{i:04d}" + "A" * (64 - len(f"BODYLINE{i:04d}")) for i in range(600)]
+    body = "\n".join(markers)
+    complete = f"-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----\n"
+    assert len(complete) > MAX_BUFFERED_PEM
+
+    redactor = StreamingSecretRedactor()
+    parts = [redactor.feed(complete[i : i + 1024]) for i in range(0, len(complete), 1024)]
+    parts.append(redactor.flush())
+    output = "".join(parts)
+    assert "BODYLINE" not in output, output[:200]
+    assert output.count("[REDACTED_PRIVATE_KEY]") == 1
+
+    # Unterminated variant (no END ever): flush must still fail closed.
+    unfinished = f"-----BEGIN PRIVATE KEY-----\n{body}\n"
+    redactor = StreamingSecretRedactor()
+    parts = [redactor.feed(unfinished[i : i + 1024]) for i in range(0, len(unfinished), 1024)]
+    parts.append(redactor.flush())
+    output = "".join(parts)
+    assert "BODYLINE" not in output, output[:200]
+    assert "[REDACTED_PRIVATE_KEY]" in output
+
+
+def test_streaming_redactor_unfinished_small_pem_flushes_to_marker():
+    """The whole-string PEM pattern needs the END marker; an unterminated
+    block under the cap must fail closed at flush rather than leak its body."""
+    from machina.memory.redaction import StreamingSecretRedactor
+
+    redactor = StreamingSecretRedactor()
+    output = redactor.feed("-----BEGIN RSA PRIVATE KEY-----\nMIIBnozMSECRETBODY")
+    output += redactor.flush()
+    assert "MIIBnozMSECRETBODY" not in output
+    assert "[REDACTED_PRIVATE_KEY]" in output
+
+
 # ─── AH-002: RPC/REST redaction parity ─────────────────────────────────────
 
 

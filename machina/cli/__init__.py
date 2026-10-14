@@ -174,7 +174,9 @@ def chat(
             try:
                 from machina.core.agent_factory import build_agent_for_session
 
-                agent = await build_agent_for_session(session)
+                agent = await build_agent_for_session(
+                    session, provider_override=provider, model_override=model
+                )
                 llm = agent.provider
                 _provider_name = provider or session.provider or config.get("provider")
             except ValueError as e:

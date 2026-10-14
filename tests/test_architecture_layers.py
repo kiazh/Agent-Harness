@@ -188,11 +188,16 @@ def test_deferred_import_count_ratchet():
 #     Anthropic, OpenRouter passthrough only for Anthropic-routed models,
 #     direct/ollama no-ops, and OFF-path wire-byte pins; transport logic
 #     unchanged.
+#   core/provider.py 2554 -> 2576 (audit-remediation wave): SSE terminal-state
+#     validation — saw_terminal tracking ([DONE] or non-null finish_reason)
+#     across the DirectProvider loop and both OpenRouter parse sites; a stream
+#     ending without terminal state now raises ProviderError before any done
+#     event. Unreviewed growth beyond this is rejected.
 @pytest.mark.parametrize(
     "relative_path,ceiling",
     [
         ("core/agent.py", 2057),
-        ("core/provider.py", 2554),
+        ("core/provider.py", 2576),
         ("core/compression.py", 999),
     ],
 )

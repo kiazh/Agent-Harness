@@ -402,6 +402,17 @@ def _stream_error_message(chunk: dict[str, Any], model: str) -> str:
     return f"provider stream error for {model}: {detail}"
 
 
+def _truncated_stream_error(provider: str, model: str) -> ProviderError:
+    """Clean EOF without ``[DONE]`` or a ``finish_reason`` frame.
+
+    A clean EOF is not a completion: reporting ``done`` for a truncated
+    stream would persist partial content as a successful turn.
+    """
+    return ProviderError(
+        f"{provider} stream ended without a terminal frame ([DONE] or finish_reason) for {model}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Audit logging
 # ---------------------------------------------------------------------------
@@ -1268,6 +1279,7 @@ class OpenRouterProvider(LLMProvider):
         tool_calls_by_index: dict[int, dict[str, str]] = {}
         stream_usage: dict[str, int] = {}
         resolved_model = model
+        saw_terminal = False
 
         for cand in candidates:
             payload["model"] = cand
@@ -1275,6 +1287,7 @@ class OpenRouterProvider(LLMProvider):
             content_parts = []
             tool_calls_by_index = {}
             stream_usage = {}
+            saw_terminal = False
             try:
                 async with _stream_with_retry(self.client, "/chat/completions", payload) as resp:
                     resp.raise_for_status()
@@ -1283,6 +1296,7 @@ class OpenRouterProvider(LLMProvider):
                             continue
                         data = line[6:]
                         if data == "[DONE]":
+                            saw_terminal = True
                             break
                         try:
                             chunk = json.loads(data)
@@ -1301,6 +1315,8 @@ class OpenRouterProvider(LLMProvider):
                         choices = chunk.get("choices", [])
                         if not choices:
                             continue
+                        if choices[0].get("finish_reason"):
+                            saw_terminal = True
                         delta = choices[0].get("delta", {})
 
                         # Text content
@@ -1328,6 +1344,8 @@ class OpenRouterProvider(LLMProvider):
                                     # before concatenating the streamed fragments.
                                     frag = json.dumps(frag)
                                 tc["arguments"] += frag
+                    if not saw_terminal:
+                        raise _truncated_stream_error("openrouter", resolved_model)
                 # Success — stop trying fallbacks.
                 break
             except Exception as e:
@@ -1375,6 +1393,7 @@ class OpenRouterProvider(LLMProvider):
                     content_parts = []
                     tool_calls_by_index = {}
                     stream_usage = {}
+                    saw_terminal = False
                     try:
                         async with _stream_with_retry(
                             self.client, "/chat/completions", payload
@@ -1385,6 +1404,7 @@ class OpenRouterProvider(LLMProvider):
                                     continue
                                 d2 = line[6:]
                                 if d2 == "[DONE]":
+                                    saw_terminal = True
                                     break
                                 try:
                                     ch2 = json.loads(d2)
@@ -1398,11 +1418,15 @@ class OpenRouterProvider(LLMProvider):
                                 chs = ch2.get("choices", [])
                                 if not chs:
                                     continue
+                                if chs[0].get("finish_reason"):
+                                    saw_terminal = True
                                 dl2 = chs[0].get("delta", {})
                                 c2 = dl2.get("content", "")
                                 if c2:
                                     content_parts.append(c2)
                                     yield StreamEvent(type="text", content=c2)
+                            if not saw_terminal:
+                                raise _truncated_stream_error("openrouter", resolved_model)
                         break
                     except Exception as e2:
                         e = e2
@@ -1998,6 +2022,7 @@ class DirectProvider(LLMProvider):
         tool_calls_by_index: dict[int, dict[str, str]] = {}
         stream_usage: dict[str, int] = {}
         resolved_model = model
+        saw_terminal = False
         try:
             async with _stream_with_retry(self.client, "/chat/completions", payload) as resp:
                 resp.raise_for_status()
@@ -2006,6 +2031,7 @@ class DirectProvider(LLMProvider):
                         continue
                     data = line[6:]
                     if data == "[DONE]":
+                        saw_terminal = True
                         break
                     try:
                         chunk = json.loads(data)
@@ -2024,6 +2050,8 @@ class DirectProvider(LLMProvider):
                     choices = chunk.get("choices", [])
                     if not choices:
                         continue
+                    if choices[0].get("finish_reason"):
+                        saw_terminal = True
                     delta = choices[0].get("delta", {})
                     content = delta.get("content", "")
                     if content:
@@ -2044,6 +2072,8 @@ class DirectProvider(LLMProvider):
                             if isinstance(frag, dict):
                                 frag = json.dumps(frag)
                             tc["arguments"] += frag
+            if not saw_terminal:
+                raise _truncated_stream_error(self.spec.name, resolved_model)
         except Exception as e:
             if reservation_id is not None:
                 await usage_store.finish(reservation_id, failed=True)

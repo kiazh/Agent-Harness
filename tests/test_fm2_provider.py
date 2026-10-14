@@ -484,6 +484,55 @@ async def test_stream_keepalives_and_usage_chunks_stay_tolerated(make):
     assert events[-1].response.content == "hi"
 
 
+# ─── W5b: clean EOF without a terminal frame is a truncation, not `done` ───
+
+
+def _partial_sse(model: str) -> httpx.Response:
+    chunk = {
+        "model": model,
+        "choices": [{"delta": {"content": "partial text"}, "finish_reason": None}],
+    }
+    return httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\n")
+
+
+async def test_direct_stream_partial_frame_clean_eof_raises(make):
+    provider = make.direct("groq", lambda request: _partial_sse("llama-3.3-70b-versatile"))
+    with pytest.raises(ProviderError, match="terminal"):
+        _ = [event async for event in provider.stream_complete(MESSAGES)]
+
+
+async def test_openrouter_stream_partial_frame_clean_eof_raises(make):
+    provider = make.openrouter(lambda request: _partial_sse("vendor/paid"))
+    with pytest.raises(ProviderError, match="terminal"):
+        _ = [event async for event in provider.stream_complete(MESSAGES)]
+
+
+async def test_direct_stream_finish_reason_without_done_completes(make):
+    chunk = {
+        "model": "llama-3.3-70b-versatile",
+        "choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}],
+    }
+    provider = make.direct(
+        "groq", lambda request: httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\n")
+    )
+    events = [event async for event in provider.stream_complete(MESSAGES)]
+    assert events[-1].type == "done"
+    assert events[-1].response.content == "ok"
+
+
+async def test_openrouter_stream_finish_reason_without_done_completes(make):
+    chunk = {
+        "model": "vendor/paid",
+        "choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}],
+    }
+    provider = make.openrouter(
+        lambda request: httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\n")
+    )
+    events = [event async for event in provider.stream_complete(MESSAGES)]
+    assert events[-1].type == "done"
+    assert events[-1].response.content == "ok"
+
+
 # ─── W6: Ollama complete guards a missing message + reservation ─────────────
 
 

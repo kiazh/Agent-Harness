@@ -206,6 +206,44 @@ def test_chat_drains_background_tasks_before_db_close(monkeypatch: pytest.Monkey
     )
 
 
+def test_chat_headless_passes_provider_model_overrides_to_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audit fix: `chat --provider X --model Y` must reach the shared factory
+    instead of silently running the configured default model."""
+    import machina.cli as cli
+
+    calls: dict[str, object] = {}
+
+    class _FakeAgent:
+        provider = SimpleNamespace(model="override-model")
+
+        async def run_stream(self, session_id, message, verbose=False):
+            return
+            yield  # pragma: no cover — makes this an async generator
+
+    async def fake_build(session, **kwargs):
+        calls["kwargs"] = kwargs
+        return _FakeAgent()
+
+    fake_session = SimpleNamespace(id=uuid.uuid4(), provider=None, model=None, agent_id="harness")
+
+    monkeypatch.setattr(cli.db, "connect", AsyncMock())
+    monkeypatch.setattr(cli.db, "initialize_runtime_schema", AsyncMock())
+    monkeypatch.setattr(cli.db, "close", AsyncMock())
+    monkeypatch.setattr(cli.session_manager, "create", AsyncMock(return_value=fake_session))
+    monkeypatch.setattr("machina.core.agent_factory.build_agent_for_session", fake_build)
+    monkeypatch.setattr("machina.core.agent_factory.close_agent_provider", AsyncMock())
+    monkeypatch.setattr(cli, "drain_background_tasks", AsyncMock(return_value=0))
+
+    result = runner.invoke(
+        cli.app, ["chat", "--provider", "ollama", "--model", "my-model", "hello"]
+    )
+    assert result.exit_code == 0, result.output
+    assert calls["kwargs"] == {"provider_override": "ollama", "model_override": "my-model"}
+    assert "override-model (ollama)" in result.output
+
+
 def test_delete_session_title_markup_renders_literally(monkeypatch: pytest.MonkeyPatch) -> None:
     import machina.cli as cli
 

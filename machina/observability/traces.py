@@ -460,14 +460,21 @@ def _child_span(kind: str, name: str, attributes: dict[str, Any]) -> Iterator[Sp
     if not _enabled:
         yield None
         return
+    turn: TurnTrace | None = None
+    span: Span | None = None
     try:
         tid = _active_turn.get()
         turn = _TURNS.get(tid) if tid else None
-        if turn is None or turn.ended:
-            yield None
-            return
-        span = _append_span(turn, kind=kind, name=name, attributes=attributes)
+        if turn is not None and not turn.ended:
+            span = _append_span(turn, kind=kind, name=name, attributes=attributes)
     except Exception:
+        turn = None
+        span = None
+    if turn is None or span is None:
+        # No-turn path yields OUTSIDE the guarded region: a body exception
+        # thrown back into the generator must propagate as itself instead of
+        # being caught here and answered with a second yield (which surfaces
+        # as "RuntimeError: generator didn't stop after throw()").
         yield None
         return
     token = _span_stack.set(_span_stack.get() + ((turn.turn_id, span.id),))

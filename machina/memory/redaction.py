@@ -407,10 +407,19 @@ def redact_secrets(text: str) -> RedactionResult:
 # redacted; complete matches inside it are removed). Everything from the
 # frontier on is withheld until more deltas arrive or flush() redacts it
 # whole. Bounded by construction: every partial pattern has an explicit max
-# length except PEM blocks, which are capped separately (line-frontier
-# fallback). Formats and bounds are documented below, not "perfect".
+# length except PEM blocks. An open PEM block is withheld whole; if it grows
+# past MAX_BUFFERED_PEM the stream redactor replaces its body with the
+# standard marker and discards it — a frontier *inside* an unterminated block
+# would leak raw body lines, since the whole-string PEM pattern needs the END
+# marker to match. Formats and bounds are documented below, not "perfect".
 STREAM_TAIL_CHARS = 512  # stream-tail hold; per-format bounds documented below
 MAX_BUFFERED_PEM = 32 * 1024
+#: Marker replacing an oversized or unterminated open PEM body during
+#: streaming; same text as the ``private_key_pem`` replacement pattern.
+_PEM_REDACTED_MARKER = "[REDACTED_PRIVATE_KEY]"
+#: Tail kept while discarding an oversized open PEM body — wide enough to
+#: still recognize a split END marker across feed boundaries.
+_PEM_RESUME_WINDOW = STREAM_TAIL_CHARS
 
 # End-anchored partial patterns: each matches a PREFIX of a valid secret that
 # reaches the buffer end. Leftmost start across all patterns = frontier.
@@ -618,24 +627,24 @@ def _stream_frontier(buf: str) -> int:
                 break
         if not moved:
             break
-    # PEM: withhold an open block until its END (capped; line fallback).
+    # PEM: withhold an open block until its END. The frontier never cuts
+    # inside the block: a partial (open) block is not matchable by the
+    # whole-string PEM pattern, so emitting any prefix of it would leak raw
+    # body lines. Oversized blocks are handled by StreamingSecretRedactor
+    # (marker + discard), not by moving this frontier.
     # Marker detection is substring-based ("BEGIN" present with no END after
     # the last one), so splits inside the dashes or the marker words still
     # withhold. The hold starts at the marker including preceding dashes.
     # Trailing dash runs / bare BEGIN/END words are always withheld for the
     # same reason; a cut inside an already-COMPLETE block is repaired below.
-    pem_open = False
     for b in _PEM_BEGIN_RE.finditer(buf):
-        tail = buf[b.start() :]
-        if not _PEM_END_RE.search(tail):
-            pem_open = True
+        if not _PEM_END_RE.search(buf, b.end()):
             if b.start() < frontier:
                 frontier = b.start()
             break
-    if not pem_open:
+    else:
         frag = buf.rfind("BEGIN")
         if frag != -1 and not _PEM_END_RE.search(buf, frag):
-            pem_open = True
             s = frag
             while s > 0 and buf[s - 1] == "-":
                 s -= 1
@@ -647,13 +656,6 @@ def _stream_frontier(buf: str) -> int:
             frontier = m.start()
             if frontier == 0:
                 return 0
-    if pem_open and frontier < len(buf) - MAX_BUFFERED_PEM:
-        # Pathological open block: emit redacted complete lines only. A PEM
-        # body line is base64; full lines are removed by the bare-secret
-        # pattern, so a line frontier cannot leak a complete line.
-        cut = buf.rfind("\n", 0, len(buf) - MAX_BUFFERED_PEM)
-        if cut > frontier:
-            frontier = cut + 1
     # Complete-block repair: a hold that lands inside an already-COMPLETE
     # PEM block would break its END marker and desynchronize output. Extend
     # to the block end so it emits whole (and redacted).
@@ -663,6 +665,19 @@ def _stream_frontier(buf: str) -> int:
             frontier = e.end()
             break
     return frontier
+
+
+def _open_pem_block_start(buf: str) -> int | None:
+    """Start index of an unterminated PRIVATE KEY block in *buf*, else None.
+
+    Only complete BEGIN markers count: the whole-string PEM pattern (and the
+    body it protects) starts at a complete marker, so a bare fragment has no
+    body to guard.
+    """
+    for match in _PEM_BEGIN_RE.finditer(buf):
+        if not _PEM_END_RE.search(buf, match.end()):
+            return match.start()
+    return None
 
 
 def redact_value(value: object) -> object:
@@ -675,18 +690,34 @@ class StreamingSecretRedactor:
 
     Feed deltas; only the safe frontier (no partial secret crosses it) is
     emitted, fully redacted. The withheld suffix is retained until further
-    deltas resolve it or :meth:`flush` redacts it whole. Byte-bounded
-    buffering; see policy table above for per-format bounds.
+    deltas resolve it or :meth:`flush` redacts it whole. An unterminated PEM
+    block is withheld whole; once it exceeds ``MAX_BUFFERED_PEM`` its body is
+    replaced by ``[REDACTED_PRIVATE_KEY]`` and discarded — raw body prefixes
+    are never emitted, and :meth:`flush` fails closed for any block whose END
+    never arrives. Byte-bounded buffering; see policy table above for
+    per-format bounds.
     """
 
     def __init__(self, tail: int = STREAM_TAIL_CHARS) -> None:
         self._buf = ""
+        #: Explicit open-PEM state: True from the moment an unterminated block
+        #: exceeds MAX_BUFFERED_PEM until its END marker is consumed.
+        self._pem_open = False
+        #: Withheld text before the open block (restored after its END).
+        self._pem_prefix = ""
 
     def feed(self, delta: str) -> str:
         """Add *delta*, return newly-safe redacted output (may be empty)."""
         if not delta:
             return ""
         self._buf += delta
+
+        if self._pem_open and not self._consume_open_pem_end():
+            # Still inside the oversized block: its body was already replaced
+            # by the marker, so nothing else may be emitted; only the bounded
+            # END-detection tail is kept.
+            return ""
+
         frontier = _stream_frontier(self._buf)
         from machina.security.secrets import known_secret_values
 
@@ -700,13 +731,54 @@ class StreamingSecretRedactor:
             start = self._buf.rfind(value)
             if start >= 0 and start < frontier < start + len(value):
                 frontier = start
-        if frontier <= 0:
-            return ""
-        safe, self._buf = self._buf[:frontier], self._buf[frontier:]
-        return redact_secrets(safe).text
+        emitted = ""
+        if frontier > 0:
+            safe, self._buf = self._buf[:frontier], self._buf[frontier:]
+            emitted = redact_secrets(safe).text
+
+        start = _open_pem_block_start(self._buf)
+        if start is not None and len(self._buf) - start > MAX_BUFFERED_PEM:
+            # Pathological open block: never buffer (or emit) its body. The
+            # marker stands in for the whole block and is emitted exactly
+            # once; keep only a marker-sized tail so a split END can still be
+            # recognized and consumed across feeds.
+            self._pem_open = True
+            self._pem_prefix = self._buf[:start]
+            self._buf = self._buf[max(start, len(self._buf) - _PEM_RESUME_WINDOW) :]
+            emitted += _PEM_REDACTED_MARKER
+        return emitted
+
+    def _consume_open_pem_end(self) -> bool:
+        """Consume the END of an oversized open block; True when found.
+
+        The body was already replaced by the redaction marker, so everything
+        buffered up to END is discarded, never emitted.
+        """
+        end = _PEM_END_RE.search(self._buf)
+        if end is None:
+            if len(self._buf) > _PEM_RESUME_WINDOW:
+                self._buf = self._buf[-_PEM_RESUME_WINDOW:]
+            return False
+        self._buf = self._pem_prefix + self._buf[end.end() :]
+        self._pem_prefix = ""
+        self._pem_open = False
+        return True
 
     def flush(self) -> str:
         """Redact and return any buffered remainder."""
+        if self._pem_open:
+            # Oversized unterminated block: the marker was already emitted;
+            # drop the remaining body tail rather than emitting any of it.
+            self._buf = ""
+            self._pem_prefix = ""
+            self._pem_open = False
+            return ""
+        if _open_pem_block_start(self._buf) is not None:
+            # Unterminated block under the cap: the whole-string PEM pattern
+            # needs the END marker to match, so fail closed instead of
+            # leaking the buffered body.
+            self._buf = ""
+            return _PEM_REDACTED_MARKER
         out = redact_secrets(self._buf).text if self._buf else ""
         self._buf = ""
         return out
