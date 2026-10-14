@@ -368,3 +368,16 @@ Consolidated tree: **3,531 passed, 0 failed, 1 skipped, 1 xfailed**;
   `ruff check` + `ruff format --check` fully green (488 files).
 - Untouched by design: the two user git stashes; the untracked external
   review file left as authored.
+- **Full benchmark run (2026-10-14)**: proof `docs/verification/proofs/2026-10-14-benchmark.json`.
+  Replay: 1 provider call / 22+256 tokens / 3 recalls / 7 delegate launches / artifact
+  written (vs incident 2,119,552 tokens, 228 calls, 25 recalls, no report). Retrieval:
+  memory/rag/recall relevancy+faithfulness 1.0 (baseline-before-program 0.0). LoCoMo
+  (10 conversations, 1,986 questions): TF-IDF baseline k=5 recall 0.440 / hit 0.477 /
+  MRR 0.354; k=10 0.510 / 0.555 / 0.365; production archive search 0.425 / 0.461 /
+  0.345; production session recall identical at ~5.5-11.5 ms. Prefix: 3,756-token
+  stable prefix, 72% identical-prefix resend share. Architecture: 211 files, 56,775 LOC,
+  deferred imports 652 <= 680, every god-file ceiling green (incl. the 14 provider
+  modules from W5). Suite: 3,576 passed / 0 failed; UI 341 pass / 6 skip / 0 fail.
+  Note: 4 transient `batch_update_access` failures (absorbed by design, best-effort
+  access bumps) occurred among ~2k retrievals; a section re-run showed zero recurrences
+  and identical recall numbers — pool noise, no result impact.

@@ -1,0 +1,242 @@
+{
+  "environment": {
+    "version": "0.2.0",
+    "git_head": "9020bcd",
+    "python": "3.14.5",
+    "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+    "_section_seconds": 0.03
+  },
+  "replay": {
+    "provider_calls": 1,
+    "tokens_in": 22,
+    "tokens_out": 256,
+    "recall_calls": 3,
+    "delegate_launches": 7,
+    "artifact_written": true,
+    "artifact_path": "/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/tmpsxferosu/DELEGATION_DEFECT_REPORT.md",
+    "stop_reason": "stagnant for 3 consecutive rounds: no new file coverage and no artifact bytes; forced synthesize/write attempt required",
+    "elapsed_s": 0.0011651249951682985,
+    "live_calls": 0,
+    "incident": {
+      "tokens": 2119552,
+      "tool_calls": 228,
+      "post_ask_recalls": 25,
+      "artifact_written": false,
+      "display": "2,119,552 tokens, 228 calls, 25 post-ask recalls, no report"
+    },
+    "deltas": {
+      "artifact_written": true,
+      "recall_calls": "3 vs 25 (incident)"
+    },
+    "_section_seconds": 0.0
+  },
+  "retrieval": {
+    "memory": {
+      "relevancy": 1.0,
+      "faithfulness": 1.0
+    },
+    "rag": {
+      "relevancy": 1.0,
+      "faithfulness": 1.0
+    },
+    "recall": {
+      "relevancy": 1.0,
+      "faithfulness": 1.0
+    },
+    "baseline_before_program": {
+      "memory_faithfulness": 0.0,
+      "rag_faithfulness": 0.0
+    },
+    "_section_seconds": 0.07
+  },
+  "locomo": {
+    "dataset": "/Users/shadow/.machina/locomo/locomo10.json",
+    "conversations": 10,
+    "questions": 1986,
+    "baseline_tfidf": {
+      "k=5": {
+        "evidence_recall": 0.44,
+        "hit_rate": 0.477,
+        "mrr": 0.354,
+        "mean_retrieved_bytes": 1078.6
+      },
+      "k=10": {
+        "evidence_recall": 0.51,
+        "hit_rate": 0.555,
+        "mrr": 0.365,
+        "mean_retrieved_bytes": 2102.0
+      }
+    },
+    "production_archive_search": {
+      "evidence_recall": 0.425,
+      "hit_rate": 0.461,
+      "mrr": 0.345,
+      "k": 5
+    },
+    "production_session_recall": {
+      "evidence_recall": 0.425,
+      "hit_rate": 0.461,
+      "mrr": 0.345,
+      "mean_latency_ms": 5.5,
+      "k": 5
+    },
+    "comparison": {
+      "note": "same questions, same k=5: TF-IDF baseline vs production engines",
+      "baseline": {
+        "evidence_recall": 0.44,
+        "hit_rate": 0.477,
+        "mrr": 0.354,
+        "mean_retrieved_bytes": 1078.6
+      },
+      "archive": {
+        "evidence_recall": 0.425,
+        "hit_rate": 0.461,
+        "mrr": 0.345,
+        "k": 5
+      },
+      "session_recall": {
+        "evidence_recall": 0.425,
+        "hit_rate": 0.461,
+        "mrr": 0.345,
+        "mean_latency_ms": 5.5,
+        "k": 5
+      }
+    },
+    "status": "OK",
+    "_section_seconds": 57.62
+  },
+  "prefix": {
+    "n_tools": 29,
+    "prefix_tokens": 3756,
+    "prefix_bytes": 15924,
+    "rounds": 6,
+    "turn_bytes": 110589,
+    "identical_prefix_resent_bytes": 79620,
+    "identical_prefix_resent_pct": 72.0,
+    "_section_seconds": 0.06
+  },
+  "architecture": {
+    "files": 211,
+    "loc": 56775,
+    "deferred_imports": 652,
+    "ratchet_cap": 680,
+    "god_files": {
+      "core/agent.py": {
+        "lines": 2043,
+        "ceiling": 2057
+      },
+      "core/compression.py": {
+        "lines": 818,
+        "ceiling": 999
+      },
+      "core/provider/__init__.py": {
+        "lines": 51,
+        "ceiling": 51
+      },
+      "core/provider/_log.py": {
+        "lines": 10,
+        "ceiling": 10
+      },
+      "core/provider/reasoning.py": {
+        "lines": 61,
+        "ceiling": 61
+      },
+      "core/provider/specs.py": {
+        "lines": 103,
+        "ceiling": 103
+      },
+      "core/provider/audit.py": {
+        "lines": 147,
+        "ceiling": 147
+      },
+      "core/provider/rate_limit.py": {
+        "lines": 79,
+        "ceiling": 79
+      },
+      "core/provider/caches.py": {
+        "lines": 97,
+        "ceiling": 97
+      },
+      "core/provider/transport.py": {
+        "lines": 382,
+        "ceiling": 382
+      },
+      "core/provider/base.py": {
+        "lines": 60,
+        "ceiling": 60
+      },
+      "core/provider/openrouter.py": {
+        "lines": 607,
+        "ceiling": 607
+      },
+      "core/provider/ollama.py": {
+        "lines": 369,
+        "ceiling": 369
+      },
+      "core/provider/direct.py": {
+        "lines": 337,
+        "ceiling": 337
+      },
+      "core/provider/anthropic.py": {
+        "lines": 462,
+        "ceiling": 462
+      },
+      "core/provider/factory.py": {
+        "lines": 39,
+        "ceiling": 39
+      }
+    },
+    "_section_seconds": 0.4
+  },
+  "suite": {
+    "summary": "3576 passed, 1 skipped, 1 xfailed in 147.52s (0:02:27)",
+    "wall_seconds": 148.8,
+    "exit_code": 0
+  },
+  "ui": {
+    "counts": {
+      "pass": 341,
+      "fail": 0,
+      "skipped": 6
+    },
+    "wall_seconds": 4.4,
+    "exit_code": 0
+  },
+  "comparisons": {
+    "incident_vs_now": {
+      "incident": "2,119,552 tokens, 228 calls, 25 post-ask recalls, no report",
+      "now": "provider_calls=1, recall_calls=3, artifact_written=True"
+    },
+    "memory_baseline_vs_production": {
+      "note": "same questions, same k=5: TF-IDF baseline vs production engines",
+      "baseline": {
+        "evidence_recall": 0.44,
+        "hit_rate": 0.477,
+        "mrr": 0.354,
+        "mean_retrieved_bytes": 1078.6
+      },
+      "archive": {
+        "evidence_recall": 0.425,
+        "hit_rate": 0.461,
+        "mrr": 0.345,
+        "k": 5
+      },
+      "session_recall": {
+        "evidence_recall": 0.425,
+        "hit_rate": 0.461,
+        "mrr": 0.345,
+        "mean_latency_ms": 5.5,
+        "k": 5
+      }
+    },
+    "cross_tool_vs_opencode": {
+      "status": "PROTOCOL \u2014 not directly comparable by construction",
+      "why": "OpenCode has no LoCoMo-style persistent-memory implementation to run the same questions through, and this benchmark cannot drive another agent harness headlessly. Comparing token counts across different systems without a shared task is not a measurement.",
+      "fair_axes": [
+        "same-task delivery: tokens/calls/wall-time to produce the same artifact (this benchmark's replay harness is the task definition)",
+        "memory quality: LoCoMo recall@k/MRR of each system's memory engine"
+      ],
+      "how_to_fill": "run the identical replay task and LoCoMo dataset through the other system with its own harness, then compare rows here"
+    }
+  }
+}
