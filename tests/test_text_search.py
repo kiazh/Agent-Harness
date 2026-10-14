@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from machina.core.text_search import build_or_tsquery
 
 
@@ -65,17 +67,15 @@ class TestBuildOrTsquery:
         assert terms[0] == "word0"
         assert terms[15] == "word15"
 
-    def test_exactly_sixteen_terms(self):
-        words = [f"word{i}" for i in range(16)]
+    @pytest.mark.parametrize(
+        "word_count",
+        [pytest.param(16, id="at-cap"), pytest.param(15, id="under-cap")],
+    )
+    def test_term_count_matches_input(self, word_count):
+        words = [f"word{i}" for i in range(word_count)]
         result = build_or_tsquery(" ".join(words))
         terms = result.split(" | ")
-        assert len(terms) == 16
-
-    def test_fifteen_terms_under_cap(self):
-        words = [f"word{i}" for i in range(15)]
-        result = build_or_tsquery(" ".join(words))
-        terms = result.split(" | ")
-        assert len(terms) == 15
+        assert len(terms) == word_count
 
     def test_cap_with_stopwords_removed_first(self):
         # 20 content words + stopwords interleaved; cap applies after stopword removal

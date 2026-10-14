@@ -78,23 +78,38 @@ class TestLLMChaos:
                 assert response.content == ""
                 assert response.iterations == 1
 
-    async def test_agent_handles_malformed_tool_json(self, mock_session):
-        """Agent should not crash on invalid tool call JSON."""
+    @pytest.mark.parametrize(
+        "tool_call",
+        [
+            pytest.param(
+                {
+                    "id": "call_1",
+                    "function": {"name": "read_file", "arguments": "not valid json{{{"},
+                },
+                id="malformed-tool-json",
+            ),
+            pytest.param(
+                {"id": "call_1", "function": {"name": "", "arguments": "{}"}},
+                id="missing-tool-name",
+            ),
+            pytest.param(
+                {
+                    "id": "call_1",
+                    "function": {"name": "nonexistent_tool_xyz", "arguments": "{}"},
+                },
+                id="nonexistent-tool",
+            ),
+        ],
+    )
+    async def test_agent_handles_invalid_tool_calls(self, mock_session, tool_call):
+        """Agent should not crash on malformed, unnamed, or unknown tool calls."""
         provider = AsyncMock()
         provider.complete = AsyncMock(
             return_value=LLMResponse(
                 content="",
                 model="test-model",
                 usage={"total_tokens": 5},
-                tool_calls=[
-                    {
-                        "id": "call_1",
-                        "function": {
-                            "name": "read_file",
-                            "arguments": "not valid json{{{",
-                        },
-                    }
-                ],
+                tool_calls=[tool_call],
             )
         )
 
@@ -112,79 +127,6 @@ class TestLLMChaos:
                 response = await agent.run(mock_session.id, "test", verbose=False)
 
                 # Should not crash — should return an error or retry
-                assert response is not None
-                assert response.iterations >= 1
-
-    async def test_agent_handles_missing_tool_name(self, mock_session):
-        """Agent should handle tool call missing 'name' field."""
-        provider = AsyncMock()
-        provider.complete = AsyncMock(
-            return_value=LLMResponse(
-                content="",
-                model="test-model",
-                usage={"total_tokens": 5},
-                tool_calls=[
-                    {
-                        "id": "call_1",
-                        "function": {
-                            "name": "",
-                            "arguments": "{}",
-                        },
-                    }
-                ],
-            )
-        )
-
-        with patch("machina.core.agent.session_manager") as mock_sm:
-            mock_sm.get = AsyncMock(return_value=mock_session)
-            mock_sm.update_activity = AsyncMock()
-
-            with patch("machina.core.agent.context_manager") as mock_cm:
-                mock_cm.add_chunk = AsyncMock()
-                mock_cm.add_chunks_batch = AsyncMock()
-                mock_cm.get_latest_images = AsyncMock(return_value=[])
-                mock_cm.get_recent_context = AsyncMock(return_value=[])
-
-                agent = ReActAgent(provider=provider, max_iterations=5)
-                response = await agent.run(mock_session.id, "test", verbose=False)
-
-                assert response is not None
-                assert response.iterations >= 1
-
-    async def test_agent_handles_nonexistent_tool(self, mock_session):
-        """Agent should handle non-existent tool gracefully."""
-        provider = AsyncMock()
-        provider.complete = AsyncMock(
-            return_value=LLMResponse(
-                content="",
-                model="test-model",
-                usage={"total_tokens": 5},
-                tool_calls=[
-                    {
-                        "id": "call_1",
-                        "function": {
-                            "name": "nonexistent_tool_xyz",
-                            "arguments": "{}",
-                        },
-                    }
-                ],
-            )
-        )
-
-        with patch("machina.core.agent.session_manager") as mock_sm:
-            mock_sm.get = AsyncMock(return_value=mock_session)
-            mock_sm.update_activity = AsyncMock()
-
-            with patch("machina.core.agent.context_manager") as mock_cm:
-                mock_cm.add_chunk = AsyncMock()
-                mock_cm.add_chunks_batch = AsyncMock()
-                mock_cm.get_latest_images = AsyncMock(return_value=[])
-                mock_cm.get_recent_context = AsyncMock(return_value=[])
-
-                agent = ReActAgent(provider=provider, max_iterations=5)
-                response = await agent.run(mock_session.id, "test", verbose=False)
-
-                # Should report error, not crash
                 assert response is not None
                 assert response.iterations >= 1
 
@@ -461,13 +403,20 @@ class TestToolChaos:
                             "Error" in tc.get("result_preview", "") for tc in response.tool_calls
                         )
 
-    async def test_agent_handles_tool_returning_none(self, mock_session):
-        """Agent should handle tool returning None."""
+    @pytest.mark.parametrize(
+        "tool_name,result",
+        [
+            pytest.param("none_tool", None, id="tool-returns-none"),
+            pytest.param("huge_tool", "x" * 1000000, id="tool-returns-huge-output"),
+        ],
+    )
+    async def test_agent_handles_tool_returning_edge_output(self, mock_session, tool_name, result):
+        """Agent should handle a tool returning None or a very large output."""
         test_registry = ToolRegistry()
 
-        @test_registry.register()
-        async def none_tool() -> None:
-            return None
+        @test_registry.register(name=tool_name)
+        async def edge_tool():
+            return result
 
         provider = AsyncMock()
         provider.complete = AsyncMock(
@@ -479,49 +428,7 @@ class TestToolChaos:
                     tool_calls=[
                         {
                             "id": "call_1",
-                            "function": {"name": "none_tool", "arguments": "{}"},
-                        }
-                    ],
-                ),
-                LLMResponse(content="Done", model="test", usage={"total_tokens": 5}),
-            ]
-        )
-
-        with patch("machina.core.agent.session_manager") as mock_sm:
-            mock_sm.get = AsyncMock(return_value=mock_session)
-            mock_sm.update_activity = AsyncMock()
-
-            with patch("machina.core.agent.context_manager") as mock_cm:
-                mock_cm.add_chunk = AsyncMock()
-                mock_cm.add_chunks_batch = AsyncMock()
-                mock_cm.get_latest_images = AsyncMock(return_value=[])
-                mock_cm.get_recent_context = AsyncMock(return_value=[])
-
-                with patch("machina.core.agent.registry", test_registry):
-                    agent = ReActAgent(provider=provider, max_iterations=5)
-                    response = await agent.run(mock_session.id, "test", verbose=False)
-
-                    assert response is not None
-
-    async def test_agent_handles_tool_returning_huge_output(self, mock_session):
-        """Agent should handle tool returning very large output."""
-        test_registry = ToolRegistry()
-
-        @test_registry.register()
-        async def huge_tool() -> str:
-            return "x" * 1000000
-
-        provider = AsyncMock()
-        provider.complete = AsyncMock(
-            side_effect=[
-                LLMResponse(
-                    content="",
-                    model="test",
-                    usage={"total_tokens": 5},
-                    tool_calls=[
-                        {
-                            "id": "call_1",
-                            "function": {"name": "huge_tool", "arguments": "{}"},
+                            "function": {"name": tool_name, "arguments": "{}"},
                         }
                     ],
                 ),

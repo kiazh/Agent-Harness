@@ -23,13 +23,20 @@ class TestDelegationPromptVersioning:
         assert isinstance(Orchestrator.PROMPT_VERSION, str)
         assert len(Orchestrator.PROMPT_VERSION) > 0
 
-    def test_delegation_prompt_is_deterministic(self):
-        """Same inputs must produce the same prompt."""
+    @pytest.mark.parametrize(
+        "agent2,expect_equal",
+        [
+            pytest.param("agent1", True, id="same-inputs-identical"),
+            pytest.param("agent2", False, id="different-inputs-differ"),
+        ],
+    )
+    def test_delegation_prompt_determinism(self, agent2, expect_equal):
+        """Same inputs must produce the same prompt; different inputs must differ."""
         from machina.core.orchestrator import Orchestrator
 
         prompt1 = Orchestrator._build_delegation_prompt("agent1", "task1", "context1")
-        prompt2 = Orchestrator._build_delegation_prompt("agent1", "task1", "context1")
-        assert prompt1 == prompt2
+        prompt2 = Orchestrator._build_delegation_prompt(agent2, "task1", "context1")
+        assert (prompt1 == prompt2) is expect_equal
 
     def test_delegation_prompt_includes_version(self):
         """Prompt must include the version string."""
@@ -66,11 +73,3 @@ class TestDelegationPromptVersioning:
         prompt = Orchestrator._build_delegation_prompt("agent1", "task1", "")
         assert "agent1" in prompt
         assert "task1" in prompt
-
-    def test_delegation_prompt_changes_with_different_inputs(self):
-        """Different inputs must produce different prompts."""
-        from machina.core.orchestrator import Orchestrator
-
-        prompt1 = Orchestrator._build_delegation_prompt("agent1", "task1", "context1")
-        prompt2 = Orchestrator._build_delegation_prompt("agent2", "task1", "context1")
-        assert prompt1 != prompt2

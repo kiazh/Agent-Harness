@@ -279,15 +279,17 @@ class TestExceptionTypes:
         with pytest.raises(ValidationError, match="must be a dict"):
             _validate_messages(["not a dict"])
 
-    def test_validate_params_temperature_too_low(self):
-        """Temperature below 0 should raise ValueError."""
+    @pytest.mark.parametrize(
+        "temperature",
+        [
+            pytest.param(-0.1, id="below-zero"),
+            pytest.param(2.1, id="above-two"),
+        ],
+    )
+    def test_validate_params_rejects_out_of_range_temperature(self, temperature):
+        """Temperature outside [0, 2] should raise ValueError."""
         with pytest.raises(ValueError, match="temperature must be between"):
-            _validate_params(-0.1, 100)
-
-    def test_validate_params_temperature_too_high(self):
-        """Temperature above 2.0 should raise ValueError."""
-        with pytest.raises(ValueError, match="temperature must be between"):
-            _validate_params(2.1, 100)
+            _validate_params(temperature, 100)
 
     def test_validate_params_max_tokens_too_low(self):
         """max_tokens below 1 should raise ValueError."""

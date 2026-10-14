@@ -95,14 +95,22 @@ class TestEmbedder:
             assert isinstance(r, list)
             assert len(r) == 1536
 
-    async def test_embed_empty_string(self):
-        """Test embedding an empty string."""
+    @pytest.mark.parametrize(
+        "text,vector",
+        [
+            pytest.param("", [0.0] * 1536, id="empty-string"),
+            pytest.param("test", [0.1] * 1536, id="ascii-text"),
+            pytest.param("你好世界", [0.1] * 1536, id="unicode-text"),
+        ],
+    )
+    async def test_embed_text_variants(self, text, vector):
+        """Embedding empty, ascii, or unicode text returns a 1536-dimension list."""
         embedder = AsyncMock(spec=Embedder)
-        embedder.embed = AsyncMock(return_value=[0.0] * 1536)
+        embedder.embed = AsyncMock(return_value=vector)
         embedder.dimensions = 1536
         embedder.model_name = "test"
 
-        result = await embedder.embed("")
+        result = await embedder.embed(text)
         assert isinstance(result, list)
         assert len(result) == 1536
 
@@ -127,27 +135,6 @@ class TestEmbedder:
         result1 = await embedder.embed("hello")
         result2 = await embedder.embed("world")
         assert result1 != result2
-
-    async def test_embed_dimension(self):
-        """Test that embeddings have consistent dimension."""
-        embedder = AsyncMock(spec=Embedder)
-        embedder.embed = AsyncMock(return_value=[0.1] * 1536)
-        embedder.dimensions = 1536
-        embedder.model_name = "test"
-
-        result = await embedder.embed("test")
-        assert len(result) == 1536
-
-    async def test_embed_unicode(self):
-        """Test embedding unicode text."""
-        embedder = AsyncMock(spec=Embedder)
-        embedder.embed = AsyncMock(return_value=[0.1] * 1536)
-        embedder.dimensions = 1536
-        embedder.model_name = "test"
-
-        result = await embedder.embed("你好世界")
-        assert isinstance(result, list)
-        assert len(result) == 1536
 
     async def test_embed_long_text(self):
         """Test embedding a long text."""

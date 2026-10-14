@@ -113,45 +113,33 @@ class TestRequestContextCapacity:
 class TestParseCommandCount:
     """parse_command_count must handle asyncpg command tags safely."""
 
-    def test_delete_tag(self):
+    @pytest.mark.parametrize(
+        "result,expected",
+        [
+            pytest.param("DELETE 3", 3, id="delete-tag"),
+            pytest.param("UPDATE 1", 1, id="update-tag"),
+            pytest.param("INSERT 0 1", 1, id="insert-tag"),
+        ],
+    )
+    def test_command_tag_count_parsed(self, result, expected):
         from machina.db.connection import parse_command_count
 
-        assert parse_command_count("DELETE 3") == 3
+        assert parse_command_count(result) == expected
 
-    def test_update_tag(self):
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(None, id="none"),
+            pytest.param("", id="empty"),
+            pytest.param("   ", id="whitespace"),
+            pytest.param("DELETE notanumber", id="malformed-count"),
+            pytest.param("SOMETHING_WEIRD", id="non-numeric-single-token"),
+        ],
+    )
+    def test_unparseable_input_returns_zero(self, value):
         from machina.db.connection import parse_command_count
 
-        assert parse_command_count("UPDATE 1") == 1
-
-    def test_insert_tag(self):
-        from machina.db.connection import parse_command_count
-
-        assert parse_command_count("INSERT 0 1") == 1
-
-    def test_none_returns_zero(self):
-        from machina.db.connection import parse_command_count
-
-        assert parse_command_count(None) == 0
-
-    def test_empty_returns_zero(self):
-        from machina.db.connection import parse_command_count
-
-        assert parse_command_count("") == 0
-
-    def test_whitespace_returns_zero(self):
-        from machina.db.connection import parse_command_count
-
-        assert parse_command_count("   ") == 0
-
-    def test_malformed_returns_zero(self):
-        from machina.db.connection import parse_command_count
-
-        assert parse_command_count("DELETE notanumber") == 0
-
-    def test_non_numeric_single_token_returns_zero(self):
-        from machina.db.connection import parse_command_count
-
-        assert parse_command_count("SOMETHING_WEIRD") == 0
+        assert parse_command_count(value) == 0
 
     def test_does_not_raise_on_any_input(self):
         from machina.db.connection import parse_command_count
@@ -224,7 +212,15 @@ class TestCLIUUIDValidation:
         u = uuid.uuid4()
         assert _parse_uuid(str(u)) == u
 
-    def test_export_command_invalid_uuid_exits_nonzero(self):
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            pytest.param(["export", "out.md", "--session", "not-a-uuid"], id="export"),
+            pytest.param(["context", "not-a-uuid"], id="context"),
+            pytest.param(["compress", "not-a-uuid"], id="compress"),
+        ],
+    )
+    def test_invalid_uuid_exits_nonzero(self, argv):
         from typer.testing import CliRunner
 
         import machina.cli as cli_mod
@@ -234,35 +230,7 @@ class TestCLIUUIDValidation:
             patch.object(cli_mod.db, "connect", new_callable=AsyncMock),
             patch.object(cli_mod.db, "close", new_callable=AsyncMock),
         ):
-            result = runner.invoke(cli_mod.app, ["export", "out.md", "--session", "not-a-uuid"])
-        assert result.exit_code != 0
-        assert "Invalid session ID" in result.output
-
-    def test_context_command_invalid_uuid_exits_nonzero(self):
-        from typer.testing import CliRunner
-
-        import machina.cli as cli_mod
-
-        runner = CliRunner()
-        with (
-            patch.object(cli_mod.db, "connect", new_callable=AsyncMock),
-            patch.object(cli_mod.db, "close", new_callable=AsyncMock),
-        ):
-            result = runner.invoke(cli_mod.app, ["context", "not-a-uuid"])
-        assert result.exit_code != 0
-        assert "Invalid session ID" in result.output
-
-    def test_compress_command_invalid_uuid_exits_nonzero(self):
-        from typer.testing import CliRunner
-
-        import machina.cli as cli_mod
-
-        runner = CliRunner()
-        with (
-            patch.object(cli_mod.db, "connect", new_callable=AsyncMock),
-            patch.object(cli_mod.db, "close", new_callable=AsyncMock),
-        ):
-            result = runner.invoke(cli_mod.app, ["compress", "not-a-uuid"])
+            result = runner.invoke(cli_mod.app, argv)
         assert result.exit_code != 0
         assert "Invalid session ID" in result.output
 

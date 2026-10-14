@@ -334,8 +334,15 @@ async def test_discover_deduplicates_live_and_archive(db_pool, monkeypatch):
         await db_pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
 
 
-async def test_window_clamping_at_start(db_pool, monkeypatch):
-    """window() clamps to available chunks when before exceeds available history."""
+@pytest.mark.parametrize(
+    "anchor_index,before,after",
+    [
+        pytest.param(1, 10, 0, id="before-clamped-at-history-start"),
+        pytest.param(0, 0, 10, id="after-clamped-at-history-end"),
+    ],
+)
+async def test_window_clamping_at_history_bounds(db_pool, monkeypatch, anchor_index, before, after):
+    """window() clamps to available chunks when before/after exceed history."""
     monkeypatch.setattr("machina.core.context.db", db_pool)
     monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     context = ContextManager()
@@ -350,34 +357,10 @@ async def test_window_clamping_at_start(db_pool, monkeypatch):
         second = await context.add_chunk(
             session_id, agent, "assistant_message", {"content": "second"}
         )
-        # Request before=10 but only 1 chunk exists before 'second'
-        window = await recall.window(agent, session_id, second.id, before=10, after=0)
-        assert len(window) == 2
-        assert window[0].chunk_id == first.id
-        assert window[1].chunk_id == second.id
-    finally:
-        await db_pool.execute("DELETE FROM context_chunks WHERE session_id = $1", session_id)
-        await db_pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
-
-
-async def test_window_clamping_at_end(db_pool, monkeypatch):
-    """window() clamps to available chunks when after exceeds available future."""
-    monkeypatch.setattr("machina.core.context.db", db_pool)
-    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
-    context = ContextManager()
-    recall = SessionRecall()
-    agent = f"recall-clamp2-{uuid.uuid4()}"
-    session_id = await db_pool.fetchval(
-        "INSERT INTO sessions (agent_id, title) VALUES ($1, 'Clamp test') RETURNING id",
-        agent,
-    )
-    try:
-        first = await context.add_chunk(session_id, agent, "user_message", {"content": "first"})
-        second = await context.add_chunk(
-            session_id, agent, "assistant_message", {"content": "second"}
+        chunks = [first, second]
+        window = await recall.window(
+            agent, session_id, chunks[anchor_index].id, before=before, after=after
         )
-        # Request after=10 but only 1 chunk exists after 'first'
-        window = await recall.window(agent, session_id, first.id, before=0, after=10)
         assert len(window) == 2
         assert window[0].chunk_id == first.id
         assert window[1].chunk_id == second.id
@@ -542,36 +525,21 @@ async def test_window_empty_agent_id_raises(db_pool, monkeypatch):
         await recall.window("", uuid.uuid4(), uuid.uuid4())
 
 
-async def test_window_before_out_of_range_raises(db_pool, monkeypatch):
-    """window() raises ValueError for before > 20."""
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"before": 21}, id="before-over-cap"),
+        pytest.param({"after": 21}, id="after-over-cap"),
+        pytest.param({"before": -1}, id="before-negative"),
+        pytest.param({"after": -1}, id="after-negative"),
+    ],
+)
+async def test_window_out_of_range_raises(db_pool, monkeypatch, kwargs):
+    """window() raises ValueError when before/after leave [0, 20]."""
     monkeypatch.setattr("machina.core.session_recall.db", db_pool)
     recall = SessionRecall()
     with pytest.raises(ValueError, match="before and after must be between 0 and 20"):
-        await recall.window("agent", uuid.uuid4(), uuid.uuid4(), before=21)
-
-
-async def test_window_after_out_of_range_raises(db_pool, monkeypatch):
-    """window() raises ValueError for after > 20."""
-    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
-    recall = SessionRecall()
-    with pytest.raises(ValueError, match="before and after must be between 0 and 20"):
-        await recall.window("agent", uuid.uuid4(), uuid.uuid4(), after=21)
-
-
-async def test_window_negative_before_raises(db_pool, monkeypatch):
-    """window() raises ValueError for negative before."""
-    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
-    recall = SessionRecall()
-    with pytest.raises(ValueError, match="before and after must be between 0 and 20"):
-        await recall.window("agent", uuid.uuid4(), uuid.uuid4(), before=-1)
-
-
-async def test_window_negative_after_raises(db_pool, monkeypatch):
-    """window() raises ValueError for negative after."""
-    monkeypatch.setattr("machina.core.session_recall.db", db_pool)
-    recall = SessionRecall()
-    with pytest.raises(ValueError, match="before and after must be between 0 and 20"):
-        await recall.window("agent", uuid.uuid4(), uuid.uuid4(), after=-1)
+        await recall.window("agent", uuid.uuid4(), uuid.uuid4(), **kwargs)
 
 
 async def test_window_includes_archived_chunks(db_pool, monkeypatch):

@@ -153,7 +153,9 @@ def test_resolve_env_file_unset_uses_checkout(tmp_path):
 
 
 def test_resolve_env_file_absolute_override(tmp_path):
-    proc = run_bash("resolve_env_file /startup", cwd=tmp_path, env={"MACHINA_ENV_FILE": "/tmp/x y/.env"})
+    proc = run_bash(
+        "resolve_env_file /startup", cwd=tmp_path, env={"MACHINA_ENV_FILE": "/tmp/x y/.env"}
+    )
     assert proc.returncode == 0
     assert proc.stdout.strip() == "/tmp/x y/.env"
 
@@ -170,7 +172,9 @@ def test_resolve_env_file_relative_anchors_to_startup(tmp_path):
 
 
 def test_resolve_env_file_unicode_name(tmp_path):
-    proc = run_bash("resolve_env_file /s", cwd=tmp_path, env={"MACHINA_ENV_FILE": "/tmp/ünïcode.env"})
+    proc = run_bash(
+        "resolve_env_file /s", cwd=tmp_path, env={"MACHINA_ENV_FILE": "/tmp/ünïcode.env"}
+    )
     assert proc.stdout.strip() == "/tmp/ünïcode.env"
 
 
@@ -465,23 +469,19 @@ def test_prompt_fails_without_tty_and_leaves_echo_on(tmp_path):
     assert "rc=1 out=[]" in proc.stdout
 
 
-def test_prompt_stty_state_failure_is_safe(tmp_path, tmp_bin):
+@pytest.mark.parametrize(
+    "fail_mode",
+    [
+        pytest.param("state", id="stty-state-failure"),
+        pytest.param("echo", id="echo-disable-failure"),
+    ],
+)
+def test_prompt_failure_is_safe(tmp_path, tmp_bin, fail_mode):
     proc = run_bash(
         'if out=$(prompt_secret_hidden "P: "); then echo "rc=0 out=[$out]";'
         ' else echo "rc=1 out=[$out]"; fi',
         cwd=tmp_path,
-        env={"PATH": f"{tmp_bin}:/usr/bin:/bin", "FAIL_MODE": "state"},
-        timeout=15,
-    )
-    assert "rc=1 out=[]" in proc.stdout
-
-
-def test_prompt_echo_disable_failure_is_safe(tmp_path, tmp_bin):
-    proc = run_bash(
-        'if out=$(prompt_secret_hidden "P: "); then echo "rc=0 out=[$out]";'
-        ' else echo "rc=1 out=[$out]"; fi',
-        cwd=tmp_path,
-        env={"PATH": f"{tmp_bin}:/usr/bin:/bin", "FAIL_MODE": "echo"},
+        env={"PATH": f"{tmp_bin}:/usr/bin:/bin", "FAIL_MODE": fail_mode},
         timeout=15,
     )
     assert "rc=1 out=[]" in proc.stdout

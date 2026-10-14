@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from machina.soulspec.merge import SoulSpecMerger
 from machina.soulspec.schema import SoulSpec
 
@@ -13,51 +15,49 @@ from machina.soulspec.schema import SoulSpec
 class TestMergeDefaultSentinels:
     """Bug 3: merge.py can't distinguish 'set to default' from 'not set'."""
 
-    def test_merge_version_explicit_default(self) -> None:
-        """Override with version='1.0.0' should use '1.0.0', not base's version."""
+    @pytest.mark.parametrize(
+        "version,expected",
+        [
+            pytest.param("1.0.0", "1.0.0", id="explicit-default-wins"),
+            pytest.param(None, "2.0.0", id="none-falls-back-to-base"),
+        ],
+    )
+    def test_merge_version_sentinel(self, version, expected) -> None:
+        """Explicit version wins; None falls back to the base version."""
         base = SoulSpec(name="Base", version="2.0.0")
-        override = SoulSpec(name="Override", version="1.0.0")
+        override = SoulSpec(name="Override", version=version)
         merged = SoulSpecMerger.merge(base, override)
-        assert merged.version == "1.0.0"
+        assert merged.version == expected
 
-    def test_merge_max_iterations_explicit_default(self) -> None:
-        """Override with max_iterations=10 should use 10, not base's value."""
+    @pytest.mark.parametrize(
+        "max_iterations,expected",
+        [
+            pytest.param(10, 10, id="explicit-default-wins"),
+            pytest.param(None, 5, id="none-falls-back-to-base"),
+        ],
+    )
+    def test_merge_max_iterations_sentinel(self, max_iterations, expected) -> None:
+        """Explicit max_iterations wins; None falls back to the base value."""
         base = SoulSpec(name="Base", config=SoulSpec.Config(max_iterations=5))
-        override = SoulSpec(name="Override", config=SoulSpec.Config(max_iterations=10))
+        override = SoulSpec(name="Override", config=SoulSpec.Config(max_iterations=max_iterations))
         merged = SoulSpecMerger.merge(base, override)
         assert merged.config is not None
-        assert merged.config.max_iterations == 10
+        assert merged.config.max_iterations == expected
 
-    def test_merge_context_budget_explicit_default(self) -> None:
-        """Override with context_budget=8000 should use 8000, not base's value."""
+    @pytest.mark.parametrize(
+        "context_budget,expected",
+        [
+            pytest.param(8000, 8000, id="explicit-default-wins"),
+            pytest.param(None, 4000, id="none-falls-back-to-base"),
+        ],
+    )
+    def test_merge_context_budget_sentinel(self, context_budget, expected) -> None:
+        """Explicit context_budget wins; None falls back to the base value."""
         base = SoulSpec(name="Base", config=SoulSpec.Config(context_budget=4000))
-        override = SoulSpec(name="Override", config=SoulSpec.Config(context_budget=8000))
+        override = SoulSpec(name="Override", config=SoulSpec.Config(context_budget=context_budget))
         merged = SoulSpecMerger.merge(base, override)
         assert merged.config is not None
-        assert merged.config.context_budget == 8000
-
-    def test_merge_version_none_uses_base(self) -> None:
-        """Override with version=None should use base's version."""
-        base = SoulSpec(name="Base", version="2.0.0")
-        override = SoulSpec(name="Override", version=None)
-        merged = SoulSpecMerger.merge(base, override)
-        assert merged.version == "2.0.0"
-
-    def test_merge_max_iterations_none_uses_base(self) -> None:
-        """Override with max_iterations=None should use base's value."""
-        base = SoulSpec(name="Base", config=SoulSpec.Config(max_iterations=5))
-        override = SoulSpec(name="Override", config=SoulSpec.Config(max_iterations=None))
-        merged = SoulSpecMerger.merge(base, override)
-        assert merged.config is not None
-        assert merged.config.max_iterations == 5
-
-    def test_merge_context_budget_none_uses_base(self) -> None:
-        """Override with context_budget=None should use base's value."""
-        base = SoulSpec(name="Base", config=SoulSpec.Config(context_budget=4000))
-        override = SoulSpec(name="Override", config=SoulSpec.Config(context_budget=None))
-        merged = SoulSpecMerger.merge(base, override)
-        assert merged.config is not None
-        assert merged.config.context_budget == 4000
+        assert merged.config.context_budget == expected
 
 
 # ─── Bug 4: write_package doesn't clean stale files ─────────────────────────

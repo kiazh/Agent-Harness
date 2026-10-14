@@ -85,7 +85,9 @@ async def test_gateway_usage_get_returns_persisted_summary(monkeypatch):
     frames = []
     gateway = Gateway(frames.append, owns_db=False)
     gateway._db_ready = True
-    monkeypatch.setattr("machina.gateway.server.session_manager.get", AsyncMock(return_value=session))
+    monkeypatch.setattr(
+        "machina.gateway.server.session_manager.get", AsyncMock(return_value=session)
+    )
     summary = AsyncMock(return_value={"sessionId": str(sid), "session": {"requests": 3}})
     monkeypatch.setattr("machina.core.usage.usage_store.summary", summary)
 
@@ -423,23 +425,20 @@ async def test_totals_aggregation(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_orphaned_reservations_parses_update_count(monkeypatch):
-    """cleanup_orphaned_reservations() parses the UPDATE count from the result string."""
-    execute = AsyncMock(return_value="UPDATE 5")
+@pytest.mark.parametrize(
+    "update_result,expected",
+    [
+        pytest.param("UPDATE 5", 5, id="parses-update-count"),
+        pytest.param("UPDATE", 0, id="unparseable-returns-zero"),
+    ],
+)
+async def test_cleanup_orphaned_reservations_result(monkeypatch, update_result, expected):
+    """cleanup_orphaned_reservations() parses the UPDATE count, 0 when unparseable."""
+    execute = AsyncMock(return_value=update_result)
     monkeypatch.setattr("machina.core.usage.db", SimpleNamespace(execute=execute))
     store = UsageStore()
     result = await store.cleanup_orphaned_reservations()
-    assert result == 5
-
-
-@pytest.mark.asyncio
-async def test_cleanup_orphaned_reservations_returns_zero_on_bad_result(monkeypatch):
-    """cleanup_orphaned_reservations() returns 0 when the result string is unparseable."""
-    execute = AsyncMock(return_value="UPDATE")
-    monkeypatch.setattr("machina.core.usage.db", SimpleNamespace(execute=execute))
-    store = UsageStore()
-    result = await store.cleanup_orphaned_reservations()
-    assert result == 0
+    assert result == expected
 
 
 @pytest.mark.asyncio

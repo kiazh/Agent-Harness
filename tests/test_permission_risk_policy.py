@@ -52,36 +52,44 @@ def test_security_documentation_is_not_credential_access(workspace, path):
     assert decide(request).verdict == "allowed"
 
 
-@pytest.mark.parametrize(
-    "command",
-    [
-        "rm -rf .",
-        "git reset --hard",
-        "git clean -fd",
-        "git push origin main",
-        "git checkout -- notes.md",
-        "git restore notes.md",
-        "sudo ls",
-        "cat .env",
-        "cat /etc/shadow",
-        "cat ~/.ssh/id_rsa",
-        "cat ../outside.txt",
-        "python -c print(1)",
-        "npm install",
-        "npm run deploy",
-        "find . -delete",
-        # GNU find output-writing primaries write attacker-directed files and
-        # must require file-write review, not routine classification.
-        "find . -fprint captured.txt",
-        "find . -fprint0 captured.bin",
-        "find . -fprintf report.txt %p",
-        "find . -fls listing.txt",
-        "git -c alias.status=whoami status",
-        "curl https://example.com",
-        "bash script.sh",
-    ],
-)
-def test_dangerous_or_unclassified_commands_still_ask(workspace, command):
+DANGEROUS_OR_REVIEW_COMMANDS = [
+    # dangerous / unclassified commands
+    "rm -rf .",
+    "git reset --hard",
+    "git clean -fd",
+    "git push origin main",
+    "git checkout -- notes.md",
+    "git restore notes.md",
+    "sudo ls",
+    "cat .env",
+    "cat /etc/shadow",
+    "cat ~/.ssh/id_rsa",
+    "cat ../outside.txt",
+    "python -c print(1)",
+    "npm install",
+    "npm run deploy",
+    "find . -delete",
+    # GNU find output-writing primaries write attacker-directed files and
+    # must require file-write review, not routine classification.
+    "find . -fprint captured.txt",
+    "find . -fprint0 captured.bin",
+    "find . -fprintf report.txt %p",
+    "find . -fls listing.txt",
+    "git -c alias.status=whoami status",
+    "curl https://example.com",
+    "bash script.sh",
+    # command options / security settings
+    "cp -t/tmp README.md",
+    "grep -f.env README.md",
+    "pytest -oaddopts=whatever",
+    "cp config.txt .git/config",
+    "touch .git/config",
+    "touch .machina/config.yaml",
+]
+
+
+@pytest.mark.parametrize("command", DANGEROUS_OR_REVIEW_COMMANDS)
+def test_dangerous_or_review_commands_ask(workspace, command):
     request = build_request(tool="terminal", **action_for_tool("terminal", {"command": command}))
     assert decide(request).verdict == "pending"
 
@@ -131,22 +139,6 @@ def test_full_grant_allows_all_without_approval(workspace):
     # Full mode is explicit no-approval authority: a live session grant
     # allows everything without approval cards.
     assert decide(request, [grant]).verdict == "allowed"
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "cp -t/tmp README.md",
-        "grep -f.env README.md",
-        "pytest -oaddopts=whatever",
-        "cp config.txt .git/config",
-        "touch .git/config",
-        "touch .machina/config.yaml",
-    ],
-)
-def test_command_options_and_security_settings_need_review(workspace, command):
-    request = build_request(tool="terminal", **action_for_tool("terminal", {"command": command}))
-    assert decide(request).verdict == "pending"
 
 
 async def test_docker_routine_project_work_has_writable_mount(workspace, monkeypatch):
