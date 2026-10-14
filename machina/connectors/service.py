@@ -16,6 +16,7 @@ from machina.connectors.models import (
     ConnectionFailed,
     ConnectionState,
     ConnectorToolError,
+    DiscoveredTool,
 )
 from machina.connectors.policy import classify_tool
 from machina.connectors.registry import ConnectorRegistry
@@ -107,57 +108,70 @@ class ConnectorService:
         if not isinstance(fields, dict):
             raise ConfigError("config must be an object")
         async with self._configuration_lock:
-            await self._refresh_locked()
-            if (
-                "transport" not in fields
-                and "id" in fields
-                and "oauth" in fields
-                and set(fields) <= {"id", "oauth"}
-            ):
-                # Partial OAuth-settings edit: merge over the stored config so
-                # existing servers go through the normal revision/retirement
-                # path without re-entering transport fields.
-                from dataclasses import asdict as _asdict
+            return await self._configure_locked(fields)
 
-                existing = self.registry.get(fields["id"])
-                if existing is None:
-                    raise ConfigError("unknown connector for partial update")
-                merged = _asdict(existing)
-                merged.pop("owner", None)
-                merged.pop("revision", None)
-                for key, value in fields.items():
-                    if key == "id":
-                        continue
-                    if key not in ("oauth",):
-                        raise ConfigError("partial updates support only oauth settings")
-                    merged[key] = value
-                fields = merged
-            config = self.store.validate_input(fields)
-            if self.registry.get(config.id) is not None:
-                await self.manager.disconnect(config.id)
-            self.store.configure(fields)
-            await self._refresh_locked()
-            await self._refresh_auth_cache()
-            current = self._config(config.id)
-            return {**current.public_view(), **_state_only(self.manager.status(config.id))}
+    async def _configure_locked(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """Configure under the caller-held configuration lock.
+
+        Composite management flows (agent mcp_connect add+launch, rollback)
+        hold the lock across several of these primitives so no concurrent
+        worker can observe or interleave a half-configured server.
+        """
+        await self._refresh_locked()
+        if (
+            "transport" not in fields
+            and "id" in fields
+            and "oauth" in fields
+            and set(fields) <= {"id", "oauth"}
+        ):
+            # Partial OAuth-settings edit: merge over the stored config so
+            # existing servers go through the normal revision/retirement
+            # path without re-entering transport fields.
+            from dataclasses import asdict as _asdict
+
+            existing = self.registry.get(fields["id"])
+            if existing is None:
+                raise ConfigError("unknown connector for partial update")
+            merged = _asdict(existing)
+            merged.pop("owner", None)
+            merged.pop("revision", None)
+            for key, value in fields.items():
+                if key == "id":
+                    continue
+                if key not in ("oauth",):
+                    raise ConfigError("partial updates support only oauth settings")
+                merged[key] = value
+            fields = merged
+        config = self.store.validate_input(fields)
+        if self.registry.get(config.id) is not None:
+            await self.manager.disconnect(config.id)
+        self.store.configure(fields)
+        await self._refresh_locked()
+        await self._refresh_auth_cache()
+        current = self._config(config.id)
+        return {**current.public_view(), **_state_only(self.manager.status(config.id))}
 
     async def remove(self, connector_id: str) -> bool:
         if self.store is None:
             raise ConfigError("durable connector store is unavailable")
         async with self._configuration_lock:
-            await self._refresh_locked()
-            if self.registry.get(connector_id) is not None:
-                await self.manager.disconnect(connector_id)
-                if self.oauth is not None:
-                    try:
-                        await self.oauth.invalidate_connector(connector_id)
-                    except Exception as _boundary_error:
-                        # Optional fallback preserves the primary outcome; report no payload.
-                        record_failure("connector_service.invalidate_oauth", _boundary_error)
-            removed = self.store.remove(connector_id)
-            await self._refresh_locked()
-            await self._refresh_auth_cache()
-            return removed
+            return await self._remove_locked(connector_id)
+
+    async def _remove_locked(self, connector_id: str) -> bool:
+        """Remove under the caller-held configuration lock (see _configure_locked)."""
+        await self._refresh_locked()
+        if self.registry.get(connector_id) is not None:
+            await self.manager.disconnect(connector_id)
+            if self.oauth is not None:
+                try:
+                    await self.oauth.invalidate_connector(connector_id)
+                except Exception as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("connector_service.invalidate_oauth", _boundary_error)
+        removed = self.store.remove(connector_id)
+        await self._refresh_locked()
+        await self._refresh_auth_cache()
+        return removed
 
     async def list(self) -> list[dict[str, Any]]:
         """Sanitized inventory with live state; launches nothing."""
@@ -181,6 +195,32 @@ class ConnectorService:
         """Connect with bounded retries; disabled servers are refused."""
         await self.refresh()
         return await self.manager.connect(connector_id, secrets)
+
+    async def connect_and_discover(
+        self, connector_id: str, *, launch_config=None
+    ) -> list[DiscoveredTool]:
+        """Launch a configured connector and install its discovered catalog.
+
+        The low-level primitive shared by the human-reviewed management route
+        (``connect_authorized``) and the agent ``mcp_connect`` tool: approval
+        happens before this call, and composite flows hold the configuration
+        lock across it. ``secret_refs`` values resolve at launch; a discovery
+        failure retires the connection so a failed connect never leaves a
+        half-live server. Never retried here — the manager owns bounded
+        connection retries.
+        """
+        from machina.security.secrets import get_secret
+
+        config = self._config(connector_id)
+        secrets = {name: get_secret(name) or "" for name in config.secret_refs}
+        await self.manager.connect(connector_id, secrets, launch_config=launch_config)
+        connection = self._live_connection(connector_id)
+        try:
+            tools, _ = await connection.list_tools()
+            return self.registry.set_tools(connector_id, tools)
+        except BaseException:
+            await self.manager.disconnect(connector_id)
+            raise
 
     async def disconnect(self, connector_id: str) -> dict[str, Any]:
         """Disconnect; reports whether a connection existed."""

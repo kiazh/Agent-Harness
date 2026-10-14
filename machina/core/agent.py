@@ -965,7 +965,7 @@ class BaseReActAgent:
 
                             await runtime_services.get_connector_service().refresh()
                         _spec = _perm_tools.action_for_tool(tool_name, tool_args)
-                        if tool_name == "mcp_call":
+                        if tool_name in {"mcp_call", "mcp_connect", "mcp_disconnect"}:
                             tool_timeout = int(_spec.get("timeout", 60)) + 1
                         from machina.core.execution_context import resolve_execution_context
 

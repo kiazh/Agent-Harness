@@ -75,6 +75,17 @@ class AuthRequired(ConnectorError):
     """Credentials missing, expired, or revoked; needs human reauthorization."""
 
 
+def validate_connector_id(value: str) -> str:
+    """Return *value* when it matches the connector-id contract.
+
+    One definition shared by config validation and management wrappers that
+    identify a server before a full config exists (e.g. removal by name).
+    """
+    if not _CONNECTOR_ID_RE.fullmatch(value or ""):
+        raise ConfigError("connector id must match [a-z0-9][a-z0-9-_]{0,63}")
+    return value
+
+
 @dataclass
 class ConnectorConfig:
     """Validated, non-secret connector configuration."""
@@ -136,8 +147,7 @@ class ConnectorConfig:
             value = getattr(self, key)
             if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
                 raise ConfigError(f"{key} must be a list of strings")
-        if not _CONNECTOR_ID_RE.fullmatch(self.id or ""):
-            raise ConfigError("connector id must match [a-z0-9][a-z0-9-_]{0,63}")
+        validate_connector_id(self.id)
         if len(self.display_name) > 80:
             raise ConfigError("display_name must be at most 80 characters")
         if len(self.owner) > 80:

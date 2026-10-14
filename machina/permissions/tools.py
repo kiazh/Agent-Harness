@@ -10,17 +10,28 @@ from __future__ import annotations
 
 import json
 
+from machina.connectors.execution import call_spec
+from machina.connectors.management import connect_spec, disconnect_spec
+
 
 def action_for_tool(name: str, args: dict) -> dict:
     """Return broker kwargs for tool *name* with *args* (operation/targets/...)."""
     args = args or {}
     if name == "mcp_call":
-        from machina.connectors.execution import call_spec
         from machina.core.runtime import runtime_services
 
         return call_spec(runtime_services.get_connector_service(), args)
     if name in ("mcp_list", "mcp_describe"):
         return {"operation": "context.read", "targets": []}
+    if name == "mcp_connect":
+        # Adding a server grants new tools + network/process reach: the exact
+        # request (transport destination, trust, allowlists) always requires
+        # explicit approval (mcp_external_review) in ask/workspace/sandbox.
+        return connect_spec(args)
+    if name == "mcp_disconnect":
+        # Removal closes reach and deletes durable configuration; same review
+        # capability as adding, never implicit.
+        return disconnect_spec(args)
     if name in ("read_file",):
         return {"operation": "file.read", "targets": [str(args.get("path", ""))]}
     if name in ("write_file",):

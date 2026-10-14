@@ -1,0 +1,13 @@
+== failed mcp_connect (endpoint refuses instantly) ==
+[mcp_connect] PAUSED needs_approval: request_id=66176b25e0a74f438108ba0c099afc43
+[mcp_connect] human decision recorded: approved (principal=proof-human)
+[mcp_connect] approved digest claimed; executing exactly once
+{
+  "connected": false,
+  "server": "broken",
+  "error": "connection cancelled",
+  "store": "configuration removed"
+}
+store after compensation: generation=2 configs=[]
+live connection: None
+final mcp_list: {"servers": [], "next_offset": null}

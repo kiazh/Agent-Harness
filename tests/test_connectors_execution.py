@@ -17,6 +17,9 @@ def test_native_mcp_tools_are_lazy_and_uncached():
 
     assert {"mcp_list", "mcp_describe", "mcp_call"} <= set(registry.list_tools())
     assert {"mcp_list", "mcp_describe", "mcp_call"} <= _UNCACHEABLE_TOOLS
+    # Agent-callable management tools declare mutating effects instead (never
+    # cached, always review-gated); see tests/test_mcp_manage_tool.py.
+    assert {"mcp_connect", "mcp_disconnect"} <= set(registry.list_tools())
 
 
 def test_full_grant_allows_mcp_calls_without_approval():

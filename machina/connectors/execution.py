@@ -144,14 +144,14 @@ async def connect_authorized(
     service, connector_id: str, session_id: str, agent_id: str, expected_digest: str
 ) -> dict:
     from machina.permissions import broker, store
-    from machina.security.secrets import get_secret
 
     request = await _connect_request(service, connector_id, session_id, agent_id)
     if not expected_digest or request.digest != expected_digest:
         raise ConnectorToolError("connector changed; review a fresh connection preview")
 
     # Only the authenticated human management route supplies this confirmation.
-    # Neither a model tool nor server-initiated callbacks can reach this helper.
+    # Neither a model tool nor server-initiated callbacks can reach this helper;
+    # the model-facing mcp_connect tool goes through its own broker guard.
     async def reviewed(card):
         record = await store.resolve_decision(card["request_id"], "approved", "mcp-management")
         return "approved" if record is not None else "denied"
@@ -176,20 +176,12 @@ async def connect_authorized(
             if current.digest != request.digest:
                 raise ConnectorToolError("connector changed during approval; review again")
             config = service._config(connector_id)
-            secrets = {name: get_secret(name) or "" for name in config.secret_refs}
             launch_config = (
                 replace(config, command=request.argv[0], cwd=request.cwd)
                 if config.transport == "stdio"
                 else replace(config)
             )
-            await service.manager.connect(connector_id, secrets, launch_config=launch_config)
-            connection = service._live_connection(connector_id)
-            try:
-                tools, _ = await connection.list_tools()
-                service.registry.set_tools(connector_id, tools)
-            except BaseException:
-                await service.manager.disconnect(connector_id)
-                raise
+            await service.connect_and_discover(connector_id, launch_config=launch_config)
             outcome = "completed"
             return {**config.public_view(), **service.manager.status(connector_id)}
     finally:

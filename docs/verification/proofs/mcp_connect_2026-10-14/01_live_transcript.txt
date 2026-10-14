@@ -1,0 +1,103 @@
+
+== Environment ==
+repo: /Users/shadow/machina
+git HEAD: 9806bee7c53ac80bcb07a01ad8216be4747ae1b5 (working tree + this wave's changes)
+python: /Users/shadow/machina/.venv/bin/python (3.14.5)
+approval store backend: in-memory (db not connected)
+connector inventory: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-mcp-proof-0w0nl0xc/mcp.json
+
+== Registered tool surface ==
+- mcp_connect: effects=('net', 'exec') desc=Add and connect an MCP server, then report the tools it exposes. Give a short unique name plus EITHER url (an HTTP/streamable server link) O...
+- mcp_list: effects=() desc=List configured MCP servers with enabled/trust/state and cached tool counts, or a page of tools on one connected server. Never connects a se...
+- mcp_disconnect: effects=('fs.write',) desc=Remove an MCP server by name: disconnects it and deletes its saved configuration (set remove=false to only close the connection). Removed se...
+
+== 1. mcp_connect — add + launch + discover our own server ==
+[mcp_connect] policy verdict: pending (sensitive capability requires explicit approval: mcp_external_review) capabilities=['mcp_external_review'] network=[] argv=['/Users/shadow/machina/.venv/bin/python', '-m', 'machina.mcp_server']
+[mcp_connect] PAUSED needs_approval: request_id=f5a042d1cd1741e0a14e04af69253e15 operation=tool.mcp_connect status=pending
+[mcp_connect] human decision recorded: approved (principal=proof-human)
+[mcp_connect] approved digest claimed; executing exactly once
+{
+  "connected": true,
+  "server": {
+    "id": "machina-self",
+    "display_name": "machina-self",
+    "kind": "mcp",
+    "enabled": true,
+    "owner": "",
+    "transport": "stdio",
+    "command": "/Users/shadow/machina/.venv/bin/python",
+    "endpoint": "",
+    "credential_profile": "",
+    "local_access": false,
+    "trust": "untrusted",
+    "revision": 1,
+    "tool_allowlist": [],
+    "oauth": null,
+    "state": "connected",
+    "server_name": "machina",
+    "server_version": "0.2.0",
+    "protocol_version": "2025-11-25",
+    "error": ""
+  },
+  "tools": [
+    "machina-self__machina_status",
+    "machina-self__machina_chat",
+    "machina-self__machina_session_create"
+  ]
+}
+
+== 2. mcp_list — configured servers with enabled/trust/tool counts ==
+[mcp_list] policy verdict: allowed (in-process operation) capabilities=[] network=[] argv=[]
+{
+  "servers": [
+    {
+      "id": "machina-self",
+      "display_name": "machina-self",
+      "transport": "stdio",
+      "enabled": true,
+      "state": "connected",
+      "trust": "untrusted",
+      "revision": 1,
+      "tool_allowlist": [],
+      "tool_count": 3
+    }
+  ],
+  "next_offset": null
+}
+
+== 3. mcp_call machina_status — real round trip through our own server ==
+[mcp_call] policy verdict: pending (sensitive capability requires explicit approval: mcp_external_review) capabilities=['mcp_external_review'] network=[] argv=[]
+[mcp_call] PAUSED needs_approval: request_id=dd1550f3eaeb4bcab749815293c9d405 operation=tool.mcp_call status=pending
+[mcp_call] human decision recorded: approved (principal=proof-human)
+[mcp_call] approved digest claimed; executing exactly once
+ok=True outcome_unknown=False
+remote text:
+Machina status
+postgres: PostgreSQL 16.15 (Homebrew) on aarch64-apple-darwin25.6.0
+sessions: 171 | chunks: 1135 | memories: 53 (pending: 0)
+tools: 31 registered
+model: deepseek-chat (provider: deepseek)
+mode: workspace | backend: host | workspace: (unset)
+chat provider: unknown
+memory retrieval: dense+sparse (onnx:BAAI/bge-small-en-v1.5)
+memory extraction: ready
+document rag: ready; 21 indexed documents
+reranker: local (configured; pipeline not initialized)
+automatic compaction: enabled
+sandbox: unknown
+jobs awaiting approval: 0
+permission durability: unknown
+
+== 4. mcp_disconnect — remove; store and live connection both empty ==
+[mcp_disconnect] policy verdict: pending (sensitive capability requires explicit approval: mcp_external_review) capabilities=['mcp_external_review'] network=[] argv=[]
+[mcp_disconnect] PAUSED needs_approval: request_id=ac81b926dee143bd9ee149888cc9c2dc operation=tool.mcp_disconnect status=pending
+[mcp_disconnect] human decision recorded: approved (principal=proof-human)
+[mcp_disconnect] approved digest claimed; executing exactly once
+{
+  "removed": true,
+  "server": "machina-self"
+}
+store after removal: generation=2 configs=[]
+live connection: None
+[mcp_list] policy verdict: allowed (in-process operation) capabilities=[] network=[] argv=[]
+final mcp_list: {"servers": [], "next_offset": null}
