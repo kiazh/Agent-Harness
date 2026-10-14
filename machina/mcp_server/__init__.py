@@ -15,11 +15,12 @@ Exposes exactly three tools to MCP hosts (OpenCode, Codex, Claude Desktop):
 ``machina_session_create(title=None)``
     Create an empty session row through ``session_manager`` and return its id.
 
-Process discipline mirrors the repo's terminal-tool patterns
-(``machina/tools/terminal.py``, AH-AUDIT-010/023): children run with a minimal
-environment allowlist, their own process group, a kill-tree deadline, and
-bounded output. The tool registry is deliberately not imported at startup so
-the server stays light; status imports Machina pieces lazily inside the call.
+Process discipline shares the repo's terminal-tool leaf mechanics
+(``machina/core/child_process.py``, AH-AUDIT-010/023): children run with a
+minimal environment allowlist, their own process group, a kill-tree
+deadline, and bounded output. The tool registry is deliberately not imported
+at startup so the server stays light; status imports Machina pieces lazily
+inside the call.
 """
 
 from __future__ import annotations
@@ -96,43 +97,24 @@ _NOISE_LINE_PREFIXES = (
 )
 
 # AH-AUDIT-010: children inherit only the platform variables they need to
-# start. Mirrors machina/tools/terminal.py (kept local so the MCP server does
-# not import the tool registry). No passthrough extension: the unused
+# start; the allowlist, sanitizer, and process-group helpers are shared with
+# machina/tools/terminal.py via machina/core/child_process.py (stdlib-only).
+# The binding is function-level because the shim must not pull the Machina
+# runtime at startup. No passthrough extension here: the unused
 # MACHINA_MCP_EXTRA_ENV hook was removed by the 2026-10-14 interop review —
 # a new name needs a named host case and a test.
-_CHILD_ENV_ALLOWLIST = frozenset(
-    {
-        "PATH",
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "TMPDIR",
-        "TMP",
-        "TEMP",
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-        "TERM",
-        "VIRTUAL_ENV",
-        "SYSTEMROOT",
-        "WINDIR",
-        "USERPROFILE",
-        "COMSPEC",
-        "PATHEXT",
-        "APPDATA",
-        "LOCALAPPDATA",
-    }
-)
+
+
+def _child_process():
+    """Lazily bound stdlib-only child-process mechanics (shim stays light)."""
+    from machina.core import child_process
+
+    return child_process
 
 
 def _sanitized_env() -> dict[str, str]:
     """Minimal child environment without secrets (never dumps the environment)."""
-    env: dict[str, str] = {}
-    for key, value in os.environ.items():
-        if key.upper() in _CHILD_ENV_ALLOWLIST:
-            env[key] = value
-    if os.name != "nt" and not env.get("PATH"):
-        env["PATH"] = "/usr/bin:/bin"
+    env = _child_process().sanitized_env(None)
     # Display-only: keep rich from hard-wrapping the reply at the pipe width
     # and strip color even when TERM claims otherwise.
     env["COLUMNS"] = "400"
@@ -175,65 +157,11 @@ class ProcessResult:
     truncated: bool
 
 
-def _group_members(pgid: int | None, process: subprocess.Popen[str]) -> bool:
-    """True while the launcher or any of its session descendants remains."""
-    if os.name == "nt" or pgid is None:
-        return process.poll() is None
-    process.poll()
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return process.returncode is None
-    return True
-
-
-def _kill_tree(process: subprocess.Popen[str], pgid: int | None = None) -> None:
-    """Terminate a whole process tree (AH-AUDIT-023). Best effort, never raises."""
-    if os.name == "nt":
-        try:
-            if process.poll() is not None:
-                return
-        except Exception:
-            return
-        try:
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
-                timeout=10,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except Exception:
-            try:
-                process.kill()
-            except OSError:
-                pass
-        return
-    group = pgid
-    if group is None:
-        try:
-            derived = os.getpgid(process.pid)
-        except OSError:
-            derived = None
-        # Never killpg an inherited group this process did not create.
-        group = derived if derived == process.pid else None
-    if group is not None:
-        import signal as _signal
-
-        try:
-            os.killpg(group, _signal.SIGKILL)
-            return
-        except ProcessLookupError:
-            return
-        except (PermissionError, OSError):
-            pass
-    try:
-        process.kill()
-    except OSError:
-        pass
+# The process-group helpers (group_members / kill_tree) live in
+# machina/core/child_process.py; _run_process binds them per call via
+# _child_process(). The runner itself stays local: the shim reads stdout and
+# stderr separately and reports a timed_out flag instead of raising, unlike
+# terminal.py's single-stream CommandOutput runner.
 
 
 def _default_child_cwd() -> Path:
@@ -262,6 +190,7 @@ def _run_process(cmd: list[str], *, timeout: float, cwd: Path | None = None) -> 
     never waits past ``timeout`` plus bounded teardown.
     """
     child_cwd = cwd if cwd is not None else _default_child_cwd()
+    mechanics = _child_process()
     popen_kwargs: dict[str, Any] = {}
     if os.name == "nt":
         popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -287,10 +216,10 @@ def _run_process(cmd: list[str], *, timeout: float, cwd: Path | None = None) -> 
         exceeded = threading.Event()
 
         def stop_on_timeout() -> None:
-            if not _group_members(pgid, process):
+            if not mechanics.group_members(pgid, process):
                 return
             expired.set()
-            _kill_tree(process, pgid)
+            mechanics.kill_tree(process, pgid)
 
         def read_stream(stream: Any, parts: list[str], is_stdout: bool, cap: int) -> None:
             total = 0
@@ -337,14 +266,14 @@ def _run_process(cmd: list[str], *, timeout: float, cwd: Path | None = None) -> 
                 reader.join(timeout=timeout + 5)
             if exceeded.is_set():
                 # Prolific stdout: stop the whole group.
-                _kill_tree(process, pgid)
+                mechanics.kill_tree(process, pgid)
             # Completion semantics follow terminal.py: the launcher may exit
             # while descendants keep running, so wait for the whole group —
             # bounded by the deadline timer, which kills what is still alive.
-            while not expired.is_set() and _group_members(pgid, process):
+            while not expired.is_set() and mechanics.group_members(pgid, process):
                 time.sleep(0.02)
-            if (expired.is_set() or exceeded.is_set()) and _group_members(pgid, process):
-                _kill_tree(process, pgid)
+            if (expired.is_set() or exceeded.is_set()) and mechanics.group_members(pgid, process):
+                mechanics.kill_tree(process, pgid)
             process.wait()
         finally:
             timer.cancel()
@@ -418,14 +347,22 @@ async def _create_session_row(title: str | None) -> tuple[str, str | None]:
 
 
 def _format_status(summary: dict[str, Any]) -> str:
+    """Compact status text; the shared subset comes from ``services``.
+
+    ``services.format_status_lines`` is the one source of truth for the
+    rows the CLI also renders; it is imported lazily so the shim does not
+    pull the agent runtime at startup. This surface keeps its terse
+    lowercase styling and its own count/model/permission extras.
+    """
+    from machina import services
+
+    shared = {label.lower(): value for label, value in services.format_status_lines(summary)}
+
     def value(key: str, default: object = "unknown") -> object:
         found = summary.get(key, default)
         return default if found is None else found
 
     tools = summary.get("tools") or []
-    retrieval = f"memory retrieval: {value('memoryRetrieval')}"
-    if summary.get("memoryRetrievalReason"):
-        retrieval += f" ({summary['memoryRetrievalReason']})"
     lines = [
         "Machina status",
         f"postgres: {value('postgres')}",
@@ -433,16 +370,16 @@ def _format_status(summary: dict[str, Any]) -> str:
         f" | memories: {value('memories', 0)} (pending: {value('pendingMemories', 0)})",
         f"tools: {len(tools)} registered",
         f"model: {value('model')} (provider: {value('provider')})",
-        f"mode: {value('mode')} | backend: {value('backend')}"
-        f" | workspace: {value('workspace', '') or '(unset)'}",
-        f"chat provider: {value('chatProvider')}",
-        retrieval,
-        f"memory extraction: {value('memoryExtraction')}",
-        f"document rag: {value('documentRag')}",
-        f"reranker: {value('reranker')}",
-        f"auto compaction: {value('autoCompaction')}",
-        f"sandbox: {value('sandbox')}",
-        f"jobs awaiting approval: {value('jobsAwaitingApproval', 0)}",
+        f"mode: {shared['mode']} | backend: {shared['backend']}"
+        f" | workspace: {shared['workspace'] or '(unset)'}",
+        f"chat provider: {shared['chat provider']}",
+        f"memory retrieval: {shared['memory retrieval']}",
+        f"memory extraction: {shared['memory extraction']}",
+        f"document rag: {shared['document rag']}",
+        f"reranker: {shared['reranker']}",
+        f"automatic compaction: {shared['automatic compaction']}",
+        f"sandbox: {shared['sandbox']}",
+        f"jobs awaiting approval: {shared['jobs awaiting approval']}",
         f"permission durability: {value('permissionDurability')}",
     ]
     return "\n".join(str(line) for line in lines)

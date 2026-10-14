@@ -427,29 +427,23 @@ def status():
             # Real capability reporting (never healthy-by-flag alone).
             try:
                 summary = await services.status_summary()
+                # Shared subset comes from services.format_status_lines (one
+                # source of truth with the MCP shim); this surface keeps its
+                # Rich labels and its own extras (direct DB/registry reads).
+                shared = dict(services.format_status_lines(summary))
                 output.status_line(
-                    "Mode", f"{summary.get('mode')} | Backend: {summary.get('backend')}", "success"
+                    "Mode", f"{shared['Mode']} | Backend: {shared['Backend']}", "success"
                 )
-                if summary.get("workspace"):
-                    output.status_line("Workspace", str(summary.get("workspace")))
-                output.status_line("Chat provider", str(summary.get("chatProvider", "unknown")))
-                output.status_line(
-                    "Memory retrieval",
-                    f"{summary.get('memoryRetrieval')}"
-                    + (
-                        f" ({summary.get('memoryRetrievalReason')})"
-                        if summary.get("memoryRetrievalReason")
-                        else ""
-                    ),
-                )
-                output.status_line("Memory extraction", str(summary.get("memoryExtraction", "")))
-                output.status_line("Document RAG", str(summary.get("documentRag", "")))
-                output.status_line("Reranker", str(summary.get("reranker", "")))
-                output.status_line("Automatic compaction", str(summary.get("autoCompaction", "")))
-                output.status_line("Sandbox", str(summary.get("sandbox", "")))
-                output.status_line(
-                    "Jobs awaiting approval", str(summary.get("jobsAwaitingApproval", 0))
-                )
+                if shared["Workspace"]:
+                    output.status_line("Workspace", shared["Workspace"])
+                output.status_line("Chat provider", shared["Chat provider"])
+                output.status_line("Memory retrieval", shared["Memory retrieval"])
+                output.status_line("Memory extraction", shared["Memory extraction"])
+                output.status_line("Document RAG", shared["Document RAG"])
+                output.status_line("Reranker", shared["Reranker"])
+                output.status_line("Automatic compaction", shared["Automatic compaction"])
+                output.status_line("Sandbox", shared["Sandbox"])
+                output.status_line("Jobs awaiting approval", shared["Jobs awaiting approval"])
                 output.status_line("Research training", str(summary.get("researchTraining", "")))
             except Exception as e:
                 output.status_line("Capabilities", f"unavailable ({e})", "warning")

@@ -23,6 +23,7 @@ __all__ = [
     "compress_session_with_status",
     "maybe_auto_compact",
     "export_markdown",
+    "format_status_lines",
     "learn_skill",
     "status_summary",
 ]
@@ -700,3 +701,36 @@ async def status_summary() -> dict[str, Any]:
         record_failure("services.status_summary.permission_durability", _boundary_error)
         base["permissionDurability"] = "unknown"
     return base
+
+
+def format_status_lines(summary: dict[str, Any]) -> list[tuple[str, str]]:
+    """Shared (label, value) status rows for the CLI and the MCP shim.
+
+    Both surfaces used to fork this rendering; they now derive the shared
+    subset from one ``status_summary()`` payload here. No rendering and no
+    Rich: each caller keeps its per-surface extras (CLI: Rich markup plus
+    direct DB/registry reads; shim: count/model lines) and its own styling.
+    """
+
+    # Local mirror of the shim's tolerant value lookup: missing and None
+    # collapse to the default so a degraded payload never crashes a surface.
+    def value(key: str, default: object = "unknown") -> object:
+        found = summary.get(key, default)
+        return default if found is None else found
+
+    retrieval = str(value("memoryRetrieval"))
+    if summary.get("memoryRetrievalReason"):
+        retrieval += f" ({summary['memoryRetrievalReason']})"
+    return [
+        ("Mode", str(value("mode"))),
+        ("Backend", str(value("backend"))),
+        ("Workspace", str(value("workspace", "") or "")),
+        ("Chat provider", str(value("chatProvider"))),
+        ("Memory retrieval", retrieval),
+        ("Memory extraction", str(value("memoryExtraction"))),
+        ("Document RAG", str(value("documentRag"))),
+        ("Reranker", str(value("reranker"))),
+        ("Automatic compaction", str(value("autoCompaction"))),
+        ("Sandbox", str(value("sandbox"))),
+        ("Jobs awaiting approval", str(value("jobsAwaitingApproval", 0))),
+    ]

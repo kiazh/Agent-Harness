@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 
+from machina.core import child_process
 from machina.core.config import config
 from machina.core.exceptions import ToolError, ValidationError
 from machina.observability.diagnostics import record_failure
@@ -84,49 +85,12 @@ def _validate_workdir(workdir: str) -> None:
     raise ValidationError(f"workdir '{workdir}' is not within allowed paths")
 
 
-# AH-AUDIT-010: child processes inherit only the platform variables they
-# need to start. Other variables, including credentials with unfamiliar
-# names, require explicit MACHINA_TERMINAL_EXTRA_ENV passthrough.
-_CHILD_ENV_ALLOWLIST = frozenset(
-    {
-        "PATH",
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "TMPDIR",
-        "TMP",
-        "TEMP",
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-        "TERM",
-        "VIRTUAL_ENV",
-        "SYSTEMROOT",
-        "WINDIR",
-        "USERPROFILE",
-        "COMSPEC",
-        "PATHEXT",
-        "APPDATA",
-        "LOCALAPPDATA",
-    }
-)
-
-
+# AH-AUDIT-010: the allowlist and sanitizer are shared with the MCP shim via
+# machina/core/child_process.py (imported above); only the terminal-specific
+# passthrough variable name lives here.
 def _sanitized_env() -> dict[str, str]:
     """Minimal child environment without secrets (AH-AUDIT-010)."""
-    extra = {
-        e.strip().upper()
-        for e in os.environ.get("MACHINA_TERMINAL_EXTRA_ENV", "").split(",")
-        if e.strip()
-    }
-    env: dict[str, str] = {}
-    for key, value in os.environ.items():
-        upper = key.upper()
-        if upper in _CHILD_ENV_ALLOWLIST or upper in extra:
-            env[key] = value
-    if os.name != "nt" and not env.get("PATH"):
-        env["PATH"] = "/usr/bin:/bin"
-    return env
+    return child_process.sanitized_env("MACHINA_TERMINAL_EXTRA_ENV")
 
 
 def _approved_snapshot() -> dict | None:
@@ -141,78 +105,18 @@ def _call_mode() -> str:
     return execution_context("terminal").mode
 
 
+# Thin adapters over the shared leaf mechanics (machina/core/child_process.py):
+# R07 completion semantics and AH-AUDIT-023 tree teardown now have one
+# implementation for this module and the MCP shim. The private names stay so
+# existing call sites and tests keep working unchanged.
 def _group_members(pgid: int | None, process: subprocess.Popen[str]) -> bool:
-    """True while the launcher or any of its session descendants remains.
-
-    R07: a command like ``(long-work) &`` exits immediately while its child
-    keeps running, so completion must be judged on the retained process
-    group, not on ``process.poll()`` alone. Reaps an exited launcher first
-    so only live descendants (plus not-yet-reaped group zombies) count.
-    """
-    if os.name == "nt" or pgid is None:
-        return process.poll() is None
-    process.poll()
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return process.returncode is None
-    return True
+    """True while the launcher or any of its session descendants remains."""
+    return child_process.group_members(pgid, process)
 
 
 def _kill_tree(process: subprocess.Popen[str], pgid: int | None = None) -> None:
-    """Terminate a whole process tree (AH-AUDIT-023, R07).
-
-    Cancelling an asyncio await never stops a thread or child on its own:
-    ownership here is explicit. POSIX kills the process group; the group id
-    is retained independently of the launcher (captured at spawn), so an
-    already-exited launcher cannot hide surviving descendants. Windows uses
-    taskkill /T while the launcher pid is live. Best effort, never raises.
-    """
-    if os.name == "nt":
-        try:
-            if process.poll() is not None:
-                return
-        except Exception:
-            return
-        try:
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
-                timeout=10,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except Exception:
-            try:
-                process.kill()
-            except OSError:
-                pass
-        return
-    group = pgid
-    if group is None:
-        try:
-            derived = os.getpgid(process.pid)
-        except OSError:
-            derived = None
-        # Never killpg an inherited group this process did not create.
-        group = derived if derived == process.pid else None
-    if group is not None:
-        import signal as _signal
-
-        try:
-            os.killpg(group, _signal.SIGKILL)
-            return
-        except ProcessLookupError:
-            return
-        except (PermissionError, OSError):
-            pass
-    try:
-        process.kill()
-    except OSError:
-        pass
+    """Terminate a whole process tree (AH-AUDIT-023, R07)."""
+    return child_process.kill_tree(process, pgid)
 
 
 def _stop_container(name: str) -> None:

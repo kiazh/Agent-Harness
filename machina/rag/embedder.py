@@ -802,6 +802,7 @@ def _embedder_identity(settings: EmbeddingSettings) -> tuple[str, str, str, str]
     if settings.kind == "openai":
         credential = _config_value("openai_api_key") or _config_value("openrouter_api_key")
         if credential:
+            # Intentional 16-hex identity digest (rag/reranker.py keeps 64; do not unify).
             key_digest = hashlib.sha256(credential.encode("utf-8")).hexdigest()[:16]
     return (settings.kind, settings.model, settings.base_url, key_digest)
 

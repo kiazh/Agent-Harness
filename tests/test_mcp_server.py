@@ -377,6 +377,72 @@ async def test_status_never_raises(monkeypatch):
     assert await mcp_server.machina_status() == "Machina status unavailable (OSError)"
 
 
+# Stage 4 pin: the shared status subset travels from ONE payload through both
+# consumers. The CLI and the shim no longer fork the label/value derivation —
+# the CLI's contract is the helper output (asserted directly; no CLI spawn),
+# and the shim formatter must delegate to the same helper (spy).
+def test_status_shared_subset_flows_from_one_payload_through_both_consumers(monkeypatch):
+    payload = {
+        "postgres": "PostgreSQL 16.4",
+        "sessions": 3,
+        "contextChunks": 120,
+        "memories": 4,
+        "pendingMemories": 1,
+        "tools": ["a", "b"],
+        "model": "deepseek/deepseek-chat",
+        "provider": "deepseek",
+        "mode": "ask",
+        "backend": "host",
+        "workspace": "/tmp/ws",
+        "chatProvider": "deepseek",
+        "memoryRetrieval": "keyword-only",
+        "memoryRetrievalReason": "embeddings disabled",
+        "memoryExtraction": "ready",
+        "documentRag": "degraded; no indexed documents",
+        "reranker": "passthrough",
+        "autoCompaction": "enabled",
+        "sandbox": "inactive",
+        "jobsAwaitingApproval": 2,
+        "permissionDurability": "durable",
+    }
+
+    from machina import services
+
+    lines = services.format_status_lines(payload)
+    assert [label for label, _ in lines] == [
+        "Mode",
+        "Backend",
+        "Workspace",
+        "Chat provider",
+        "Memory retrieval",
+        "Memory extraction",
+        "Document RAG",
+        "Reranker",
+        "Automatic compaction",
+        "Sandbox",
+        "Jobs awaiting approval",
+    ]
+    shared = dict(lines)
+    assert shared["Mode"] == "ask"
+    assert shared["Backend"] == "host"
+    assert shared["Memory retrieval"] == "keyword-only (embeddings disabled)"
+    assert shared["Jobs awaiting approval"] == "2"
+
+    calls: list = []
+    real = services.format_status_lines
+
+    def spy(summary):
+        calls.append(summary)
+        return real(summary)
+
+    monkeypatch.setattr(services, "format_status_lines", spy)
+    text = mcp_server._format_status(payload)
+    assert calls == [payload]
+    for label, value in lines:
+        assert label.lower() in text
+        assert value in text
+
+
 async def test_session_create_returns_id(monkeypatch):
     async def fake_create(title):
         return SESSION_ID, title

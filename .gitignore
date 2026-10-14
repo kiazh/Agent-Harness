@@ -71,7 +71,6 @@ agents/
 skills/telemetry.json
 skills/telemetry.json.lock
 .skill-hub/
-.coverage
 .hypothesis/
 .pytest_cache/
 .ruff_cache/
