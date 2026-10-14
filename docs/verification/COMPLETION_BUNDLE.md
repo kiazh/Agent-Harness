@@ -343,3 +343,28 @@ Consolidated tree: **3,531 passed, 0 failed, 1 skipped, 1 xfailed**;
 - **Structural verification**: the full j1-j8 e2e gate was re-run on the
   finished tree (proof committed alongside this entry) — see
   `docs/verification/proofs/2026-10-14-e2e-gate.*`.
+
+- **B Batch 2** (`ad255ac`): the near-duplicate pairs that could not be
+  deleted without losing coverage are now 15 count-preserving parametrize
+  merges across 12 files (34 scanner cases, 28 permission-risk commands,
+  window-bound cases, tag parsing, chaos tool-edge handling, soulspec
+  sentinels, installer prompt failure, ...). Collect count EXACT before/after
+  (3578); battery 398 passed; full backend 3,576 passed / 0 failed. Honest
+  scope: the earlier "137 mergeable" was never reproducible; only
+  re-verified pairs were executed.
+- **Format hygiene** (`fa1fb2f`): repo-wide `ruff format` normalized 29
+  drifted files (mixed provenance: pre-existing drift + lanes whose format
+  check covered a subset or ran before final edits). Format-only; suite
+  unchanged at 3,576 passed.
+
+## 13. Close-out state (2026-10-13)
+
+- Remediation queue W0-W8 + B batches: COMPLETE. External audit: 18
+  confirmed defects fixed with an independently re-runnable battery
+  (`docs/verification/proofs/audit_2026-10-13/`), 1 refuted, 1 unprovable.
+- Structural queue: W6 -> W2 -> W5 all landed after the j1-j8 gate baseline;
+  final acceptance run 8 PASS / 0 FAIL / 0 SKIP (proof committed).
+- Final tree: `3576 passed, 1 skipped, 1 xfailed, 0 failed`;
+  `ruff check` + `ruff format --check` fully green (488 files).
+- Untouched by design: the two user git stashes; the untracked external
+  review file left as authored.
