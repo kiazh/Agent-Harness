@@ -79,7 +79,9 @@ Enforcement audit: all 7 execution paths guarded (P6/P7 re-tested against the re
 - Windows/macOS CI matrix absent (installer paths inspected, not exercised there).
 - Export fidelity: unit-level coverage; full persisted-DB vs export comparison not exercised.
 - `provider.py` god-file split (template-method refactor) deferred; ceilings tracked with delta tables.
-- Ports caller migration (tools/memory/rag `ports.py` consumers) — seams exist, callers partial.
+- Ports caller migration: the unadopted `tools/`/`memory/`/`rag/` `ports.py` modules were deleted
+  (zero importers anywhere; they asserted an architecture that did not exist). `skills/ports.py`
+  remains the one adopted seam, with its conformance test in `tests/test_architecture_pairs.py`.
 - Memory/RAG FTS index — proposed SQL, not applied (operator DDL):
   ```sql
   CREATE INDEX IF NOT EXISTS idx_memories_fts
