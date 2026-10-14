@@ -1,0 +1,27 @@
+SCRATCH /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-security-review-ds3gpzvs
+read_file {'path': 'credentials'}: pending; sensitive capability requires explicit approval: credential_access
+terminal {'command': 'cat .env'}: pending; sensitive capability requires explicit approval: credential_access
+search_files {'pattern': 'REVIEW_TOKEN', 'path': '.'}: allowed; trusted project read
+2026-10-14 07:56:47,021 [AUDIT] {"timestamp": 1791979007.0211892, "event": "permission_allowed", "request_id": "31e5f12ea0ef479c98e9106744859885", "session_id": "", "turn_id": "", "agent_id": "", "operation": "file.read", "tool": "search_files", "mode": "ask", "digest_prefix": "b526422778053782", "reason": "trusted project read"}
+Audit event dropped before the writer started; event was not persisted
+  OUTPUT 'Found 2 matches:\n/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-security-review-ds3gpzvs/production.env:1: REVIEW_TOKEN=synthetic-dotenv\n/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-security-review-ds3gpzvs/credentials:1: REVIEW_TOKEN=synthetic-credential'
+terminal {'command': 'rg REVIEW_TOKEN .', 'timeout': 2}: allowed; routine trusted project command
+2026-10-14 07:56:47,151 [AUDIT] {"timestamp": 1791979007.151844, "event": "permission_allowed", "request_id": "875757e9646743abbc1bcb8b5ed2533d", "session_id": "", "turn_id": "", "agent_id": "", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "944bff51a170ed77", "reason": "routine trusted project command"}
+Audit event dropped before the writer started; event was not persisted
+  OUTPUT './production.env:REVIEW_TOKEN=synthetic-dotenv\n./credentials:REVIEW_TOKEN=synthetic-credential\n'
+terminal {'command': 'grep -d recurse REVIEW_TOKEN .', 'timeout': 2}: allowed; routine trusted project command
+2026-10-14 07:56:47,213 [AUDIT] {"timestamp": 1791979007.2137768, "event": "permission_allowed", "request_id": "5f08a8641aee4b41985a7cec56d9ae03", "session_id": "", "turn_id": "", "agent_id": "", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "03d7b6383e939d32", "reason": "routine trusted project command"}
+Audit event dropped before the writer started; event was not persisted
+  OUTPUT './production.env:REVIEW_TOKEN=synthetic-dotenv\n./.env:REVIEW_TOKEN=synthetic-hidden-dotenv\n./credentials:REVIEW_TOKEN=synthetic-credential\n'
+terminal {'command': 'cp source/.git/config target/.git/config'}: pending; sensitive capability requires explicit approval: security_settings
+terminal {'command': 'cp -R source/. target', 'timeout': 2}: allowed; routine trusted project command
+2026-10-14 07:56:47,284 [AUDIT] {"timestamp": 1791979007.284093, "event": "permission_allowed", "request_id": "6bee4f0e4f13428baa608dac49254c35", "session_id": "", "turn_id": "", "agent_id": "", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "6da97c012f03697b", "reason": "routine trusted project command"}
+Audit event dropped before the writer started; event was not persisted
+  OUTPUT '(exit code 0, no output)'
+  TARGET GIT CONFIG 'attacker-controlled-config\n'
+2026-10-14 07:56:47,339 [AUDIT] {"timestamp": 1791979007.339181, "event": "permission_pending", "request_id": "b427fa1135374716b8373df1d4a44329", "session_id": "", "turn_id": "", "agent_id": "", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "9ddd208b1964b179", "reason": "sensitive capability requires explicit approval: opaque_execution_review"}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 07:56:47,341 [AUDIT] {"timestamp": 1791979007.341334, "event": "permission_allowed", "request_id": "b427fa1135374716b8373df1d4a44329", "session_id": "", "turn_id": "", "agent_id": "", "operation": "process.exec", "tool": "terminal", "mode": "ask", "digest_prefix": "9ddd208b1964b179", "reason": "approval granted"}
+Audit event dropped before the writer started; event was not persisted
+terminal timeout=1 returned after 2.08s: '(exit code 0, no output)'; is_error=False; marker_at_return=False
+marker_after_return=True; content='survived\n'
