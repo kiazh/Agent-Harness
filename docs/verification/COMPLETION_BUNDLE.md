@@ -201,6 +201,11 @@ Found by running the system live (all numbers observed, not estimated):
   growth. Counted repetitions are now screened before any compile — counts bounded at 100 and
   nested counted repetitions refused, both failing closed — with MemoryError/OverflowError
   mapped to connection errors as defense in depth.
+  Four adversarial re-verification rounds followed (each re-running its own attack probes at
+  the new HEAD): the final round records **CLEAN for both the pattern-safety and
+  consolidation-join families**, with the one LOW residual (settle window under a
+  double-cancel) hardened afterwards; the real-schema false rejection it caught
+  (`{1,128}` vs the first screen bound) is pinned by tests.
   (C2) the consolidation fix covered only the CLI: gateway turns, API streaming, scheduler jobs,
   and delegated children closed the session provider before extraction ran, so those sessions
   silently never consolidated. All four close paths now join the agent's consolidation/learning

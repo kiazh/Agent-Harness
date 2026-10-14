@@ -33,7 +33,7 @@ async def test_polluted_archive_returns_real_instruction_first(monkeypatch):
     sid = uuid.uuid4()
     rows = [
         _row(sid, uuid.uuid4(), "Skill tdd-guide [0:500/1200]: workflow steps red green", 0.9, "tool_call"),
-        _row(sid, uuid.uuid4(), "[live] prior | session=%s chunk=%s | echoed catalog text" % (sid, uuid.uuid4()), 0.8, "assistant_message"),
+        _row(sid, uuid.uuid4(), f"[live] prior | session={sid} chunk={uuid.uuid4()} | echoed catalog text", 0.8, "assistant_message"),
         _row(sid, uuid.uuid4(), "Deploy with read-only scope, do not edit files outside /tmp", 0.1, "user_message"),
     ]
     _mock_db(monkeypatch, rows)

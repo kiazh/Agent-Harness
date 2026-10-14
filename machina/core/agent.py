@@ -136,7 +136,9 @@ def instrument_stream(func):
                             metrics.record_latency("agent.run", (time.monotonic() - start) * 1000)
                             metrics.increment_counter("agent.run.calls")
                             session = await session_manager.get(session_id)
-                            await plugin_registry.dispatch("post_agent_run", session, event.response)
+                            await plugin_registry.dispatch(
+                                "post_agent_run", session, event.response
+                            )
                         yield event
             except Exception:
                 metrics.record_error("agent.run")
@@ -206,12 +208,9 @@ _STORED_TOOL_RESULT_CHARS = 65536
 MAX_PENDING_LEARNING_REVIEWS = 16
 # Task registries live in core.background_tasks (imported above, same objects).
 
-# Per-tool execution timeouts. Delegation-style tools fan out to sub-agents
-# and legitimately run long; everything else must answer quickly to keep
-# turns responsive. The default must exceed the slowest legitimate tool
-# (web_search/web_extract allow 10-30s, terminal 60s, RAG embeddings longer) —
-# a 1s cap aborted healthy network tools, which then cost *another* LLM call
-# to react to a failure that never happened.
+# Per-tool execution timeouts. Delegation-style and network tools fan out and
+# legitimately run long; the default must exceed the slowest legitimate tool —
+# a 1s cap aborted healthy network tools and cost another LLM call to react.
 _TOOL_TIMEOUTS: dict[str, float] = {
     "delegate": 120.0,
     "share_memory": 60.0,
@@ -2047,7 +2046,9 @@ class ReActAgent(BaseReActAgent):
                 self._schedule_memory_consolidation(session_id)
                 yield StreamEvent(
                     type="done",
-                    response=stopped_response(_s3_text, tool_calls_made, total_tokens, iteration + 1),
+                    response=stopped_response(
+                        _s3_text, tool_calls_made, total_tokens, iteration + 1
+                    ),
                 )
                 return
             iteration += 1

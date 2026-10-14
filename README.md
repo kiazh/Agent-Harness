@@ -574,7 +574,7 @@ To run those groups locally, use `python -m pytest -m ui_integration` or
 
 The 2026-10-13 remediation program (incident fixes, security hardening, delegation
 correctness, retrieval faithfulness, deterministic-first routing) recorded
-**3,434 backend tests passed, 0 failed, 1 skipped, 1 xfailed** (exact command in the
+**3,479 backend tests passed, 0 failed, 1 skipped, 1 xfailed** (exact command in the
 [completion bundle](docs/verification/COMPLETION_BUNDLE.md)), with standalone UI
 checks at **337 passed, 0 failed, 6 skipped** including the real-gateway integration
 group. Fixture-replay metrics, before/after token measurements and the full

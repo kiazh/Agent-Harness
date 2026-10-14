@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
+import importlib as _importlib
 import logging
 import math
+import sys as _sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import httpx
-
-import importlib as _importlib
-import sys as _sys
 
 
 # SEAM: leaf-core seam for machina.core (config, exceptions ProviderError,
@@ -22,6 +21,7 @@ def _core_symbol(module: str, name: str):
     if mod is None:
         mod = _importlib.import_module(module)
     return getattr(mod, name)
+
 
 logger = logging.getLogger(__name__)
 
@@ -80,9 +80,7 @@ class CohereReranker(Reranker):
             api_key or _core_symbol("machina.core.config", "config").get("cohere_api_key") or ""
         )
         if not self.api_key:
-            raise _core_symbol("machina.core.exceptions", "ProviderError")(
-                "COHERE_API_KEY not set"
-            )
+            raise _core_symbol("machina.core.exceptions", "ProviderError")("COHERE_API_KEY not set")
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout

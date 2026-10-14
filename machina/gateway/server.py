@@ -993,7 +993,9 @@ class Gateway:
                     )
                 self._record_stage(turn_id, "waiting_for_provider", session_id=sid)
                 stream_kwargs = {"images": images} if images else {}
-                async for event in agent.run_stream(session_id, text, verbose=False, **stream_kwargs):
+                async for event in agent.run_stream(
+                    session_id, text, verbose=False, **stream_kwargs
+                ):
                     if event.type == "text":
                         safe = _turn_redactor.feed(event.content or "")
                         if safe:
@@ -1022,8 +1024,8 @@ class Gateway:
                         # Pair by tool-call id when the event carries one;
                         # otherwise fall back to the oldest open call with the
                         # same name (FIFO).
-                        result_id = (
-                            getattr(event, "tool_call_id", None) or getattr(event, "id", None)
+                        result_id = getattr(event, "tool_call_id", None) or getattr(
+                            event, "id", None
                         )
                         match_id: str | None = None
                         if result_id is not None and str(result_id) in open_tools:
@@ -1115,7 +1117,9 @@ class Gateway:
                             except (TimeoutError, asyncio.CancelledError):
                                 logger.warning("Provider close timed out for session %s", sid)
                             except Exception:
-                                logger.exception("Could not close turn provider for session %s", sid)
+                                logger.exception(
+                                    "Could not close turn provider for session %s", sid
+                                )
                     finally:
                         self._record_stage(turn_id, "releasing_ownership", session_id=sid)
                         # RF4-C1 hotfix: stop renewal BEFORE release. A cancellation

@@ -70,9 +70,7 @@ def _bounded_int(value: object, *, name: str, low: int, high: int) -> int:
             },
             "max_depth": {
                 "type": "integer",
-                "description": (
-                    f"Link depth from the start URL (0–{_CRAWL_MAX_DEPTH}, default 1)"
-                ),
+                "description": (f"Link depth from the start URL (0–{_CRAWL_MAX_DEPTH}, default 1)"),
             },
             "same_host": {
                 "type": "boolean",
@@ -82,7 +80,9 @@ def _bounded_int(value: object, *, name: str, low: int, high: int) -> int:
         "required": ["url"],
     },
 )
-async def web_crawl(url: str, max_pages: int = 5, max_depth: int = 1, same_host: bool = True) -> str:
+async def web_crawl(
+    url: str, max_pages: int = 5, max_depth: int = 1, same_host: bool = True
+) -> str:
     """Crawl bounded pages into the caller's current session."""
     if not isinstance(url, str) or not url.strip():
         raise ValidationError("Empty crawl URL")

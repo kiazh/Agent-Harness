@@ -34,6 +34,7 @@ def _core_symbol(module: str, name: str):
         mod = _importlib.import_module(module)
     return getattr(mod, name)
 
+
 db = LazyDb()
 PROFILE_ID_RE = r"[a-z0-9][a-z0-9-]{0,39}"
 

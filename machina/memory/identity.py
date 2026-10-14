@@ -16,15 +16,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import importlib as _importlib
 import json
 import logging
+import sys as _sys
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
-
-import importlib as _importlib
-import sys as _sys
 
 from machina.db.lazy import LazyDb
 from machina.memory.models import MemoryEntry
@@ -39,6 +38,7 @@ def _core_symbol(module: str, name: str):
     if mod is None:
         mod = _importlib.import_module(module)
     return getattr(mod, name)
+
 
 __all__ = [
     "AgentBelief",

@@ -846,9 +846,7 @@ def _openrouter_wire_messages(
     return marked, True
 
 
-def _log_prompt_cache_breakpoints(
-    provider: str, model: str, *, system: bool, tools: bool
-) -> None:
+def _log_prompt_cache_breakpoints(provider: str, model: str, *, system: bool, tools: bool) -> None:
     """One debug line per call when breakpoints attach (pilot visibility).
 
     The saving expectation is stated, not measured: benefit depends on the
@@ -995,9 +993,7 @@ class OpenRouterProvider(LLMProvider):
         effort = _resolve_effort(reasoning_effort, self._default_effort)
         if effort:
             payload["reasoning"] = {"effort": effort}
-        _log_prompt_cache_breakpoints(
-            "openrouter", model, system=system_marked, tools=tools_marked
-        )
+        _log_prompt_cache_breakpoints("openrouter", model, system=system_marked, tools=tools_marked)
 
         # Check cache before making any HTTP request
         if _is_free_model(model):
@@ -1251,9 +1247,7 @@ class OpenRouterProvider(LLMProvider):
         effort = _resolve_effort(reasoning_effort, self._default_effort)
         if effort:
             payload["reasoning"] = {"effort": effort}
-        _log_prompt_cache_breakpoints(
-            "openrouter", model, system=system_marked, tools=tools_marked
-        )
+        _log_prompt_cache_breakpoints("openrouter", model, system=system_marked, tools=tools_marked)
 
         audit_log(
             "llm_stream_start", provider="openrouter", model=model, message_count=len(messages)

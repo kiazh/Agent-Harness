@@ -8,9 +8,9 @@ Delivered: tested `machina/core/progress.py` only. Per Stream D scope,
 `ReActAgent.run`, `machina/core/agent.py:1788-1804`:
 
 ```python
-batch = tool_calls_made[batch_start:]      # line 1788
+batch = tool_calls_made[batch_start:]  # line 1788
 ...
-iteration += 1                             # line 1804
+iteration += 1  # line 1804
 ```
 
 Insert between them (pseudo):

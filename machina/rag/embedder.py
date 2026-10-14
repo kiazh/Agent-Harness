@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import importlib as _importlib
 import logging
 import os
+import sys as _sys
 import threading
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 
 import httpx
-
-import importlib as _importlib
-import sys as _sys
 
 
 # SEAM: leaf-core seam for machina.core (config, exceptions ProviderError,
@@ -24,6 +23,7 @@ def _core_symbol(module: str, name: str):
     if mod is None:
         mod = _importlib.import_module(module)
     return getattr(mod, name)
+
 
 logger = logging.getLogger(__name__)
 

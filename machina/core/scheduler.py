@@ -570,9 +570,7 @@ class JobRunner:
         await asyncio.sleep(0)
         finalizers = [t for t in list(self._finalizers) if not t.done()]
         if finalizers:
-            _, pending = await asyncio.wait(
-                finalizers, timeout=self._shutdown_grace_seconds
-            )
+            _, pending = await asyncio.wait(finalizers, timeout=self._shutdown_grace_seconds)
             for task in pending:
                 task.cancel()
             if pending:
@@ -634,9 +632,7 @@ class JobRunner:
                 # cancelled, and raised nothing, it completed cleanly — do
                 # not record a timeout error for it.
                 if exec_task.done() and not exec_task.cancelled() and exec_task.exception() is None:
-                    logger.info(
-                        "Job %s (%s) finished as the timeout fired", job.name, job.id
-                    )
+                    logger.info("Job %s (%s) finished as the timeout fired", job.name, job.id)
                 elif exec_task.done() and not exec_task.cancelled():
                     exc = exec_task.exception()
                     logger.error(

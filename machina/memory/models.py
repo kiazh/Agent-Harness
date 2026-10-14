@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import importlib as _importlib
+import sys as _sys
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-
-import importlib as _importlib
-import sys as _sys
 
 
 # SEAM: leaf-core seam for machina.core.exceptions (ValidationError). Deferred

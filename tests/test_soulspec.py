@@ -9,9 +9,9 @@ import yaml
 
 from machina.core.agent_def import AgentDef
 from machina.soulspec import (
-    MachinaAdapter,
     ClaudeCodeAdapter,
     CodexAdapter,
+    MachinaAdapter,
     SoulSpec,
     SoulSpecMerger,
     TestSoulSpecConformance,

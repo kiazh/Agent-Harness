@@ -26,11 +26,10 @@ from machina.core.orchestrator import Orchestrator
 
 @pytest.fixture
 def delegation(monkeypatch, tmp_path):
-    from machina.core import orchestrator as module
-    from machina.core.usage import usage_store
-
     # Pin the file-backend workspace to tmp_path for contract resolution.
     import machina.tools.file as filemod
+    from machina.core import orchestrator as module
+    from machina.core.usage import usage_store
 
     monkeypatch.setattr(filemod, "_base_dir", lambda: tmp_path)
 
@@ -258,7 +257,6 @@ async def test_contract_in_run_and_stream_parents(delegation, monkeypatch, strea
     from machina.core.execution_context import ExecutionContext
     from machina.core.models import LLMResponse, StreamEvent
     from machina.permissions.broker import permission_broker
-    from machina.tools.agents import delegate
 
     monkeypatch.setattr(filemod, "_base_dir", lambda: tmp_path)
     (tmp_path / "out.md").write_text("contract artifact")

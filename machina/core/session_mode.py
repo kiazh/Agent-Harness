@@ -38,6 +38,7 @@ MODES = ("ask", "workspace", "sandbox", "full")
 _lock = threading.Lock()
 _session_modes: dict[str, str] = {}
 
+
 # Turn-scoped mode snapshot (Stream A cost seam). The agent tool loop
 # re-resolves execution mode on EVERY tool call; resolving once per turn and
 # carrying the value in a ContextVar collapses N durable reads to one. The

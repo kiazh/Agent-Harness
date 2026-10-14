@@ -241,15 +241,11 @@ def git_capture(repo: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def machina_create_session(
-    venv_python: Path, title: str, goal: str, agent_id: str
-) -> str:
+def machina_create_session(venv_python: Path, title: str, goal: str, agent_id: str) -> str:
     script = _MACHINA_CREATE_SCRIPT.format(
         repo=str(REPO_ROOT), title=title, goal=goal, agent=agent_id
     )
-    result = run_cmd(
-        [str(venv_python), "-c", script], cwd=REPO_ROOT, env=child_env(), timeout=120
-    )
+    result = run_cmd([str(venv_python), "-c", script], cwd=REPO_ROOT, env=child_env(), timeout=120)
     if result["exit_code"] != 0:
         raise RuntimeError(
             f"machina session setup failed (rc={result['exit_code']}, timed_out={result['timed_out']})"
@@ -470,9 +466,7 @@ def grade(run_dir: Path, venv_python: Path, test_path: str, timeout: float = 120
 
 def run_one(harness: str, args: argparse.Namespace, task_dir: Path, venv_python: Path) -> dict:
     runs_dir = (
-        Path(args.runs_dir).expanduser().resolve()
-        if args.runs_dir
-        else (task_dir.parent / "runs")
+        Path(args.runs_dir).expanduser().resolve() if args.runs_dir else (task_dir.parent / "runs")
     )
     run_dir = runs_dir / task_dir.name / harness
     if run_dir.exists():
@@ -569,9 +563,7 @@ def run_one(harness: str, args: argparse.Namespace, task_dir: Path, venv_python:
                     "total_tokens": total,
                     "accounted_tokens": int(usage.get("accounted_tokens", 0) or 0),
                     "llm_requests": int(usage.get("requests", 0) or 0),
-                    "llm_incomplete_requests": int(
-                        usage.get("incomplete_requests", 0) or 0
-                    ),
+                    "llm_incomplete_requests": int(usage.get("incomplete_requests", 0) or 0),
                     "tool_calls": int(audit.get("tool_calls_count", 0) or 0),
                     "iterations": audit.get("iterations"),
                     "audit_total_tokens": audit.get("total_tokens"),
@@ -666,9 +658,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"venv python not found: {venv_python}")
 
     runs_dir = (
-        Path(args.runs_dir).expanduser().resolve()
-        if args.runs_dir
-        else (task_dir.parent / "runs")
+        Path(args.runs_dir).expanduser().resolve() if args.runs_dir else (task_dir.parent / "runs")
     )
     if runs_dir == task_dir or task_dir in runs_dir.parents:
         parser.error("--runs-dir must not be inside --task-dir")

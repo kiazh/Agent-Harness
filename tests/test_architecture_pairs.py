@@ -617,7 +617,6 @@ def test_rank_parity_interface_vs_direct_on_fixed_queries(tmp_path):
 def test_preselect_cache_matches_direct_rank_and_ranks_once(tmp_path):
     from machina.controller.preselect import SkillPreselectCache
     from machina.skills import ports
-    from machina.skills.registry import SkillRegistry
 
     reg = _fixture_registry(tmp_path)
     assert isinstance(reg, ports.SkillSource)

@@ -48,7 +48,11 @@ ALREADY_CLEAN = [
 
 
 def _module_file(dotted: str) -> Path:
-    return ROOT / Path(*dotted.split(".")) .with_suffix(".py")
+    return ROOT / Path(*dotted.split(".")).with_suffix(".py")
+
+
+def _is_typing_guard(node: ast.If) -> bool:
+    return isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
 
 
 def _top_level_core_imports(dotted: str) -> list[str]:
@@ -70,6 +74,14 @@ def _top_level_core_imports(dotted: str) -> list[str]:
             for m in mods:
                 if m == "machina.core" or m.startswith("machina.core."):
                     found.append(f"line {node.lineno}: {m}")
+        if isinstance(node, ast.If) and _is_typing_guard(node):
+            # `if TYPE_CHECKING:` bodies never execute at import time (the
+            # flag is False at runtime), so guarded imports are type-only.
+            # The dynamic check below still proves the module executes with
+            # machina.core fully blocked.
+            for child in node.orelse:
+                visit(child, depth)
+            return
         for child in ast.iter_child_nodes(node):
             # depth increments only for func/class; If/Try at top level still
             # execute at import, so they count as top-level (depth unchanged).

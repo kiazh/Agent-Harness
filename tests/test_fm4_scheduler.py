@@ -12,8 +12,6 @@ import asyncio
 import uuid
 from datetime import UTC, datetime
 
-import pytest
-
 from machina.core.scheduler import Job, JobRunner
 
 

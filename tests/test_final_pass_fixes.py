@@ -15,8 +15,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from machina.core.models import AgentResponse, StreamEvent
-
 
 def _agent(monkeypatch):
     import machina.core.agent as mod

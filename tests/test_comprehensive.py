@@ -33,7 +33,13 @@ from machina.core.provider import (
 )
 from machina.core.session import session_manager
 from machina.db.connection import Database
-from machina.skills.registry import SkillCurator, SkillHub, SkillParser, SkillRegistry, skill_registry
+from machina.skills.registry import (
+    SkillCurator,
+    SkillHub,
+    SkillParser,
+    SkillRegistry,
+    skill_registry,
+)
 from machina.tools import (
     builtins,  # noqa: F401 — registers web_search, web_extract, search_files
     file,  # noqa: F401 — registers read_file, write_file, list_files

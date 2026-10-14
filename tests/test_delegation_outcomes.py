@@ -5,7 +5,6 @@ Mocked providers/DB, AsyncMock patterns like tests/test_failed_delegation_usage.
 
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -216,6 +215,7 @@ async def test_typed_failure_parent_charges_once_run_and_stream(
     """Typed failed child via real delegate tool: usage charged exactly once, parent sees failure."""
 
     from pathlib import Path
+    from types import SimpleNamespace
 
     from machina.core import orchestrator as module
     from machina.core.agent import ReActAgent, registry
@@ -224,7 +224,6 @@ async def test_typed_failure_parent_charges_once_run_and_stream(
     from machina.core.models import LLMResponse, Session, StreamEvent
     from machina.permissions.broker import permission_broker
     from machina.tools.agents import delegate
-    from types import SimpleNamespace
 
     parent = Session(id=uuid4())
     agent = ReActAgent(provider=SimpleNamespace(model="fake"), allowed_tools=["delegate"])

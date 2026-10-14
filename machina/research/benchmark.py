@@ -329,7 +329,6 @@ def _suite() -> dict:
             "-q",
             "-p",
             "no:cacheprovider",
-            "--ignore=tests/test_e2e_gateway",
         ],
         cwd=_REPO_ROOT,
         capture_output=True,

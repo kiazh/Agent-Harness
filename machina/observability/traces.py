@@ -106,7 +106,7 @@ class Span:
     ended_ms: float | None = None
     duration_ms: float | None = None
 
-    def set(self, **attrs: Any) -> "Span":
+    def set(self, **attrs: Any) -> Span:
         """Attach operational attributes (model, outcome, counts, ...).
 
         Stores values as-is; free-text redaction happens at the dedicated
@@ -283,6 +283,7 @@ def _close_open_spans(turn: TurnTrace, status: str) -> None:
 
 # ─── turn lifecycle ─────────────────────────────────────────────────────────
 
+
 def start_turn(
     turn_id: str,
     *,
@@ -407,9 +408,7 @@ def end_turn(
             for key in [k for k, v in _RESERVATIONS.items() if v.get("turn_id") == tid]:
                 _RESERVATIONS.pop(key, None)
             try:
-                _span_stack.set(tuple(
-                    entry for entry in _span_stack.get()[: turn._stack_depth]
-                ))
+                _span_stack.set(tuple(entry for entry in _span_stack.get()[: turn._stack_depth]))
             except Exception:
                 pass
             _emit(
@@ -455,10 +454,9 @@ def get_turn(turn_id: str) -> TurnTrace | None:
 
 # ─── child spans ────────────────────────────────────────────────────────────
 
+
 @contextmanager
-def _child_span(
-    kind: str, name: str, attributes: dict[str, Any]
-) -> Iterator[Span | None]:
+def _child_span(kind: str, name: str, attributes: dict[str, Any]) -> Iterator[Span | None]:
     if not _enabled:
         yield None
         return
@@ -533,9 +531,7 @@ def tool_span(name: str, args: Any = None) -> Iterator[Span | None]:
 
 
 @contextmanager
-def delegation_span(
-    child_session_id: str = "", *, child_agent: str = ""
-) -> Iterator[Span | None]:
+def delegation_span(child_session_id: str = "", *, child_agent: str = "") -> Iterator[Span | None]:
     """Child run for one delegation to a child session."""
     with _child_span(
         DELEGATION,
@@ -553,6 +549,7 @@ def approval_span(request_id: str) -> Iterator[Span | None]:
 
 
 # ─── usage attribution ──────────────────────────────────────────────────────
+
 
 def _is_nonneg_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
@@ -641,11 +638,7 @@ def note_finish(
         turn = _TURNS.get(entry["turn_id"])
         if turn is None:
             return False
-        known = (
-            not failed
-            and _is_nonneg_int(prompt_tokens)
-            and _is_nonneg_int(completion_tokens)
-        )
+        known = not failed and _is_nonneg_int(prompt_tokens) and _is_nonneg_int(completion_tokens)
         accounted = accounted_tokens if _is_nonneg_int(accounted_tokens) else None
         if accounted is None and not known:
             # Mirror COALESCE($5, reserved_tokens): failed/unknown calls keep
@@ -693,6 +686,7 @@ def note_finish(
 
 
 # ─── reconciliation + diagnostics ───────────────────────────────────────────
+
 
 def _outcome_of(span: Span, key: str) -> str:
     value = span.attributes.get(key, None) or span.status

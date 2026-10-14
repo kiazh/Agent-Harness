@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import hashlib
+import importlib as _importlib
 import inspect
 import json
 import logging
+import sys as _sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, get_type_hints
+from typing import TYPE_CHECKING, Any, get_type_hints
 
-import importlib as _importlib
-import sys as _sys
+if TYPE_CHECKING:
+    from machina.core.models import ToolDefinition
 
 
 # SEAM: leaf-core seam for machina.core (exceptions ToolError/ValidationError,
@@ -24,6 +26,7 @@ def _core_symbol(module: str, name: str):
     if mod is None:
         mod = _importlib.import_module(module)
     return getattr(mod, name)
+
 
 logger = logging.getLogger(__name__)
 
