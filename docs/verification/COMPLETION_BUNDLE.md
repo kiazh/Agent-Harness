@@ -537,3 +537,11 @@ read-only references.
 - **Gates**: `pytest tests/test_mcp_server.py` — **26 passed / 0 failed**
   (19 pre-existing + 7 new pins, stdio handshake included); `ruff check` +
   `ruff format --check` green on all touched Python files.
+- **j1-j9 certification (2026-10-14, final)**: full acceptance gate on the
+  tree carrying every wave of the day (adversarial re-verification fixes,
+  agent tabs, MCP shim + Stage 2 durability, auto-applied learning +
+  census consolidation, Stage 3 UI dedup, Stage 4+5 status/process
+  consolidation, hygiene): **9 PASS / 0 FAIL / 0 SKIP** — j4 firecrawl and
+  j9 opencode-MCP both green on real components (proof committed at
+  docs/verification/proofs/2026-10-14-e2e-gate.*). Backend suite on the
+  same tree: 3,776 passed / 0 failed.
