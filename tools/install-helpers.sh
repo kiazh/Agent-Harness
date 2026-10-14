@@ -96,6 +96,41 @@ installer_next_steps() {
   printf '\nDocs: %s\n' "$docs"
 }
 
+# installer_interop_setup <mode> [prompt|no-prompt] — best-effort registration
+# of Machina's MCP server with detected harnesses (requires MACHINA_BIN, the
+# freshly installed CLI; runs after the shim step so it exists).
+#   none: skip entirely (no output, no spawns).
+#   auto: the CLI prompts on a TTY; otherwise it only prints the detection
+#         summary + enable-later commands (never a silent registration).
+#   all:  register every detected harness without prompting (safe when piped).
+# A failure warns and continues — interop must never fail the install.
+installer_interop_setup() {
+  local mode="${1:-auto}" prompt_mode="${2:-prompt}"
+  case "$mode" in
+    none) return 0 ;;
+    auto | all) ;;
+    *)
+      warn "Unknown interop mode '$mode'; skipping external harness registration"
+      return 0
+      ;;
+  esac
+  if [ -z "${MACHINA_BIN:-}" ] || [ ! -x "$MACHINA_BIN" ]; then
+    warn "Interop: machina CLI not found; run 'machina interop setup' after install"
+    return 0
+  fi
+  log "Checking external agent harnesses (interop: $mode)"
+  if [ "$prompt_mode" = "no-prompt" ]; then
+    if ! "$MACHINA_BIN" interop setup --mode "$mode" --no-prompt; then
+      warn "Interop setup did not complete; install continues. Retry later: machina interop setup"
+    fi
+  else
+    if ! "$MACHINA_BIN" interop setup --mode "$mode"; then
+      warn "Interop setup did not complete; install continues. Retry later: machina interop setup"
+    fi
+  fi
+  return 0
+}
+
 # resolve_env_file <startup_dir> — stdout: absolute env-file path.
 # MACHINA_ENV_FILE absolute wins as-is; relative MACHINA_ENV_FILE anchors to the
 # startup directory (so a later cd into the checkout cannot redirect it);

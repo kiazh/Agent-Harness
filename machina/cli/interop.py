@@ -2,7 +2,8 @@
 
 Surfaces the ``machina.interop`` module: which of OpenCode / Codex / Hermes
 are installed, running, and registered to reach Machina's MCP server
-(``python -m machina.mcp_server``), plus idempotent enable/disable.
+(``python -m machina.mcp_server``), plus idempotent enable/disable and the
+best-effort ``setup`` sweep used by the installer and ``machina setup``.
 
 Status-surface decision (interop wave, 2026-10-14): this feature is
 deliberately NOT folded into ``services.format_status_lines`` or the
@@ -19,6 +20,7 @@ from __future__ import annotations
 import shlex
 
 import typer
+from rich.markup import escape
 from rich.table import Table
 
 from machina import interop
@@ -154,6 +156,48 @@ def run_disable(platform: str) -> int:
     return EXIT_OK if result.ok else EXIT_FAILED
 
 
+def run_setup(mode: str = "auto", *, scope: str = "global", no_prompt: bool = False) -> int:
+    """Best-effort detect + enable sweep; return 0/1/2.
+
+    * ``none`` — skip entirely (no detection, no spawns).
+    * ``all`` — register every detected-but-unregistered harness, no prompting
+      (safe when piped).
+    * ``auto`` — prompt per detected harness on a TTY; otherwise print the
+      detection summary plus the exact enable-later commands and write nothing.
+    """
+    normalized = (mode or "auto").strip().lower()
+    if normalized not in ("auto", "all", "none"):
+        console.print(f"[red]Invalid --mode {escape(str(mode))!r}. Use auto|all|none.[/red]")
+        return EXIT_USAGE
+    normalized_scope = (scope or "global").strip().lower()
+    if normalized_scope not in ("project", "global"):
+        console.print("[red]Invalid --scope. Use project|global.[/red]")
+        return EXIT_USAGE
+    if normalized == "none":
+        console.print("[dim]Interop setup skipped (mode none).[/dim]")
+        return EXIT_OK
+
+    if normalized == "all":
+        only = list(interop.PLATFORMS)
+        interactive = False
+    else:
+        only = None
+        interactive = (not no_prompt) and interop.stdin_is_tty()
+
+    def _emit(line: str) -> None:
+        console.print(line, markup=False, highlight=False)
+
+    report = interop.enable_detected(
+        scope=normalized_scope, only=only, interactive=interactive, out=_emit
+    )
+    if report.failed:
+        console.print(
+            "[yellow]Some registrations did not complete; run `machina interop status`.[/yellow]"
+        )
+        return EXIT_FAILED
+    return EXIT_OK
+
+
 @app.command()
 def status() -> None:
     """Show which harnesses are installed, running, registered, and enabled."""
@@ -180,3 +224,23 @@ def disable(
 ) -> None:
     """Remove Machina's MCP server registration (manual where unsupported)."""
     raise typer.Exit(run_disable(platform))
+
+
+@app.command()
+def setup(
+    mode: str = typer.Option(
+        "auto",
+        "--mode",
+        envvar="MACHINA_INTEROP",
+        help="auto|all|none — auto prompts on a TTY and prints the summary "
+        "otherwise; all registers every detected harness; none skips",
+    ),
+    scope: str = typer.Option(
+        "global", "--scope", help="Registration scope: project|global (Codex/Hermes: global only)"
+    ),
+    no_prompt: bool = typer.Option(
+        False, "--no-prompt", help="Never prompt; print the summary and enable-later commands"
+    ),
+) -> None:
+    """Detect harnesses and register Machina's MCP server (best-effort)."""
+    raise typer.Exit(run_setup(mode, scope=scope, no_prompt=no_prompt))

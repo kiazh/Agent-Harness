@@ -22,6 +22,7 @@ from rich.table import Table
 
 import machina.tools  # noqa: F401 — registers all built-in tools
 from machina import __version__, services
+from machina import interop as interop_mod
 from machina.cli import output
 from machina.cli.growth import app as growth_app
 from machina.cli.interop import app as interop_app
@@ -1051,6 +1052,24 @@ def hub(
         raise typer.Exit(1)
 
 
+def _doctor_interop_line(key: str, result: object) -> str:
+    """Read-only doctor line: installed/version/running/registered + fix hint."""
+    label = getattr(result, "label", key)
+    if not getattr(result, "installed", False):
+        return f"  {label}: not installed (install `{key}` to enable Machina tools there)"
+    version = getattr(result, "version", None)
+    parts = [f"installed ({version})" if version else "installed"]
+    parts.append("running" if getattr(result, "running", False) else "not running")
+    if getattr(result, "registered", False):
+        scopes = "+".join(getattr(result, "scopes", []) or [])
+        parts.append(f"registered ({scopes})" if scopes else "registered")
+        return f"  {label}: " + ", ".join(parts)
+    parts.append("not registered")
+    return (
+        f"  {label}: " + ", ".join(parts) + f" — fix: `machina interop enable {key} --scope global`"
+    )
+
+
 @app.command()
 def doctor():
     """Check Machina dependencies and configuration."""
@@ -1128,6 +1147,16 @@ def doctor():
             await db.close()
 
     _run(_check_db())
+
+    console.print()
+    console.print("[bold]External agent harnesses (interop)[/bold]")
+    try:
+        detection = interop_mod.detect()
+        for key, result in detection.items():
+            console.print(_doctor_interop_line(key, result), markup=False, highlight=False)
+    except Exception as error:
+        console.print(f"  [yellow]Interop detection unavailable: {escape(str(error))}[/yellow]")
+
     console.print()
     output.muted("New install? Run `machina setup` before opening the UI with `machina`.")
 
@@ -1160,11 +1189,74 @@ def init(
     _run(_init())
 
 
+def _interop_state_lines(report) -> list[str]:
+    """Final-message lines describing the setup interop step's outcome."""
+    detected = report.detected
+    labels = {key: result.label for key, result in detected.items()}
+    lines: list[str] = []
+    if report.enabled:
+        names = ", ".join(labels.get(key, key) for key in report.enabled)
+        lines.append(f"Interop: registered `machina` with {names} — see `machina interop status`.")
+    if report.failed:
+        names = ", ".join(labels.get(key, key) for key in report.failed)
+        lines.append(
+            f"Interop: registration did not verify for {names} — see `machina interop status`."
+        )
+    if report.skipped:
+        names = ", ".join(labels.get(key, key) for key in report.skipped)
+        hint = f"machina interop enable {report.skipped[0]} --scope global"
+        lines.append(f"Interop: {names} installed but not registered — enable with `{hint}`.")
+    if not lines:
+        registered = [result.label for result in detected.values() if result.registered]
+        if registered:
+            lines.append(f"Interop: {', '.join(registered)} already registered.")
+        else:
+            lines.append("Interop: no external harnesses detected (OpenCode, Codex, Hermes).")
+    return lines
+
+
+def _setup_interop(mode: str, *, non_interactive: bool) -> list[str]:
+    """Interop step for `machina setup`: detect, optionally register.
+
+    Best-effort by design: the .env work above is already done, so a harness
+    problem is reported and swallowed — never a failed setup. Returns the
+    lines for the final message block.
+    """
+    console.print()
+    console.print("[bold]External agent harnesses[/bold]")
+    if mode == "none":
+        console.print("  [dim]Skipped (--interop none).[/dim]")
+        return ["Interop: skipped (--interop none)."]
+    try:
+        if mode == "all":
+            only = list(interop_mod.PLATFORMS)
+            interactive = False
+        else:
+            only = None
+            interactive = (not non_interactive) and interop_mod.stdin_is_tty()
+        report = interop_mod.enable_detected(
+            scope="global",
+            only=only,
+            interactive=interactive,
+            out=lambda line: console.print(line, markup=False, highlight=False),
+        )
+    except Exception as error:  # pragma: no cover - interop is best-effort
+        console.print(f"  [yellow]Interop setup skipped: {escape(str(error))}[/yellow]")
+        return ["Interop: setup skipped (run `machina interop setup` later)."]
+    return _interop_state_lines(report)
+
+
 @app.command()
 def setup(
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite an existing .env file"),
     non_interactive: bool = typer.Option(
         False, "--non-interactive", help="Create a blank .env without prompting"
+    ),
+    interop_mode: str = typer.Option(
+        "auto",
+        "--interop",
+        envvar="MACHINA_INTEROP",
+        help="External harness MCP registration: auto|all|none (env: MACHINA_INTEROP)",
     ),
 ):
     """First-launch setup — create the .env file and configure API keys.
@@ -1172,7 +1264,9 @@ def setup(
     Creates the git-ignored ``.env`` next to the project (or at
     ``$MACHINA_ENV_FILE``) with one entry per model family you use, plus the
     default provider and model. Existing values are kept when you press
-    Enter; ``--force`` starts over.
+    Enter; ``--force`` starts over. Finally detects external agent harnesses
+    (OpenCode, Codex, Hermes) and offers to register Machina's MCP server
+    with them (``--interop auto|all|none``).
     """
     import secrets as _secrets
 
@@ -1182,6 +1276,14 @@ def setup(
         read_env_values,
         set_env_values,
     )
+
+    mode = (interop_mode or "auto").strip().lower()
+    if mode not in ("auto", "all", "none"):
+        console.print(
+            f"[red]Invalid --interop {escape(str(interop_mode))!r}. "
+            "Use auto|all|none (env: MACHINA_INTEROP).[/red]"
+        )
+        raise typer.Exit(1)
 
     target = find_env_file()
     if target.is_file() and force:
@@ -1319,14 +1421,20 @@ def setup(
         console.print(f"\n[green]✓ Wrote {len(updates)} value(s) to .env:[/green] {changed}")
     else:
         console.print("\n[dim]No changes written.[/dim]")
-    console.print()
-    output.muted("Next: run `machina doctor`, then `machina init` to create the database schema.")
 
     # Show key status without ever printing values.
     stored = read_env_values(target)
     for key, _desc in PROVIDER_KEYS:
         mark = "[green]set[/green]" if stored.get(key, "").strip() else "[dim]not set[/dim]"
         console.print(f"  {key}: {mark}")
+
+    # Best-effort interop step: register Machina's MCP server where chosen.
+    interop_lines = _setup_interop(mode, non_interactive=non_interactive)
+
+    console.print()
+    output.muted("Next: run `machina doctor`, then `machina init` to create the database schema.")
+    for line in interop_lines:
+        output.muted(line)
 
 
 @app.command()

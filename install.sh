@@ -9,7 +9,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/kiazh/Machina-Harness/main/install.sh | bash -s -- --interactive
 #
 # Local:
-#   ./install.sh [--dir DIR] [--dev] [--no-ui] [--interactive] [--yes] [--with-docker-db|--no-docker-db] [--skip-init]
+#   ./install.sh [--dir DIR] [--dev] [--no-ui] [--interactive] [--yes] [--with-docker-db|--no-docker-db] [--skip-init] [--interop MODE]
 #
 # What it does, in order:
 #   1. Uses current checkout (or clones REPO_URL into --dir / ./machina)
@@ -22,7 +22,9 @@
 #   7. Installs an `machina` shim in ~/.local/bin, persists it to the shell rc
 #      (~/.zshrc / ~/.bash_profile / ~/.bashrc), and on Windows registers the
 #      venv in the user Path for PowerShell — so `machina` works in new shells.
-#   8. Tells the user to run `machina setup` before opening the UI, chat, or server.
+#   8. Detects external agent harnesses (OpenCode, Codex, Hermes) and registers
+#      Machina's MCP server with the chosen ones (--interop auto|all|none).
+#   9. Tells the user to run `machina setup` before opening the UI, chat, or server.
 #
 set -euo pipefail
 
@@ -36,6 +38,7 @@ SKIP_INIT=0
 DOCKER_DB="auto" # auto | yes | no
 DB_AUTO="yes" # provision a local Postgres (docker, then Homebrew on macOS) when machina init fails
 SHELL_RC="yes" # append ~/.local/bin to PATH in the shell rc file (opt out with --no-shell-rc)
+INTEROP_MODE="${MACHINA_INTEROP:-auto}" # auto | all | none (external harness MCP registration)
 PYTHON_BIN=""
 
 log() {
@@ -71,9 +74,12 @@ Options:
   --no-auto-db     Never auto-provision Postgres (docker or Homebrew); just warn
   --no-shell-rc    Don't touch shell rc files (~/.zshrc etc.); print PATH hint only
   --skip-init      Skip automatic `machina init` (DB schema creation)
+  --interop MODE   External harness MCP registration: auto (default — prompt
+                   on a TTY, otherwise print the detection summary), all
+                   (register every detected OpenCode/Codex/Hermes), none (skip)
   -h, --help       Show this help
 
-Env: REPO_URL, MACHINA_INSTALL_DIR
+Env: REPO_URL, MACHINA_INSTALL_DIR, MACHINA_INTEROP (=--interop MODE)
 EOF
 }
 
@@ -89,6 +95,14 @@ while [ $# -gt 0 ]; do
     --no-auto-db) DB_AUTO="no"; shift ;;
     --no-shell-rc) SHELL_RC="no"; shift ;;
     --skip-init) SKIP_INIT=1; shift ;;
+    --interop)
+      [ $# -ge 2 ] || die "--interop requires a value (auto|all|none)"
+      case "${2:-}" in
+        auto | all | none) INTEROP_MODE="${2:-}" ;;
+        *) die "--interop must be auto, all, or none (got '${2:-}')" ;;
+      esac
+      shift 2
+      ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown option: $1 (see --help)" ;;
   esac
@@ -98,6 +112,16 @@ done
 if [ ! -t 0 ] && [ "$INTERACTIVE" = "0" ]; then
   ASSUME_YES=1
 fi
+
+# A bad MACHINA_INTEROP in the environment is a warning, not a fatal error:
+# install continues and simply skips harness registration.
+case "$INTEROP_MODE" in
+  auto | all | none) ;;
+  *)
+    warn "MACHINA_INTEROP='$INTEROP_MODE' is not auto|all|none; skipping interop setup"
+    INTEROP_MODE="none"
+    ;;
+esac
 
 is_repo_dir() { [ -f "$1/pyproject.toml" ] && [ -d "$1/machina" ] && [ -d "$1/ui" ]; }
 
@@ -514,5 +538,15 @@ if [ "$PATH_STATE" = "shim-failed" ]; then
   warn "  source \"$(pwd)/.venv/bin/activate\" && machina"
   echo ""
 fi
+
+# --- Interop: register Machina's MCP server with detected harnesses -----------
+# Runs after the shim step (so the `machina` CLI exists) and is failure-tolerant
+# like the init step: an interop problem must never fail the install. `none`
+# skips entirely; `all` registers every detected harness; `auto` prompts only
+# on an interactive TTY and otherwise just prints the detection summary plus
+# the exact enable-later commands (`--yes`/piped runs never prompt).
+INTEROP_PROMPT="prompt"
+if [ "$ASSUME_YES" = "1" ] || [ ! -t 0 ]; then INTEROP_PROMPT="no-prompt"; fi
+installer_interop_setup "$INTEROP_MODE" "$INTEROP_PROMPT"
 
 installer_next_steps "$INIT_STATE" "$(pwd)/README.md"

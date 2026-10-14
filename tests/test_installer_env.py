@@ -13,8 +13,10 @@ import fcntl
 import os
 import pty
 import select
+import shlex
 import signal
 import subprocess
+import sys
 import termios
 import time
 from pathlib import Path
@@ -688,3 +690,183 @@ def test_docker_custom_url_preserved(tmp_path):
     assert (
         "DATABASE_URL=postgresql://u:p@db.internal:5432/prod" in env_file.read_text().splitlines()
     )
+
+
+# ─── interop wiring (installer_interop_setup) ────────────────────────────────
+
+# The fake `machina` console script runs the REAL `machina interop` CLI (so
+# mode semantics and the enable path are exercised end-to-end) with the
+# project-root anchor redirected to an empty temp dir, mirroring what the
+# Python suite does with monkeypatch(interop, "_repo_root", ...).
+INTEROP_CLI_RUNNER = """\
+import os
+from pathlib import Path
+
+import machina.interop as interop
+
+interop._repo_root = lambda: Path(os.environ["FAKE_REPO_ROOT"])
+
+from machina.cli import app
+
+app()
+"""
+
+
+def _interop_harness(tmp_path):
+    """Fake opencode/codex on PATH + a fake `machina` wrapper; return (env, logs)."""
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir()
+    opencode_log = tmp_path / "opencode.log"
+    codex_log = tmp_path / "codex.log"
+    machina_log = tmp_path / "machina.log"
+
+    (bindir / "opencode").write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$*" >> {shlex.quote(str(opencode_log))}\n'
+        'if [ "$1" = "--version" ]; then echo "opencode v9.9.9"; exit 0; fi\n'
+        'if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then\n'
+        f'  if grep -q "mcp add" {shlex.quote(str(opencode_log))} 2>/dev/null; then\n'
+        '    echo "✓ machina              connected"\n'
+        '  else echo ""; fi\n'
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    (bindir / "opencode").chmod(0o755)
+
+    (bindir / "codex").write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$*" >> {shlex.quote(str(codex_log))}\n'
+        'if [ "$1" = "--version" ]; then echo "codex-cli 9.9.9"; exit 0; fi\n'
+        'if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then\n'
+        f'  if grep -q "mcp add" {shlex.quote(str(codex_log))} 2>/dev/null; then\n'
+        '    echo \'[{"name": "machina", "enabled": true}]\'\n'
+        "  else echo '[]'; fi\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    (bindir / "codex").chmod(0o755)
+
+    runner = tmp_path / "interop_cli_runner.py"
+    runner.write_text(INTEROP_CLI_RUNNER, encoding="utf-8")
+    (bindir / "machina").write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "machina %s\\n" "$*" >> {shlex.quote(str(machina_log))}\n'
+        f'exec {shlex.quote(sys.executable)} {shlex.quote(str(runner))} "$@"\n'
+    )
+    (bindir / "machina").chmod(0o755)
+
+    (tmp_path / "repo-root").mkdir()
+    (tmp_path / "home").mkdir()
+    env = {
+        "PATH": f"{bindir}:/usr/bin:/bin",
+        "MACHINA_BIN": str(bindir / "machina"),
+        "FAKE_REPO_ROOT": str(tmp_path / "repo-root"),
+        "PYTHONPATH": str(REPO),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "HOME": str(tmp_path / "home"),
+        "XDG_CONFIG_HOME": str(tmp_path / "xdg"),
+        "CODEX_HOME": str(tmp_path / "codex"),
+        "HERMES_HOME": str(tmp_path / "hermes"),
+        "MACHINA_INTEROP_STATE_FILE": str(tmp_path / "state" / "interop.json"),
+    }
+    return env, {"opencode": opencode_log, "codex": codex_log, "machina": machina_log}
+
+
+def test_interop_none_skips_entirely(tmp_path):
+    env, logs = _interop_harness(tmp_path)
+
+    proc = run_bash("installer_interop_setup none", cwd=tmp_path, env=env)
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "", "no summary section for --interop none"
+    assert not logs["machina"].exists(), "none must not invoke the machina CLI"
+    assert not logs["opencode"].exists() and not logs["codex"].exists()
+
+
+def test_interop_unknown_mode_warns_and_spawns_nothing(tmp_path):
+    env, logs = _interop_harness(tmp_path)
+
+    proc = run_bash("installer_interop_setup someday", cwd=tmp_path, env=env)
+
+    assert proc.returncode == 0
+    assert "Unknown interop mode" in proc.stderr
+    assert not logs["machina"].exists()
+
+
+def test_interop_all_registers_detected_harnesses(tmp_path):
+    env, logs = _interop_harness(tmp_path)
+
+    proc = run_bash("installer_interop_setup all no-prompt", cwd=tmp_path, env=env, timeout=180)
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "Interop harness detection" in proc.stdout
+    assert "OpenCode" in proc.stdout and "Codex" in proc.stdout
+
+    opencode_log = logs["opencode"].read_text(encoding="utf-8")
+    assert "mcp add --global machina --" in opencode_log, "opencode is global-scope"
+    assert sys.executable in opencode_log, "registered with the (venv) interpreter"
+    assert "-m machina.mcp_server" in opencode_log
+
+    codex_log = logs["codex"].read_text(encoding="utf-8")
+    assert "mcp add machina --" in codex_log
+    assert sys.executable in codex_log
+    assert "-m machina.mcp_server" in codex_log
+    assert "--global" not in codex_log, "codex has no scope flag"
+
+    assert "interop setup --mode all" in logs["machina"].read_text(encoding="utf-8")
+    assert (tmp_path / "state" / "interop.json").is_file(), "state recorded on enable"
+
+
+def test_interop_auto_piped_prints_summary_without_writes(tmp_path):
+    env, logs = _interop_harness(tmp_path)
+
+    # run_bash feeds /dev/null on stdin => the default (auto) install is piped.
+    proc = run_bash("installer_interop_setup auto", cwd=tmp_path, env=env, timeout=180)
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "OpenCode" in proc.stdout and "not registered" in proc.stdout
+    assert "machina interop enable opencode --scope global" in proc.stdout
+    assert "machina interop enable codex --scope global" in proc.stdout
+
+    for name in ("opencode", "codex"):
+        assert "mcp add" not in logs[name].read_text(encoding="utf-8"), (
+            "piped auto must not register anything"
+        )
+    assert not (tmp_path / "state" / "interop.json").exists()
+    assert "interop setup --mode auto" in logs["machina"].read_text(encoding="utf-8")
+
+
+def test_install_sh_declares_and_wires_interop():
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    assert "--interop MODE" in text and "MACHINA_INTEROP" in text
+    assert 'INTEROP_MODE="${MACHINA_INTEROP:-auto}"' in text
+    # Wired after the shim step, before the final next-steps block.
+    assert "installer_interop_setup" in text
+    assert text.index("installer_interop_setup") < text.index("installer_next_steps")
+
+
+def test_install_sh_help_lists_interop_flag(tmp_path):
+    proc = subprocess.run(
+        ["bash", str(INSTALL_SH), "--help"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "--interop MODE" in proc.stdout
+    assert "MACHINA_INTEROP" in proc.stdout
+
+
+def test_install_sh_rejects_bad_interop_mode(tmp_path):
+    proc = subprocess.run(
+        ["bash", str(INSTALL_SH), "--interop", "bogus"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "--interop must be auto, all, or none" in proc.stderr

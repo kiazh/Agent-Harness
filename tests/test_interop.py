@@ -42,6 +42,7 @@ def _sandboxed_homes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.delenv("MACHINA_INTEROP", raising=False)
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
     monkeypatch.setattr(interop, "_repo_root", lambda: repo)
@@ -675,3 +676,321 @@ def test_cli_disable_manual_exits_1(monkeypatch):
     result = runner.invoke(cli.app, ["interop", "disable", "opencode"])
     assert result.exit_code == 1
     assert "no MCP remove subcommand" in result.output
+
+
+# ─── enable_detected: best-effort sweep for setup/installer flows ───────────
+
+
+def _installed_result(key, *, registered=False, version="v9.9"):
+    spec = interop.PLATFORMS[key]
+    return interop.DetectResult(
+        platform=key,
+        label=spec.label,
+        installed=True,
+        binary=f"/fake/bin/{key}",
+        version=version,
+        running=False,
+        registered=registered,
+        registered_detail="listed" if registered else "not listed",
+        scopes=["global"] if registered else [],
+        enabled=None,
+        state_scope=None,
+        notes=[],
+    )
+
+
+def _missing_result(key):
+    spec = interop.PLATFORMS[key]
+    return interop.DetectResult(
+        platform=key,
+        label=spec.label,
+        installed=False,
+        binary=None,
+        version=None,
+        running=False,
+        registered=False,
+        registered_detail="not installed",
+        scopes=[],
+        enabled=None,
+        state_scope=None,
+        notes=[],
+    )
+
+
+def _patch_sweep(monkeypatch, detection, *, enable_ok=True, enable_error=None):
+    """Fake interop.detect()/interop.enable(); return the recorded enable calls."""
+    calls: list[tuple[str, str]] = []
+
+    def fake_enable(platform, *, scope="project", dry_run=False):
+        calls.append((platform, scope))
+        if enable_error is not None:
+            raise enable_error
+        spec = interop.PLATFORMS[platform]
+        return interop.ActionResult(
+            platform=platform,
+            action="enable",
+            ok=enable_ok,
+            changed=True,
+            message=f"registered `machina` for {spec.label} ({scope} scope) and verified it.",
+            verify={"ok": enable_ok, "detail": "listed"},
+        )
+
+    monkeypatch.setattr(interop, "detect", lambda platforms=None: detection)
+    monkeypatch.setattr(interop, "enable", fake_enable)
+    return calls
+
+
+def test_enable_detected_non_interactive_only_enables_listed(monkeypatch):
+    detection = {
+        "opencode": _installed_result("opencode"),
+        "codex": _installed_result("codex"),
+        "hermes": _missing_result("hermes"),
+    }
+    calls = _patch_sweep(monkeypatch, detection)
+    lines: list[str] = []
+
+    report = interop.enable_detected(
+        scope="global", only=["codex"], interactive=False, out=lines.append
+    )
+
+    assert calls == [("codex", "global")]
+    assert report.enabled == ["codex"] and report.failed == []
+    assert report.skipped == ["opencode"], "unlisted candidates are never enabled"
+    # A detection summary line per platform, always.
+    assert any(line.startswith("  OpenCode:") and "not registered" in line for line in lines)
+    assert any(line.startswith("  Codex:") for line in lines)
+    assert any("Hermes: not installed" in line for line in lines)
+    # Skipped candidates get the exact enable-later command.
+    assert any("machina interop enable opencode --scope global" in line for line in lines)
+    assert any("Enabling Machina for Codex (scope: global)" in line for line in lines)
+
+
+def test_enable_detected_non_interactive_without_only_never_enables(monkeypatch):
+    detection = {
+        "opencode": _installed_result("opencode"),
+        "codex": _installed_result("codex", registered=True),
+        "hermes": _missing_result("hermes"),
+    }
+    calls = _patch_sweep(monkeypatch, detection)
+    lines: list[str] = []
+
+    report = interop.enable_detected(interactive=False, out=lines.append)
+
+    assert calls == [], "non-interactive without an explicit only-list must not enable"
+    assert report.results == [] and report.skipped == ["opencode"]
+    assert any("Interop harness detection:" in line for line in lines)
+    assert any("enable later with" in line for line in lines)
+    assert any("registered" in line for line in lines if line.startswith("  Codex:"))
+
+
+def test_enable_detected_callback_decides_per_candidate(monkeypatch):
+    detection = {
+        "opencode": _installed_result("opencode"),
+        "codex": _installed_result("codex"),
+        "hermes": _missing_result("hermes"),
+    }
+    calls = _patch_sweep(monkeypatch, detection)
+    lines: list[str] = []
+    seen: list[str] = []
+
+    report = interop.enable_detected(
+        interactive=lambda result: seen.append(result.platform) or result.platform == "codex",
+        out=lines.append,
+    )
+
+    assert seen == ["opencode", "codex"], "every candidate is offered"
+    assert calls == [("codex", "global")]
+    assert report.skipped == ["opencode"]
+
+
+def test_enable_detected_tty_prompt_yes_then_no(monkeypatch):
+    detection = {
+        "opencode": _installed_result("opencode"),
+        "codex": _installed_result("codex"),
+        "hermes": _missing_result("hermes"),
+    }
+    calls = _patch_sweep(monkeypatch, detection)
+    lines: list[str] = []
+    monkeypatch.setattr(interop, "stdin_is_tty", lambda: True)
+    answers = iter(["y", "n"])
+    monkeypatch.setattr("builtins.input", lambda: next(answers))
+
+    report = interop.enable_detected(out=lines.append)
+
+    assert [call[0] for call in calls] == ["opencode"]
+    assert report.enabled == ["opencode"] and report.skipped == ["codex"]
+    assert any("Enable Machina in OpenCode? [Y/n]" in line for line in lines)
+    assert any("Enable Machina in Codex? [Y/n]" in line for line in lines)
+    assert any("machina interop enable codex --scope global" in line for line in lines)
+
+
+def test_enable_detected_prompt_eof_is_a_safe_no(monkeypatch):
+    detection = {"opencode": _installed_result("opencode")}
+    calls = _patch_sweep(monkeypatch, detection)
+    monkeypatch.setattr(interop, "stdin_is_tty", lambda: True)
+
+    def _eof():
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", _eof)
+
+    report = interop.enable_detected(out=lambda line: None)
+
+    assert calls == []
+    assert report.skipped == ["opencode"]
+
+
+def test_enable_detected_never_crashes_on_enable_error(monkeypatch):
+    detection = {"codex": _installed_result("codex")}
+    _patch_sweep(monkeypatch, detection, enable_error=RuntimeError("boom"))
+    lines: list[str] = []
+
+    report = interop.enable_detected(only=["codex"], interactive=False, out=lines.append)
+
+    assert report.failed == ["codex"] and report.enabled == []
+    assert any("boom" in note for note in report.notes)
+    assert any("✗" in line for line in lines)
+
+
+def test_enable_detected_detection_failure_is_reported_not_raised(monkeypatch):
+    def boom(platforms=None):
+        raise RuntimeError("pgrep exploded")
+
+    monkeypatch.setattr(interop, "detect", boom)
+    lines: list[str] = []
+
+    report = interop.enable_detected(interactive=False, out=lines.append)
+
+    assert report.detected == {}
+    assert any("pgrep exploded" in note for note in report.notes)
+    assert any("detection failed" in line for line in lines)
+
+
+def test_enable_detected_ignores_unknown_only_keys(monkeypatch):
+    detection = {"codex": _installed_result("codex")}
+    calls = _patch_sweep(monkeypatch, detection)
+
+    report = interop.enable_detected(
+        only=["bogus", "codex"], interactive=False, out=lambda line: None
+    )
+
+    assert calls == [("codex", "global")]
+    assert any("bogus" in note for note in report.notes)
+
+
+def test_enable_detected_nothing_to_do_when_all_registered(monkeypatch):
+    detection = {
+        "opencode": _installed_result("opencode", registered=True),
+        "codex": _installed_result("codex", registered=True),
+        "hermes": _missing_result("hermes"),
+    }
+    calls = _patch_sweep(monkeypatch, detection)
+
+    report = interop.enable_detected(interactive=False, out=lambda line: None)
+
+    assert calls == [] and report.results == [] and report.skipped == []
+    assert any("no action needed" in note for note in report.notes)
+
+
+# ─── `machina interop setup` (installer + `machina setup` sweep) ────────────
+
+
+def test_cli_interop_setup_none_skips_detection(monkeypatch):
+    def _forbidden(platforms=None):
+        raise AssertionError("--mode none must not run detection")
+
+    monkeypatch.setattr(interop, "detect", _forbidden)
+    result = runner.invoke(cli.app, ["interop", "setup", "--mode", "none"])
+    assert result.exit_code == 0, result.output
+    assert "skipped" in result.output.lower()
+
+
+def test_cli_interop_setup_all_enables_detected_without_prompt(monkeypatch):
+    detection = {
+        "opencode": _installed_result("opencode"),
+        "codex": _installed_result("codex"),
+        "hermes": _missing_result("hermes"),
+    }
+    calls = _patch_sweep(monkeypatch, detection)
+
+    result = runner.invoke(cli.app, ["interop", "setup", "--mode", "all"])
+
+    assert result.exit_code == 0, result.output
+    assert [call[0] for call in calls] == ["opencode", "codex"]
+    assert all(scope == "global" for _, scope in calls)
+    flat = " ".join(result.output.split())
+    assert "Interop harness detection:" in flat
+    assert "Enable Machina in" not in flat, "all mode never prompts"
+
+
+def test_cli_interop_setup_auto_piped_is_summary_only(monkeypatch):
+    detection = {
+        "opencode": _installed_result("opencode"),
+        "codex": _installed_result("codex"),
+        "hermes": _missing_result("hermes"),
+    }
+    calls = _patch_sweep(monkeypatch, detection)
+    monkeypatch.setattr(interop, "stdin_is_tty", lambda: False)
+
+    result = runner.invoke(cli.app, ["interop", "setup"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [], "piped auto must write nothing"
+    flat = " ".join(result.output.split())
+    assert "Interop harness detection:" in flat
+    assert "machina interop enable opencode --scope global" in flat
+
+
+@pytest.mark.parametrize(("answer", "should_enable"), [("y\n", True), ("n\n", False)])
+def test_cli_interop_setup_auto_prompts_on_a_tty(monkeypatch, answer, should_enable):
+    # One prompt-qualified candidate to keep the answer stream deterministic
+    # (OpenCode is already registered, Hermes is not installed).
+    detection = {
+        "opencode": _installed_result("opencode", registered=True),
+        "codex": _installed_result("codex"),
+        "hermes": _missing_result("hermes"),
+    }
+    calls = _patch_sweep(monkeypatch, detection)
+    monkeypatch.setattr(interop, "stdin_is_tty", lambda: True)
+
+    result = runner.invoke(cli.app, ["interop", "setup"], input=answer)
+
+    assert result.exit_code == 0, result.output
+    assert "Enable Machina in Codex? [Y/n]" in " ".join(result.output.split())
+    assert bool(calls) is should_enable
+
+
+def test_cli_interop_setup_no_prompt_overrides_a_tty(monkeypatch):
+    detection = {"codex": _installed_result("codex")}
+    calls = _patch_sweep(monkeypatch, detection)
+    monkeypatch.setattr(interop, "stdin_is_tty", lambda: True)
+
+    result = runner.invoke(cli.app, ["interop", "setup", "--no-prompt"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == []
+    assert "machina interop enable codex --scope global" in " ".join(result.output.split())
+
+
+def test_cli_interop_setup_invalid_mode_exits_2():
+    result = runner.invoke(cli.app, ["interop", "setup", "--mode", "later"])
+    assert result.exit_code == 2
+    assert "Invalid --mode" in result.output
+
+
+def test_cli_interop_setup_invalid_scope_exits_2():
+    result = runner.invoke(cli.app, ["interop", "setup", "--mode", "auto", "--scope", "session"])
+    assert result.exit_code == 2
+    assert "Invalid --scope" in result.output
+
+
+def test_new_flags_are_documented_in_help():
+    setup_help = runner.invoke(cli.app, ["setup", "--help"])
+    assert setup_help.exit_code == 0, setup_help.output
+    flat = " ".join(setup_help.output.split())
+    assert "--interop" in flat and "MACHINA_INTEROP" in flat
+
+    interop_help = runner.invoke(cli.app, ["interop", "setup", "--help"])
+    assert interop_help.exit_code == 0, interop_help.output
+    flat = " ".join(interop_help.output.split())
+    assert "--mode" in flat and "auto|all|none" in flat and "--no-prompt" in flat

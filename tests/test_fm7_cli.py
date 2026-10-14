@@ -343,3 +343,164 @@ def test_env_roundtrip_plain_values_still_works(env_file: Path) -> None:
     value = "hello world #not-a-comment"
     set_env_values({"TEST_MENU_KEY": value}, env_file)
     assert read_env_values(env_file)["TEST_MENU_KEY"] == value
+
+
+# ─── Interop step: `machina setup --interop` and the doctor section ─────────
+
+
+def _fake_interop_detection(*, opencode_registered: bool = False):
+    """Three fake DetectResults: OpenCode reg-optional, Codex unregistered, Hermes absent."""
+    from machina import interop
+
+    def _result(key, *, installed, registered, version="v9.9"):
+        return interop.DetectResult(
+            platform=key,
+            label=interop.PLATFORMS[key].label,
+            installed=installed,
+            binary=f"/fake/bin/{key}" if installed else None,
+            version=version if installed else None,
+            running=False,
+            registered=registered,
+            registered_detail="listed" if registered else "not listed",
+            scopes=["project"]
+            if registered and key == "opencode"
+            else (["global"] if registered else []),
+            enabled=None,
+            state_scope=None,
+            notes=[],
+        )
+
+    return {
+        "opencode": _result("opencode", installed=True, registered=opencode_registered),
+        "codex": _result("codex", installed=True, registered=False),
+        "hermes": _result("hermes", installed=False, registered=False),
+    }
+
+
+def _patch_setup_interop(monkeypatch, detection):
+    """Fake interop.detect()/enable(); return recorded (platform, scope) enables."""
+    from machina import interop
+
+    monkeypatch.delenv("MACHINA_INTEROP", raising=False)
+    calls: list[tuple[str, str]] = []
+
+    def fake_enable(platform, *, scope="project", dry_run=False):
+        calls.append((platform, scope))
+        return interop.ActionResult(
+            platform=platform,
+            action="enable",
+            ok=True,
+            changed=True,
+            message=f"registered `machina` for {interop.PLATFORMS[platform].label} "
+            f"({scope} scope) and verified it.",
+            verify={"ok": True, "detail": "listed"},
+        )
+
+    monkeypatch.setattr(interop, "detect", lambda platforms=None: detection)
+    monkeypatch.setattr(interop, "enable", fake_enable)
+    return calls
+
+
+def test_setup_interop_all_registers_detected_harnesses(
+    env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import machina.cli as cli
+
+    calls = _patch_setup_interop(monkeypatch, _fake_interop_detection(opencode_registered=True))
+
+    result = runner.invoke(cli.app, ["setup", "--non-interactive", "--interop", "all"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [("codex", "global")], "opencode is registered, hermes not installed"
+    flat = " ".join(result.output.split())
+    assert "Interop: registered `machina` with Codex" in flat
+    assert "machina interop status" in flat
+
+
+def test_setup_interop_none_skips_detection_entirely(
+    env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import machina.cli as cli
+    from machina import interop
+
+    def _forbidden(platforms=None):
+        raise AssertionError("--interop none must not detect")
+
+    monkeypatch.setattr(interop, "detect", _forbidden)
+
+    result = runner.invoke(cli.app, ["setup", "--non-interactive", "--interop", "none"])
+
+    assert result.exit_code == 0, result.output
+    flat = " ".join(result.output.split())
+    assert "Skipped (--interop none)" in flat
+    assert "Interop: skipped (--interop none)." in flat
+
+
+def test_setup_interop_auto_non_interactive_is_summary_only(
+    env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import machina.cli as cli
+
+    calls = _patch_setup_interop(monkeypatch, _fake_interop_detection())
+
+    result = runner.invoke(cli.app, ["setup", "--non-interactive"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [], "non-interactive setup must never register silently"
+    flat = " ".join(result.output.split())
+    assert "OpenCode: installed" in flat and "not registered" in flat
+    assert "machina interop enable codex --scope global" in flat
+    assert "Interop:" in flat
+
+
+def test_setup_interop_env_fallback_selects_mode(
+    env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import machina.cli as cli
+
+    calls = _patch_setup_interop(monkeypatch, _fake_interop_detection())
+
+    result = runner.invoke(cli.app, ["setup", "--non-interactive"], env={"MACHINA_INTEROP": "all"})
+
+    assert result.exit_code == 0, result.output
+    assert [call[0] for call in calls] == ["opencode", "codex"]
+
+
+def test_setup_interop_invalid_mode_exits_1(
+    env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import machina.cli as cli
+
+    result = runner.invoke(cli.app, ["setup", "--non-interactive", "--interop", "sometimes"])
+
+    assert result.exit_code == 1
+    assert "Invalid --interop" in result.output
+    assert not env_file.exists(), "a bad mode fails before any .env write"
+
+
+def test_doctor_interop_section_is_read_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    import machina.cli as cli
+    from machina import interop
+
+    monkeypatch.setattr(
+        interop, "detect", lambda platforms=None: _fake_interop_detection(opencode_registered=True)
+    )
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError("doctor must never enable a harness")
+
+    monkeypatch.setattr(interop, "enable", _forbidden)
+    monkeypatch.setattr(interop, "enable_detected", _forbidden)
+    monkeypatch.setattr(cli.db, "connect", AsyncMock())
+    monkeypatch.setattr(cli.db, "fetchval", AsyncMock(return_value="PostgreSQL 16.15"))
+    monkeypatch.setattr(cli.db, "close", AsyncMock())
+
+    result = runner.invoke(cli.app, ["doctor"])
+
+    assert result.exit_code == 0, result.output
+    flat = " ".join(result.output.split())
+    assert "External agent harnesses (interop)" in flat
+    assert "OpenCode: installed (v9.9), not running, registered (project)" in flat
+    assert "Codex: installed (v9.9), not running, not registered" in flat
+    assert "machina interop enable codex --scope global" in flat
+    assert "Hermes: not installed" in flat

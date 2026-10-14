@@ -18,6 +18,12 @@ inspectable operation:
     Removal where the platform CLI has a remove subcommand; platforms
     without one (OpenCode) report the exact manual step instead.
 
+``enable_detected(...)``
+    One best-effort sweep for setup/installer flows: detect every harness,
+    print a summary line per platform, and act only on the installed but
+    unregistered ones — prompting on a TTY (or via an ask-callback), enabling
+    an explicit ``only`` list non-interactively, and never raising.
+
 Design constraints (mirrors ``machina/mcp_server``):
 
 * Module imports are stdlib only; the ``machina.core.child_process`` leaf is
@@ -48,6 +54,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,14 +64,17 @@ __all__ = [
     "PLATFORMS",
     "ActionResult",
     "DetectResult",
+    "EnableReport",
     "UnknownPlatform",
     "detect",
     "disable",
     "enable",
+    "enable_detected",
     "load_state",
     "resolve_platform",
     "server_command",
     "state_path",
+    "stdin_is_tty",
 ]
 
 SERVER_NAME = "machina"
@@ -1046,3 +1056,179 @@ def disable(platform: str) -> ActionResult:
     return ActionResult(
         spec.key, "disable", ok, True, message, steps=steps, verify=verify, argv=[argv]
     )
+
+
+# ---------------------------------------------------------------------------
+# Best-effort sweep for setup/installer flows: detect → choose → enable
+# ---------------------------------------------------------------------------
+
+
+def stdin_is_tty() -> bool:
+    """True when stdin is an interactive terminal (safe to prompt on)."""
+    try:
+        return bool(sys.stdin.isatty())
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+@dataclass
+class EnableReport:
+    """Outcome of one :func:`enable_detected` sweep.
+
+    ``results`` holds one entry per *attempted* enable; ``skipped`` names the
+    installed-but-unregistered harnesses left alone (not requested, declined,
+    or non-interactive summary-only); ``notes`` is the human-readable trace
+    of both. ``detected`` is the full per-platform detection map.
+    """
+
+    detected: dict[str, DetectResult]
+    results: list[ActionResult] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def enabled(self) -> list[str]:
+        """Platform keys registered and verified during this sweep."""
+        return [result.platform for result in self.results if result.ok]
+
+    @property
+    def failed(self) -> list[str]:
+        """Platform keys whose enable attempt did not verify."""
+        return [result.platform for result in self.results if not result.ok]
+
+
+def _detection_summary_line(result: DetectResult) -> str:
+    """One plain-text summary line for a platform's detection state."""
+    if not result.installed:
+        return f"  {result.label}: not installed (`{result.platform}` not on PATH)"
+    parts = [f"installed ({result.version})" if result.version else "installed"]
+    parts.append("running" if result.running else "not running")
+    if result.registered:
+        scopes = "+".join(result.scopes)
+        parts.append(f"registered ({scopes})" if scopes else "registered")
+    else:
+        parts.append("not registered")
+    return f"  {result.label}: " + ", ".join(parts)
+
+
+def _enable_later_hint(result: DetectResult, scope: str) -> str:
+    return (
+        f"  {result.label}: enable later with "
+        f"`machina interop enable {result.platform} --scope {scope}`"
+    )
+
+
+def _prompt_enable(result: DetectResult, emit: Callable[[str], None]) -> bool:
+    """Ask the one enable question; default yes, EOF/abort means no."""
+    emit(f"Enable Machina in {result.label}? [Y/n]")
+    try:
+        answer = input().strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer in ("", "y", "yes")
+
+
+def enable_detected(
+    *,
+    scope: str = "global",
+    only: Iterable[str] | None = None,
+    interactive: bool | Callable[[DetectResult], bool] | None = None,
+    out: Callable[[str], None] | None = None,
+) -> EnableReport:
+    """Detect harnesses, then idempotently enable Machina for the chosen ones.
+
+    Behavior matrix (``interactive``):
+      * ``True`` or a callable — every installed-but-unregistered harness is
+        prompted ("Enable Machina in <platform>? [Y/n]"); the callable
+        receives its :class:`DetectResult` and returns the decision, and
+        ``only`` is ignored.
+      * ``False`` — only harnesses explicitly listed in ``only`` are enabled;
+        ``only=None``/empty enables nothing (detection summary only, never a
+        silent registration).
+      * ``None`` — prompts when stdin is a TTY, otherwise behaves like
+        ``interactive=False``.
+
+    A detection summary line is printed for every platform through ``out``
+    (default ``print``). Enable failures, detection failures, unknown ``only``
+    keys, and callback errors are captured in the returned :class:`EnableReport`
+    (and in ``notes``) — this function never raises for them.
+    """
+    emit = out if out is not None else print
+    report = EnableReport(detected={})
+
+    try:
+        detection = detect()
+    except Exception as error:  # detection must never abort a setup flow
+        report.notes.append(f"detection failed: {error}")
+        emit(f"Interop detection failed: {error}")
+        return report
+    report.detected = detection
+
+    wanted: set[str] = set()
+    keys = [only] if isinstance(only, str) else list(only or ())
+    for key in keys:
+        try:
+            wanted.add(resolve_platform(str(key)).key)
+        except (AttributeError, TypeError, UnknownPlatform):
+            report.notes.append(f"ignoring unknown platform {key!r} in `only`")
+
+    ask_callback = interactive if callable(interactive) else None
+    prompting = interactive is True or ask_callback is not None
+    if interactive is None:
+        prompting = stdin_is_tty()
+
+    emit("Interop harness detection:")
+    candidates: list[DetectResult] = []
+    for result in detection.values():
+        emit(_detection_summary_line(result))
+        if result.installed and not result.registered:
+            candidates.append(result)
+
+    if not candidates:
+        emit("  nothing to register (no installed harness is missing Machina)")
+        report.notes.append("no action needed: every installed harness is registered")
+        return report
+
+    planned: list[DetectResult] = []
+    for result in candidates:
+        approved = False
+        if prompting:
+            try:
+                approved = (
+                    bool(ask_callback(result))
+                    if ask_callback is not None
+                    else _prompt_enable(result, emit)
+                )
+            except Exception as error:  # a broken prompt is a no, never a crash
+                report.notes.append(
+                    f"{result.label}: prompt failed ({error}); treating as declined"
+                )
+        else:
+            approved = result.platform in wanted
+        if approved:
+            planned.append(result)
+            continue
+        report.skipped.append(result.platform)
+        report.notes.append(
+            f"{result.label}: left unregistered; enable later with "
+            f"`machina interop enable {result.platform} --scope {scope}`"
+        )
+        emit(_enable_later_hint(result, scope))
+
+    for result in planned:
+        emit(f"Enabling Machina for {result.label} (scope: {scope})...")
+        try:
+            action = enable(result.platform, scope=scope)
+        except Exception as error:  # an enable bug must not kill setup/install
+            action = ActionResult(
+                result.platform,
+                "enable",
+                False,
+                False,
+                f"unexpected error while enabling: {error}",
+            )
+            report.notes.append(f"{result.label}: unexpected error: {error}")
+        report.results.append(action)
+        mark = "✓" if action.ok else "✗"
+        emit(f"  {mark} {action.message}")
+    return report
