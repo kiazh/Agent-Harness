@@ -940,3 +940,190 @@ test("legacy tool completion retains typed success and error flags without infer
   assert.match(textOf(view), isError ? /✖ terminal/ : /✔ terminal/);
  }
 });
+
+// ─── R4-024: provider remove must not leave a stale session pin ─────────────
+
+/**
+ * FakeClient whose `request` models the gateway's durable session row:
+ * `/provider` runs through the real feature commands, `session.setModel`
+ * updates the row and answers with the authoritative route, and a turn
+ * executes with the row's pinned provider — an unknown pin rejects the turn
+ * the way the agent factory does, so a stale pin becomes a visible failure.
+ */
+class PinClient extends FakeClient {
+	route = { sessionId: SESSION_A.id, model: "openrouter/free", provider: "openrouter" };
+	named = new Set<string>();
+	gatewayProvider = "openrouter";
+	lastSubmitProvider: string | undefined;
+	setModelCalls: Array<Record<string, unknown>> = [];
+
+	private known(provider: string): boolean {
+		return provider === "openrouter" || this.named.has(provider);
+	}
+
+	override request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+		const respond = (value: unknown): Promise<T> => Promise.resolve(value as T);
+		const record = () => {
+			this.requests.push({ method, params });
+		};
+		switch (method) {
+			case "config.set": {
+				record();
+				if (params.key === "provider") this.gatewayProvider = String(params.value);
+				return respond({
+					model: this.route.model,
+					provider: this.gatewayProvider,
+					key: params.key,
+					value: params.value,
+				});
+			}
+			case "providers.add": {
+				record();
+				const name = String(params.name);
+				this.named.add(name);
+				return respond({
+					provider: name,
+					baseUrl: params.baseUrl,
+					apiKeyEnv: `MACHINA_PROVIDER_${name.toUpperCase()}_API_KEY`,
+					keySet: false,
+					keySaved: false,
+					models: [{ id: "acme-1" }],
+					fetchError: null,
+				});
+			}
+			case "providers.list": {
+				record();
+				const providers = [...this.named].map((name) => ({
+					name,
+					kind: "named",
+					selected: name === this.gatewayProvider,
+					baseUrl: "http://127.0.0.1:9000/v1",
+					keySet: false,
+					keylessLocal: true,
+					apiKeyEnv: `MACHINA_PROVIDER_${name.toUpperCase()}_API_KEY`,
+					modelsCount: 1,
+				}));
+				return respond({ selected: this.gatewayProvider, providers });
+			}
+			case "providers.remove": {
+				record();
+				const name = String(params.name);
+				if (!this.named.delete(name)) {
+					return Promise.reject(new Error(`unknown user-added provider: ${name}`));
+				}
+				const switched = this.gatewayProvider === name;
+				if (switched) this.gatewayProvider = "openrouter";
+				return respond({
+					provider: name,
+					removed: true,
+					selected: this.gatewayProvider,
+					switchedTo: switched ? "openrouter" : null,
+					modelResetTo: switched ? "openrouter/free" : null,
+					cleanup: {
+						storeEntry: true,
+						envKey: `MACHINA_PROVIDER_${name.toUpperCase()}_API_KEY`,
+						envLineRemoved: true,
+						envVarRemoved: true,
+						cachedModels: 1,
+						registryEntry: true,
+					},
+				});
+			}
+			case "session.setModel": {
+				record();
+				const provider = params.provider === undefined ? this.route.provider : String(params.provider);
+				if (!this.known(provider)) {
+					return Promise.reject(new Error("model or provider is invalid"));
+				}
+				this.route = {
+					sessionId: this.route.sessionId,
+					model: params.model === undefined ? this.route.model : String(params.model),
+					provider,
+				};
+				this.setModelCalls.push({ ...params });
+				return respond({
+					sessionId: this.route.sessionId,
+					model: this.route.model,
+					provider: this.route.provider,
+				});
+			}
+			case "prompt.submit": {
+				record();
+				if (!this.known(this.route.provider)) {
+					return Promise.reject(
+						new Error(`Unknown provider: ${this.route.provider}. Choose one of: openrouter`),
+					);
+				}
+				this.lastSubmitProvider = this.route.provider;
+				return respond({ turnId: "pin-turn" });
+			}
+			default:
+				return super.request<T>(method, params);
+		}
+	}
+}
+
+function makePinApp() {
+	const tui = new FakeTUI();
+	const client = new PinClient();
+	const app = new App(tui, client as unknown as GatewayClient);
+	// Scripted dialog intent only: confirmations accept, the optional provider
+	// key stays empty. Every RPC and the command/session flow stay real.
+	app.pick = async (_title, items) => items.find((item) => item.value === "yes") ?? items[0];
+	app.askText = async () => "";
+	return { app, tui, client };
+}
+
+async function appSubmit(app: App, text: string): Promise<void> {
+	await (app as unknown as { submit: (text: string) => Promise<void> }).submit(text);
+}
+
+async function waitForPromptOutcome(client: PinClient, notices: string[]): Promise<void> {
+	// Settle on either outcome: the fallback route accepted the turn, or the
+	// stale pin produced the gateway's unknown-provider rejection notice.
+	for (let i = 0; i < 200; i++) {
+		if (client.lastSubmitProvider !== undefined || notices.some((n) => /Unknown provider/i.test(n))) return;
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+}
+
+test("R4-024 /provider switch mirrors the authoritative route into the session snapshot", async () => {
+	const { app, client } = makePinApp();
+	await app.start();
+	client.named.add("acme");
+	await appSubmit(app, "/provider acme");
+	assert.equal(app.session()?.provider, "acme", "the app snapshot follows the gateway's pinned provider");
+	assert.equal(app.session()?.model, "openrouter/free", "the untouched model part is preserved");
+	await app.exit();
+});
+
+test("R4-024 provider remove re-pins the session and the next turn uses the fallback", async () => {
+	const { app, tui, client } = makePinApp();
+	await app.start();
+	const spy = spyTranscript(app);
+	const editor = tui.focused as unknown as { handleInput(data: string): void };
+	// Scripted user flow: add a provider, switch to it, then remove it.
+	await appSubmit(app, "/provider add acme http://127.0.0.1:9000/v1");
+	await appSubmit(app, "/provider acme");
+	await appSubmit(app, "/provider remove acme");
+	// The next prompt must execute on the fallback provider the removal
+	// reported — never on the deleted pin.
+	editor.handleInput("anything after the removal");
+	editor.handleInput("\r");
+	await waitForPromptOutcome(client, spy.notices);
+	assert.equal(
+		client.lastSubmitProvider,
+		"openrouter",
+		`next turn routes to the fallback; notices: ${spy.notices.join(" | ")}`,
+	);
+	assert.deepEqual(
+		client.setModelCalls.at(-1),
+		{ sessionId: SESSION_A.id, provider: "openrouter", model: "openrouter/free" },
+		"the remove guard re-pinned the session",
+	);
+	assert.ok(
+		!spy.notices.some((n) => /Unknown provider/i.test(n)),
+		`no unknown-provider failure: ${spy.notices.join(" | ")}`,
+	);
+	await app.exit();
+});

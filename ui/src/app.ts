@@ -330,7 +330,31 @@ export class App implements FeatureHost {
 			if (typeof mode === "string") this.footer.mode = mode;
 			this.tui.requestRender();
 		}
+		if (method === "session.setModel") this.adoptSessionRoute(result);
 		return result;
+	}
+
+	/**
+	 * Adopt the gateway's authoritative route for the current session after a
+	 * `session.setModel`. Sessions pin model/provider at creation, so readers
+	 * of `session()` (the `/provider remove` re-pin guard, `/models` grouping)
+	 * must compare the live pin — never a snapshot taken before the last
+	 * switch. All `/provider`/`/models` call sites route through `request`,
+	 * so mirroring here keeps the snapshot faithful without re-fetching.
+	 */
+	private adoptSessionRoute(result: unknown): void {
+		const current = this.current;
+		if (!current) return;
+		const route = result as { sessionId?: unknown; model?: unknown; provider?: unknown };
+		if (typeof route.sessionId === "string" && route.sessionId !== current.id) return;
+		const model = typeof route.model === "string" && route.model ? route.model : undefined;
+		const provider = typeof route.provider === "string" && route.provider ? route.provider : undefined;
+		if (!model && !provider) return;
+		this.updateSession({
+			...current,
+			...(model ? { model } : {}),
+			...(provider ? { provider } : {}),
+		});
 	}
 
 	print(text: string, kind: NoticeKind = "info"): void {
@@ -1277,6 +1301,24 @@ export class App implements FeatureHost {
 			this.outputStore.put(event.sessionId, event.id, event.name, event.result, event.truncated ?? false);
 		}
 		if ((event.type === "needs_approval" || event.type === "permission.required")) {
+			// R4-065: a pause frame can carry a terminal status — the broker's
+			// deadline (or another transport) already resolved the request.
+			// That is a resolution, not a card: retire any open card and
+			// retained evidence without issuing a decision the record refuses.
+			if (event.status !== undefined && event.status !== "pending") {
+				this.pendingApprovals.delete(event.requestId);
+				const stale = this.approvalDialogs.get(event.requestId);
+				stale?.card.setRecorded(`approval ${event.status}`);
+				stale?.close();
+				if (event.sessionId === this.current?.id) {
+					this.transcript.addNotice(
+						`Approval ${event.requestId.slice(0, 8)} ${event.status}.`,
+						event.status === "approved" ? "success" : event.status === "denied" ? "error" : "warning",
+					);
+				}
+				this.tui.requestRender();
+				return;
+			}
 			// Retain the review evidence even while its session is hidden
 			// (R15); the card itself opens only in the bound visible session
 			// and never carries a dialog into another session (T7 owns the
