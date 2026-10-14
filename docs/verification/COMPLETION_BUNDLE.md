@@ -403,3 +403,21 @@ Consolidated tree: **3,531 passed, 0 failed, 1 skipped, 1 xfailed**;
   opts in via .env (onnx + local reranker). Suite 3,697 passed / 0 failed;
   ruff green. Caveats recorded: huggingface-hub pinned <2.0 by fastembed,
   single-dataset point estimates, L6/thread/batching latency levers untested.
+
+- **harness-evals pilot (2026-10-14)**: evaluated `harness/harness-evals`
+  (Apache-2.0) against our bespoke stack. Verdict: keep the bespoke layer
+  (e2e gate, unified benchmark, head-to-head, repro batteries); adopt it
+  selectively for judged answer quality. Pilot ran clean end-to-end: 50
+  LoCoMo questions, production retrieval -> DeepSeek answers (the one paid
+  surface; a ~40-line json_object shim covers DeepSeek's rejection of
+  json_schema judges) -> judge metrics: faithfulness mean 0.950 (94% pass;
+  21/50 vacuous "no claims"), context_recall 0.453 (42% pass; non-vacuous
+  0.299), repo token_f1 anchor 0.208, evidence recall@5 0.367 (matches the
+  known retrieval number). Cost measured: 46,825 in / 3,466 out tokens for
+  50 questions -> **$0.72 peak / $0.36 off-peak extrapolated to all 1,986**
+  (cache-miss upper bound). Recommendations: (a) judged LoCoMo QA as an
+  opt-in nightly benchmark section (~1.5 d) - ADOPT; (b) conversation
+  simulation vs the SSE approval flow (~2 d, needs a thin custom target for
+  the two-step resolve->resume) - LATER; (c) baseline regression gating
+  (~0.5 d; deterministic per-PR, judged nightly) - ADOPT LITE. Artifacts:
+  tools/harness_evals_pilot.py + docs/verification/HARNESS_EVALS_PILOT.md.
