@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -447,3 +449,228 @@ class TestRerankIndexDedup:
             out = await retriever._rerank("query", candidates)
 
         assert [str(r.memory.id) for r in out] == [str(c.memory.id) for c in candidates]
+
+
+# ===========================================================================
+# R09: schema-invalid extraction must not advance the agent watermark
+# ===========================================================================
+
+TEST_DSN = os.environ.get("MACHINA_TEST_DATABASE_URL", "")
+needs_db = pytest.mark.skipif(not TEST_DSN, reason="MACHINA_TEST_DATABASE_URL not set")
+
+
+class TestConsolidationWatermarkRetry:
+    """R09: a schema-invalid extraction result must not let the agent advance
+    ``mem_consolidated_up_to``. The range stays retryable and the next
+    consolidation re-extracts it, exactly like malformed JSON."""
+
+    async def test_invalid_elements_keep_range_retryable(self):
+        import importlib
+        from types import SimpleNamespace
+
+        from machina.core.agent import BaseReActAgent
+        from machina.core.models import ContextChunk
+
+        agent_module = importlib.import_module("machina.core.agent")
+        consolidator_module = importlib.import_module("machina.memory.consolidator")
+        usage_module = importlib.import_module("machina.core.usage")
+
+        sid = uuid.uuid4()
+        chunk = ContextChunk(
+            uuid.uuid4(),
+            sid,
+            "harness",
+            "user_message",
+            {"content": "Remember: I prefer concise answers."},
+        )
+        session = SimpleNamespace(state={})
+
+        async def get_chunks_since(session_id, *, since_time=None, since_id=None, limit=100):
+            return [] if since_id == chunk.id else [chunk]
+
+        context = SimpleNamespace(
+            get_chunks_since=get_chunks_since,
+            get_chunks=AsyncMock(return_value=[chunk]),
+        )
+
+        async def update_state_fields(session_id, fields):
+            session.state.update(fields)
+
+        sessions = SimpleNamespace(
+            get=AsyncMock(return_value=session),
+            update_state_fields=update_state_fields,
+        )
+
+        class _Store:
+            def __init__(self):
+                self.added = []
+
+            async def search(self, **kwargs):
+                return []
+
+            async def search_by_embedding(self, **kwargs):
+                return []
+
+            async def update_access(self, *args, **kwargs):
+                return None
+
+            async def add(self, **kwargs):
+                self.added.append(kwargs)
+                return SimpleNamespace(id=uuid.uuid4())
+
+        responses = [
+            # Schema-invalid element: missing content.
+            '[{"category": "preference", "importance": 0.9}]',
+            # The retry returns a valid element for the same range.
+            '[{"content": "I prefer concise answers.", "category": "preference", "importance": 0.9}]',
+        ]
+
+        async def complete(*args, **kwargs):
+            return SimpleNamespace(content=responses.pop(0))
+
+        store = _Store()
+        agent = BaseReActAgent.__new__(BaseReActAgent)
+        agent.agent_id = "harness"
+        agent.memory_consolidator = MemoryConsolidator(llm_provider=object(), store=store)
+
+        with (
+            patch.object(consolidator_module, "db", SimpleNamespace(connected=False)),
+            patch.object(consolidator_module, "context_manager", context),
+            patch.object(agent_module, "context_manager", context),
+            patch.object(agent_module, "session_manager", sessions),
+            patch.object(usage_module.usage_store, "complete_call", complete),
+        ):
+            await agent._consolidate_memories(sid)
+            assert "mem_consolidated_up_to" not in session.state
+            assert len(responses) == 1, "invalid extraction must stay retryable"
+
+            await agent._consolidate_memories(sid)
+            assert session.state.get("mem_consolidated_up_to", {}).get("id") == str(chunk.id)
+            assert len(responses) == 0, "the retry must re-extract the same range"
+
+
+# ===========================================================================
+# R10: consolidation must not starve the database pool it protects
+# ===========================================================================
+
+
+class _BoundedPoolDb:
+    """Test double with a bounded pool: ``acquire`` fails fast when exhausted.
+
+    Mirrors the review's bounded-pool fixture (memory_and_skill.pool_starvation):
+    the consolidation may only use the connections it actually needs and must
+    not hold one for its serialization lock while borrowing another.
+    """
+
+    connected = True
+
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self.sem = asyncio.Semaphore(capacity)
+        self.locked = 0
+        self.all_locked = asyncio.Event()
+
+    @asynccontextmanager
+    async def acquire(self):
+        await asyncio.wait_for(self.sem.acquire(), timeout=0.5)
+        try:
+            yield self
+        finally:
+            self.sem.release()
+
+    @asynccontextmanager
+    async def transaction(self):
+        yield self
+
+    async def execute(self, query, *args):
+        if "pg_advisory_xact_lock" in query:
+            self.locked += 1
+            if self.locked == self.capacity:
+                self.all_locked.set()
+            # Wait until every pool connection is busy holding a lock —
+            # the deterministic pool-exhaustion scenario from the review.
+            await asyncio.wait_for(self.all_locked.wait(), timeout=5)
+
+    async def fetch(self, query, *args):
+        async with self.acquire():
+            return []
+
+
+class TestConsolidationPoolIndependence:
+    """R10: the serialization lock must not consume a pool connection that
+    the protected consolidation body itself needs."""
+
+    async def test_one_connection_pool_does_not_deadlock(self, monkeypatch):
+        database = _BoundedPoolDb(capacity=1)
+        monkeypatch.setattr("machina.memory.consolidator.db", database)
+        monkeypatch.setattr("machina.core.context.db", database)
+
+        result = await asyncio.wait_for(
+            MemoryConsolidator().consolidate_session(uuid.uuid4(), "harness"),
+            timeout=5,
+        )
+        assert result.status == "empty"
+
+    async def test_ten_concurrent_sessions_do_not_exhaust_the_pool(self, monkeypatch):
+        database = _BoundedPoolDb(capacity=10)
+        monkeypatch.setattr("machina.memory.consolidator.db", database)
+        monkeypatch.setattr("machina.core.context.db", database)
+
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                *(
+                    MemoryConsolidator().consolidate_session(uuid.uuid4(), "harness")
+                    for _ in range(10)
+                )
+            ),
+            timeout=5,
+        )
+        assert [r.status for r in results] == ["empty"] * 10
+
+    @needs_db
+    async def test_single_connection_real_pool(self, monkeypatch):
+        """Reproduction: the public locked method must work with a 1-conn pool."""
+        import asyncpg
+
+        from machina.db.connection import Database
+
+        database = Database(dsn=TEST_DSN)
+        database._pool = await asyncpg.create_pool(TEST_DSN, min_size=1, max_size=1)
+        try:
+            monkeypatch.setattr("machina.memory.consolidator.db", database)
+            monkeypatch.setattr("machina.core.context.db", database)
+
+            result = await asyncio.wait_for(
+                MemoryConsolidator().consolidate_session(uuid.uuid4(), "harness"),
+                timeout=15,
+            )
+            assert result.status == "empty"
+        finally:
+            await database.close()
+
+    @needs_db
+    async def test_ten_concurrent_sessions_real_default_pool(self, monkeypatch):
+        """10 simultaneous distinct-session consolidations must share the
+        default 10-connection pool without timing out on their own locks."""
+        import asyncpg
+
+        from machina.db.connection import Database
+
+        database = Database(dsn=TEST_DSN)
+        database._pool = await asyncpg.create_pool(TEST_DSN, min_size=2, max_size=10)
+        try:
+            monkeypatch.setattr("machina.memory.consolidator.db", database)
+            monkeypatch.setattr("machina.core.context.db", database)
+
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    *(
+                        MemoryConsolidator().consolidate_session(uuid.uuid4(), "harness")
+                        for _ in range(10)
+                    )
+                ),
+                timeout=15,
+            )
+            assert [r.status for r in results] == ["empty"] * 10
+        finally:
+            await database.close()

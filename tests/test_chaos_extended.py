@@ -1282,8 +1282,9 @@ class TestMemoryConsolidatorChaos:
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
         assert results.status == "empty" and results.entries == []
 
-    async def test_consolidate_with_missing_fields_in_memory_item_skips_it(self):
-        """When LLM returns memory item missing required fields, should skip it."""
+    async def test_consolidate_with_missing_fields_in_memory_item_fails_retryably(self):
+        """R09: a memory item missing required fields makes the whole extraction
+        a retryable failure — never a silent skip whose range is marked done."""
         llm = AsyncMock()
         llm.complete = AsyncMock(
             return_value=LLMResponse(
@@ -1319,9 +1320,11 @@ class TestMemoryConsolidatorChaos:
         with patch("machina.memory.consolidator.context_manager") as mock_cm:
             mock_cm.get_chunks = AsyncMock(return_value=[MagicMock()])
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
-        # Should have 1 result (invalid item skipped)
-        assert len(results) == 1
-        assert results.entries[0].content == "valid memory"
+        # No writes and no checkpoint: the range stays retryable so the
+        # malformed element cannot silently skip past remembered input.
+        assert results.status == "failed"
+        assert results.checkpoint is None
+        assert mock_store.add.await_count == 0
 
 
 # ===========================================================================

@@ -1035,6 +1035,63 @@ class TestMemoryConsolidator:
         assert empty.status == "empty"
         assert empty.checkpoint is not None
 
+    async def test_schema_invalid_array_items_fail_extraction_and_keep_checkpoint(
+        self, consolidator, mock_store, monkeypatch
+    ):
+        """R09: schema-invalid array elements (missing ``content``) are a
+        retryable extraction failure like malformed JSON — never a silent
+        empty success that advances the checkpoint past unprocessed input.
+
+        A genuine empty array must still be a successful empty extraction.
+        """
+        from types import SimpleNamespace
+
+        from machina.core.usage import usage_store
+        from machina.memory import consolidator as consolidator_module
+
+        chunk = SimpleNamespace(
+            chunk_type="user_message",
+            payload={"content": "Remember: user prefers dark mode"},
+            created_at=datetime.now(UTC),
+            id=uuid.uuid4(),
+            token_count=5,
+        )
+
+        async def fake_chunks(*args, **kwargs):
+            return [chunk]
+
+        monkeypatch.setattr(consolidator_module.context_manager, "get_chunks_since", fake_chunks)
+        consolidator.llm = object()
+        consolidator.store = mock_store
+
+        responses = [
+            # Every element schema-invalid: missing content.
+            '[{"category": "preference", "importance": 0.9}]',
+            # Mixed: one valid element, one schema-invalid element.
+            '[{"content": "User likes tea", "category": "fact"}, {"importance": 0.9}]',
+            # A genuine empty array remains a successful empty extraction.
+            "[]",
+        ]
+
+        async def fake_complete(*args, **kwargs):
+            return SimpleNamespace(content=responses.pop(0))
+
+        monkeypatch.setattr(usage_store, "complete_call", fake_complete)
+
+        invalid_only = await consolidator._consolidate_session_impl(uuid.uuid4(), "harness")
+        assert invalid_only.status == "failed"
+        assert invalid_only.checkpoint is None
+        assert mock_store.add.await_count == 0
+
+        mixed = await consolidator._consolidate_session_impl(uuid.uuid4(), "harness")
+        assert mixed.status == "failed"
+        assert mixed.checkpoint is None
+        assert mock_store.add.await_count == 0
+
+        empty = await consolidator._consolidate_session_impl(uuid.uuid4(), "harness")
+        assert empty.status == "empty"
+        assert empty.checkpoint is not None
+
     async def test_consolidate_session_records_candidate_embedding_failure(
         self, consolidator, mock_store, monkeypatch
     ):

@@ -9,6 +9,10 @@ import inspect
 import json
 import logging
 import uuid
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
+import asyncpg
 
 from machina.core.context import context_manager
 from machina.core.models import ContextChunk
@@ -149,8 +153,11 @@ class MemoryConsolidator:
 
         Cross-instance single-flight (FM5 W5): consolidations for one
         session are serialized with a transaction-scoped PostgreSQL
-        advisory lock, so two processes cannot extract the same range
-        concurrently. When the database is unavailable the lock is skipped
+        advisory lock taken on a DEDICATED connection outside the shared
+        pool (R10), so two processes cannot extract the same range
+        concurrently and the lock can never consume a connection the
+        protected body needs. When no dedicated connection can be
+        established (database unavailable, no DSN) the lock is skipped
         (the caller's in-process single-flight still applies) and
         consolidation proceeds.
         """
@@ -159,26 +166,56 @@ class MemoryConsolidator:
 
         entered_impl = False
 
-        async def _run_locked() -> ConsolidationResult:
-            nonlocal entered_impl
-            entered_impl = True
-            return await self._consolidate_session_impl(session_id, agent_id, since)
-
         try:
-            async with db.acquire() as conn:
-                async with conn.transaction():
-                    await conn.execute(
-                        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-                        f"memory_consolidate:{session_id}",
+            async with self._advisory_lock(session_id) as locked:
+                if not locked:
+                    logger.debug(
+                        "No dedicated lock connection for session %s; "
+                        "consolidating without a cross-process lock",
+                        session_id,
                     )
-                    return await _run_locked()
+                # Any exception from here on comes from the consolidation
+                # body: never re-run it (double extraction/writes).
+                entered_impl = True
+                return await self._consolidate_session_impl(session_id, agent_id, since)
         except Exception as e:
             if entered_impl:
-                # The consolidation body itself failed: never re-run it
-                # (double extraction/writes) because the lock path raised.
                 raise
             record_failure("consolidator.consolidate_session.lock", e)
             return await self._consolidate_session_impl(session_id, agent_id, since)
+
+    @asynccontextmanager
+    async def _advisory_lock(self, session_id: uuid.UUID) -> AsyncGenerator[bool, None]:
+        """Transaction-scoped cross-process lock on a dedicated connection (R10).
+
+        The lock connection is deliberately NOT taken from the shared pool:
+        the protected consolidation body acquires pool connections of its own
+        (context, memory, usage), so a pool-held lock would consume a
+        connection that the work then waits for — deadlocking a one-connection
+        pool and starving the default pool under concurrent consolidations.
+
+        Yields True once the advisory lock is held, False when no dedicated
+        connection can be established (no DSN / test double); callers then
+        proceed with only the in-process single-flight, the same degradation
+        as an unavailable database.
+        """
+        try:
+            dsn = getattr(db, "dsn", None)
+        except Exception:
+            dsn = None
+        if not isinstance(dsn, str) or not dsn:
+            yield False
+            return
+        conn = await asyncpg.connect(dsn, timeout=10)
+        try:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    f"memory_consolidate:{session_id}",
+                )
+                yield True
+        finally:
+            await conn.close()
 
     async def _consolidate_session_impl(
         self,
@@ -545,9 +582,10 @@ class MemoryConsolidator:
         """Use LLM to extract candidate memories from conversation.
 
         Returns list of MemoryEntry objects (not yet persisted). Raises on
-        extraction failure (no provider, provider error, malformed output)
-        so callers distinguish failed extraction (retryable, no checkpoint)
-        from successful empty extraction (checkpoint valid).
+        extraction failure (no provider, provider error, malformed output,
+        schema-invalid array elements) so callers distinguish failed
+        extraction (retryable, no checkpoint) from successful empty
+        extraction (checkpoint valid).
         """
         if not self.llm:
             raise RuntimeError("no LLM provider available for memory extraction")
@@ -585,13 +623,24 @@ class MemoryConsolidator:
                 )
 
             memories: list[MemoryEntry] = []
-            for item in items:
+            for index, item in enumerate(items):
+                if not isinstance(item, dict):
+                    # Schema-invalid element: a retryable extraction failure
+                    # (like malformed JSON), never a silent skip that lets the
+                    # caller advance the checkpoint past unprocessed input.
+                    raise RuntimeError(
+                        "memory extraction parse failed: array item "
+                        f"{index} is {type(item).__name__}, expected an object"
+                    )
                 try:
+                    content = item["content"]
+                    if not isinstance(content, str):
+                        raise TypeError(f"content must be a string, got {type(content).__name__}")
                     memory = MemoryEntry(
                         id=uuid.uuid4(),
                         session_id=None,  # Will be set on write
                         agent_id="harness",  # Will be overridden
-                        content=item["content"],
+                        content=content,
                         category=item.get("category", "fact"),
                         importance=float(item.get("importance", 0.5)),
                         explicitly_important=bool(item.get("explicitly_important", False)),
@@ -600,10 +649,15 @@ class MemoryConsolidator:
                         # (normalized-content dedup applies instead).
                         embedding=None,
                     )
-                    memories.append(memory)
-                except (KeyError, ValueError) as e:
-                    logger.warning("Invalid memory item from LLM: %s (error: %s)", item, e)
-                    continue
+                except (KeyError, TypeError, ValueError) as e:
+                    # Schema-invalid elements are as untrustworthy as malformed
+                    # JSON: fail the extraction so the range stays retryable
+                    # instead of silently dropping memories and advancing the
+                    # watermark past them (R09).
+                    raise RuntimeError(
+                        f"memory extraction parse failed: array item {index} is schema-invalid: {e}"
+                    ) from e
+                memories.append(memory)
 
             return memories
 
