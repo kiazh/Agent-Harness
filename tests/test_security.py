@@ -66,6 +66,25 @@ class TestLearnSSRFAndPathTraversal:
 
         assert not _is_safe_url("http://nonexistent.invalid.tld.example/")
 
+    def test_is_safe_url_loopback_only_with_explicit_opt_in(self):
+        """SearXNG policy: loopback URLs pass only when the caller opts in."""
+        from machina.tools.builtins import _is_safe_url
+
+        assert not _is_safe_url("http://127.0.0.1:8088/search")
+        assert not _is_safe_url("http://localhost:8088/search")
+        assert _is_safe_url("http://127.0.0.1:8088/search", allow_loopback=True)
+        assert _is_safe_url("http://localhost:8088/search", allow_loopback=True)
+
+    def test_is_safe_url_loopback_opt_in_keeps_other_rejections(self):
+        """Loopback opt-in must not widen the policy for private/metadata hosts."""
+        from machina.tools.builtins import _is_safe_url
+
+        assert not _is_safe_url("http://10.0.0.1/secret", allow_loopback=True)
+        assert not _is_safe_url("http://192.168.1.1/admin", allow_loopback=True)
+        assert not _is_safe_url("http://172.16.0.1/internal", allow_loopback=True)
+        assert not _is_safe_url("http://169.254.169.254/metadata", allow_loopback=True)
+        assert not _is_safe_url("file:///etc/passwd", allow_loopback=True)
+
     def test_resolve_path_rejects_traversal(self):
         """Path traversal: .. paths should be rejected."""
         from machina.tools.file import resolve_path

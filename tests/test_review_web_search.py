@@ -57,3 +57,57 @@ def test_duckduckgo_redirects_do_not_publish_unsafe_urls():
         '<a class="result__a" href="https://example.com/article">article</a>'
     )
     assert _parse_duckduckgo_results(html) == [("https://example.com/article", "article")]
+
+
+async def test_configured_localhost_searxng_is_used_for_search(monkeypatch):
+    """A loopback SearXNG URL passes the policy and serves JSON results."""
+    calls: list[tuple[str, dict]] = []
+
+    def fake_get(url, *args, **kwargs):
+        calls.append((url, kwargs.get("params", {})))
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "Python documentation",
+                        "url": "https://docs.python.org/3/",
+                        "content": "Python language reference",
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr(
+        builtins.config,
+        "get",
+        lambda key: "http://localhost:8088" if key == "searxng_url" else None,
+    )
+    monkeypatch.setattr(builtins.httpx, "get", fake_get)
+
+    result = await builtins.web_search("python documentation")
+    assert "https://docs.python.org/3/" in result
+    assert calls == [
+        ("http://localhost:8088/search", {"q": "python documentation", "format": "json"})
+    ]
+
+
+async def test_private_searxng_url_is_rejected_and_ddg_fallback_used(monkeypatch):
+    """Non-loopback private instance URLs stay rejected: DDG fallback runs."""
+    calls: list[str] = []
+
+    def fake_get(url, *args, **kwargs):
+        calls.append(url)
+        html = '<a class="result__a" href="https://example.test/one">First result</a>'
+        return httpx.Response(200, text=html)
+
+    monkeypatch.setattr(
+        builtins.config,
+        "get",
+        lambda key: "http://10.0.0.1:8088" if key == "searxng_url" else None,
+    )
+    monkeypatch.setattr(builtins.httpx, "get", fake_get)
+
+    result = await builtins.web_search("anything")
+    assert "https://example.test/one" in result
+    assert calls == ["https://html.duckduckgo.com/html/"]

@@ -98,7 +98,11 @@ async def _search_web_results(query: str, limit: int = 5) -> list[tuple[str, str
     if searxng_url:
         try:
             probe = f"{str(searxng_url).rstrip('/')}/search"
-            if not _is_safe_url(probe):
+            # Operator-configured instance, not agent input: an explicitly
+            # configured loopback address (e.g. a self-hosted container on
+            # localhost) is allowed. Private ranges, link-local/metadata IPs
+            # and non-HTTP schemes stay rejected by the policy.
+            if not _is_safe_url(probe, allow_loopback=True):
                 raise ValidationError(f"SearXNG URL rejected by security policy: {searxng_url}")
         except ValidationError:
             searxng_url = None
@@ -169,7 +173,7 @@ _DNS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 )
 
 
-def _is_safe_url(url: str) -> bool:
+def _is_safe_url(url: str, *, allow_loopback: bool = False) -> bool:
     """Validate URL to prevent SSRF attacks.
 
     Rejects:
@@ -178,6 +182,10 @@ def _is_safe_url(url: str) -> bool:
     - localhost
     - IPv6 private ranges
     - Multicast, unspecified (0.0.0.0/::), reserved and link-local addresses
+
+    ``allow_loopback=True`` is reserved for explicitly operator-configured
+    service URLs (the SearXNG instance): loopback hosts (localhost, 127.0.0.0/8,
+    ::1) are then permitted. All other rejections above still apply.
     """
     try:
         parsed = urlparse(url)
@@ -192,9 +200,9 @@ def _is_safe_url(url: str) -> bool:
     if not hostname:
         return False
 
-    # Reject localhost
+    # Reject localhost unless the caller explicitly allows loopback
     if hostname.lower() in ("localhost", "localhost.localdomain"):
-        return False
+        return allow_loopback
 
     # Resolve hostname to IP and check against private ranges
     try:
@@ -202,6 +210,8 @@ def _is_safe_url(url: str) -> bool:
         addr_infos = _getaddrinfo_timeout(hostname, timeout=3.0)
         for _, _, _, _, sockaddr in addr_infos:
             ip = ipaddress.ip_address(sockaddr[0])
+            if ip.is_loopback and allow_loopback:
+                continue
             if (
                 ip.is_private
                 or ip.is_loopback
