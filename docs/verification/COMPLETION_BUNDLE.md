@@ -182,7 +182,7 @@ Found by running the system live (all numbers observed, not estimated):
   entry (`firecrawl-mcp` over stdio), `FIRECRAWL_API_URL` via env_allowlist (never in JSON),
   `trusted_read` allowlist for scrape/map/crawl/check_crawl_status.
 - **Self-hosted SearXNG** (operator setup, not committed, 2026-10-14): private metasearch
-  backend for `web_search` at `/Users/shadow/searxng` in the lima docker VM
+  backend for `web_search` at `/Users/shadow/Projects/searxng` in the lima docker VM
   (`searxng/searxng:2026.10.13-22c64b8d3`, host :8088, `restart: unless-stopped`, limiter off,
   `format: json` on, no telemetry/auxiliary outbound calls). `SEARXNG_URL=http://localhost:8088`
   in `.env`; the security probe now accepts an explicitly configured loopback SearXNG instance
