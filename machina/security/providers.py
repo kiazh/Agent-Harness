@@ -25,7 +25,8 @@ import os
 import re
 import tempfile
 import time
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,48 @@ __all__ = [
     "save_models",
     "validate_name",
 ]
+
+_WINDOWS = os.name == "nt"
+if _WINDOWS:  # pragma: no cover - platform branch
+    import msvcrt
+else:
+    import fcntl
+
+
+@contextmanager
+def _store_lock() -> Iterator[None]:
+    """Exclusive per-store lock (same flock idiom as machina/interop.py).
+
+    Serializes whole load -> mutate -> atomic-replace sections across threads
+    and processes, so concurrent store writers cannot drop one side's update
+    (review round 6, R6-2). The lock file holds no state and the atomic
+    replace keeps the store itself always readable.
+    """
+    target = providers_path()
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(str(target) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    acquired = False
+    try:
+        if _WINDOWS:  # pragma: no cover - platform branch
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        acquired = True
+        yield
+    finally:
+        try:
+            if acquired:
+                if _WINDOWS:  # pragma: no cover - platform branch
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 _BASE_URL_MAX = 500
@@ -238,27 +281,28 @@ def add_provider(
     """
     normalized = validate_name(name)
     url = _validate_base_url(base_url)
-    store = load_store()
-    previous = _entry_or_none(store, normalized) or {}
-    entry: dict[str, Any] = {
-        "base_url": url,
-        "api_key_env": api_key_env(normalized),
-        "models": previous.get("models") if isinstance(previous.get("models"), list) else [],
-        "models_fetched_at": previous.get("models_fetched_at"),
-        "default_model": previous.get("default_model"),
-        "created_at": previous.get("created_at")
-        or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-    if api_key:
-        key = str(api_key).strip()
-        if not key or len(key) > 2000 or any(ch in key for ch in ("\r", "\n", "\x00")):
-            raise ProviderStoreError("api key must be a single line of 1-2000 characters")
-        if persist_key:
-            set_env_values({entry["api_key_env"]: key}, path=env_file)
-        os.environ[entry["api_key_env"]] = key
-        invalidate_secret_cache()
-    store["providers"][normalized] = entry
-    _save_store(store)
+    with _store_lock():
+        store = load_store()
+        previous = _entry_or_none(store, normalized) or {}
+        entry: dict[str, Any] = {
+            "base_url": url,
+            "api_key_env": api_key_env(normalized),
+            "models": previous.get("models") if isinstance(previous.get("models"), list) else [],
+            "models_fetched_at": previous.get("models_fetched_at"),
+            "default_model": previous.get("default_model"),
+            "created_at": previous.get("created_at")
+            or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        if api_key:
+            key = str(api_key).strip()
+            if not key or len(key) > 2000 or any(ch in key for ch in ("\r", "\n", "\x00")):
+                raise ProviderStoreError("api key must be a single line of 1-2000 characters")
+            if persist_key:
+                set_env_values({entry["api_key_env"]: key}, path=env_file)
+            os.environ[entry["api_key_env"]] = key
+            invalidate_secret_cache()
+        store["providers"][normalized] = entry
+        _save_store(store)
     return dict(entry)
 
 
@@ -278,14 +322,17 @@ def remove_provider(name: str) -> dict[str, Any] | None:
     gone (e.g. ``envLineRemoved`` is False when ``.env`` had no line).
     """
     normalized = str(name or "").strip().lower()
-    store = load_store()
-    entry = _entry_or_none(store, normalized)
-    if entry is None:
-        return None
-    env_name = str(entry.get("api_key_env") or "")
-    cached_models = len(entry.get("models") or []) if isinstance(entry.get("models"), list) else 0
-    del store["providers"][normalized]
-    _save_store(store)
+    with _store_lock():
+        store = load_store()
+        entry = _entry_or_none(store, normalized)
+        if entry is None:
+            return None
+        env_name = str(entry.get("api_key_env") or "")
+        cached_models = (
+            len(entry.get("models") or []) if isinstance(entry.get("models"), list) else 0
+        )
+        del store["providers"][normalized]
+        _save_store(store)
     env_line_removed = False
     env_var_removed = False
     if env_name:
@@ -347,16 +394,17 @@ def _normalize_models(models: Any) -> list[dict[str, Any]]:
 def save_models(name: str, models: Any) -> list[dict[str, Any]]:
     """Persist a pulled model catalog (bounded) for one provider."""
     normalized = str(name or "").strip().lower()
-    store = load_store()
-    entry = _entry_or_none(store, normalized)
-    if entry is None:
-        raise ProviderStoreError(f"provider {normalized!r} is not registered")
-    rows = _normalize_models(models)
-    entry["models"] = rows
-    entry["models_fetched_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if rows and not entry.get("default_model"):
-        entry["default_model"] = rows[0]["id"]
-    _save_store(store)
+    with _store_lock():
+        store = load_store()
+        entry = _entry_or_none(store, normalized)
+        if entry is None:
+            raise ProviderStoreError(f"provider {normalized!r} is not registered")
+        rows = _normalize_models(models)
+        entry["models"] = rows
+        entry["models_fetched_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if rows and not entry.get("default_model"):
+            entry["default_model"] = rows[0]["id"]
+        _save_store(store)
     return rows
 
 

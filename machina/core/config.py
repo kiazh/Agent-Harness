@@ -275,6 +275,9 @@ def validate_value(key: str, value: Any) -> Any:
         # live-verified ChatGPT (Codex catalog) levels — the per-model set
         # is validated by the chatgpt provider against the catalog entry.
         normalized = str(value).strip().lower()
+        # Cross-reference: the classic set lives in core/provider/reasoning.
+        # REASONING_EFFORTS; wider tiers are catalog-validated per model
+        # (review round 6, R6-3).
         if normalized not in ("", "low", "medium", "high", "xhigh", "max"):
             raise ValueError("reasoning_effort must be ''|low|medium|high|xhigh|max")
         return normalized

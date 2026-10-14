@@ -20,6 +20,13 @@ from machina.core.provider._log import logger
 # ``reasoning_effort`` config key); unset means "provider default", so existing
 # behavior is unchanged.
 # ---------------------------------------------------------------------------
+# The classic wire vocabulary. The config layer accepts the WIDER set
+# (""|low|medium|high|xhigh|max, see core/config.py reasoning_effort) and the
+# ChatGPT provider validates its catalog tiers per model
+# (core/provider/catalog.validate_effort); this constant stays the
+# conservative set for providers whose wire may reject wider values
+# (review round 6, R6-3 - keep the two views in step when a provider gains
+# tiers).
 REASONING_EFFORTS = ("low", "medium", "high")
 
 # Anthropic thinking budgets per effort level (tokens reserved for thinking).

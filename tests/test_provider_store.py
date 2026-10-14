@@ -380,3 +380,35 @@ def test_cli_remove_cleans_traces_and_falls_back(store_env, monkeypatch, tmp_pat
     assert config.get("provider") == "openrouter"
     assert config.get("model") == config_module.DEFAULTS["model"]
     assert (tmp_path / "config.yaml").is_file()
+
+
+def test_concurrent_store_writers_keep_both_entries(tmp_path, monkeypatch):
+    """R6-2: store mutations are serialized; a concurrent add cannot be lost."""
+    import threading
+    import time as time_mod
+
+    monkeypatch.setenv("MACHINA_PROVIDERS_FILE", str(tmp_path / "providers.json"))
+    real_save = store._save_store
+
+    def slow_save(payload):
+        time_mod.sleep(0.2)
+        return real_save(payload)
+
+    monkeypatch.setattr(store, "_save_store", slow_save)
+    barrier = threading.Barrier(2)
+    failures: list[BaseException] = []
+
+    def worker(name: str) -> None:
+        try:
+            barrier.wait(timeout=5)
+            store.add_provider(name, f"http://127.0.0.1:{8000 + len(name)}/v1", persist_key=False)
+        except BaseException as exc:  # pragma: no cover - failure path
+            failures.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(name,)) for name in ("alpha", "beta")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert failures == []
+    assert set(store.load_store()["providers"]) == {"alpha", "beta"}
