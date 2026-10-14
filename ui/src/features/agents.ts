@@ -2,14 +2,33 @@
 // delegate (run a task on another agent).
 
 import { keyValues, shortId, table, when } from "../format.ts";
-import type { AgentInfo, AgentHistoryResult, AgentSaveResult, DelegationResult, ResumeResult } from "../protocol.ts";
+import type { SelectItem } from "@earendil-works/pi-tui";
+import type { AgentInfo, AgentHistoryResult, AgentSaveResult, DelegationResult, ResumeResult, SessionInfo } from "../protocol.ts";
 import { listFamilySessions } from "../family.ts";
 import { splitSub } from "../commands.ts";
 import { confirm, options, requireArgs, requireSession, type Command } from "./types.ts";
 
+/**
+ * The family picker rows shared by `/agents sessions` and the composer's
+ * Down-arrow menu: main marker, label, current marker, and a description
+ * with the live run state. Pure presentation — callers own the pick/switch.
+ */
+export function agentSessionItems(
+	family: SessionInfo[],
+	current: SessionInfo,
+	running: Map<string, boolean>,
+): SelectItem[] {
+	const rootId = current.parentSessionId ?? current.id;
+	return family.map((session) => ({
+		value: session.id,
+		label: `${session.id === rootId ? "main · " : ""}${session.title || shortId(session.id)}${session.id === current.id ? " (current)" : ""}`,
+		description: `${shortId(session.id)}  ${running.get(session.id) ? "running" : "idle"}  ${when(session.lastActivity)}`,
+	}));
+}
+
 export const agentsCommand: Command = {
 	name: "agents",
-	description: "Agents: list, show, save, history, delete · sessions switches delegated tabs (Ctrl+Shift+←/→)",
+	description: "Agents: list, show, save, history, delete · sessions switches subagents (↓ on empty input, or Ctrl+Shift+←/→)",
 	argumentHint: "[list|show|save|history|delete|sessions|switch]",
 	getArgumentCompletions: options([
 		["list", "All available agents"],
@@ -17,7 +36,7 @@ export const agentsCommand: Command = {
 		["save", "Save the current session as an agent <name>"],
 		["history", "Recent agent activity"],
 		["delete", "Remove a custom agent <name>"],
-		["sessions", "Switch to a delegated agent session (tab)"],
+		["sessions", "Switch to a delegated subagent session"],
 		["switch", "Alias for sessions"],
 	]),
 	async run(args, host) {
@@ -39,20 +58,15 @@ export const agentsCommand: Command = {
 			case "sessions":
 			case "switch": {
 				const current = requireSession(host);
-				// Live run state comes from the host's tab tracking when the
+				// Live run state comes from the host's family tracking when the
 				// host has it (App); other hosts report idle.
 				const running = new Map((host.familySessions?.() ?? []).map((row) => [row.session.id, row.running]));
 				const family = await listFamilySessions(host, current);
-				const rootId = current.parentSessionId ?? current.id;
 				if (family.length <= 1) {
-					host.print("No delegated agent sessions in this family yet. Use /delegate to start one; Ctrl+Shift+←/→ cycles tabs.", "plain");
+					host.print("No delegated agent sessions in this family yet. Use /delegate to start one; Ctrl+Shift+←/→ cycles subagents.", "plain");
 					return;
 				}
-				const choice = await host.pick("Switch to an agent session", family.map((session) => ({
-					value: session.id,
-					label: `${session.id === rootId ? "main · " : ""}${session.title || shortId(session.id)}${session.id === current.id ? " (current)" : ""}`,
-					description: `${shortId(session.id)}  ${running.get(session.id) ? "running" : "idle"}  ${when(session.lastActivity)}`,
-				})));
+				const choice = await host.pick("Switch to an agent session", agentSessionItems(family, current, running));
 				if (!choice) return;
 				if (choice.value === current.id) {
 					host.print("Already on that session.", "plain");

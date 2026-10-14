@@ -28,7 +28,6 @@ export class AppShell {
 	private lastRows = -1;
 	private density: Density = "full";
 	private dock: Component | undefined;
-	private tabs: Component | undefined;
 
 	constructor(tui: TUI, transcript: Component, composer: Component & ComposerBudget, footer: Footer) {
 		this.tui = tui;
@@ -55,17 +54,6 @@ export class AppShell {
 	setDock(component?: Component): void {
 		this.dock = component;
 		this.applyBudgets();
-		this.rebuild();
-	}
-
-	/**
-	 * Session tab strip above the composer; undefined hides it entirely.
-	 * Idempotent: passing the current component (or undefined) is a no-op,
-	 * so callers can sync unconditionally without rebuilding the root.
-	 */
-	setTabs(component?: Component): void {
-		if (component === this.tabs) return;
-		this.tabs = component;
 		this.rebuild();
 	}
 
@@ -137,7 +125,6 @@ export class AppShell {
 		return new VStack(
 			[
 				{ component: this.transcriptScroll, grow: 1 },
-				...(this.tabs ? [{ component: this.tabs, shrink: 0 }] : []),
 				...(this.dock ? [{ component: this.dock, shrink: 0 }] : []),
 				{ component: this.composer, shrink: 0 },
 				{ component: this.footer, shrink: 0 },

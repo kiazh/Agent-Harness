@@ -1,7 +1,8 @@
-// Multi-agent orchestration tabs: hidden-session live tails, the family tab
-// strip, lazy tab discovery, and the /agents sessions switch menu. Rendered
-// through a real TuiAltScreen against a fake terminal (dialogs.test.ts
-// pattern) so the strip's visibility is asserted on actual screen lines.
+// Multi-agent orchestration: hidden-session live tails, lazy family
+// discovery, the footer subagent count, the Down-arrow subagent menu, and
+// the /agents sessions switch menu. Rendered through a real TuiAltScreen
+// against a fake terminal (dialogs.test.ts pattern) so the counts and menus
+// are asserted on actual screen lines.
 //
 // Pinned merge rule (see tail.ts): a hidden session's buffered tail is the
 // conversation suffix and WINS over the freshly fetched history; matching
@@ -33,6 +34,16 @@ const MAIN: SessionInfo = {
 const CHILD: SessionInfo = {
 	id: "22222222-2222-4222-8222-222222222222",
 	title: "researcher: find X",
+	model: "m",
+	provider: "openrouter",
+	status: "active",
+	lastActivity: null,
+	parentSessionId: MAIN.id,
+};
+
+const CHILD_B: SessionInfo = {
+	id: "44444444-4444-4444-8444-444444444444",
+	title: "researcher: find Y",
 	model: "m",
 	provider: "openrouter",
 	status: "active",
@@ -149,6 +160,7 @@ function internals(app: App) {
 		sessionTokensById: Map<string, number>;
 		sessionTails: Map<string, { blocks: unknown[] }>;
 		footer: { tokens: number };
+		editor: { getText(): string; isShowingAutocomplete(): boolean };
 	};
 }
 
@@ -170,10 +182,10 @@ test("(a) events for a hidden agent session are buffered and appear when switchi
 	assert.doesNotMatch(screenOf(tui), /child working/, "hidden work never bleeds into the visible transcript");
 	assert.equal(internals(app).sessionTails.get(CHILD.id)?.blocks.length, 2, "deltas and tool are buffered while hidden");
 
-	// Ctrl+Shift+→ cycles to the child tab.
+	// Ctrl+Shift+→ cycles to the child session.
 	type("\x1b[1;6C");
 	await settle();
-	assert.equal(app.session()?.id, CHILD.id, "tab key switched to the child session");
+	assert.equal(app.session()?.id, CHILD.id, "cycle key switched to the child session");
 	tui.renderNow(true);
 	const screen = screenOf(tui);
 	assert.match(screen, /child working/, "buffered tail renders on switch");
@@ -218,24 +230,49 @@ test("(b) buffered tail over fetched history has no duplicates", async (t) => {
 	assert.equal((screen.match(/recorded output/g) ?? []).length, 1, "the settled tool renders exactly once");
 });
 
-// ─── (c) tab strip: children from session.list + run state ─────────────────
+// ─── (c) footer subagent count ─────────────────────────────────────────────
 
-test("(c) the strip lists session.list children with run state and hides strangers", async (t) => {
+test("(c) the footer counts subagents and hides at zero", async (t) => {
+	// 0 subagents: no segment at all.
+	const single = await boot({ sessions: [MAIN] });
+	t.after(() => single.app.exit());
+	await settle();
+	single.tui.renderNow(true);
+	assert.doesNotMatch(screenOf(single.tui), /subagent/, "no count without a family");
+	assert.equal(single.app.familySessions().length, 1);
+
+	// 1 subagent: singular form.
+	const pair = await boot({ sessions: [MAIN, CHILD] });
+	t.after(() => pair.app.exit());
+	await settle();
+	pair.tui.renderNow(true);
+	const pairScreen = screenOf(pair.tui);
+	assert.match(pairScreen, /\b1 subagent\b/, "one child counts as one subagent");
+	assert.doesNotMatch(pairScreen, /subagents/, "the singular form never pluralizes");
+
+	// 2 subagents: plural form.
+	const trio = await boot({ sessions: [MAIN, CHILD, CHILD_B] });
+	t.after(() => trio.app.exit());
+	await settle();
+	trio.tui.renderNow(true);
+	const trioScreen = screenOf(trio.tui);
+	assert.match(trioScreen, /\b2 subagents\b/, "two children count as two subagents");
+	assert.doesNotMatch(trioScreen, /\b1 subagent\b/, "count replaces, never accumulates");
+	assert.equal(trio.app.familySessions().length, 3);
+});
+
+// ─── (d) Down-arrow subagent menu ──────────────────────────────────────────
+
+test("(d) Down on the empty composer opens the subagent menu with run state and switches", async (t) => {
 	const { app, tui, type, client } = await boot({
-		sessions: [MAIN, CHILD, UNRELATED],
+		sessions: [MAIN, CHILD],
 		resume: [[CHILD.id, { session: CHILD, history: [] }]],
 	});
 	t.after(() => app.exit());
 	await settle();
-	tui.renderNow(true);
-	let screen = screenOf(tui);
-	assert.match(screen, /Main work \(main\)/, "main session is marked");
-	assert.match(screen, /researcher: find X/, "listed child renders as a tab");
-	assert.doesNotMatch(screen, /Other chat/, "sessions outside the family stay out of the strip");
-	assert.match(screen, /ctrl\+shift/, "cycling hint is discoverable");
 
-	// Give the child a live turn, then hide it again: the tab must show
-	// running state while the main session is visible.
+	// Give the child a live turn, then hide it again: the menu must show
+	// its run state while the main session stays visible.
 	type("\x1b[1;6C");
 	await settle();
 	assert.equal(app.session()?.id, CHILD.id);
@@ -243,16 +280,69 @@ test("(c) the strip lists session.list children with run state and hides strange
 	await app.submitTurn("child task");
 	type("\x1b[1;6C");
 	await settle();
-	assert.equal(app.session()?.id, MAIN.id, "cycling wraps back to the main tab");
+	assert.equal(app.session()?.id, MAIN.id, "cycling wraps back to the main session");
 	assert.equal(app.familySessions().find((row) => row.session.id === CHILD.id)?.running, true);
+
+	type("\x1b[B");
+	await settle();
 	tui.renderNow(true);
-	screen = screenOf(tui);
-	assert.match(screen, /● researcher: find X/, "running child carries the running marker");
+	const screen = screenOf(tui);
+	assert.match(screen, /Switch to an agent session/, "Down opens the family picker");
+	assert.match(screen, /main · Main work/, "the main session is marked");
+	const childRow = screen.split("\n").find((row) => row.includes("researcher: find X"));
+	assert.ok(childRow, "the child appears in the menu");
+	assert.match(childRow, /running/, "the busy child row shows running state");
+
+	type("\x1b[B"); // move off the initially selected main row
+	type("\r");
+	await settle();
+	assert.equal(app.session()?.id, CHILD.id, "selecting a row switches through session.resume");
 });
 
-// ─── (d) switching preserves per-session state ─────────────────────────────
+// ─── (e) Down fall-through guards ──────────────────────────────────────────
 
-test("(d) tab switching preserves in-flight guards and token totals", async (t) => {
+test("(e) Down falls through with a draft, with a completion open, and with no subagents", async (t) => {
+	const { app, tui, type } = await boot({ sessions: [MAIN, CHILD] });
+	t.after(() => app.exit());
+	await settle();
+
+	// A draft keeps Down for the editor (movement/history).
+	type("hello");
+	type("\x1b[B");
+	await settle();
+	tui.renderNow(true);
+	let screen = screenOf(tui);
+	assert.doesNotMatch(screen, /Switch to an agent session/, "no menu with a draft");
+	assert.match(screen, /hello/, "the draft is untouched");
+
+	// An open completion popup keeps Down for completion navigation.
+	type("\x03"); // clear the draft
+	type("/");
+	for (let i = 0; i < 30 && !internals(app).editor.isShowingAutocomplete(); i++) {
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	assert.equal(internals(app).editor.isShowingAutocomplete(), true, "completion is open");
+	type("\x1b[B");
+	await settle();
+	tui.renderNow(true);
+	screen = screenOf(tui);
+	assert.doesNotMatch(screen, /Switch to an agent session/, "no family menu while completing");
+	assert.equal(internals(app).editor.isShowingAutocomplete(), true, "the completion stays open");
+
+	// No subagents: Down is not a menu key at all.
+	const bare = await boot({ sessions: [MAIN] });
+	t.after(() => bare.app.exit());
+	await settle();
+	bare.type("\x1b[B");
+	await settle();
+	bare.tui.renderNow(true);
+	assert.doesNotMatch(screenOf(bare.tui), /Switch to an agent session/, "no menu without subagents");
+	assert.equal(bare.app.familySessions().length, 1);
+});
+
+// ─── (f) switching preserves per-session state ─────────────────────────────
+
+test("(f) session switching preserves in-flight guards and token totals", async (t) => {
 	const { app, type, client } = await boot({
 		sessions: [MAIN, CHILD],
 		resume: [[CHILD.id, { session: CHILD, history: [] }]],
@@ -292,56 +382,43 @@ test("(d) tab switching preserves in-flight guards and token totals", async (t) 
 	assert.equal(state.inFlight.has(MAIN.id), false);
 });
 
-// ─── (e) single-session use is unchanged ───────────────────────────────────
-
-test("(e) the strip stays hidden for single-session use", async (t) => {
-	const { app, tui } = await boot({ sessions: [MAIN] });
-	t.after(() => app.exit());
-	await settle();
-	tui.renderNow(true);
-	const screen = screenOf(tui);
-	assert.doesNotMatch(screen, /\(main\)/, "no main marker without a family");
-	assert.doesNotMatch(screen, /ctrl\+shift/, "no cycling hint without a family");
-	assert.equal(app.familySessions().length, 1);
-});
-
 // ─── lazy discovery + /agents sessions menu ────────────────────────────────
 
-test("an unknown child's turn start lazily adds its tab once the list shows the parent link", async (t) => {
+test("an unknown child's turn start lazily counts it once the list shows the parent link", async (t) => {
 	const { app, tui, client } = await boot({ sessions: [MAIN] });
 	t.after(() => app.exit());
 	await settle();
 	tui.renderNow(true);
-	assert.doesNotMatch(screenOf(tui), /researcher/);
+	assert.doesNotMatch(screenOf(tui), /subagent/, "no count before discovery");
 
 	// Delegation is non-streaming: the child's work arrives as the parent's
 	// `delegate` tool.complete (pinned in the next test). A turn-start frame
 	// from an unfamiliar session is the other discovery trigger: one bounded
-	// refresh, and the matching parent link in the list adds the tab.
+	// refresh, and the matching parent link in the list adds the subagent.
 	client.sessions = [MAIN, CHILD];
 	client.emit(CHILD.id, "c9", { type: "message.start" });
 	client.emit(CHILD.id, "c9", { type: "message.delta", text: "late child" });
 	await settle();
 	tui.renderNow(true);
-	assert.match(screenOf(tui), /researcher: find X/, "matching parent link adds the tab lazily");
+	assert.match(screenOf(tui), /\b1 subagent\b/, "the matching parent link counts the child lazily");
 	assert.equal(internals(app).sessionTails.get(CHILD.id)?.blocks.length, 1, "the delta is buffered for switching");
 });
 
-test("a parent's delegate tool.complete discovers the new child tab", async (t) => {
+test("a parent's delegate tool.complete discovers the new child", async (t) => {
 	const { app, tui, client } = await boot({ sessions: [MAIN] });
 	t.after(() => app.exit());
 	await settle();
 	tui.renderNow(true);
-	assert.doesNotMatch(screenOf(tui), /researcher/);
+	assert.doesNotMatch(screenOf(tui), /subagent/);
 
 	// The delegated child is created server-side by agent.run and never
 	// streams to this TUI. It is listed by the time the parent's delegate
-	// tool completes, so that completion is what adds the tab.
+	// tool completes, so that completion is what counts and buffers it.
 	client.sessions = [MAIN, CHILD];
 	client.emit(MAIN.id, "m9", { type: "tool.complete", id: "tool-d", name: "delegate", result: "done", isError: false });
 	await settle();
 	tui.renderNow(true);
-	assert.match(screenOf(tui), /researcher: find X/, "the delegate completion adds the child tab");
+	assert.match(screenOf(tui), /\b1 subagent\b/, "the delegate completion counts the child");
 });
 
 test("only turn starts scan for an unknown session, and a foreign id is negatively cached", async (t) => {

@@ -50,7 +50,7 @@ const helpCommand: Command = {
 	description: "Show available commands",
 	async run(_args, host) {
 		host.print(
-			`${helpText(COMMANDS)}\n\nKeys: Enter send · Shift+Enter newline · Esc stop reply · Tab complete · Ctrl+C exit · Ctrl+Shift+←/→ switch agent tabs`,
+			`${helpText(COMMANDS)}\n\nKeys: Enter send · Shift+Enter newline · Esc stop reply · Tab complete · ↓ on empty input picks a subagent · Ctrl+C exit · Ctrl+Shift+←/→ switch agents`,
 			"plain",
 		);
 	},

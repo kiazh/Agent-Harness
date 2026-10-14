@@ -98,7 +98,7 @@ test("protocol-parity: SessionInfo mirrors session_to_dict", () => {
 	assert.equal(consumed.model, backend.model);
 	assert.equal(consumed.provider, backend.provider);
 	assert.equal(consumed.status, backend.status);
-	// Orchestration link consumed by the agent tab strip (app.ts family).
+	// Orchestration link consumed by the agent family (app.ts family).
 	assert.equal(consumed.parentSessionId, backend.parentSessionId);
 	assert.deepEqual(Object.keys(consumed).sort(), Object.keys(backend).sort());
 });

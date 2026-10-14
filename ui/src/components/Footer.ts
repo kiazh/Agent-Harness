@@ -24,6 +24,8 @@ export class Footer implements Component {
 	model = "";
 	tokens = 0;
 	mode = "ask";
+	/** Subagents in the visible session's family (0 hides the segment). */
+	subagents = 0;
 	private currentStatus: FooterStatus = "ready";
 	/** Compact single-row mode for short viewports (hints hide first). */
 	compact = false;
@@ -123,7 +125,10 @@ export class Footer implements Component {
 			: this.status === "cleanup_pending" ? theme.warning("cleanup pending")
 			: this.status === "stopping" ? theme.warning("stopping") : theme.dim("ready");
 		const tokens = this.tokens > 0 ? theme.dim(` · ${this.tokens.toLocaleString("en-US")} tokens`) : "";
-		const tail = `${status}${tokens}`;
+		const agents = this.subagents > 0
+			? theme.dim(` · ${this.subagents} subagent${this.subagents === 1 ? "" : "s"}`)
+			: "";
+		const tail = `${status}${agents}${tokens}`;
 		const metadata = theme.dim(sanitizeDisplay([this.model, this.branch, this.mode].filter(Boolean).join(" / ")));
 		const core = metadata ? `${metadata} / ${tail}` : tail;
 		const hint = theme.dim("? shortcuts · / commands");

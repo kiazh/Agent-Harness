@@ -23,13 +23,12 @@ import { OAuthProgress } from "./components/OAuthProgress.ts";
 import { ApprovalCard, type ApprovalDecision } from "./components/ApprovalCard.ts";
 import { AppShell } from "./components/AppShell.ts";
 import { OutputStore, OutputViewer, type OutputRecord } from "./components/OutputViewer.ts";
-import { SessionTabs, type SessionTab } from "./components/SessionTabs.ts";
 import { AnimationCoordinator } from "./design/motion.ts";
 import { type FamilySession, type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features/index.ts";
 import { guardSubmit } from "./commandDispatch.ts";
 import { type AskTextOptions, PROFILE_ID_RE, type OAuthProgressHandle, type OAuthProgressOptions } from "./features/types.ts";
-import { shortId } from "./format.ts";
-import { FamilyStore } from "./family.ts";
+import { FamilyStore, listFamilySessions } from "./family.ts";
+import { agentSessionItems } from "./features/agents.ts";
 import type { GatewayClient } from "./gateway.ts";
 import { copyText as copyClipboardText } from "./clipboard.ts";
 import { clipboardImage, clipboardText, ImageDraft, imagePaths, readImageFile, type ImageAttachment } from "./images.ts";
@@ -79,12 +78,6 @@ interface SessionTurn {
 	usageLatest: number;
 	/** Bounded retired turn IDs; late duplicates are inert. */
 	retired: string[];
-}
-
-/** Tab label: meaningful title, else the short id. */
-function tabLabel(session: SessionInfo): string {
-	const title = (session.title ?? "").trim();
-	return title && title !== "New session" ? title : shortId(session.id);
 }
 
 export class App implements FeatureHost {
@@ -137,7 +130,7 @@ export class App implements FeatureHost {
 		retained: (sessionId) =>
 			sessionId === this.current?.id || this.inFlight.has(sessionId) || this.isFamilyMember(sessionId),
 	});
-	/** Family (agent tabs) state and actions; App owns rendering and keys. */
+	/** Family (agent family) state and actions; App owns rendering and keys. */
 	private readonly family = new FamilyStore({
 		current: () => this.current,
 		isRunning: (sessionId) => this.inFlight.has(sessionId),
@@ -145,7 +138,7 @@ export class App implements FeatureHost {
 		switchTo: (session, history) => this.switchTo(session, history),
 		changed: () => {
 			this.pruneSessionTails();
-			this.syncTabs();
+			this.syncAgentCount();
 			this.tui.requestRender();
 		},
 		report: (error) => {
@@ -153,7 +146,6 @@ export class App implements FeatureHost {
 			this.tui.requestRender();
 		},
 	});
-	private readonly tabStrip = new SessionTabs();
 	/** Bounded retained tool outputs for /output inspection (all sessions). */
 	private readonly outputStore = new OutputStore();
 	/** Open approval reviews keyed by request ID (binding captured at open). */
@@ -247,9 +239,7 @@ export class App implements FeatureHost {
 			this.tui.setLayoutRoot(this.shell.root);
 		} else {
 			// Fallback for non-viewport TUIs (and test doubles): classic stacking.
-			// The tab strip renders zero rows while the family has one member.
 			this.tui.addChild(this.transcriptView);
-			this.tui.addChild(this.tabStrip);
 			this.tui.addChild(this.composer);
 			this.tui.addChild(this.footer);
 		}
@@ -386,9 +376,10 @@ export class App implements FeatureHost {
 		this.restoreApprovals(session.id);
 		this.setRunning(this.inFlight.has(session.id));
 		// Family = current.parentSessionId ?? current.id plus that root's
-		// children; refresh after the local re-seed keeps the strip honest.
+		// children; refresh after the local re-seed keeps the subagent count
+		// honest.
 		this.family.reseed();
-		this.syncTabs();
+		this.syncAgentCount();
 		this.refreshFamily();
 		this.tui.requestRender();
 	}
@@ -403,7 +394,7 @@ export class App implements FeatureHost {
 			this.invalidateApprovals(session.id);
 		}
 		this.current = session;
-		this.syncTabs();
+		this.syncAgentCount();
 		this.tui.requestRender();
 	}
 
@@ -428,9 +419,9 @@ export class App implements FeatureHost {
 		}
 	}
 
-	// ─── agent tabs (family = root + delegated children) ────────────────────
+	// ─── agent family (root + delegated subagents) ──────────────────────────
 
-	/** Family rows, main first, with run/current state for chrome and menus. */
+	/** Family rows, main first, with run/current state for menus. */
 	private familyRows(): FamilySession[] {
 		return this.family.rows();
 	}
@@ -440,23 +431,38 @@ export class App implements FeatureHost {
 		return this.familyRows();
 	}
 
-	private syncTabs(): void {
-		this.tabStrip.setTabs(this.tabStripTabs());
-		// Viewport hosts lay out through the shell; classic hosts mount the
-		// strip permanently and it renders zero rows while hidden. setTabs
-		// is idempotent, so the computed family length is the only
-		// visibility bookkeeping the App needs.
-		this.shell.setTabs(this.familyRows().length > 1 ? this.tabStrip : undefined);
+	/**
+	 * Footer segment: the number of subagents = family rows minus the
+	 * main session (the root is not a subagent). Zero hides the segment.
+	 */
+	private syncAgentCount(): void {
+		this.footer.subagents = Math.max(0, this.familyRows().length - 1);
 	}
 
-	private tabStripTabs(): SessionTab[] {
-		return this.familyRows().map((row) => ({
-			id: row.session.id,
-			label: tabLabel(row.session),
-			main: row.main,
-			current: row.session.id === this.current?.id,
-			running: row.running,
-		}));
+	/**
+	 * Down on an empty composer: the same family picker as /agents sessions.
+	 * Selecting switches through FamilyStore.open (the one-resume-at-a-time
+	 * path shared with Ctrl+Shift+←/→); choosing the visible session is a
+	 * no-op. Listing failures are reported quietly.
+	 */
+	private async openSubagentMenu(): Promise<void> {
+		const current = this.current;
+		if (!current) return;
+		const running = new Map(this.familyRows().map((row) => [row.session.id, row.running]));
+		let family: SessionInfo[];
+		try {
+			family = await listFamilySessions(this, current);
+		} catch (error) {
+			this.transcript.addNotice(`Could not list agent sessions: ${message(error)}`, "error");
+			this.tui.requestRender();
+			return;
+		}
+		// The visible session may have changed while the list was fetched.
+		if (this.exiting || this.current?.id !== current.id) return;
+		if (family.length <= 1) return;
+		const choice = await this.pick("Switch to an agent session", agentSessionItems(family, current, running));
+		if (!choice || choice.value === current.id) return;
+		await this.family.open(choice.value);
 	}
 
 	/** Bounded, best-effort family refresh (see family.ts). */
@@ -464,7 +470,7 @@ export class App implements FeatureHost {
 		void this.family.refresh();
 	}
 
-	/** Refresh kick for turn-start frames from ids not yet known family tabs. */
+	/** Refresh kick for turn-start frames from ids not yet known family members. */
 	private noteUnknownSession(sessionId: string): void {
 		this.family.noteUnknown(sessionId);
 	}
@@ -822,7 +828,8 @@ export class App implements FeatureHost {
 				{ value: "exit", label: "Ctrl+D — exit", description: "When input is empty and idle" },
 				{ value: "clear", label: "Ctrl+L — clear chat", description: "When idle" },
 				{ value: "complete", label: "Tab — complete", description: "Commands and arguments" },
-				{ value: "tabs", label: "Ctrl+Shift+←/→ — switch agents", description: "Cycle the main session and delegated child tabs" },
+				{ value: "subagents", label: "↓ — subagent menu", description: "On empty input: switch between the main session and its subagents" },
+				{ value: "tabs", label: "Ctrl+Shift+←/→ — switch agents", description: "Cycle the main session and its subagents" },
 				{ value: "help", label: "? / F1 — shortcuts", description: "? on empty input, F1 with a draft" },
 				{ value: "commands", label: "/help — all commands", description: "/growth shows learning details" },
 				{ value: "learning", label: "□ / ▪ — activity and learning", description: "Pulses while working and briefly when learning is saved" },
@@ -849,14 +856,28 @@ export class App implements FeatureHost {
 			this.clear();
 			return { consume: true };
 		}
-		// Agent tabs: Ctrl+Shift+←/→ cycles the current family (main session
-		// plus delegated children). Chosen because nothing else in the app
+		// Agent family: Ctrl+Shift+←/→ cycles the current family (main session
+		// plus delegated subagents). Chosen because nothing else in the app
 		// binds them — the editor uses plain/alt/ctrl arrows for movement and
 		// ctrl+pageUp/PageDown for paging; the alt screen uses ctrl+up/down.
 		// Consumed only while a multi-member family exists.
 		const cycle = matchesKey(data, Key.ctrlShift("right")) ? 1 : matchesKey(data, Key.ctrlShift("left")) ? -1 : 0;
 		if (cycle !== 0 && this.familyRows().length > 1) {
 			void this.cycleFamily(cycle as 1 | -1);
+			return { consume: true };
+		}
+		// Down on an empty composer opens the subagent menu (the same picker
+		// as /agents sessions). With text, with a completion popup, or with
+		// no subagents it falls through untouched to the editor's own
+		// Down handling (movement and history). Dialogs and approvals were
+		// already given the key above.
+		if (
+			matchesKey(data, Key.down) &&
+			!this.editor.getText() &&
+			!this.editor.isShowingAutocomplete() &&
+			this.familyRows().length > 1
+		) {
+			void this.openSubagentMenu();
 			return { consume: true };
 		}
 		if (
@@ -979,7 +1000,6 @@ export class App implements FeatureHost {
 		this.setRunning(true);
 		this.inFlight.add(sessionId);
 		this.inFlightSessionId = sessionId;
-		this.syncTabs();
 		// Register the submitting record before dispatch: gateway work is
 		// asynchronous and events can arrive before the RPC result.
 		const record = this.turnRecord(sessionId);
@@ -1090,7 +1110,6 @@ export class App implements FeatureHost {
 		if (this.inFlightSessionId === sessionId) {
 			this.inFlightSessionId = undefined;
 		}
-		this.syncTabs();
 	}
 
 	private cancel(): void {
