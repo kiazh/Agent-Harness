@@ -421,3 +421,21 @@ Consolidated tree: **3,531 passed, 0 failed, 1 skipped, 1 xfailed**;
   the two-step resolve->resume) - LATER; (c) baseline regression gating
   (~0.5 d; deterministic per-PR, judged nightly) - ADOPT LITE. Artifacts:
   tools/harness_evals_pilot.py + docs/verification/HARNESS_EVALS_PILOT.md.
+
+- **Firecrawl VM boot fix (2026-10-14, infra outside the repo)**: the api
+  container had exited OOM/timeout three hours before the first final-sweep
+  gate run — the stock harness boots 9+ node processes (api + 5 nuq workers
+  + queue/extract/prefetch/reconciler) and the api never bound :3002 inside
+  the 60s watchdog on the 5GiB lima VM (`ExitCode 1`; OOMKilled true on the
+  first failure). Diagnosed by running the api binary alone (binds in ~3s)
+  and api+one-worker (binds fine): the herd is the problem, not the binary.
+  Fix: right-sized command in ~/firecrawl/docker-compose.yaml (2 nuq workers
+  + queue worker + api) — ready in 16s, live scrape verified, j4 green
+  again. Also noted: the stock `NUM_WORKERS_PER_QUEUE=8` default is far too
+  high for this VM.
+- **Final acceptance gate (post-review + post-quality-wave, 2026-10-14)**:
+  **8 PASS / 0 FAIL / 0 SKIP** with the onnx-embedding + local-reranker
+  stack active (proof committed at
+  docs/verification/proofs/2026-10-14-e2e-gate.*). This run certifies the
+  full stack: all 20 review findings fixed, local quality wave landed,
+  restored firecrawl.
