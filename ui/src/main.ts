@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import * as crypto from "node:crypto";
 import { TuiAltScreen } from "@earendil-works/pi-tui";
 import { ThemedTerminal } from "./design/terminal.ts";
+import { tuiClipboardOptions } from "./clipboard.ts";
 import { App } from "./app.ts";
 import { GatewayClient } from "./gateway.ts";
 
@@ -51,7 +52,9 @@ const python = detectPython();
 const gatewayToken = crypto.randomBytes(32).toString("hex");
 // Fullscreen alternate buffer, Codex style: the app owns the display and the
 // composer docks to the bottom (see App's layout root). Restored on exit.
-const tui = new TuiAltScreen(new ThemedTerminal());
+// Selection copy must hit the real clipboard (pbcopy/wl-copy/Set-Clipboard);
+// the framework's OSC 52 fallback lies "Copied!" on terminals that ignore it.
+const tui = new TuiAltScreen(new ThemedTerminal(), undefined, undefined, tuiClipboardOptions());
 const client = new GatewayClient({ python, token: gatewayToken, env: { MACHINA_GATEWAY_TOKEN: gatewayToken } });
 const app = new App(tui, client, { model: values.model, provider: values.provider, sessionId: values.session, mode: values.mode });
 

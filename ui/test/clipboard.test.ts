@@ -37,3 +37,34 @@ test("unavailable clipboard commands return a recoverable failure", async (t) =>
 		await rm(directory, { recursive: true, force: true });
 	}
 });
+
+test("the fullscreen TUI copies selections through the real clipboard, not OSC 52", async (t) => {
+	if (process.platform === "win32") { t.skip("POSIX executable fixture"); return; }
+	const { tuiClipboardOptions } = await import("../src/clipboard.ts");
+	const { TuiAltScreen } = await import("@earendil-works/pi-tui");
+	const directory = await mkdtemp(join(tmpdir(), "machina-copy-"));
+	const output = join(directory, "copied.txt");
+	const originalPath = process.env.PATH;
+	const writes: string[] = [];
+	const term = {
+		columns: 80, rows: 24, kittyProtocolActive: false,
+		start() {}, stop() {}, async drainInput() {},
+		write(data: string) { writes.push(data); },
+		moveBy() {}, hideCursor() {}, showCursor() {}, clearLine() {},
+		clearFromCursor() {}, clearScreen() {}, setTitle() {}, setProgress() {},
+	};
+	try {
+		for (const command of ["pbcopy", "wl-copy", "xclip"]) {
+			await writeFile(join(directory, command), `#!${process.execPath}\nconst fs = require("node:fs"); fs.writeFileSync(${JSON.stringify(output)}, fs.readFileSync(0));`, { mode: 0o700 });
+		}
+		process.env.PATH = directory;
+		const tui = new TuiAltScreen(term as never, undefined, undefined, tuiClipboardOptions());
+		(tui as unknown as { getActiveSelectionText: () => string }).getActiveSelectionText = () => "selected highlight";
+		assert.equal(await (tui as unknown as { copySelectionToClipboard(): Promise<boolean> }).copySelectionToClipboard(), true);
+		assert.equal(await readFile(output, "utf8"), "selected highlight");
+		assert.ok(!writes.some((chunk) => chunk.includes("\x1b]52")), "no OSC 52 fallback write");
+	} finally {
+		process.env.PATH = originalPath;
+		await rm(directory, { recursive: true, force: true });
+	}
+});

@@ -1,5 +1,23 @@
 import { spawn } from "node:child_process";
 
+/** Constructor options for the pi-tui fullscreen clipboard hook (no hard dep). */
+export type TuiClipboardOptions = {
+	copySelection: (text: string) => Promise<boolean | string>;
+};
+
+/**
+ * Wire the fullscreen TUI's selection copy to the real system clipboard.
+ *
+ * Without this, pi-tui falls back to an OSC 52 terminal write and flashes
+ * "Copied!" even on terminals that ignore OSC 52 (e.g. macOS Terminal.app) —
+ * the highlight looks copied but the system clipboard never changes. With the
+ * hook injected, the flash reflects the actual spawn result ("Copy failed"
+ * otherwise).
+ */
+export function tuiClipboardOptions(): TuiClipboardOptions {
+	return { copySelection: (text: string) => copyText(text) };
+}
+
 /** Copy a transient value without exposing it in shell arguments or output. */
 export async function copyText(text: string): Promise<boolean> {
 	const commands: Array<[string, string[]]> = process.platform === "darwin"
