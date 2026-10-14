@@ -10,6 +10,7 @@ from contextvars import ContextVar
 
 from machina.core.exceptions import DelegationAccountingError, ToolError
 from machina.db.connection import db
+from machina.observability.diagnostics import record_failure
 from machina.tools.base import registry
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,9 @@ async def delegate(
         from machina.core.agent_def import frozen_roster
 
         _names = frozen_roster()
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("tools.delegate.roster", _boundary_error)
         _names = []
     try:
         from machina.memory.user_profile import PROFILE_ID_RE
@@ -117,7 +120,9 @@ async def delegate(
                 from machina.core.agent_def import agent_registry as _registry
 
                 _known = await _registry.get(agent)
-            except Exception:
+            except Exception as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("tools.delegate.registry", _boundary_error)
                 _known = None
             if _known is None:
                 _suggestions = difflib.get_close_matches(agent, _names, n=3, cutoff=0.5)
@@ -151,7 +156,9 @@ async def delegate(
         from machina.core.agent_factory import parent_authority_var
 
         parent_authority = parent_authority_var.get()
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("tools.delegate.parent_authority", _boundary_error)
         parent_authority = None
     # Let the orchestrator own the deadline so a timed-out child can return
     # its usage receipt after cancellation drains the child's provider work.

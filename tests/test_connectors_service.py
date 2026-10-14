@@ -155,3 +155,26 @@ async def test_catalog_truncation_is_reported_without_schemas():
     assert all(
         set(item) == {"name", "remote_name", "description", "verdict"} for item in out["tools"]
     )
+
+
+async def test_oauth_invalidation_failure_is_recorded(monkeypatch):
+    """A failing OAuth invalidation during refresh reports its boundary."""
+    from machina.connectors import service as service_module
+
+    recorded = []
+    monkeypatch.setattr(service_module, "record_failure", lambda op, e: recorded.append((op, e)))
+
+    service, _clients = setup_service()
+
+    class BoomOAuth:
+        async def invalidate_connector(self, *_args, **_kwargs):
+            raise RuntimeError("invalidation boom")
+
+    class FakeStore:
+        def load(self):
+            return 1, []
+
+    service.oauth = BoomOAuth()
+    service.store = FakeStore()
+    await service._refresh_locked()
+    assert any(op == "connector_service.invalidate_oauth" for op, _ in recorded)

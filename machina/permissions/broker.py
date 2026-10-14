@@ -320,15 +320,18 @@ def _redacted(value: object) -> str:
     """Best-effort secret redaction for DISPLAY and audit text.
 
     Deferred import keeps this module importable without the memory package;
-    failures fall back to the raw string (never blocks authorization).
+    failures fail closed with an explicit marker (never the raw string) and
+    are reported without payload.
     """
     text = str(value)
     try:
         from machina.memory.redaction import redact_secrets
 
         return redact_secrets(text).text
-    except Exception:
-        return text
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("broker.redacted", _boundary_error)
+        return "[redaction unavailable]"
 
 
 def _truncate_display(value: str, limit: int = DISPLAY_VALUE_MAX) -> str:

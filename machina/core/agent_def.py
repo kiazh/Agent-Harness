@@ -20,6 +20,7 @@ from typing import Any
 import yaml
 
 from machina.db.connection import db
+from machina.observability.diagnostics import record_failure
 
 __all__ = ["AgentDef", "AgentRegistry", "agent_registry", "BUILTIN_AGENTS", "frozen_roster"]
 
@@ -309,7 +310,9 @@ class AgentRegistry:
                 if hit is None:
                     return None
                 user_id = hit.user_id
-        except Exception:
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("agent_def.profile_scope", _boundary_error)
             return None
         return AgentDef(
             name=name,
@@ -413,6 +416,8 @@ def frozen_roster() -> list[str]:
     """
     try:
         file_defs = agent_registry._file_definitions()
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("agent_def.frozen_roster", _boundary_error)
         file_defs = {}
     return sorted(set(BUILTIN_AGENTS) | set(file_defs))

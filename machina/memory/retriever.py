@@ -88,7 +88,9 @@ class MemoryRetriever:
             from machina.core.config import get_config
 
             return bool(get_config().get("persona_memory_enabled"))
-        except Exception:
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("retriever.persona_enabled", _boundary_error)
             return True
 
     def _default_emotion(self, override: str | None = None) -> str:

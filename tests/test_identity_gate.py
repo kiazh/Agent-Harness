@@ -200,7 +200,7 @@ class TestIdentityGate:
         assert result.is_valid is False
         assert "irrelevant" in result.reason.lower() or "relevance" in result.reason.lower()
 
-    async def test_validate_incoming_rejects_when_belief_lookup_fails(self, gate, mock_db):
+    async def test_validate_incoming_rejects_when_belief_lookup_fails(self, gate, mock_db, caplog):
         memory = _make_memory(content="Python is a great programming language")
         mock_db.fetchrow = AsyncMock(side_effect=RuntimeError("database unavailable"))
 
@@ -209,8 +209,11 @@ class TestIdentityGate:
 
         assert result.is_valid is False
         assert "belief" in result.reason.lower()
+        assert any("RuntimeError" in (record.exc_text or "") for record in caplog.records)
 
-    async def test_validate_incoming_rejects_when_provenance_lookup_fails(self, gate, mock_db):
+    async def test_validate_incoming_rejects_when_provenance_lookup_fails(
+        self, gate, mock_db, caplog
+    ):
         memory = _make_memory(content="Python is a great programming language")
         mock_db.fetchrow = AsyncMock(
             side_effect=[_make_belief_row(), RuntimeError("provenance table unavailable")]
@@ -221,6 +224,7 @@ class TestIdentityGate:
 
         assert result.is_valid is False
         assert "provenance" in result.reason.lower()
+        assert any("RuntimeError" in (record.exc_text or "") for record in caplog.records)
 
     async def test_validate_incoming_checks_provenance_without_existing_beliefs(
         self, gate, mock_db
@@ -253,3 +257,14 @@ class TestIdentityGate:
             result = await gate.contain_drift("harness", memory_ids)
 
         assert result is True
+
+    async def test_drift_containment_failure_logs_traceback(self, gate, mock_db, caplog):
+        """A failed containment fails closed and logs the traceback."""
+        memory_ids = [uuid.uuid4()]
+
+        with patch("machina.memory.identity.db", mock_db):
+            mock_db.execute = AsyncMock(side_effect=RuntimeError("database unavailable"))
+            result = await gate.contain_drift("harness", memory_ids)
+
+        assert result is False
+        assert any("RuntimeError" in (record.exc_text or "") for record in caplog.records)

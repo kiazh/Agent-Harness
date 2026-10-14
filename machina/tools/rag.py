@@ -47,7 +47,7 @@ def _build_shared_pipeline() -> RAGPipeline:
 
             reranker = CohereReranker()
         except Exception as e:
-            logger.warning("Cohere reranker unavailable, passthrough: %s", e)
+            logger.warning("Cohere reranker unavailable, passthrough: %s", e, exc_info=True)
             reranker = None
     if reranker is None:
         from machina.rag.reranker import IdentityReranker

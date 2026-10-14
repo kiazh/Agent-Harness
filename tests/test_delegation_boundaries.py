@@ -49,7 +49,9 @@ async def test_child_uses_parent_mode_even_when_global_default_is_full(
         AsyncMock(return_value=AgentDef(name="coder", tools=["read_file", "terminal"])),
     )
     monkeypatch.setattr(module.session_manager, "create", create)
-    monkeypatch.setattr("machina.core.session_mode.resolve_effective_mode", AsyncMock(return_value=mode))
+    monkeypatch.setattr(
+        "machina.core.session_mode.resolve_effective_mode", AsyncMock(return_value=mode)
+    )
     orch = Orchestrator(agent_factory=lambda _: Child())
     monkeypatch.setattr(orch, "_parent_context", AsyncMock(return_value=""))
     monkeypatch.setattr(orch, "_record_start", AsyncMock(return_value=uuid4()))
@@ -389,7 +391,9 @@ async def test_rebuilt_child_retains_durable_delegation_restrictions(monkeypatch
         "machina.core.agent_def.agent_registry.get",
         AsyncMock(return_value=AgentDef(name="coder", tools=["read_file", "terminal"])),
     )
-    monkeypatch.setattr("machina.core.provider.get_provider", lambda **_: SimpleNamespace(model="fake"))
+    monkeypatch.setattr(
+        "machina.core.provider.get_provider", lambda **_: SimpleNamespace(model="fake")
+    )
     session = SimpleNamespace(
         agent_id="coder",
         model="fake",
@@ -609,3 +613,82 @@ async def test_fork_keeps_ancestral_budgets_after_parent_deletion(db_pool, monke
     monkeypatch.setattr(config, "usage_agent_request_limit", 1)
     with pytest.raises(UsageBudgetExceededError):
         await UsageStore().reserve(fork.id, fork.agent_id, "fake", "fake", [], [], 1)
+
+
+@pytest.mark.asyncio
+async def test_delegate_roster_and_registry_failures_record_failure(monkeypatch):
+    from machina.core.exceptions import ToolError
+    from machina.tools import agents as agents_tool
+
+    recorded = []
+    monkeypatch.setattr(agents_tool, "record_failure", lambda op, e: recorded.append((op, e)))
+
+    def boom_roster():
+        raise RuntimeError("roster scan boom")
+
+    monkeypatch.setattr("machina.core.agent_def.frozen_roster", boom_roster)
+
+    async def boom_registry(_name):
+        raise RuntimeError("registry lookup boom")
+
+    monkeypatch.setattr("machina.core.agent_def.agent_registry.get", boom_registry)
+    with pytest.raises(ToolError, match="no agent named"):
+        await agents_tool.delegate("ghost-agent", "do work")
+    assert [op for op, _ in recorded] == ["tools.delegate.roster", "tools.delegate.registry"]
+
+
+@pytest.mark.asyncio
+async def test_delegate_parent_authority_failure_records_and_continues(monkeypatch):
+    from machina.core import orchestrator as orchestrator_module
+    from machina.tools import agents as agents_tool
+
+    recorded = []
+    monkeypatch.setattr(agents_tool, "record_failure", lambda op, e: recorded.append((op, e)))
+    monkeypatch.setattr("machina.core.agent_def.frozen_roster", lambda: ["coder"])
+
+    class BoomAuthority:
+        @staticmethod
+        def get():
+            raise RuntimeError("authority probe boom")
+
+    monkeypatch.setattr("machina.core.agent_factory.parent_authority_var", BoomAuthority())
+
+    result = SimpleNamespace(status="ok", response="child result", tokens=1)
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator, "delegate", AsyncMock(return_value=result)
+    )
+    out = await agents_tool.delegate("coder", "do work")
+    assert "child result" in out
+    assert any(op == "tools.delegate.parent_authority" for op, _ in recorded)
+
+
+def test_frozen_roster_records_definition_scan_failure(monkeypatch):
+    from machina.core import agent_def
+
+    recorded = []
+    monkeypatch.setattr(agent_def, "record_failure", lambda op, e: recorded.append((op, e)))
+    monkeypatch.setattr(
+        agent_def.agent_registry,
+        "_file_definitions",
+        lambda: (_ for _ in ()).throw(RuntimeError("scan boom")),
+    )
+    names = agent_def.frozen_roster()
+    assert names  # builtin names remain available
+    assert [op for op, _ in recorded] == ["agent_def.frozen_roster"]
+
+
+@pytest.mark.asyncio
+async def test_profile_scope_records_lookup_failure(monkeypatch):
+    from machina.core import agent_def
+    from machina.memory import user_profile
+
+    recorded = []
+    monkeypatch.setattr(agent_def, "record_failure", lambda op, e: recorded.append((op, e)))
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("profile lookup boom")
+
+    monkeypatch.setattr(user_profile.user_profile_store, "get_by_user_id", boom)
+    monkeypatch.setattr(user_profile.user_profile_store, "list_all", boom)
+    assert await agent_def.agent_registry._profile_scope("harness-anyone") is None
+    assert [op for op, _ in recorded] == ["agent_def.profile_scope"]

@@ -79,3 +79,41 @@ async def test_failed_release_emits_cleanup_pending_without_terminal(monkeypatch
         compact.assert_not_awaited()
     finally:
         turns._local_reset_for_tests()
+
+
+async def test_claim_boundaries_record_sanitized_failures(monkeypatch):
+    """Every silent fail-closed ownership boundary reports its own boundary key."""
+    session_id = uuid.uuid4()
+    recorded = []
+    monkeypatch.setattr(turns, "record_failure", lambda op, e: recorded.append((op, e)))
+    monkeypatch.setattr(db, "_pool", object())
+
+    monkeypatch.setattr(turns, "_db_renew", AsyncMock(side_effect=ConnectionError("offline")))
+    assert await turns.renew_turn(session_id, "owner") is False
+    assert [op for op, _ in recorded] == ["turns.renew_turn"]
+
+    monkeypatch.setattr(turns, "_db_claim_state", AsyncMock(side_effect=ConnectionError("offline")))
+    assert await turns.owns_claim(session_id, "owner") is False
+    assert [op for op, _ in recorded] == ["turns.renew_turn", "turns.owns_claim"]
+
+    monkeypatch.setattr(
+        turns,
+        "_db_claim_state",
+        AsyncMock(
+            return_value={
+                "claim_owner": "owner",
+                "claim_kind": "turn",
+                "claim_expires_at": "not-a-timestamp",
+            }
+        ),
+    )
+    assert await turns.owns_claim(session_id, "owner") is False
+    assert [op for op, _ in recorded][-1] == "turns.owns_claim.expiry"
+    assert await turns._live_claim(session_id, ("turn",)) is True
+    assert [op for op, _ in recorded][-1] == "turns.live_claim.expiry"
+
+    monkeypatch.setattr(turns, "_live_claim", AsyncMock(side_effect=RuntimeError("probe failed")))
+    lock = asyncio.Lock()
+    await lock.acquire()
+    assert await turns._acquire_or_steal(lock, session_id, ("turn",)) is False
+    assert [op for op, _ in recorded][-1] == "turns.acquire_or_steal"

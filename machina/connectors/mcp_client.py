@@ -314,7 +314,10 @@ class MCPConnection:
                 self.last_error = f"shutdown failed: {type(exc).__name__}"
                 self.state = ConnectionState.ERROR
                 logger.warning(
-                    "connector %s shutdown issue: %s", self.config.id, type(exc).__name__
+                    "connector %s shutdown issue: %s",
+                    self.config.id,
+                    type(exc).__name__,
+                    exc_info=True,
                 )
             finally:
                 self._session = None

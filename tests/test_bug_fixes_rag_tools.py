@@ -153,3 +153,19 @@ class TestBug13CdNotInAllowlist:
         monkeypatch.setenv("MACHINA_TERMINAL_SANDBOX", "local")
         result = await terminal("git --version")
         assert isinstance(result, str)
+
+
+def test_shared_pipeline_logs_traceback_on_cohere_failure(monkeypatch, caplog):
+    """A failed Cohere build degrades to passthrough with its traceback logged."""
+    from machina.rag.reranker import IdentityReranker
+    from machina.tools import rag as rag_tools
+
+    monkeypatch.setattr(rag_tools, "_cohere_configured", lambda: True)
+
+    def boom():
+        raise RuntimeError("cohere init boom")
+
+    monkeypatch.setattr("machina.rag.reranker.CohereReranker", boom)
+    pipeline = rag_tools._build_shared_pipeline()
+    assert isinstance(pipeline._reranker, IdentityReranker)
+    assert any("RuntimeError" in (record.exc_text or "") for record in caplog.records)

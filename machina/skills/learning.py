@@ -269,7 +269,9 @@ class LearningReviewer:
             )
             return self._serialize(staged)
         except Exception as exc:
-            logger.warning("Post-turn learning review failed for %s: %s", session_id, exc)
+            logger.warning(
+                "Post-turn learning review failed for %s: %s", session_id, exc, exc_info=True
+            )
             await db.execute(
                 "UPDATE learning_reviews SET status = 'error', reason = $2, lease_expires_at = NULL WHERE id = $1",
                 row["id"],

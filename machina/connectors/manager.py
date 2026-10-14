@@ -156,7 +156,12 @@ class ConnectorManager:
             try:
                 await self.disconnect(connector_id)
             except Exception as exc:
-                logger.warning("connector %s shutdown issue: %s", connector_id, type(exc).__name__)
+                logger.warning(
+                    "connector %s shutdown issue: %s",
+                    connector_id,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
 
     def connection(self, connector_id: str) -> MCPConnection | None:
         return self._connections.get(connector_id)

@@ -844,6 +844,44 @@ class TestMemoryRetriever:
         assert isinstance(results, list)
 
 
+def test_persona_enabled_fallback_records_failure(monkeypatch):
+    """A config read failure keeps persona default-on and reports the boundary."""
+    import importlib
+
+    recorded = []
+    monkeypatch.setattr(
+        "machina.memory.retriever.record_failure", lambda op, e: recorded.append((op, e))
+    )
+
+    def boom_get_config():
+        raise RuntimeError("config boom")
+
+    config_module = importlib.import_module("machina.core.config")
+    monkeypatch.setattr(config_module, "get_config", boom_get_config)
+    assert MemoryRetriever()._persona_enabled() is True
+    assert [op for op, _ in recorded] == ["retriever.persona_enabled"]
+
+
+async def test_backfill_embeddings_records_embed_failure(monkeypatch):
+    """A failed backfill row is skipped and reported, never silently dropped."""
+    from machina.memory import store as store_module
+
+    recorded = []
+    monkeypatch.setattr(store_module, "record_failure", lambda op, e: recorded.append((op, e)))
+
+    async def fake_fetch(_query, _limit):
+        return [{"id": uuid.uuid4(), "content": "User prefers Python"}]
+
+    async def boom_embed(_content):
+        raise RuntimeError("embedding provider offline")
+
+    monkeypatch.setattr(store_module.db, "fetch", fake_fetch)
+    monkeypatch.setattr("machina.memory.embeddings.embed_query", boom_embed)
+    out = await MemoryStore().backfill_embeddings()
+    assert out == {"embedded": 0, "skipped": 1}
+    assert [op for op, _ in recorded] == ["memory.store.backfill_embed"]
+
+
 # ===========================================================================
 # MemoryConsolidator Tests
 # ===========================================================================
@@ -900,15 +938,21 @@ class TestMemoryConsolidator:
         # Results may be empty if importance < 0.2 or other filtering
         assert isinstance(results, list)
 
-    async def test_consolidate_from_text_no_llm(self, consolidator, mock_store):
-        """Test consolidating without LLM returns empty."""
+    async def test_consolidate_from_text_no_llm(self, consolidator, mock_store, monkeypatch):
+        """Test consolidating without LLM returns empty and reports the boundary."""
+        recorded = []
+        monkeypatch.setattr(
+            "machina.memory.consolidator.record_failure",
+            lambda op, e: recorded.append((op, e)),
+        )
         consolidator.llm = None
         consolidator.store = mock_store
 
         results = await consolidator.consolidate_from_text("test")
         assert results == []
+        assert [op for op, _ in recorded] == ["consolidator.consolidate_text"]
 
-    async def test_consolidate_from_text_invalid_json(self, consolidator, mock_store):
+    async def test_consolidate_from_text_invalid_json(self, consolidator, mock_store, caplog):
         """Test consolidating with invalid JSON response."""
         mock_llm = AsyncMock()
         mock_llm.complete = AsyncMock(
@@ -924,6 +968,7 @@ class TestMemoryConsolidator:
         results = await consolidator.consolidate_from_text("test")
         # Invalid JSON should return empty list
         assert isinstance(results, list)
+        assert any("JSONDecodeError" in (record.exc_text or "") for record in caplog.records)
 
     async def test_consolidate_from_text_empty_response(self, consolidator, mock_store):
         """Test consolidating with empty LLM response."""
@@ -948,6 +993,63 @@ class TestMemoryConsolidator:
             mock_cm.get_chunks = AsyncMock(return_value=[])
             results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
             assert results.status == "empty" and results.entries == []
+
+    async def test_consolidate_session_records_candidate_embedding_failure(
+        self, consolidator, mock_store, monkeypatch
+    ):
+        """An embedding failure keeps the candidate and reports its boundary."""
+        from machina.core.models import ContextChunk
+        from machina.memory import consolidator as consolidator_module
+
+        recorded = []
+        monkeypatch.setattr(
+            consolidator_module, "record_failure", lambda op, e: recorded.append((op, e))
+        )
+        session_id = uuid.uuid4()
+        chunk = ContextChunk(
+            id=uuid.uuid4(),
+            session_id=session_id,
+            agent_id="harness",
+            chunk_type="user_message",
+            payload={"content": "User prefers Python"},
+            token_count=10,
+        )
+        candidate = MemoryEntry(
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="User prefers Python",
+            category="preference",
+            importance=0.8,
+            embedding=None,
+        )
+        consolidator.store = mock_store
+        monkeypatch.setattr(consolidator, "_extract_memories", AsyncMock(return_value=[candidate]))
+
+        async def boom_embed(_content):
+            raise RuntimeError("embedding provider offline")
+
+        monkeypatch.setattr("machina.memory.embeddings.embed_query", boom_embed)
+        with patch("machina.memory.consolidator.context_manager") as mock_cm:
+            mock_cm.get_chunks = AsyncMock(return_value=[chunk])
+            mock_cm.get_chunks_since = AsyncMock(return_value=[chunk])
+            result = await consolidator._consolidate_session_impl(session_id, "harness")
+        assert result.status == "complete"
+        assert [op for op, _ in recorded] == ["consolidator.candidate_embedding"]
+
+    async def test_consolidate_from_text_write_failure_logs_exception(
+        self, consolidator, mock_llm, mock_store, caplog
+    ):
+        """A failed memory write keeps [] and logs the traceback."""
+        consolidator.llm = mock_llm
+        mock_store.add = AsyncMock(side_effect=RuntimeError("write boom"))
+        consolidator.store = mock_store
+
+        results = await consolidator.consolidate_from_text(
+            "The user prefers Python programming", agent_id="test"
+        )
+        assert results == []
+        assert any("RuntimeError" in (record.exc_text or "") for record in caplog.records)
 
 
 # ===========================================================================

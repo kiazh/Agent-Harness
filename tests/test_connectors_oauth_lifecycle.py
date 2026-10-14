@@ -437,3 +437,82 @@ def test_config_invalidation_preserves_newer_login_on_reused_binding(tmp_path):
         assert kept.generation == 2
 
     asyncio.run(run())
+
+
+def test_oauth_storage_fallbacks_record_failures(tmp_path, monkeypatch):
+    """Every swallowed OAuth storage read reports its sanitized boundary key."""
+    from unittest.mock import AsyncMock
+
+    from machina.connectors import oauth as oauth_module
+
+    async def run():
+        from machina.connectors.oauth_models import OAuthSettings
+        from tests.test_connectors_oauth_refresh import _seed_refresh
+
+        recorded = []
+        monkeypatch.setattr(oauth_module, "record_failure", lambda op, e: recorded.append((op, e)))
+        coordinator, config, binding, identity = await _seed_refresh(tmp_path)
+
+        # forget(): snapshot read then retire-time load both fail closed.
+        real_load = coordinator._creds.load
+        calls = {"n": 0}
+
+        async def flaky_load(candidate):
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise RuntimeError("storage read boom")
+            return await real_load(candidate)
+
+        monkeypatch.setattr(coordinator._creds, "load", flaky_load)
+        forgotten = await coordinator.forget(
+            "web", _owner(), expected_generation=int(identity.get("generation") or 0), revoke=False
+        )
+        assert forgotten["auth"]["state"] in ("signed_out", "storage_unavailable")
+        ops = [op for op, _ in recorded]
+        assert "oauth.forget.snapshot" in ops
+        assert "oauth.retire.load" in ops
+
+        # _public_auth(): index scan failure -> storage_unavailable.
+        monkeypatch.setattr(
+            coordinator._creds, "_read_index", lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+        )
+        recorded.clear()
+        auth = await coordinator._public_auth(config)
+        assert auth == {"state": "storage_unavailable", "generation": 0}
+        assert [op for op, _ in recorded] == ["oauth.public_auth.storage"]
+
+        # _auth_view(): bind load failure -> storage_unavailable.
+        recorded.clear()
+        view = await coordinator._auth_view(config, binding)
+        assert view == {"state": "storage_unavailable", "generation": 0}
+        assert [op for op, _ in recorded] == ["oauth.public_auth.storage"]
+
+        # refresh_auth_cache(): config resolution failure.
+        async def boom_resolve(_connector_id):
+            raise RuntimeError("resolve boom")
+
+        monkeypatch.setattr(coordinator, "_resolve_config", boom_resolve)
+        recorded.clear()
+        await coordinator.refresh_auth_cache("web")
+        assert [op for op, _ in recorded] == ["oauth.refresh_auth_cache"]
+
+        # refresh_auth_cache(): load failure after a primary binding resolves.
+        monkeypatch.setattr(coordinator, "_primary_binding", AsyncMock(return_value=binding))
+        monkeypatch.setattr(coordinator._creds, "load", AsyncMock(side_effect=RuntimeError("boom")))
+        recorded.clear()
+        await coordinator.refresh_auth_cache("web", config=config)
+        assert [op for op, _ in recorded] == ["oauth.refresh_auth_cache"]
+
+        # refresh_auth_cache(): settings parse failure.
+        real_from_dict = OAuthSettings.from_dict
+        monkeypatch.setattr(
+            OAuthSettings,
+            "from_dict",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("settings boom")),
+        )
+        recorded.clear()
+        await coordinator.refresh_auth_cache("web", config=config)
+        assert [op for op, _ in recorded] == ["oauth.refresh_auth_cache"]
+        monkeypatch.setattr(OAuthSettings, "from_dict", real_from_dict)
+
+    asyncio.run(run())

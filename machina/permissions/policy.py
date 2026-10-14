@@ -13,6 +13,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from machina.observability.diagnostics import record_failure
+
 MODES = ("ask", "workspace", "sandbox", "full")
 
 # Opaque execution: npm/pip/build/test scripts can run arbitrary code. Never
@@ -300,7 +302,9 @@ def _inside_workspace(path: str, root: Path | None = None) -> bool:
     try:
         base = root if root is not None else workspace_root()
         return Path(path).resolve().is_relative_to(base)
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("policy.inside_workspace", _boundary_error)
         return False
 
 
@@ -466,7 +470,9 @@ def _grant_usable(grant: dict, req: ActionRequest) -> bool:
                 exp = exp.replace(tzinfo=UTC)
             if exp <= now:
                 return False
-        except Exception:
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("policy.grant_expiry", _boundary_error)
             return False
     return True
 

@@ -69,6 +69,24 @@ def test_env_example_stays_exempt(workspace):
     assert decide(req).verdict == "allowed"
 
 
+def test_inside_workspace_records_containment_failure(monkeypatch):
+    """A path-resolution failure fails closed and reports the boundary."""
+    from pathlib import Path
+
+    from machina.permissions import policy
+
+    recorded = []
+    monkeypatch.setattr(policy, "record_failure", lambda op, e: recorded.append((op, e)))
+
+    class BrokenPath(Path):
+        def resolve(self, strict=False):
+            raise OSError("resolve boom")
+
+    monkeypatch.setattr(policy, "Path", BrokenPath)
+    assert policy._inside_workspace("x", Path("/tmp")) is False
+    assert [op for op, _ in recorded] == ["policy.inside_workspace"]
+
+
 # ─── F11: session-capability grants need live-full-grant semantics ─────────
 
 

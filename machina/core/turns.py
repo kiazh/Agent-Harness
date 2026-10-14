@@ -195,7 +195,9 @@ async def _live_claim(session_id: uuid.UUID, kinds: tuple[str, ...]) -> bool:
             exp = exp.replace(tzinfo=UTC)
         if exp <= now:
             return False
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("turns.live_claim.expiry", _boundary_error)
         return True
     return True
 
@@ -220,7 +222,9 @@ async def _acquire_or_steal(
     try:
         if await _live_claim(session_id, kinds):
             return False
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("turns.acquire_or_steal", _boundary_error)
         return False
     try:
         lock.release()
@@ -260,7 +264,9 @@ async def renew_turn(
         return bool(owner is not None and owner.get("token") == token)
     try:
         return await _db_renew(session_id, token, ttl_s)
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("turns.renew_turn", _boundary_error)
         return False
 
 
@@ -275,7 +281,9 @@ async def owns_claim(session_id: uuid.UUID, token: str | None) -> bool:
         return bool(owner is not None and owner.get("token") == token)
     try:
         state = await _db_claim_state(session_id)
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("turns.owns_claim", _boundary_error)
         return False
     if not state or state.get("claim_owner") != token:
         return False
@@ -289,7 +297,9 @@ async def owns_claim(session_id: uuid.UUID, token: str | None) -> bool:
         if exp.tzinfo is None:
             exp = exp.replace(tzinfo=UTC)
         return exp > now
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("turns.owns_claim.expiry", _boundary_error)
         return False
 
 

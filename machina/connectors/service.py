@@ -20,6 +20,7 @@ from machina.connectors.models import (
 from machina.connectors.policy import classify_tool
 from machina.connectors.registry import ConnectorRegistry
 from machina.connectors.store import ConnectorStore
+from machina.observability.diagnostics import record_failure
 
 
 class ConnectorService:
@@ -81,8 +82,9 @@ class ConnectorService:
                             current.id,
                             config_revision=current.revision if current.id in desired else None,
                         )
-                    except Exception:
-                        pass
+                    except Exception as _boundary_error:
+                        # Optional fallback preserves the primary outcome; report no payload.
+                        record_failure("connector_service.invalidate_oauth", _boundary_error)
         for config in configs:
             if self.registry.get(config.id) is None:
                 stored = self.registry.add(config)
@@ -149,8 +151,9 @@ class ConnectorService:
                 if self.oauth is not None:
                     try:
                         await self.oauth.invalidate_connector(connector_id)
-                    except Exception:
-                        pass
+                    except Exception as _boundary_error:
+                        # Optional fallback preserves the primary outcome; report no payload.
+                        record_failure("connector_service.invalidate_oauth", _boundary_error)
             removed = self.store.remove(connector_id)
             await self._refresh_locked()
             await self._refresh_auth_cache()

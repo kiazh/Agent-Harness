@@ -39,6 +39,7 @@ from machina.connectors.oauth_network import (
     normalize_resource,
 )
 from machina.connectors.oauth_store import OAuthCredentialStore, credential_key_for
+from machina.observability.diagnostics import record_failure
 
 
 def _utcnow() -> datetime:
@@ -781,7 +782,9 @@ class OAuthCoordinator:
                             return await self._auth_view(config, binding)
                         if stale_binding is None:
                             stale_binding = binding
-        except Exception:
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("oauth.public_auth.storage", _boundary_error)
             return {"state": "storage_unavailable", "generation": 0}
         if stale_binding is not None:
             return await self._auth_view(config, stale_binding)
@@ -790,7 +793,9 @@ class OAuthCoordinator:
     async def _auth_view(self, config, binding: OAuthBinding) -> dict[str, Any]:
         try:
             record = await self._creds.load(binding)
-        except Exception:
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("oauth.public_auth.storage", _boundary_error)
             return {"state": "storage_unavailable", "generation": 0}
         if record is None:
             return {"state": "signed_out", "generation": 0}
@@ -936,7 +941,9 @@ class OAuthCoordinator:
         if binding is not None:
             try:
                 snapshot_record = await self._creds.load(binding)
-            except Exception:
+            except Exception as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("oauth.forget.snapshot", _boundary_error)
                 snapshot_record = None
         await self._retire_connector_credentials(
             connector_id, preferred_binding=binding, expected_generation=expected_generation
@@ -1022,7 +1029,9 @@ class OAuthCoordinator:
             )
             try:
                 record = await self._creds.load(binding)
-            except Exception:
+            except Exception as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("oauth.retire.load", _boundary_error)
                 record = None
             if (
                 record is not None
@@ -1145,14 +1154,17 @@ class OAuthCoordinator:
         try:
             if config is None:
                 config = await self._resolve_config(connector_id)
-        except Exception:
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("oauth.refresh_auth_cache", _boundary_error)
             self._auth_cache.pop(connector_id, None)
             return
         settings = None
         try:
             settings = OAuthSettings.from_dict(getattr(config, "oauth", None) or {})
-        except Exception:
-            pass
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("oauth.refresh_auth_cache", _boundary_error)
         if settings is None:
             self._auth_cache.pop(connector_id, None)
             return
@@ -1162,7 +1174,9 @@ class OAuthCoordinator:
             return
         try:
             record = await self._creds.load(binding)
-        except Exception:
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("oauth.refresh_auth_cache", _boundary_error)
             self._auth_cache.pop(connector_id, None)
             return
         if (

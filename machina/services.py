@@ -209,7 +209,9 @@ async def compress_session_with_status(
                 except Exception as e:
                     import logging as _logging
 
-                    _logging.getLogger(__name__).warning("compression provider close failed: %s", e)
+                    _logging.getLogger(__name__).warning(
+                        "compression provider close failed: %s", e, exc_info=True
+                    )
         finally:
             if owned:
                 try:
@@ -324,7 +326,9 @@ async def compress_session(
                 except Exception as e:
                     import logging as _logging
 
-                    _logging.getLogger(__name__).warning("compression provider close failed: %s", e)
+                    _logging.getLogger(__name__).warning(
+                        "compression provider close failed: %s", e, exc_info=True
+                    )
         finally:
             if owned:
                 try:
@@ -363,7 +367,9 @@ async def _estimate_next_request(session_id) -> int:
 
         try:
             session = await _sessions.get(session_id)
-        except Exception:
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("services.maybe_auto_compact.session", _boundary_error)
             session = None
         allowed: list | None = None
         definition_prompt = ""
@@ -502,7 +508,9 @@ async def maybe_auto_compact(session_id) -> dict | None:
         if max_tokens and max_tokens > 0:
             try:
                 evicted = await context_manager.evict_old_chunks(session_id, max_tokens=max_tokens)
-            except Exception:
+            except Exception as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("services.maybe_auto_compact.evict", _boundary_error)
                 evicted = 0
         return {
             "compressed": True,
@@ -621,19 +629,25 @@ async def status_summary() -> dict[str, Any]:
         from machina.core.runtime import runtime_services
 
         runtime = runtime_services.status()
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services.status_summary.runtime", _boundary_error)
         runtime = {}
     try:
         from machina.memory.embeddings import embedding_status
 
         retrieval = embedding_status()
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services.status_summary.retrieval", _boundary_error)
         retrieval = {"mode": "keyword-only"}
     try:
         rag_docs = await db.fetchval(
             "SELECT COUNT(DISTINCT COALESCE(document_source, id::text)) FROM context_chunks WHERE chunk_type = 'document'"
         )
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services.status_summary.rag_docs", _boundary_error)
         rag_docs = 0
     try:
         from machina.core.config import config as _cfg
@@ -662,7 +676,9 @@ async def status_summary() -> dict[str, Any]:
             if bool(_cfg.get("memory_consolidation_enabled") and _cfg.get("memory_enabled"))
             else "disabled"
         )
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services.status_summary.config", _boundary_error)
         mode, backend, workspace, reranker, auto_compact, extraction = (
             "ask",
             "host",
@@ -677,7 +693,9 @@ async def status_summary() -> dict[str, Any]:
             "SELECT COUNT(*) FROM jobs WHERE status = 'paused_approval' "
             "OR (status = 'error' AND last_error ILIKE '%needs_approval%')"
         )
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services.status_summary.jobs_waiting", _boundary_error)
         jobs_waiting = 0
     base = {
         "postgres": version.split(",")[0],
@@ -722,6 +740,8 @@ async def status_summary() -> dict[str, Any]:
         base["permissionDurability"] = (
             "durable" if durable else ("local-only" if durable is False else "unknown")
         )
-    except Exception:
+    except Exception as _boundary_error:
+        # Optional fallback preserves the primary outcome; report no payload.
+        record_failure("services.status_summary.permission_durability", _boundary_error)
         base["permissionDurability"] = "unknown"
     return base

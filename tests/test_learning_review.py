@@ -382,8 +382,8 @@ async def test_review_includes_tool_calls_in_prompt(db_pool, monkeypatch, tmp_pa
         await db_pool.execute("DELETE FROM sessions WHERE id = $1", session.id)
 
 
-async def test_review_marks_error_when_provider_raises(db_pool, monkeypatch, tmp_path):
-    """review_turn() marks the review as 'error' when the provider call fails."""
+async def test_review_marks_error_when_provider_raises(db_pool, monkeypatch, tmp_path, caplog):
+    """review_turn() marks the review as 'error' and logs the traceback."""
     monkeypatch.setattr("machina.skills.learning.db", db_pool)
     monkeypatch.setattr("machina.core.session.db", db_pool)
     agent_id = f"review-{uuid.uuid4()}"
@@ -405,6 +405,7 @@ async def test_review_marks_error_when_provider_raises(db_pool, monkeypatch, tmp
             FailingProvider(),
         )
         assert result is None
+        assert any("RuntimeError" in (record.exc_text or "") for record in caplog.records)
         rows = await db_pool.fetch(
             "SELECT status, reason FROM learning_reviews WHERE session_id = $1", session.id
         )

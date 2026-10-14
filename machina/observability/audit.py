@@ -92,9 +92,9 @@ class AuditPersistence:
                     json.dumps(entry, default=str),
                 )
                 metrics.increment_counter("audit.persistence.succeeded")
-            except Exception as error:
+            except Exception:
                 metrics.increment_counter("audit.persistence.failed")
-                logger.error("Could not persist audit event (%s)", type(error).__name__)
+                logger.exception("Could not persist audit event")
             finally:
                 queue.task_done()
 

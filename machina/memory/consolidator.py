@@ -366,7 +366,9 @@ class MemoryConsolidator:
                     if not redacted.strip():
                         continue
                     candidate.embedding = await _embed_query(redacted[:2000])
-                except Exception:
+                except Exception as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("consolidator.candidate_embedding", _boundary_error)
                     candidate.embedding = None
         except Exception as _boundary_error:
             # Optional fallback preserves the primary outcome; report no payload.
@@ -390,7 +392,7 @@ class MemoryConsolidator:
                 written.append(entry)
             except Exception as e:
                 write_failures += 1
-                logger.error("Failed to write memory: %s", e)
+                logger.exception("Failed to write memory: %s", e)
 
         audit_log(
             "memory_consolidate",
@@ -428,7 +430,9 @@ class MemoryConsolidator:
         """
         try:
             candidates = await self._extract_memories(text, session_id, agent_id)
-        except Exception:
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("consolidator.consolidate_text", _boundary_error)
             return []
         if not candidates:
             return []
@@ -502,7 +506,7 @@ class MemoryConsolidator:
                 )
                 written.append(entry)
             except Exception as e:
-                logger.error("Failed to write memory: %s", e)
+                logger.exception("Failed to write memory: %s", e)
 
         return written
 
@@ -598,10 +602,10 @@ class MemoryConsolidator:
             return memories
 
         except json.JSONDecodeError as e:
-            logger.error("Failed to parse LLM memory extraction response as JSON: %s", e)
+            logger.exception("Failed to parse LLM memory extraction response as JSON: %s", e)
             raise RuntimeError(f"memory extraction parse failed: {e}") from e
         except RuntimeError:
             raise
         except Exception as e:
-            logger.error("Memory extraction failed: %s", e)
+            logger.exception("Memory extraction failed: %s", e)
             raise RuntimeError(f"memory extraction failed: {e}") from e

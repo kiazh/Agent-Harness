@@ -73,6 +73,10 @@ async def test_audit_writer_failure_has_metric_and_no_error_payload(monkeypatch,
         await asyncio.wait_for(started.wait(), 1)
         await writer.stop()
         assert metrics._counters["audit.persistence.failed"] == previous + 1
+        assert any(
+            record.getMessage() == "Could not persist audit event" for record in caplog.records
+        )
+        assert any("RuntimeError" in (record.exc_text or "") for record in caplog.records)
         assert "private-provider-response" not in caplog.text
     finally:
         await writer.stop()

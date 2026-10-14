@@ -193,19 +193,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         rpc_gw = _RpcGateway()
         app.state._rpc_gateway = rpc_gw
     except Exception as e:
-        logger.warning("Runtime startup degraded: %s", e)
+        logger.warning("Runtime startup degraded: %s", e, exc_info=True)
     yield
     # AH-AUDIT-024: bounded shutdown — no stage awaits cancellation-
     # resistant work indefinitely.
     if runner is not None:
         try:
             await asyncio.wait_for(runner.stop(), timeout=10)
-        except (TimeoutError, asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
+            raise
+        except (TimeoutError, Exception):
             logger.warning("API job runner stop exceeded its bound; continuing")
     if rpc_gw is not None:
         try:
             await asyncio.wait_for(rpc_gw.close(), timeout=10)
-        except (TimeoutError, asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
+            raise
+        except (TimeoutError, Exception):
             logger.warning("API gateway close exceeded its bound; continuing")
     try:
         await asyncio.wait_for(runtime_services.shutdown(), timeout=15)

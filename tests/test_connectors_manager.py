@@ -187,3 +187,16 @@ async def test_unknown_connector_never_launches():
     with pytest.raises(ConnectionFailed, match="unknown connector"):
         manager.status("missing")
     assert clients == []
+
+
+async def test_shutdown_all_logs_traceback_when_disconnect_fails(monkeypatch, caplog):
+    """A failing teardown is logged with its traceback, never silently swallowed."""
+    manager, _clients = setup_manager()
+    await manager.connect("alpha")
+
+    async def boom(_connector_id):
+        raise RuntimeError("disconnect boom")
+
+    monkeypatch.setattr(manager, "disconnect", boom)
+    await manager.shutdown_all()
+    assert any("RuntimeError" in (record.exc_text or "") for record in caplog.records)

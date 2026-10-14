@@ -291,7 +291,8 @@ async def _stream_session(
                             await asyncio.shield(active)
                         except asyncio.CancelledError:
                             continue
-                        except Exception:
+                        except Exception as exc:
+                            record_failure("app.retire_execution", exc)
                             break
                     try:
                         if stream is not None:

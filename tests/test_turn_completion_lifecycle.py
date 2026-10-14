@@ -147,3 +147,64 @@ async def test_rest_timeout_quarantines_until_actual_execution_stops(monkeypatch
         release.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_rest_retire_execution_failure_is_recorded(monkeypatch):
+    """A retirement that observes a late execution error reports the boundary."""
+    import machina.core.agent_factory as factory
+    from machina.api import app as api
+    from machina.api.routes import streaming as streaming_module
+    from machina.core import turns
+    from machina.core.config import config
+    from machina.core.session import session_manager
+
+    turns._local_reset_for_tests()
+    session = Session(id=uuid.uuid4())
+    release, retired = asyncio.Event(), asyncio.Event()
+    monkeypatch.setattr(config, "turn_timeout", 0.01)
+    monkeypatch.setattr(session_manager, "get_fresh", AsyncMock(return_value=session))
+    recorded = []
+    monkeypatch.setattr(streaming_module, "record_failure", lambda op, e: recorded.append((op, e)))
+
+    class Agent:
+        async def run_stream(self, *args, **kwargs):
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    continue
+            raise RuntimeError("late execution boom")
+            yield  # pragma: no cover
+
+    monkeypatch.setattr(factory, "build_agent_for_session", AsyncMock(return_value=Agent()))
+    real_end = turns.end_turn
+
+    async def release_owner(sid, token):
+        result = await real_end(sid, token)
+        retired.set()
+        return result
+
+    monkeypatch.setattr(turns, "end_turn", release_owner)
+    endpoint = next(
+        route.endpoint
+        for route in api.create_app().routes
+        if route.path == "/sessions/{session_id}/prompt"
+    )
+    response = await endpoint(str(session.id), api.PromptRequest(text="work"))
+
+    async def consume():
+        return [frame async for frame in response.body_iterator]
+
+    task = asyncio.create_task(consume())
+    try:
+        done, _ = await asyncio.wait({task}, timeout=0.8)
+        assert task in done
+        frames = await task
+        assert any('"type": "turn.cleanup_pending"' in frame for frame in frames)
+        release.set()
+        await asyncio.wait_for(retired.wait(), 0.8)
+        assert any(op == "app.retire_execution" for op, _ in recorded), recorded
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

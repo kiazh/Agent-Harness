@@ -129,11 +129,62 @@ async def test_maybe_auto_compact_records_failure(monkeypatch):
     assert any(op == "services.maybe_auto_compact" for op, _ in recorded)
 
 
+async def test_maybe_auto_compact_eviction_failure_recorded(monkeypatch):
+    """A failed eviction pass keeps the compaction result and reports the boundary."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import machina.services as svc
+    from machina.core import session as session_module
+    from machina.core import turns as turns_module
+
+    recorded = []
+    monkeypatch.setattr(svc, "record_failure", lambda op, e: recorded.append((op, e)))
+
+    session = SimpleNamespace(id=uuid.uuid4(), model="test-model", state={})
+    monkeypatch.setattr(session_module.session_manager, "get", AsyncMock(return_value=session))
+    monkeypatch.setattr(session_module.session_manager, "update_state_fields", AsyncMock())
+    monkeypatch.setattr(turns_module, "begin_mutation", AsyncMock(return_value="token-1"))
+    monkeypatch.setattr(turns_module, "end_mutation", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        turns_module, "_db_claim_state", AsyncMock(return_value={"claim_owner": "token-1"})
+    )
+    monkeypatch.setattr(svc, "_estimate_next_request", AsyncMock(return_value=10_000))
+    monkeypatch.setattr("machina.core.context_windows.context_window_for", lambda _model: 1_000)
+    monkeypatch.setattr(svc.context_manager, "get_token_usage", AsyncMock(return_value=10_000))
+    monkeypatch.setattr(
+        svc,
+        "compress_session",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                compressed_tokens=10, original_tokens=100, method="truncate"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        svc.context_manager,
+        "evict_old_chunks",
+        AsyncMock(side_effect=RuntimeError("evict boom")),
+    )
+    from machina.core.config import config
+
+    monkeypatch.setattr(config, "auto_compaction_enabled", True)
+    monkeypatch.setattr(config, "compression_enabled", True)
+    monkeypatch.setattr(config, "eviction_max_tokens", 1_000)
+
+    result = await svc.maybe_auto_compact(session.id)
+    assert result is not None and result["evicted"] == 0
+    assert [op for op, _ in recorded] == ["services.maybe_auto_compact.evict"]
+
+
 # ─── 5. Estimate init ────────────────────────────────────────────────────
 
 
 async def test_estimate_survives_session_lookup_failure(monkeypatch):
     import machina.services as svc
+
+    recorded = []
+    monkeypatch.setattr(svc, "record_failure", lambda op, e: recorded.append((op, e)))
 
     # Force session lookup to raise at the outer import level? Simulate by
     # making session_manager.get raise and registry raise.
@@ -155,6 +206,7 @@ async def test_estimate_survives_session_lookup_failure(monkeypatch):
         pass
     val = await svc._estimate_next_request(uuid.uuid4())
     assert isinstance(val, int) and val > 0 and val != float("inf")
+    assert "services.maybe_auto_compact.session" in [op for op, _ in recorded]
 
 
 # ─── 7. Status fallback ──────────────────────────────────────────────────
@@ -220,6 +272,60 @@ async def test_status_never_raises_on_partial_config_failure(monkeypatch):
     assert isinstance(out, dict) and out["postgres"]
     assert out["autoCompaction"] != "enabled"
     assert out["memoryExtraction"] != "ready"
+
+
+async def test_status_summary_records_each_field_fallback(monkeypatch):
+    """Each status field fallback reports its own sanitized boundary key."""
+    import machina.services as svc
+    from machina.core import runtime as runtime_module
+    from machina.memory import embeddings as embeddings_module
+    from machina.permissions import store as perm_store
+
+    recorded = []
+    monkeypatch.setattr(svc, "record_failure", lambda op, e: recorded.append((op, e)))
+
+    def boom_status():
+        raise RuntimeError("runtime boom")
+
+    monkeypatch.setattr(runtime_module.runtime_services, "status", boom_status)
+
+    def boom_embedding_status():
+        raise RuntimeError("embedding boom")
+
+    monkeypatch.setattr(embeddings_module, "embedding_status", boom_embedding_status)
+
+    async def fake_fetchval(query, *args):
+        if "version()" in query:
+            return "PostgreSQL 16.0"
+        if "chunk_type = 'document'" in query or "FROM jobs" in query:
+            raise RuntimeError("query boom")
+        return 0
+
+    monkeypatch.setattr(svc.db, "fetchval", fake_fetchval)
+
+    def boom_get(_key=None):
+        raise RuntimeError("config boom")
+
+    from machina.core.config import config as cfg
+
+    monkeypatch.setattr(cfg, "get", boom_get)
+
+    monkeypatch.setattr(
+        perm_store, "is_durable", lambda: (_ for _ in ()).throw(RuntimeError("durable boom"))
+    )
+
+    out = await svc.status_summary()
+    assert isinstance(out, dict)
+    ops = {op for op, _ in recorded}
+    for field in (
+        "runtime",
+        "retrieval",
+        "rag_docs",
+        "config",
+        "jobs_waiting",
+        "permission_durability",
+    ):
+        assert f"services.status_summary.{field}" in ops, ops
 
 
 # ─── 9. Compression None timestamps ─────────────────────────────────────
@@ -377,9 +483,9 @@ async def test_document_count_distinct_sources(db_pool, monkeypatch):
             "INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source) VALUES ($1,$2,'document',$3,5,NULL,$4,$5)",
             sess.id,
             "harness",
-            __import__("machina.core.serialization", fromlist=["payload_to_msgpack"]).payload_to_msgpack(
-                payload
-            ),
+            __import__(
+                "machina.core.serialization", fromlist=["payload_to_msgpack"]
+            ).payload_to_msgpack(payload),
             "same text",
             "doc-A",
         )
@@ -387,9 +493,9 @@ async def test_document_count_distinct_sources(db_pool, monkeypatch):
             "INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source) VALUES ($1,$2,'document',$3,5,NULL,$4,$5)",
             sess.id,
             "harness",
-            __import__("machina.core.serialization", fromlist=["payload_to_msgpack"]).payload_to_msgpack(
-                payload
-            ),
+            __import__(
+                "machina.core.serialization", fromlist=["payload_to_msgpack"]
+            ).payload_to_msgpack(payload),
             "same text",
             "doc-B",
         )
@@ -398,9 +504,9 @@ async def test_document_count_distinct_sources(db_pool, monkeypatch):
             "INSERT INTO context_chunks (session_id, agent_id, chunk_type, payload_msgpack, token_count, embedding, search_text, document_source) VALUES ($1,$2,'document',$3,5,NULL,$4,$5)",
             sess.id,
             "harness",
-            __import__("machina.core.serialization", fromlist=["payload_to_msgpack"]).payload_to_msgpack(
-                payload
-            ),
+            __import__(
+                "machina.core.serialization", fromlist=["payload_to_msgpack"]
+            ).payload_to_msgpack(payload),
             "same text",
             "doc-A",
         )

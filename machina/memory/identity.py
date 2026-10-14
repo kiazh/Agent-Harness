@@ -217,7 +217,10 @@ class IdentityGate:
                 )
             except Exception as exc:
                 logger.warning(
-                    "Provenance lookup failed for memory %s (%s)", memory.id, type(exc).__name__
+                    "Provenance lookup failed for memory %s (%s)",
+                    memory.id,
+                    type(exc).__name__,
+                    exc_info=True,
                 )
                 return ValidationResult(False, 0.0, "Provenance lookup unavailable")
             if (
@@ -231,7 +234,12 @@ class IdentityGate:
         try:
             belief = await self._load_beliefs(agent_id, connection=connection)
         except Exception as exc:
-            logger.warning("Belief lookup failed for agent %s (%s)", agent_id, type(exc).__name__)
+            logger.warning(
+                "Belief lookup failed for agent %s (%s)",
+                agent_id,
+                type(exc).__name__,
+                exc_info=True,
+            )
             return ValidationResult(False, 0.0, "Belief lookup unavailable")
         if belief is not None:
             # Reject irrelevant or contradictory content before further lookup.
@@ -258,7 +266,10 @@ class IdentityGate:
                 )
             except Exception as exc:
                 logger.warning(
-                    "Provenance lookup failed for memory %s (%s)", memory.id, type(exc).__name__
+                    "Provenance lookup failed for memory %s (%s)",
+                    memory.id,
+                    type(exc).__name__,
+                    exc_info=True,
                 )
                 return ValidationResult(False, 0.0, "Provenance lookup unavailable")
             if provenance is not None and (
@@ -350,8 +361,8 @@ class IdentityGate:
                 agent_id,
             )
             return True
-        except Exception as exc:
-            logger.error("Drift containment failed: %s", exc)
+        except Exception:
+            logger.exception("Drift containment failed")
             return False
 
     async def _load_beliefs(

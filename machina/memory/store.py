@@ -16,6 +16,7 @@ from machina.db.lazy import LazyDb, parse_command_count
 from machina.memory.identity import MemoryProvenance, identity_gate
 from machina.memory.models import MemoryEntry
 from machina.memory.redaction import SecretRedactor
+from machina.observability.diagnostics import record_failure
 from machina.security.secrets import get_secret
 
 __all__ = ["MemoryStore", "memory_store"]
@@ -319,7 +320,9 @@ class MemoryStore:
                     _e2s(vector),
                 )
                 embedded += 1
-            except Exception:
+            except Exception as _boundary_error:
+                # Optional fallback preserves the primary outcome; report no payload.
+                record_failure("memory.store.backfill_embed", _boundary_error)
                 skipped += 1
         return {"embedded": embedded, "skipped": skipped}
 

@@ -40,10 +40,14 @@ def test_grant_live_iso_string_expiry_parses():
     assert _grant_live({"revoked": False, "expires_at": past}) is False
 
 
-def test_grant_usable_matches_store_on_garbage_expiry():
+def test_grant_usable_matches_store_on_garbage_expiry(monkeypatch):
     """Policy-time and execution-time checks agree: garbage expiry denies."""
+    from machina.permissions import policy
     from machina.permissions.policy import _grant_usable
     from machina.permissions.store import _grant_live
+
+    recorded = []
+    monkeypatch.setattr(policy, "record_failure", lambda op, e: recorded.append((op, e)))
 
     grant = {"revoked": False, "expires_at": "garbage", "session_id": "", "agent_id": ""}
     assert _grant_live(grant) is False
@@ -53,6 +57,23 @@ def test_grant_usable_matches_store_on_garbage_expiry():
         agent_id = ""
 
     assert _grant_usable(grant, Req()) is False  # type: ignore[arg-type]
+    assert [op for op, _ in recorded] == ["policy.grant_expiry"]
+
+
+def test_broker_redaction_failure_never_returns_raw_text(monkeypatch):
+    """The display redactor fails closed with a marker, never raw input."""
+    from machina.permissions import broker
+
+    recorded = []
+    monkeypatch.setattr(broker, "record_failure", lambda op, e: recorded.append((op, e)))
+
+    def boom(_text):
+        raise RuntimeError("redactor exploded")
+
+    monkeypatch.setattr("machina.memory.redaction.redact_secrets", boom)
+    result = broker._redacted("sk-" + "a" * 30)
+    assert result == "[redaction unavailable]"
+    assert [op for op, _ in recorded] == ["broker.redacted"]
 
 
 async def test_db_helper_records_failure(monkeypatch):
