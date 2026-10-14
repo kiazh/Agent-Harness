@@ -735,6 +735,77 @@ test("A03 late approval request from another session never opens", async () => {
 	await app.exit();
 });
 
+test("A03 returning to a session rebuilds its pending approval card (R15)", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	client.autoSubmit = { turnId: "t" };
+	await submitTurn(app, "go");
+	client.emit(ev(SESSION_A.id, "t", { type: "message.start" }));
+	client.emit(approvalEvent(SESSION_A.id, "t"));
+	const dialogs = (app as unknown as { approvalDialogs: Map<string, unknown> }).approvalDialogs;
+	const footer = (app as unknown as { footer: { status: string } }).footer;
+	assert.equal(dialogs.size, 1, "card opens for the visible bound session");
+	app.switchTo(SESSION_B, []);
+	assert.equal(dialogs.size, 0, "leaving hides the card without deciding");
+	app.switchTo(SESSION_A, []);
+	assert.equal(dialogs.size, 1, "returning rebuilds the pending review");
+	assert.equal(footer.status, "awaiting_approval", "the paused turn still reads awaiting_approval");
+	assert.equal(client.resolveCount(), 0, "rebuilding issues no decision");
+	await app.exit();
+});
+
+test("A03 approval arriving while another session is visible is recovered on return (R15)", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	client.autoSubmit = { turnId: "t" };
+	await submitTurn(app, "go");
+	client.emit(ev(SESSION_A.id, "t", { type: "message.start" }));
+	app.switchTo(SESSION_B, []);
+	client.emit(approvalEvent(SESSION_A.id, "t"));
+	const dialogs = (app as unknown as { approvalDialogs: Map<string, unknown> }).approvalDialogs;
+	assert.equal(dialogs.size, 0, "a hidden frame never opens a wrong-session card");
+	app.switchTo(SESSION_A, []);
+	assert.equal(dialogs.size, 1, "the retained frame opens when its session returns");
+	await app.exit();
+});
+
+test("A03 an approval resolved while hidden is not resurrected on return (R15)", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	client.autoSubmit = { turnId: "t" };
+	await submitTurn(app, "go");
+	client.emit(ev(SESSION_A.id, "t", { type: "message.start" }));
+	client.emit(approvalEvent(SESSION_A.id, "t"));
+	app.switchTo(SESSION_B, []);
+	client.emit(ev(SESSION_A.id, "t", { type: "approval.resolved", requestId: "req-1", status: "approved" }));
+	app.switchTo(SESSION_A, []);
+	assert.equal(
+		(app as unknown as { approvalDialogs: Map<string, unknown> }).approvalDialogs.size,
+		0,
+		"a decided approval stays retired",
+	);
+	assert.equal(client.resolveCount(), 0, "return issues no decision");
+	await app.exit();
+});
+
+test("A03 a turn completed while hidden retires its unconsumed approval evidence (R15)", async () => {
+	const { app, client } = makeApp();
+	await app.start();
+	client.autoSubmit = { turnId: "t" };
+	await submitTurn(app, "go");
+	client.emit(ev(SESSION_A.id, "t", { type: "message.start" }));
+	client.emit(approvalEvent(SESSION_A.id, "t"));
+	app.switchTo(SESSION_B, []);
+	client.emit(ev(SESSION_A.id, "t", { type: "message.complete", text: "done", tokens: 1, iterations: 1, toolCalls: 0, cancelled: false }));
+	app.switchTo(SESSION_A, []);
+	assert.equal(
+		(app as unknown as { approvalDialogs: Map<string, unknown> }).approvalDialogs.size,
+		0,
+		"a completed turn shows no stale approval",
+	);
+	await app.exit();
+});
+
 test("A04 deliberate Allow sends one bound resolve, Deny is the safe default", async () => {
 	const { app, client } = makeApp();
 	await app.start();

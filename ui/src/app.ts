@@ -132,6 +132,16 @@ export class App implements FeatureHost {
 			dialog: Promise<void | undefined>;
 		}
 	>();
+	/**
+	 * Per-request approval evidence retained across session navigation
+	 * (R15). The interactive card is presentation; this record survives
+	 * leaving a session so the paused backend's review can be rebuilt on
+	 * return, and is retired only by a decision or turn completion.
+	 */
+	private readonly pendingApprovals = new Map<
+		string,
+		Extract<GatewayEvent, { type: "needs_approval" | "permission.required" }>
+	>();
 	private readonly dialogs: Array<{ handle: OverlayHandle; cancel: () => void }> = [];
 	private exiting = false;
 	private resolveExit: () => void = () => {};
@@ -321,6 +331,9 @@ export class App implements FeatureHost {
 		// Preserve the active turn's latest cumulative usage across switches
 		// without mixing turns: completed total plus this session's turn total.
 		this.footer.tokens = this.sessionTokens + (this.turns.get(session.id)?.usageLatest ?? 0);
+		// The backend stays paused for this session's approvals; rebuild the
+		// review cards retained while it was hidden (R15).
+		this.restoreApprovals(session.id);
 		this.setRunning(this.inFlight.has(session.id));
 		this.tui.requestRender();
 	}
@@ -1023,8 +1036,12 @@ export class App implements FeatureHost {
 			this.outputStore.put(event.sessionId, event.id, event.name, event.result, event.truncated ?? false);
 		}
 		if ((event.type === "needs_approval" || event.type === "permission.required")) {
-			// Approval review only in the bound visible session; never carry
-			// a dialog into another session (T7 owns the review card/queue).
+			// Retain the review evidence even while its session is hidden
+			// (R15); the card itself opens only in the bound visible session
+			// and never carries a dialog into another session (T7 owns the
+			// review card/queue). A later return rebuilds it via
+			// restoreApprovals.
+			this.pendingApprovals.set(event.requestId, event);
 			if (event.sessionId !== this.current?.id) return;
 			// Approval card bound to this exact session/turn — switching
 			// sessions never approves the wrong session (Phase 5.6).
@@ -1033,6 +1050,8 @@ export class App implements FeatureHost {
 			return;
 		}
 		if ((event.type === "approval.resolved" || event.type === "permission.resolved")) {
+			// The decision is durable regardless of which session is visible.
+			this.pendingApprovals.delete(event.requestId);
 			if (event.sessionId !== this.current?.id) return;
 			const pending = this.approvalDialogs.get(event.requestId);
 			pending?.card.setRecorded(`approval ${event.status}`);
@@ -1045,7 +1064,9 @@ export class App implements FeatureHost {
 			return;
 		}
 		if (event.type === "approval.resumed") {
-			// The approved action continues under a fresh bound turn.
+			// The review is no longer pending; the approved action continues
+			// under a fresh bound turn.
+			this.pendingApprovals.delete(event.requestId);
 			if (event.originTurnId === record.turnId) {
 				if (record.turnId && !record.retired.includes(record.turnId)) {
 					record.retired.push(record.turnId);
@@ -1086,6 +1107,7 @@ export class App implements FeatureHost {
 			if (event.type === "message.complete") {
 				this.accountCompletion(event.sessionId, event.tokens);
 				this.retireTurn(event.sessionId, event.turnId);
+				this.clearApprovals(event.sessionId);
 			}
 			// AH-032: never clear in-flight on "error" — the terminal
 			// message.complete still follows with final accounting and
@@ -1095,14 +1117,7 @@ export class App implements FeatureHost {
 			return;
 		}
 		if (event.type === "message.stopping") this.footer.status = "stopping";
-		if (event.type === "message.complete") {
-			for (const entry of [...this.approvalDialogs.values()]) {
-				if (entry.sessionId === event.sessionId) {
-					entry.card.setRecorded("request ended");
-					entry.close();
-				}
-			}
-		}
+		if (event.type === "message.complete") this.clearApprovals(event.sessionId);
 		const summary = this.transcript.apply(event);
 		if (event.type === "error") {
 			// Keep turn state until terminal completion (AH-032). The error
@@ -1243,6 +1258,7 @@ export class App implements FeatureHost {
 			&& (record.turnId === entry.transportTurnId || (entry.originTurnId !== undefined && record.turnId === entry.originTurnId));
 		if (!bound) {
 			entry.close();
+			this.pendingApprovals.delete(requestId);
 			return;
 		}
 		entry.card.setResolving(true);
@@ -1262,6 +1278,7 @@ export class App implements FeatureHost {
 		// Decision recorded; execution is proven only by later tool events.
 		entry.card.setRecorded(`approval ${decision.verdict}`);
 		entry.close();
+		this.pendingApprovals.delete(requestId);
 		this.tui.requestRender();
 	}
 
@@ -1272,6 +1289,31 @@ export class App implements FeatureHost {
 				entry.close();
 				this.approvalDialogs.delete(requestId);
 			}
+		}
+		// Navigation retains evidence so the card can be rebuilt on return
+		// (R15); exit and disconnect drop it: nothing can be decided after.
+		if (sessionId === undefined) this.pendingApprovals.clear();
+	}
+
+	/** Retire approval evidence and cards for a session whose turn ended. */
+	private clearApprovals(sessionId: string): void {
+		for (const [requestId, event] of [...this.pendingApprovals]) {
+			if (event.sessionId === sessionId) this.pendingApprovals.delete(requestId);
+		}
+		for (const entry of [...this.approvalDialogs.values()]) {
+			if (entry.sessionId === sessionId) {
+				entry.card.setRecorded("request ended");
+				entry.close();
+			}
+		}
+	}
+
+	/** Rebuild review cards retained while their session was hidden (R15). */
+	private restoreApprovals(sessionId: string): void {
+		if (!this.inFlight.has(sessionId)) return;
+		for (const [requestId, event] of [...this.pendingApprovals]) {
+			if (event.sessionId !== sessionId || this.approvalDialogs.has(requestId)) continue;
+			void this.promptApproval(event);
 		}
 	}
 
