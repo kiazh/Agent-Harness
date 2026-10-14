@@ -10,7 +10,8 @@ delegate to (adoption is staged; nothing imports this module yet):
   start/complete pairing (stable-id match, FIFO fallback, turn-scoped fallback
   ids), tool-result redaction + truncation, token accounting, and final
   capture. Resume continuations (``spec.resume``) iterate
-  ``resume_action_stream`` under the ``resume_approval`` contextvar.
+  ``resume_action_stream``; the transport owns the ``resume_approval``
+  contextvar (see :meth:`TurnEngine.stream`).
 - :meth:`TurnEngine.flush_tail` / :meth:`TurnEngine.build_terminal` own the
   exactly-once withheld-tail contract (AH-AUDIT-027) and the canonical terminal
   payload (text/tokens/iterations/toolCalls/needsApproval).
@@ -125,9 +126,11 @@ class TurnEvent:
     """One semantic stream event, before any transport serialization.
 
     ``kind`` is one of ``delta`` (text), ``tool_start``, ``tool_complete``,
-    ``usage``, or ``approval_resumed`` (resume streams only). Payload keys
-    match the canonical frame fields: text; id/name/args;
-    id/name/result/truncated/isError/outcome; tokens.
+    ``usage``, ``needs_approval``, ``done`` (the stream's terminal marker), or
+    ``approval_resumed`` (resume streams only). Payload keys match the
+    canonical frame fields: text; id/name/args;
+    id/name/result/truncated/isError/outcome; tokens; request_id/operation/
+    proposal.
     """
 
     kind: str
@@ -193,15 +196,20 @@ class TurnEngine:
         """Bind the built agent whose ``run_stream`` this turn relays."""
         self._agent = agent
 
-    def start_renewal(self) -> asyncio.Task | None:
+    def start_renewal(self, *, ownership_lost: asyncio.Event | None = None) -> asyncio.Task | None:
         """Start managed claim renewal (shared W3 primitive); idempotent.
 
         Losing the claim sets :attr:`ownership_lost` and calls
         ``hooks.on_ownership_lost``. The transport builds from this whether the
         loss cancels an owned task (gateway) or an active stream step (SSE).
+        A transport that already publishes a per-turn loss event (gateway map /
+        SSE active-step race) passes it in so the primitive and its readers
+        share ONE event; standalone callers get a fresh one.
         """
         if self._renew_task is not None and not self._renew_task.done():
             return self._renew_task
+        if ownership_lost is not None:
+            self._loss_event = ownership_lost
         owner = _turns.TurnOwnership(
             self.spec.session_id,
             self.spec.turn_id,
@@ -268,40 +276,38 @@ class TurnEngine:
         Raises ``RuntimeError`` when no agent is attached. Cancellation is the
         transports' concern (owned-task cancel for the gateway, ``_owned_step``
         deadline/loss race for SSE): the relay itself holds no timeout.
+
+        The ``resume_approval`` contextvar for resume continuations is owned
+        by the calling transport: it must be set in the context that *drives*
+        the stream. Drivers that run each ``__anext__`` in its own task (the
+        SSE route's ``_owned_step``) need the value present before those tasks
+        are created, so a contextvar set inside this generator would not
+        survive across steps.
         """
         agent = self._agent
         if agent is None:
             raise RuntimeError("TurnEngine.attach(agent) must be called before stream()")
-        resume_var: Any | None = None
-        resume_token = None
-        try:
-            if self.spec.resume is not None:
-                from machina.core.approval_resume import resume_action_stream
-                from machina.permissions.broker import resume_approval_var
+        if self.spec.resume is not None:
+            from machina.core.approval_resume import resume_action_stream
 
-                record, arguments = self.spec.resume
-                resume_var = resume_approval_var
-                resume_token = resume_var.set(str(record.get("request_id", "")))
-                yield TurnEvent(
-                    "approval_resumed",
-                    {
-                        "request_id": str(record.get("request_id", "")),
-                        "origin_turn_id": str(record.get("turn_id", "")),
-                    },
-                )
-                source = resume_action_stream(agent, self.spec.session_id, record, arguments)
-            else:
-                stream_kwargs = {"images": self.spec.images} if self.spec.images else {}
-                source = agent.run_stream(
-                    self.spec.session_id, self.spec.text, verbose=self.spec.verbose, **stream_kwargs
-                )
-            async for event in source:
-                translated = self._translate(event)
-                if translated is not None:
-                    yield translated
-        finally:
-            if resume_token is not None and resume_var is not None:
-                resume_var.reset(resume_token)
+            record, arguments = self.spec.resume
+            yield TurnEvent(
+                "approval_resumed",
+                {
+                    "request_id": str(record.get("request_id", "")),
+                    "origin_turn_id": str(record.get("turn_id", "")),
+                },
+            )
+            source = resume_action_stream(agent, self.spec.session_id, record, arguments)
+        else:
+            stream_kwargs = {"images": self.spec.images} if self.spec.images else {}
+            source = agent.run_stream(
+                self.spec.session_id, self.spec.text, verbose=self.spec.verbose, **stream_kwargs
+            )
+        async for event in source:
+            translated = self._translate(event)
+            if translated is not None:
+                yield translated
 
     def _translate(self, event: Any) -> TurnEvent | None:
         """Map one agent ``StreamEvent`` to its semantic counterpart."""
@@ -347,9 +353,24 @@ class TurnEngine:
         if event_type == "token_usage":
             self._tokens += event.tokens_used
             return TurnEvent("usage", {"tokens": self._tokens})
+        if event_type == "needs_approval":
+            # Typed pause marker (AH-AUDIT-030). SSE forwards it as a typed
+            # frame; the gateway surfaces pauses through its approval handler
+            # and ignores these stream markers.
+            return TurnEvent(
+                "needs_approval",
+                {
+                    "request_id": str(getattr(event, "content", "") or ""),
+                    "operation": str(getattr(event, "tool_name", "") or ""),
+                    "proposal": redact_value(dict(getattr(event, "tool_args", None) or {})),
+                },
+            )
         if event_type == "done":
+            # The stream's terminal marker: transports capture the final
+            # exactly here (progress snapshot / deferred terminal frame), so
+            # the relay must surface it rather than swallowing it.
             self._final = event.response
-            return None
+            return TurnEvent("done")
         logger.warning("Unknown stream event type: %s", event_type or "?")
         return None
 

@@ -20,12 +20,11 @@ from fastapi.responses import StreamingResponse
 
 from machina.api.routes.models import PromptRequest
 from machina.api.routes.shared import _redact_value, _serialize_event
-from machina.core.background_tasks import join_agent_background_tasks
 from machina.core.config import config
 from machina.core.exceptions import StaleOwnershipError
 from machina.core.models import StreamEvent
 from machina.core.session import session_manager
-from machina.memory.redaction import StreamingSecretRedactor
+from machina.core.turn_engine import TurnEngine, TurnSpec
 from machina.observability.diagnostics import record_failure
 
 logger = logging.getLogger(__name__)
@@ -46,7 +45,6 @@ async def _stream_session(
     # Shared coordinator: owner-token claim BEFORE SSE headers so a
     # conflicting turn gets a clean 409 instead of an interleaved stream.
     # Fails closed: claim errors propagate, never concurrent execution.
-    from machina.core.turns import end_turn as _end_turn
     from machina.core.turns import try_begin_turn as _try_begin
 
     turn_token = await _try_begin(sid)
@@ -90,33 +88,6 @@ async def _stream_session(
             if task.done():
                 _renew_state.pop("active", None)
 
-    async def _ensure_renewal() -> None:
-        if _renew_state.get("task") is not None:
-            return
-        from machina.core.turns import TurnOwnership as _TurnOwnership
-
-        owner = _TurnOwnership(
-            sid, str(turn_token or ""), turn_token, ownership_lost=_ownership_lost
-        )
-
-        def _on_lost() -> None:
-            active = _renew_state.get("active")
-            if active is not None:
-                active.cancel()
-
-        _renew_state["task"] = owner.start_renewal(interval_s=_renew_interval, on_lost=_on_lost)
-
-    async def _stop_renewal() -> None:
-        _renew_task = _renew_state.pop("task", None)
-        if _renew_task is not None and not _renew_task.done():
-            _renew_task.cancel()
-        if _renew_task is not None:
-            try:
-                await asyncio.gather(_renew_task, return_exceptions=True)
-            except (asyncio.CancelledError, Exception) as _boundary_error:
-                # Optional fallback preserves the primary outcome; report no payload.
-                record_failure("app.create_app", _boundary_error)
-
     def frame(data: dict[str, Any]) -> str:
         if req.protocolVersion == 2:
             from machina.protocol import canonical_http_event
@@ -131,19 +102,45 @@ async def _stream_session(
         resume_token = None
         _stream_cancelled = False
         _release_failed = False
+        _usage_emitted = 0
         _stage = "turn_started"
-        await _ensure_renewal()
 
         def _record_stage(stage: str) -> None:
             nonlocal _stage
             _stage = stage
             logger.debug("Session %s stage: %s", session_id, stage)
 
-        # Boundary-safe streaming redaction: hold back a tail across
-        # deltas so a secret split at any boundary never leaks (AH-001).
-        # Final flush redacts the remainder; the done event carries the
-        # fully-redacted concatenation, never the raw accumulation.
-        stream_redactor = StreamingSecretRedactor()
+        class _TurnHooks:
+            def on_stage(_self, stage: str) -> None:
+                _record_stage(stage)
+
+            def on_ownership_lost(_self, reason: str) -> None:
+                active = _renew_state.get("active")
+                if active is not None:
+                    active.cancel()
+
+        # W2: the shared engine owns boundary-safe streaming redaction (the
+        # withheld tail flushes exactly once before the terminal), tool
+        # pairing (stable id, FIFO fallback, 4000-char truncation), token
+        # accounting, final capture, the renewal loop, and the bounded
+        # cleanup tail; this generator only serializes semantic events.
+        # Renewal starts here — on first iteration, not at response
+        # construction — so an unconsumed stream never renews forever; crash
+        # expiry recovery is preserved.
+        engine = TurnEngine(
+            TurnSpec(
+                session_id=sid,
+                turn_id=str(turn_token or ""),
+                token=turn_token,
+                text=req.text,
+                verbose=req.verbose,
+                resume=resume,
+            ),
+            _TurnHooks(),
+            boundary="app.create_app",
+            renew_interval_s=_renew_interval,
+        )
+        engine.start_renewal(ownership_lost=_ownership_lost)
         try:
             from machina.permissions.broker import set_approval_handler
 
@@ -163,68 +160,118 @@ async def _stream_session(
             except (TypeError, ValueError):
                 timeout = 300.0
             deadline = asyncio.get_running_loop().time() + timeout
-            if resume is None:
-                stream = agent.run_stream(sid, req.text, verbose=req.verbose)
-            else:
-                from machina.core.approval_resume import resume_action_stream
+            if resume is not None:
+                # Transport-owned resume contextvar (the engine does not own
+                # it): set in THIS context so every `_owned_step` task copies
+                # the value into the step that executes the reviewed action.
                 from machina.permissions.broker import resume_approval_var
 
-                record, arguments = resume
-                resume_token = resume_approval_var.set(record["request_id"])
-                yield frame(
-                    {
-                        "type": "approval.resumed",
-                        "requestId": record["request_id"],
-                        "sessionId": session_id,
-                        "turnId": turn_token,
-                        "originTurnId": record["turn_id"],
-                    }
-                )
-                stream = resume_action_stream(agent, sid, record, arguments)
+                resume_token = resume_approval_var.set(str(resume[0].get("request_id", "")))
+            engine.attach(agent)
+            stream = engine.stream()
             while True:
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
                     raise TimeoutError("turn timed out")
                 try:
-                    event = await _owned_step(stream.__anext__(), remaining)
+                    turn_event = await _owned_step(stream.__anext__(), remaining)
                 except StopAsyncIteration:
                     break
-                if event.type == "text":
-                    # Emit only the safe prefix; the tail stays buffered
-                    # until more deltas arrive or flush() runs at done.
-                    safe = stream_redactor.feed(event.content or "")
-                    if safe:
-                        data = _serialize_event(
-                            StreamEvent(type="text", content=safe),
-                            _pre_redacted=True,
+                if turn_event.kind == "delta":
+                    # The engine emitted only the safe redaction prefix.
+                    data = _serialize_event(
+                        StreamEvent(type="text", content=turn_event.payload["text"]),
+                        _pre_redacted=True,
+                    )
+                    yield frame(data)
+                elif turn_event.kind == "approval_resumed":
+                    yield frame(
+                        {
+                            "type": "approval.resumed",
+                            "requestId": turn_event.payload["request_id"],
+                            "sessionId": session_id,
+                            "turnId": turn_token,
+                            "originTurnId": turn_event.payload["origin_turn_id"],
+                        }
+                    )
+                elif turn_event.kind == "tool_start":
+                    yield frame(
+                        _serialize_event(
+                            StreamEvent(
+                                type="tool_call",
+                                tool_name=turn_event.payload["name"],
+                                tool_args=turn_event.payload["args"],
+                                tool_call_id=turn_event.payload["id"],
+                            )
                         )
-                        yield frame(data)
-                    continue
-                if event.type == "done" and event.response is not None:
-                    tail = stream_redactor.flush()
+                    )
+                elif turn_event.kind == "tool_complete":
+                    payload = turn_event.payload
+                    yield frame(
+                        _serialize_event(
+                            StreamEvent(
+                                type="tool_result",
+                                tool_name=payload["name"],
+                                tool_result=payload["result"],
+                                tool_outcome=payload.get("outcome", ""),
+                                tool_call_id=payload["id"],
+                            )
+                        )
+                    )
+                elif turn_event.kind == "needs_approval":
+                    # Stream pause marker (AH-AUDIT-030): typed and
+                    # actionable, never a generic error. Continuation frames
+                    # from the done response are emitted after the loop.
+                    yield frame(
+                        _serialize_event(
+                            StreamEvent(
+                                type="needs_approval",
+                                content=turn_event.payload["request_id"],
+                                tool_name=turn_event.payload["operation"],
+                                tool_args=turn_event.payload["proposal"],
+                            )
+                        )
+                    )
+                elif turn_event.kind == "usage":
+                    # Transport shape preserved: SSE usage frames carry the
+                    # per-call count while the engine reports the running
+                    # total (the wire event keeps its historical semantics).
+                    cumulative = turn_event.payload["tokens"]
+                    per_call = cumulative - _usage_emitted
+                    _usage_emitted = cumulative
+                    yield frame(
+                        _serialize_event(StreamEvent(type="token_usage", tokens_used=per_call))
+                    )
+                elif turn_event.kind == "done":
+                    if engine.final is None:
+                        # Defensive parity: a done without a response still
+                        # terminates the stream with the bare done frame.
+                        terminal_data = {"type": "done"}
+                        continue
+                    # AH-AUDIT-027: the withheld tail is flushed exactly once
+                    # as a delta before the terminal; the done payload carries
+                    # the canonical fully-redacted concatenation, never a raw
+                    # tail.
+                    tail = engine.flush_tail()
                     if tail:
-                        # The tail was withheld from earlier deltas; emit
-                        # it now (redacted) before the terminal event.
                         data = _serialize_event(
                             StreamEvent(type="text", content=tail),
                             _pre_redacted=True,
                         )
                         yield frame(data)
                     # AH-AUDIT-030: typed needs_approval SSE output with
-                    # request/session/turn binding and the sanitized
-                    # proposal. A pause is actionable and distinct from
-                    # failure; resume revalidates under a fresh fenced
-                    # claim (never by continuing stale generator state).
-                    for pause in getattr(event.response, "needs_approval", None) or []:
-                        if not isinstance(pause, dict) or not pause.get("request_id"):
-                            continue
+                    # request/session/turn binding and the sanitized proposal.
+                    # A pause is actionable and distinct from failure; resume
+                    # revalidates under a fresh fenced claim (never by
+                    # continuing stale generator state).
+                    for pause in engine.pauses:
                         pause_event = StreamEvent(
                             type="needs_approval",
-                            content=str(pause.get("request_id", "")),
+                            content=str(pause.get("requestId", "")),
                             tool_name=str(pause.get("operation", "")),
                             tool_args={
-                                "requestId": str(pause.get("request_id", "")),
-                                "sessionId": str(pause.get("session_id", "") or session_id),
+                                "requestId": str(pause.get("requestId", "")),
+                                "sessionId": str(pause.get("sessionId", "") or session_id),
                                 "operation": str(pause.get("operation", "")),
                                 "target": str(pause.get("target", "")),
                                 "status": str(pause.get("status", "pending")),
@@ -235,7 +282,7 @@ async def _stream_session(
                             from machina.permissions.store import get_approval
                             from machina.protocol import approval_fields
 
-                            record = await get_approval(str(pause["request_id"]))
+                            record = await get_approval(str(pause["requestId"]))
                             if record is None:
                                 raise RuntimeError("approval proposal is unavailable")
                             data = {
@@ -243,11 +290,18 @@ async def _stream_session(
                                 **_redact_value(approval_fields(record)),
                             }
                         yield frame(data)
-                data = _serialize_event(event)
-                if event.type == "done":
-                    terminal_data = data
+                    terminal_payload = engine.build_terminal(cancelled=False)
+                    terminal_data = {
+                        "type": "done",
+                        "content": terminal_payload["text"],
+                        "tokens": terminal_payload["tokens"],
+                        "iterations": terminal_payload["iterations"],
+                        "toolCalls": terminal_payload["toolCalls"],
+                    }
+                    if "needsApproval" in terminal_payload:
+                        terminal_data["needsApproval"] = terminal_payload["needsApproval"]
                 else:
-                    yield frame(data)
+                    logger.warning("Unknown turn event kind: %s", turn_event.kind)
         except TimeoutError:
             logger.warning("Prompt stream timed out for session %s", session_id)
             error_data = {"type": "error", "message": "turn timed out"}
@@ -297,16 +351,12 @@ async def _stream_session(
                     try:
                         if stream is not None:
                             await stream.aclose()
-                        if agent is not None:
-                            # Consolidation shares the provider; join it (bounded)
-                            # before this retire-path close, like every other path.
-                            await join_agent_background_tasks(agent, timeout=1.0)
-                            from machina.core.agent_factory import close_agent_provider
-
-                            await close_agent_provider(agent)
                     finally:
-                        await _stop_renewal()
-                        await _end_turn(sid, turn_token)
+                        # W2: bounded cleanup contract owned by the engine —
+                        # join optional work -> provider close -> stop renewal
+                        # -> shielded bounded release -> renewal join. Runs
+                        # only after the resistant execution actually unwound.
+                        await engine.close(cancelled=True)
 
                 runtime_services.track(active)
                 runtime_services.track(asyncio.create_task(retire_execution()))
@@ -319,78 +369,20 @@ async def _stream_session(
                         }
                     )
             else:
-                # H-01/H-02/H-03/H-06: Bounded cleanup contract.
-                # 1. Learning tasks: bounded join, then cancel leftovers.
-                # 2. Provider close: bounded with timeout.
-                # 3. Claim release: independent outer finally, always runs.
-                # 4. Auto-compaction: fire-and-forget, never blocks [DONE].
-                try:
-                    if agent is not None:
-                        _record_stage("joining_optional_work")
-                        # Shared helper: bounded, settles before propagating, and
-                        # timeout + settle_grace stays under the turn-completion
-                        # deadline even for cancellation-resistant tasks.
-                        await join_agent_background_tasks(agent, timeout=1.7, settle_grace=0.35)
-                except (TimeoutError, Exception) as _boundary_error:
-                    # Optional fallback preserves the primary outcome; report no payload.
-                    record_failure("app.create_app", _boundary_error)
-                finally:
-                    # Claim release in independent outer finally so provider
-                    # close errors or cancellation cannot skip it (H-02).
-                    try:
-                        _record_stage("closing_owned_clients")
-                        # AH-023: close only owned providers, bounded.
-                        if agent is not None:
-                            try:
-                                from machina.core.agent_factory import close_agent_provider
-
-                                await close_agent_provider(agent)
-                            except (TimeoutError, asyncio.CancelledError):
-                                logger.warning(
-                                    "Provider close timed out for session %s", session_id
-                                )
-                            except Exception:
-                                logger.exception(
-                                    "Could not close prompt provider for session %s",
-                                    session_id,
-                                )
-                    finally:
-                        _record_stage("releasing_ownership")
-                        # AH-AUDIT-013: stop renewal during release.
-                        try:
-                            await _stop_renewal()
-                        except (asyncio.CancelledError, Exception) as _boundary_error:
-                            # Optional fallback preserves the primary outcome; report no payload.
-                            record_failure("app.create_app", _boundary_error)
-                        if turn_token:
-                            try:
-                                await _end_turn(sid, turn_token)
-                            except Exception as _boundary_error:
-                                _release_failed = True
-                                # Unknown ownership must not produce a terminal event.
-                                record_failure("app.create_app", _boundary_error)
-                    # H-03: Auto-compaction is fire-and-forget background work.
-                    # Never blocks [DONE] or holds the stream open.
-                    # AH-AUDIT-025: tracked by the shared runtime for bounded
-                    # shutdown joining before DB closure.
-                    if not _stream_cancelled and not _release_failed:
-                        _record_stage("compaction_maintenance")
-                        try:
-                            from machina import services as _services
-                            from machina.core.runtime import runtime_services as _runtime
-
-                            task = asyncio.create_task(_services.maybe_auto_compact(sid))
-                            task.add_done_callback(
-                                lambda t: t.exception() if not t.cancelled() else None
-                            )
-                            try:
-                                _runtime.track(task)
-                            except Exception as _boundary_error:
-                                # Optional fallback preserves the primary outcome; report no payload.
-                                record_failure("app.create_app", _boundary_error)
-                        except Exception as _boundary_error:
-                            # Optional fallback preserves the primary outcome; report no payload.
-                            record_failure("app.create_app", _boundary_error)
+                # H-01/H-02/H-03/H-06: the bounded cleanup contract is owned
+                # by the engine: join optional work -> provider close -> stop
+                # renewal -> shielded bounded claim release -> join renewal.
+                # Ordinary failures are reported inside close() and returned
+                # here; a release failure must not produce a terminal event.
+                close = await engine.close(cancelled=_stream_cancelled)
+                _release_failed = close.release_failed
+                # H-03: Auto-compaction is fire-and-forget background work.
+                # Never blocks [DONE] or holds the stream open.
+                # AH-AUDIT-025: tracked by the shared runtime for bounded
+                # shutdown joining before DB closure.
+                if not _stream_cancelled and not _release_failed:
+                    _record_stage("compaction_maintenance")
+                    engine.schedule_auto_compact()
                 if not _stream_cancelled:
                     if _release_failed:
                         yield frame(

@@ -270,6 +270,9 @@ async def test_token_accounting_prefers_final_and_falls_back_to_accumulated():
     events = await _drain(engine)
 
     assert [event.payload["tokens"] for event in events if event.kind == "usage"] == [10, 15]
+    # The relay surfaces the stream's terminal marker (transports capture
+    # their final snapshot at exactly this point).
+    assert events[-1].kind == "done"
     terminal = engine.build_terminal(cancelled=False)
     assert terminal["tokens"] == 42
     assert terminal["iterations"] == 3
@@ -524,7 +527,61 @@ async def test_schedule_auto_compact_is_fire_and_forget(monkeypatch):
     assert compacted == [spec.session_id]
 
 
-async def test_resume_stream_emits_approval_resumed_and_resets_contextvar(monkeypatch):
+async def test_needs_approval_stream_events_surface_as_semantic_events():
+    agent = _scripted_agent(
+        [
+            StreamEvent(
+                type="needs_approval",
+                content="r1",
+                tool_name="process.exec",
+                tool_args={"requestId": "r1", "status": "pending", "target": "x"},
+            )
+        ]
+    )
+    engine = TurnEngine(_spec(), boundary="test.turn_engine")
+    engine.attach(agent)
+
+    events = await _drain(engine)
+
+    assert [(event.kind, event.payload) for event in events] == [
+        (
+            "needs_approval",
+            {
+                "request_id": "r1",
+                "operation": "process.exec",
+                "proposal": {"requestId": "r1", "status": "pending", "target": "x"},
+            },
+        )
+    ]
+
+
+async def test_start_renewal_adopts_transport_loss_event(monkeypatch):
+    custom = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def fake_renew(session_id, token):
+        entered.set()
+        return False
+
+    monkeypatch.setattr(turns, "renew_turn", fake_renew)
+    hooks = _RecordingHooks()
+    engine = TurnEngine(_spec(), hooks, boundary="test.renew", renew_interval_s=0.001)
+
+    task = engine.start_renewal(ownership_lost=custom)
+
+    assert task is not None
+    await asyncio.wait_for(entered.wait(), 1)
+    for _ in range(100):
+        if custom.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert custom.is_set()
+    assert engine.ownership_lost is custom
+    assert hooks.losses == ["claim_renewal_failed"]
+    await asyncio.wait_for(task, 1)
+
+
+async def test_resume_stream_emits_approval_resumed_and_reads_caller_context(monkeypatch):
     from machina.permissions.broker import resume_approval_var
 
     seen: dict = {}
@@ -537,10 +594,15 @@ async def test_resume_stream_emits_approval_resumed_and_resets_contextvar(monkey
     monkeypatch.setattr("machina.core.approval_resume.resume_action_stream", fake_resume)
     record = {"request_id": "req-9", "turn_id": "origin-turn"}
     before = resume_approval_var.get()
-    engine = TurnEngine(_spec(resume=(record, {"path": "x"})), boundary="test.resume")
-    engine.attach(object())
-
-    events = await _drain(engine)
+    # The transport owns the contextvar: it must be set in the context that
+    # drives the stream (each SSE step runs in its own task copy).
+    token = resume_approval_var.set("req-9")
+    try:
+        engine = TurnEngine(_spec(resume=(record, {"path": "x"})), boundary="test.resume")
+        engine.attach(object())
+        events = await _drain(engine)
+    finally:
+        resume_approval_var.reset(token)
 
     assert events[0].kind == "approval_resumed"
     assert events[0].payload == {"request_id": "req-9", "origin_turn_id": "origin-turn"}

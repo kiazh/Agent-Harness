@@ -22,13 +22,20 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from machina import __version__
-from machina.core.background_tasks import drain_background_tasks, join_agent_background_tasks
+from machina.core.background_tasks import drain_background_tasks
 from machina.core.config import config
 from machina.core.context import context_manager
 from machina.core.models import Session
 from machina.core.provider import PROVIDERS
 from machina.core.runtime import RuntimeServices, runtime_services
 from machina.core.session import session_manager
+from machina.core.turn_engine import (
+    MAX_TOOL_RESULT_CHARS as MAX_TOOL_RESULT_CHARS,
+)
+from machina.core.turn_engine import (
+    TurnEngine,
+    TurnSpec,
+)
 from machina.db.connection import db
 from machina.gateway import features
 from machina.gateway.errors import (  # noqa: F401 — re-exported for clients and tests
@@ -116,7 +123,8 @@ _setup_gateway_logging()
 
 # PROVIDERS is single-sourced from machina.core.provider (imported above) so the
 # gateway, HTTP API and UI always agree on valid provider names.
-MAX_TOOL_RESULT_CHARS = 4000
+# MAX_TOOL_RESULT_CHARS is re-exported from machina.core.turn_engine (imported
+# above) so the gateway and the shared turn engine share one tool-result bound.
 
 Writer = Callable[[dict[str, Any]], None]
 
@@ -745,20 +753,47 @@ class Gateway:
                 }
             )
 
-        def complete(final: Any = None, cancelled: bool = False) -> None:
+        _owned_task = asyncio.current_task()
+
+        class _TurnHooks:
+            def on_stage(_self, stage: str) -> None:
+                self._record_stage(turn_id, stage, session_id=sid)
+
+            def on_ownership_lost(_self, reason: str) -> None:
+                # Stop owned effects FIRST: the cancel is the critical effect
+                # and must not be skippable by an emit failure. The frame
+                # (correct protocol name: turn.ownership_lost, underscore)
+                # follows.
+                if _owned_task is not None:
+                    _owned_task.cancel()
+                emit("turn.ownership_lost", reason=reason)
+
+        engine = TurnEngine(
+            TurnSpec(
+                session_id=session_id,
+                turn_id=turn_id,
+                token=owned_token,
+                text=text,
+                images=images,
+            ),
+            _TurnHooks(),
+            boundary="server._run_turn",
+            renew_interval_s=CLAIM_RENEW_INTERVAL_SECONDS,
+        )
+
+        def complete(cancelled: bool = False) -> None:
             cancelled = cancelled or turn_id in self._cancel_requested
             # AH-AUDIT-027: message.complete.text is the canonical complete
-            # answer — the fully-redacted final content exactly once. The
-            # streaming tail is already part of final.content; prepending it
-            # would duplicate it in the payload while the visible stream
-            # omits it. Only when there is no final (error/empty path) does
-            # the flushed tail become the text.
+            # answer — the fully-redacted final content exactly once (the
+            # engine owns the exactly-once withheld-tail flush and the token
+            # accounting; see TurnEngine.build_terminal).
             # Exactly-once guard: quarantined timeout paths may emit a
             # fallback completion; a late genuine completion is then a
             # duplicate and is suppressed (first terminal event wins).
             if turn_id in self._turn_finished:
                 return
             self._turn_finished.add(turn_id)
+            final = engine.final
             # S2 observe-only hook: close the turn span (never gates execution).
             try:
                 from machina.observability.traces import end_turn as _trace_end_turn
@@ -775,67 +810,12 @@ class Gateway:
                     )
             except Exception:
                 pass
-            try:
-                from machina.memory.redaction import redact_secrets as _redact
-
-                text = _redact(final.content).text if final is not None else ""
-            except Exception:
-                text = ""
-            if final is None:
-                try:
-                    tail = _turn_redactor.flush()
-                except Exception:
-                    tail = ""
-                if tail:
-                    try:
-                        from machina.memory.redaction import redact_secrets as _redact2
-
-                        tail = _redact2(tail).text
-                    except Exception as _boundary_error:
-                        # Optional fallback preserves the primary outcome; report no payload.
-                        record_failure("server._run_turn", _boundary_error)
-                    text = tail
-            else:
-                try:
-                    _turn_redactor.flush()
-                except Exception as _boundary_error:
-                    # Optional fallback preserves the primary outcome; report no payload.
-                    record_failure("server._run_turn", _boundary_error)
-            pauses = []
-            try:
-                for p in getattr(final, "needs_approval", None) or []:
-                    if isinstance(p, dict) and p.get("request_id"):
-                        from machina.protocol import approval_summary
-
-                        pauses.append(approval_summary(p))
-            except Exception:
-                pauses = []
-            emit(
-                "message.complete",
-                text=text,
-                # Prefer the agent's final accounting; fall back to the tokens
-                # accumulated from token_usage events along the way.
-                tokens=(final.tokens_used or tokens) if final is not None else tokens,
-                iterations=final.iterations if final is not None else 0,
-                toolCalls=len(final.tool_calls) if final is not None else 0,
-                cancelled=cancelled,
-                **({"needsApproval": pauses} if pauses else {}),
-            )
+            emit("message.complete", **engine.build_terminal(cancelled=cancelled))
 
         emit("message.start")
-        open_tools: dict[str, str] = {}  # tool id -> tool name, in start order
-        tool_count = 0
-        tokens = 0
-        final = None
         agent = None
         _cancelled = False
         _release_failed = False
-        # Streaming redaction per turn (5.1): text deltas pass the frontier
-        # redactor; the withheld tail flushes at completion. A safe helper
-        # unused by this transport would not be a fix.
-        from machina.memory.redaction import StreamingSecretRedactor as _SSR
-
-        _turn_redactor = _SSR()
         # Phase E: human approval handler for this turn. Emits
         # permission.required and awaits the UI/HTTP resolve without holding
         # DB transactions — logical turn ownership is retained.
@@ -918,22 +898,10 @@ class Gateway:
         # the loss signal. Crash expiry recovery is preserved (a dead
         # worker renews nothing and its claim becomes reclaimable).
         _ownership_lost = self._turn_ownership_lost.setdefault(turn_id, asyncio.Event())
-        _owned_task = asyncio.current_task()
-        from machina.core.turns import TurnOwnership as _TurnOwnership
-
-        _owner = _TurnOwnership(session_id, turn_id, owned_token, ownership_lost=_ownership_lost)
-
-        def _on_ownership_lost() -> None:
-            # Stop owned effects FIRST: the cancel is the critical effect and
-            # must not be skippable by an emit failure. The frame (correct
-            # protocol name: turn.ownership_lost, underscore) follows.
-            if _owned_task is not None:
-                _owned_task.cancel()
-            emit("turn.ownership_lost", reason="claim_renewal_failed")
-
-        _renew_task = _owner.start_renewal(
-            interval_s=CLAIM_RENEW_INTERVAL_SECONDS, on_lost=_on_ownership_lost
-        )
+        # W2: the engine owns the renewal loop (shared W3 primitive) and adopts
+        # this transport's loss event so readers here and the renewal primitive
+        # share ONE signal; on_lost cancels owned work via _TurnHooks.
+        engine.start_renewal(ownership_lost=_ownership_lost)
         try:
             try:
                 # AH-021/AH-022: resolve the session's stored model/provider and
@@ -977,81 +945,58 @@ class Gateway:
                         session.model or self.model, session.provider or self.provider
                     )
                 self._record_stage(turn_id, "waiting_for_provider", session_id=sid)
-                stream_kwargs = {"images": images} if images else {}
-                async for event in agent.run_stream(
-                    session_id, text, verbose=False, **stream_kwargs
-                ):
-                    if event.type == "text":
-                        safe = _turn_redactor.feed(event.content or "")
-                        if safe:
-                            emit("message.delta", text=safe)
-                    elif event.type == "tool_call":
-                        tool_count += 1
+                engine.attach(agent)
+                # W2: the shared engine owns boundary-safe streaming redaction,
+                # tool-call pairing/truncation, token accounting and final
+                # capture; this loop only serializes semantic events.
+                async for turn_event in engine.stream():
+                    if turn_event.kind == "delta":
+                        emit("message.delta", text=turn_event.payload["text"])
+                    elif turn_event.kind == "tool_start":
                         self._record_stage(turn_id, "running_tool", session_id=sid)
-                        # AH-020: prefer the agent's stable call ID so out-of-order
-                        # completions pair correctly; fall back to turn counter.
-                        tool_id = getattr(event, "tool_call_id", "") or f"{turn_id}-{tool_count}"
-                        open_tools[tool_id] = event.tool_name
                         self._turn_progress[turn_id] = {
-                            "tokens": tokens,
+                            "tokens": engine.tokens,
                             "iterations": 0,
-                            "toolCalls": tool_count,
+                            "toolCalls": engine.tool_count,
                         }
-                        from machina.memory.redaction import redact_value
-
                         emit(
                             "tool.start",
-                            id=tool_id,
-                            name=event.tool_name,
-                            args=redact_value(event.tool_args),
+                            id=turn_event.payload["id"],
+                            name=turn_event.payload["name"],
+                            args=turn_event.payload["args"],
                         )
-                    elif event.type == "tool_result":
-                        # Pair by tool-call id when the event carries one;
-                        # otherwise fall back to the oldest open call with the
-                        # same name (FIFO).
-                        result_id = getattr(event, "tool_call_id", None) or getattr(
-                            event, "id", None
-                        )
-                        match_id: str | None = None
-                        if result_id is not None and str(result_id) in open_tools:
-                            match_id = str(result_id)
-                        else:
-                            for tid, tname in open_tools.items():
-                                if tname == event.tool_name:
-                                    match_id = tid
-                                    break
-                        if match_id is not None:
-                            del open_tools[match_id]
-                        from machina.memory.redaction import redact_secrets
-
-                        result = redact_secrets(str(event.tool_result)).text
-                        truncated = len(result) > MAX_TOOL_RESULT_CHARS
+                    elif turn_event.kind == "tool_complete":
+                        payload = turn_event.payload
                         emit(
                             "tool.complete",
-                            id=match_id if match_id else f"{turn_id}-{tool_count}",
-                            name=event.tool_name,
-                            result=result[:MAX_TOOL_RESULT_CHARS],
-                            truncated=truncated,
-                            isError=result.startswith("Error:"),
-                            **({"outcome": event.tool_outcome} if event.tool_outcome else {}),
+                            id=payload["id"],
+                            name=payload["name"],
+                            result=payload["result"],
+                            truncated=payload["truncated"],
+                            isError=payload["isError"],
+                            **({"outcome": payload["outcome"]} if "outcome" in payload else {}),
                         )
-                    elif event.type == "token_usage":
-                        tokens += event.tokens_used
+                    elif turn_event.kind == "needs_approval":
+                        # Stream pause markers are surfaced by SSE as typed
+                        # frames; the gateway emits approval cards through the
+                        # broker handler only (never twice).
+                        continue
+                    elif turn_event.kind == "usage":
                         self._turn_progress[turn_id] = {
-                            "tokens": tokens,
+                            "tokens": engine.tokens,
                             "iterations": 0,
-                            "toolCalls": tool_count,
+                            "toolCalls": engine.tool_count,
                         }
-                        emit("usage", tokens=tokens)
-                    elif event.type == "done":
-                        final = event.response
+                        emit("usage", tokens=turn_event.payload["tokens"])
+                    elif turn_event.kind == "done":
+                        final_response = engine.final
                         self._turn_progress[turn_id] = {
-                            "tokens": (getattr(final, "tokens_used", 0) or tokens),
-                            "iterations": (getattr(final, "iterations", 0) or 0),
-                            "toolCalls": len(getattr(final, "tool_calls", None) or []),
+                            "tokens": (getattr(final_response, "tokens_used", 0) or engine.tokens),
+                            "iterations": (getattr(final_response, "iterations", 0) or 0),
+                            "toolCalls": len(getattr(final_response, "tool_calls", None) or []),
                         }
                     else:
-                        logger.warning("Unknown stream event type: %s", getattr(event, "type", "?"))
+                        logger.warning("Unknown turn event kind: %s", turn_event.kind)
             except asyncio.CancelledError:
                 # AH-AUDIT-028: do NOT emit terminal completion here. Emit a
                 # stopping state (UI stays blocked), run cleanup + ownership
@@ -1064,7 +1009,6 @@ class Gateway:
                 logger.exception("Turn %s failed", turn_id)
                 emit("error", message="agent turn failed")
             finally:
-                self._record_stage(turn_id, "cleanup_started", session_id=sid)
                 # Release the approval handler and cancel any still-pending
                 # approval waits (cancellation stops owned waits, not siblings).
                 try:
@@ -1075,76 +1019,21 @@ class Gateway:
                     # Optional fallback preserves the primary outcome; report no payload.
                     record_failure("server._run_turn", _boundary_error)
                 self.cancel_turn_approvals(turn_id)
-                # H-01/H-02: Bounded cleanup contract.
-                # 1. Learning tasks: bounded join, then cancel leftovers.
-                # 2. Provider close: bounded with timeout.
-                # 3. Claim release: independent outer finally, always runs.
+                # H-01/H-02: the bounded cleanup contract is owned by the
+                # engine: join optional work -> provider close -> stop renewal
+                # -> shielded bounded claim release -> join renewal. Ordinary
+                # failures are reported inside close() and returned here.
                 try:
-                    if agent is not None:
-                        self._record_stage(turn_id, "joining_optional_work", session_id=sid)
-                        # Shared helper: bounded, settles before propagating, and
-                        # timeout + settle_grace stays under the turn-completion
-                        # deadline even for cancellation-resistant tasks.
-                        await join_agent_background_tasks(agent, timeout=1.7, settle_grace=0.35)
-                except (TimeoutError, Exception) as _boundary_error:
-                    # Optional fallback preserves the primary outcome; report no payload.
-                    record_failure("server._run_turn", _boundary_error)
+                    close = await engine.close(cancelled=_cancelled)
+                    _release_failed = close.release_failed
                 finally:
-                    # Claim release in independent outer finally.
-                    try:
-                        self._record_stage(turn_id, "closing_owned_clients", session_id=sid)
-                        # AH-023: close only owned providers, bounded.
-                        if agent is not None:
-                            try:
-                                from machina.core.agent_factory import close_agent_provider
-
-                                await close_agent_provider(agent)
-                            except (TimeoutError, asyncio.CancelledError):
-                                logger.warning("Provider close timed out for session %s", sid)
-                            except Exception:
-                                logger.exception(
-                                    "Could not close turn provider for session %s", sid
-                                )
-                    finally:
-                        self._record_stage(turn_id, "releasing_ownership", session_id=sid)
-                        # RF4-C1 hotfix: stop renewal BEFORE release. A cancellation
-                        # delivered while releasing previously skipped the
-                        # renewal-stop below, orphaning the renewal loop and
-                        # keeping an unreleased claim renewed forever (permanent
-                        # TURN_IN_PROGRESS lock until process restart).
-                        if _renew_task is not None and not _renew_task.done():
-                            _renew_task.cancel()
-                        # Owner-token release on EVERY exit (success/failure/cancel/timeout).
-                        # Stale-safe: only this turn's token clears its own claim.
-                        try:
-                            from machina.core.turns import end_turn as _end_turn
-
-                            if owned_token:
-                                # Release is shielded so a cancellation delivered
-                                # mid-flight cannot orphan the claim: wait (bounded)
-                                # for the release to settle, then continue cleanup
-                                # and terminal emission instead of unwinding.
-                                _release = asyncio.ensure_future(_end_turn(session_id, owned_token))
-                                try:
-                                    await asyncio.shield(_release)
-                                except asyncio.CancelledError:
-                                    try:
-                                        await asyncio.wait_for(
-                                            asyncio.shield(_release), timeout=5.0
-                                        )
-                                    except (TimeoutError, asyncio.CancelledError, Exception):
-                                        logger.warning(
-                                            "turn release did not settle within bound; "
-                                            "claim falls back to TTL expiry"
-                                        )
-                            if self._turn_tokens.get(sid) == owned_token:
-                                self._turn_tokens.pop(sid, None)
-                        except Exception as _boundary_error:
-                            _release_failed = True
-                            # Preserve the owner token until DB recovery or claim expiry.
-                            record_failure("server._run_turn", _boundary_error)
-                        if registered_turn is not None and self._turns.get(sid) is registered_turn:
-                            del self._turns[sid]
+                    # Owner-token bookkeeping stays adapter-side: clear it only
+                    # when ownership was released, otherwise preserve it for DB
+                    # reconciliation / TTL expiry.
+                    if not _release_failed and self._turn_tokens.get(sid) == owned_token:
+                        self._turn_tokens.pop(sid, None)
+                    if registered_turn is not None and self._turns.get(sid) is registered_turn:
+                        del self._turns[sid]
         finally:
             # W1: ONE always-run cleanup after add_growth_listener. The two
             # early return paths (session not found / agent factory
@@ -1153,23 +1042,9 @@ class Gateway:
             # _turn_ownership_lost entry leaked, the renewal loop was never
             # joined (a delayed spurious turn.ownership_lost could land after
             # message.complete) and _cancel_requested kept the turn id.
-            # AH-AUDIT-013: stop/join renewal during release (never leaks).
-            if _renew_task is not None and not _renew_task.done():
-                _renew_task.cancel()
-            try:
-                await asyncio.wait_for(asyncio.shield(_renew_task), timeout=5)
-            except asyncio.CancelledError:
-                # The join itself cancels (and joins) the renewal task, so an
-                # inner-task CancelledError is the expected completion. A
-                # cancellation delivered to the turn while it is being torn
-                # down (shutdown) must propagate instead of being absorbed.
-                if not _renew_task.cancelled():
-                    raise
-            except (TimeoutError, Exception):
-                if not _renew_task.done():
-                    _renew_task.cancel()
-            finally:
-                self._turn_ownership_lost.pop(turn_id, None)
+            # AH-AUDIT-013: engine.close() above stopped/joined renewal; the
+            # shared loss event is retired here so it cannot leak.
+            self._turn_ownership_lost.pop(turn_id, None)
             try:
                 if _release_failed:
                     # No terminal: the claim may belong to a successor, so
@@ -1183,20 +1058,16 @@ class Gateway:
                     # exactly once (also when prior deltas were emitted and
                     # when the whole answer was withheld).
                     try:
-                        _tail = _turn_redactor.flush()
+                        _tail = engine.flush_tail()
                         if _tail:
-                            from machina.memory.redaction import redact_secrets as _redact_tail
-
-                            _tail = _redact_tail(_tail).text
-                            if _tail:
-                                emit("message.delta", text=_tail)
+                            emit("message.delta", text=_tail)
                     except Exception as _boundary_error:
                         # Optional fallback preserves the primary outcome; report no payload.
                         record_failure("server._run_turn", _boundary_error)
                     # AH-AUDIT-028: this is the single terminal completion for
                     # every path (success/error/cancel/early-abort) — emitted
                     # only after cleanup and ownership release succeeded.
-                    complete(final, cancelled=_cancelled)
+                    complete(cancelled=_cancelled)
             finally:
                 # Growth notices may land with late background consolidation;
                 # keep the listener until the terminal event, then always drop it.
@@ -1211,21 +1082,8 @@ class Gateway:
         # boundary (ownership released above). AH-AUDIT-025: registered
         # with the shared runtime so shutdown cancels/joins it before DB
         # closure instead of leaking a use-after-close call.
-        try:
-            self._record_stage(turn_id, "compaction_maintenance", session_id=sid)
-            from machina import services as _services
-            from machina.core.runtime import runtime_services as _runtime
-
-            task = asyncio.create_task(_services.maybe_auto_compact(session_id))
-            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-            try:
-                _runtime.track(task)
-            except Exception as _boundary_error:
-                # Optional fallback preserves the primary outcome; report no payload.
-                record_failure("server._run_turn", _boundary_error)
-        except Exception as _boundary_error:
-            # Optional fallback preserves the primary outcome; report no payload.
-            record_failure("server._run_turn", _boundary_error)
+        self._record_stage(turn_id, "compaction_maintenance", session_id=sid)
+        engine.schedule_auto_compact()
 
     async def _run_turn_with_timeout(
         self,
