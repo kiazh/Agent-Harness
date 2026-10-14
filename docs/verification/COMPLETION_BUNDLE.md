@@ -260,3 +260,44 @@ test batches (B) interleaved. Evidence per step below; this section grows as the
   confirmed `context_windows.turn_token_budget` / `provider._cache_clear` are documented
   compat seams and `config._session_overrides` already carries its honest "no production
   writer" note. Suite: **3,467 passed, 0 failed** (delta = removed tests); ruff green.
+
+- **W7 batch 1** (`51cc4fc`): 40 surveyed error-handling items — every silent
+  fallback on consent/ownership/persistence boundaries now records
+  `record_failure` (sanitized) or logs its traceback; 27 new/extended
+  assertions verified red->green. Four logging-only tails with no natural
+  hook are recorded as unpinned in the commit.
+- **W7 batch 2** (`d7db105`): the 13 items on the previously-held files,
+  including the nuanced renewal-join cancellation fix (propagates shutdown
+  cancellation; still absorbs the expected self-cancelled join so terminal
+  completion and growth-listener cleanup survive). 19 pins.
+- **B Batch 1** (`fe127f3`): honest recount — the earlier "33 directly
+  deletable tests" was a similarity-threshold artifact over near-dup PAIRS;
+  re-reading every pair validated exactly 11 true deletions (5 from the 33
+  plus 6 re-derived), each with a strictly-superset twin; 21 pairs move to
+  Batch 2 parametrize merges. Suites 205 + 187 green; collect count -11
+  exactly.
+
+## 12. External audit remediation (2026-10-13)
+
+Every security/correctness claim in the untracked external review was
+re-verified against the worktree with a real reproduction BEFORE any fix:
+**18 CONFIRMED (all fixed), 1 REFUTED at HEAD, 1 UNPROVABLE** (an agent
+example with no runnable artifact). The repro battery, its acceptance run,
+and the claim->script->fix-commit index live in
+`docs/verification/proofs/audit_2026-10-13/` (README + `battery_after_fix.log`;
+three harnesses cannot flip — they hardcode pre-fix flows or predicates — and
+each has an explicit green-side proof documented in the index).
+
+Fix commits: `b5e46ef` (chunker preamble/aliases, document-replace lock,
+IPv6 authority), `af9d938` (workspace-scoped cache + effects eligibility +
+bounded search matcher), `660a063` (approval-id resolution, /init refusal,
+/agents save parsing, C1 controls, env export), `a8de932` (PEM streaming
+redaction, SSE terminal validation both loops, CLI overrides, trace
+double-yield; provider.py ratchet 2554->2576 reviewed), `0c9eeee` (find
+write-flags, approval redaction + capability grants + durable-claim
+fail-closed, export ownership), `54a8151` (recursive-read review, cohere key
+identity, rerank dedupe, failed outcome records, estimator full-schema,
+eviction floor covers conversations, `{}` extraction fails retryable).
+
+Consolidated tree: **3,531 passed, 0 failed, 1 skipped, 1 xfailed**;
+`ruff check` + `format --check` green across `machina/ tools/ tests/`.
