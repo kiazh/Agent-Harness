@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import ipaddress
+import json
 import logging
 import re
 import socket
+import sys
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
@@ -345,6 +347,110 @@ def _extract_links(html: str, base_url: str) -> list[str]:
     return links
 
 
+# search_files sharing bounds. Matching runs in an isolated interpreter with a
+# hard deadline: a thread + timeout cannot interrupt catastrophic backtracking
+# in `re` (the abandoned thread keeps burning CPU), but a subprocess can be
+# killed. Legitimate scans stay under the deadline; a pathological pattern
+# (e.g. "(a+)+$") is terminated and reported as a bounded ToolError.
+_SEARCH_MAX_FILES = 1000
+_SEARCH_MAX_FILE_BYTES = 102_400
+_SEARCH_MAX_LINE_CHARS = 4096
+_SEARCH_MAX_MATCHES = 500
+_SEARCH_DEADLINE_SECONDS = 3.0
+
+# stdlib-only worker; the pattern and validated file paths arrive as JSON on
+# stdin and match lines are returned as JSON on stdout, preserving the report
+# lines the tool has always produced (`path:line: text`).
+_SEARCH_WORKER_SOURCE = """
+import json
+import re
+import sys
+
+
+def main():
+    payload = json.load(sys.stdin)
+    regex = re.compile(payload["pattern"])
+    max_line_chars = payload["max_line_chars"]
+    max_matches = payload["max_matches"]
+    matches = []
+    for path in payload["files"]:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                for number, line in enumerate(handle, 1):
+                    if len(line) > max_line_chars:
+                        continue
+                    if regex.search(line):
+                        matches.append(f"{path}:{number}: {line.strip()}")
+                        if len(matches) >= max_matches:
+                            print(json.dumps(matches))
+                            return
+        except OSError:
+            continue
+    print(json.dumps(matches))
+
+
+main()
+"""
+
+
+async def _match_files_bounded(pattern: str, files: list[str]) -> list[str]:
+    """Match *pattern* against *files*, enforcing the deadline by process kill.
+
+    Returns report lines in ``path:line: text`` form. Raises ToolError when the
+    matcher exceeds ``_SEARCH_DEADLINE_SECONDS`` (terminated, not abandoned) or
+    fails; the child never outlives the call.
+    """
+    if not files:
+        return []
+    if not sys.executable:
+        raise ToolError("Error searching files: no isolated interpreter available")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            _SEARCH_WORKER_SOURCE,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError as e:
+        raise ToolError(f"Error searching files: cannot start isolated matcher: {e}") from e
+    payload = json.dumps(
+        {
+            "pattern": pattern,
+            "files": files,
+            "max_line_chars": _SEARCH_MAX_LINE_CHARS,
+            "max_matches": _SEARCH_MAX_MATCHES,
+        }
+    ).encode()
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(payload), timeout=_SEARCH_DEADLINE_SECONDS
+        )
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise ToolError(
+            f"Search timed out after {_SEARCH_DEADLINE_SECONDS:g}s for pattern "
+            f"'{pattern}' (possible catastrophic backtracking); matcher terminated"
+        ) from None
+    except BaseException:
+        # Caller cancellation (e.g. an agent-level tool timeout) must not leak
+        # the isolated matcher either.
+        proc.kill()
+        raise
+    if proc.returncode != 0:
+        detail = stderr.decode(errors="replace").strip().splitlines()[-1:] or [
+            f"exit code {proc.returncode}"
+        ]
+        raise ToolError(f"Error searching files: isolated matcher failed: {detail[0]}")
+    try:
+        matches = json.loads(stdout.decode() or "[]")
+    except json.JSONDecodeError as e:
+        raise ToolError(f"Error searching files: malformed matcher output: {e}") from e
+    return [str(match) for match in matches]
+
+
 @registry.register(description="Search file contents with regex")
 async def search_files(pattern: str, path: str = ".", file_glob: str | None = None) -> str:
     """Search file contents using regex pattern."""
@@ -361,8 +467,10 @@ async def search_files(pattern: str, path: str = ".", file_glob: str | None = No
     if not dir_path.exists():
         raise ToolError(f"Path not found: {path}")
 
+    # Validate the pattern here (cheap); matching happens in the isolated
+    # worker, so a hostile pattern can never backtrack in this process.
     try:
-        regex = re.compile(pattern)
+        re.compile(pattern)
     except re.error as e:
         raise ToolError(f"Invalid regex pattern '{pattern}': {e}") from e
 
@@ -376,36 +484,31 @@ async def search_files(pattern: str, path: str = ".", file_glob: str | None = No
         or glob_pattern.startswith(("/", "\\"))
     ):
         raise ToolError(f"Invalid glob pattern: {glob_pattern}")
-    matches = []
+
+    def _collect_files() -> list[str]:
+        files: list[str] = []
+        for f in dir_path.glob(glob_pattern):
+            if len(files) >= _SEARCH_MAX_FILES:
+                break
+            try:
+                resolve_path(str(f))
+            except ValueError:
+                continue
+            if not f.is_file():
+                continue
+            try:
+                if f.stat().st_size > _SEARCH_MAX_FILE_BYTES:
+                    continue
+            except OSError:
+                continue
+            files.append(str(f))
+        return files
+
     try:
-
-        def _search():
-            count = 0
-            for f in dir_path.glob(glob_pattern):
-                count += 1
-                if count > 1000:
-                    break
-                try:
-                    resolve_path(str(f))
-                except ValueError:
-                    continue
-                if not f.is_file():
-                    continue
-                try:
-                    if f.stat().st_size > 102_400:
-                        continue
-                    with open(f, encoding="utf-8", errors="replace") as fh:
-                        for i, line in enumerate(fh, 1):
-                            if len(line) > 4096:
-                                continue
-                            if regex.search(line):
-                                matches.append(f"{f}:{i}: {line.strip()}")
-                                if len(matches) >= 500:
-                                    return
-                except OSError:
-                    continue
-
-        await asyncio.to_thread(_search)
+        files = await asyncio.to_thread(_collect_files)
+        matches = await _match_files_bounded(pattern, files)
+    except ToolError:
+        raise
     except Exception as e:
         raise ToolError(f"Error searching files: {e}") from e
 

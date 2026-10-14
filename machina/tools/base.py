@@ -30,7 +30,8 @@ def _core_symbol(module: str, name: str):
 
 logger = logging.getLogger(__name__)
 
-# Tools that mutate state: never cached, and flush the result cache when run.
+# Legacy name heuristics. These are a fallback ONLY for tools that declare no
+# effects; declared effects are authoritative for cache eligibility.
 _SIDE_EFFECT_PREFIXES = ("write_", "delete_", "create_", "update_", "send_", "post_")
 _SIDE_EFFECT_TOOLS = frozenset(
     {
@@ -63,6 +64,30 @@ _UNCACHEABLE_TOOLS = frozenset(
         "skill_resource",
     }
 )
+# Read-type effects. Declared reads are never cached: a read result has no
+# freshness contract and a stale hit can cross workspace/session/backend
+# boundaries (audit 2026-10-13: the cache returned workspace A's file while
+# executing in workspace B). Any other declared effect (exec, fs.write, net,
+# memory, delegate, rag.write, or an unknown extensible effect) is treated as
+# mutating: never cached, and its run flushes the cache.
+_READ_EFFECTS = frozenset({"fs.read", "rag.read", "skill.read", "context.read"})
+
+
+def _cache_policy(tool: Tool) -> tuple[bool, bool]:
+    """Return ``(cacheable, flushes_cache)`` for *tool* from its effects.
+
+    Declared effects win over name heuristics; anything that is not a
+    recognized read capability is treated as mutating/exec (fail closed for
+    unknown, extensible effects).
+    """
+    effects = frozenset(tool.effects or ())
+    if effects:
+        return False, not effects <= _READ_EFFECTS
+    side_effect_name = (
+        tool.name.startswith(_SIDE_EFFECT_PREFIXES) or tool.name in _SIDE_EFFECT_TOOLS
+    )
+    cacheable = not side_effect_name and tool.name not in _UNCACHEABLE_TOOLS
+    return cacheable, side_effect_name
 
 
 @dataclass
@@ -95,8 +120,10 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
         self._definitions_cache: list[ToolDefinition] | None = None
-        # TTL cache: (tool_name, args_hash) -> (timestamp, result)
-        self._result_cache: dict[tuple[str, str], tuple[float, Any]] = {}
+        # TTL cache keyed by tool name, argument hash, and the effective
+        # execution context (workspace, session, backend) so results can never
+        # cross those boundaries. See _cache_scope / _cache_policy.
+        self._result_cache: dict[tuple[str, str, str, str, str], tuple[float, Any]] = {}
         self._cache_ttl: float = 60.0  # 1 minute default
         self._cache_max_size: int = 256
 
@@ -271,6 +298,24 @@ class ToolRegistry:
                     f"(max {_MAX_STRING_ARG_CHARS} characters)"
                 )
 
+    def _cache_scope(self) -> tuple[str, str, str] | None:
+        """Effective (workspace, session, backend) identity for cache entries.
+
+        Returns ``None`` when the boundary cannot be resolved: the call still
+        executes, it is just never read from or written to the cache (fail
+        closed).
+        """
+        try:
+            from machina.core.execution_context import execution_context
+
+            ctx = execution_context()
+            from machina.tools.agents import current_session_id
+
+            session = current_session_id.get()
+        except Exception:
+            return None
+        return (str(ctx.workspace), str(session) if session else "", ctx.backend)
+
     async def execute(self, name: str, /, **kwargs) -> Any:
         """Execute a tool by name with input validation and TTL caching."""
         if name not in self._tools:
@@ -292,24 +337,27 @@ class ToolRegistry:
             )
             raise
 
-        # TTL cache: only for read-only, deterministic tools. Side-effecting tools
-        # are never cached and flush the cache (so read_file after write_file,
-        # or repeated `git status`, never returns stale results).
-        is_side_effect = name.startswith(_SIDE_EFFECT_PREFIXES) or name in _SIDE_EFFECT_TOOLS
+        # TTL cache: eligibility comes from the tool's declared effects, not
+        # its name. Reads and mutating/exec tools are never cached; cache hits
+        # are scoped to the effective execution context so a result produced in
+        # one workspace/session/backend can never be served in another.
+        cacheable, flushes_cache = _cache_policy(tool)
         cache_key = None
-        if not is_side_effect and name not in _UNCACHEABLE_TOOLS:
-            args_hash = hashlib.sha256(
-                json.dumps(kwargs, sort_keys=True, default=str).encode()
-            ).hexdigest()
-            cache_key = (name, args_hash)
-            now = time.monotonic()
-            if cache_key in self._result_cache:
-                cached_time, cached_result = self._result_cache[cache_key]
-                if now - cached_time < self._cache_ttl:
-                    logger.debug("Tool result cache hit for %s", name)
-                    return cached_result
-                else:
-                    del self._result_cache[cache_key]
+        if cacheable:
+            scope = self._cache_scope()
+            if scope is not None:
+                args_hash = hashlib.sha256(
+                    json.dumps(kwargs, sort_keys=True, default=str).encode()
+                ).hexdigest()
+                cache_key = (name, args_hash, *scope)
+                now = time.monotonic()
+                if cache_key in self._result_cache:
+                    cached_time, cached_result = self._result_cache[cache_key]
+                    if now - cached_time < self._cache_ttl:
+                        logger.debug("Tool result cache hit for %s", name)
+                        return cached_result
+                    else:
+                        del self._result_cache[cache_key]
 
         # Execute
         if tool.is_async:
@@ -317,7 +365,7 @@ class ToolRegistry:
         else:
             result = tool.func(**kwargs)
 
-        if is_side_effect:
+        if flushes_cache:
             self._result_cache.clear()
 
         # Store in cache
