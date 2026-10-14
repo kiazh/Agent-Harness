@@ -176,21 +176,18 @@ class LoopbackOAuthCallback:
                 headers.setdefault(name.strip().lower(), []).append(value.strip())
             hosts = headers.get("host", [])
             if len(hosts) != 1 or not self._validate_host(hosts[0]):
-                self._invalid()
                 writer.write(_response(_ERROR_HTML))
                 await writer.drain()
                 writer.close()
                 return
             parsed = urlparse(target)
             if parsed.path != self._path:
-                self._invalid()
                 writer.write(_response(_ERROR_HTML))
                 await writer.drain()
                 writer.close()
                 return
             params = parse_qsl(parsed.query, keep_blank_values=True)
             if len(params) > OAUTH_CALLBACK_MAX_PARAMS:
-                self._invalid()
                 writer.write(_response(_ERROR_HTML))
                 await writer.drain()
                 writer.close()
@@ -198,7 +195,6 @@ class LoopbackOAuthCallback:
             multi: dict[str, list[str]] = {}
             for key, value in params:
                 if len(key) > 256 or len(value) > OAUTH_CALLBACK_PARAM_MAX:
-                    self._invalid()
                     writer.write(_response(_ERROR_HTML))
                     await writer.drain()
                     writer.close()
@@ -206,7 +202,6 @@ class LoopbackOAuthCallback:
                 multi.setdefault(key, []).append(value)
             for key, values in multi.items():
                 if key in ("state", "code", "error", "iss") and len(values) != 1:
-                    self._invalid()
                     writer.write(_response(_ERROR_HTML))
                     await writer.drain()
                     writer.close()
@@ -221,26 +216,22 @@ class LoopbackOAuthCallback:
             error = (multi.get("error") or [""])[0]
             iss = (multi.get("iss") or [""])[0]
             if not state or not hmac.compare_digest(state, self._state):
-                self._invalid()
                 writer.write(_response(_ERROR_HTML))
                 await writer.drain()
                 writer.close()
                 return
             if iss:
                 if iss != self._issuer:
-                    self._invalid()
                     writer.write(_response(_ERROR_HTML))
                     await writer.drain()
                     writer.close()
                     return
             elif self._require_iss:
-                self._invalid()
                 writer.write(_response(_ERROR_HTML))
                 await writer.drain()
                 writer.close()
                 return
             if code and error:
-                self._invalid()
                 writer.write(_response(_ERROR_HTML))
                 await writer.drain()
                 writer.close()
@@ -266,7 +257,6 @@ class LoopbackOAuthCallback:
                             )
                         )
                 else:
-                    self._invalid()
                     writer.write(_response(_ERROR_HTML))
                     await writer.drain()
                     writer.close()
@@ -278,5 +268,3 @@ class LoopbackOAuthCallback:
         finally:
             self._sockets -= 1
 
-    def _invalid(self) -> None:
-        """Named seam for rejected callbacks (write-only counter removed 2026-10-14)."""
