@@ -103,10 +103,10 @@ export class TextForm implements Component {
 
 	render(width: number): string[] {
 		const content = Math.max(1, width);
-		// Match App's 70% sheet capped by its five-row bottom margin. Optional
-		// guidance yields space to the cursor, count, errors, and controls.
-		const rows = this.tui.terminal.rows;
-		const height = Math.max(1, Math.min(Math.floor(rows * 70 / 100), rows - 5));
+		// Follow App's full-screen overlay sheet (100%, no bottom margin):
+		// optional guidance yields space to the cursor, count, errors, and
+		// controls.
+		const height = Math.max(1, this.tui.terminal.rows);
 		const wrap = (text: string): string[] => text.split("\n").flatMap((line) => wrapTextWithAnsi(line, content));
 		const value = this.getValue();
 		// Reserve one editable row first, then controls and count. On the

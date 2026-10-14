@@ -11,6 +11,7 @@ export type { SelectItem };
 
 export interface MenuOptions {
 	hint?: string;
+	/** Explicit row cap; the live viewport still bounds it. Omit for the full viewport. */
 	visibleRows?: number;
 	/** Live viewport for row budgets (title + filter + hint rows reserved). */
 	tui?: TUI;
@@ -18,6 +19,11 @@ export interface MenuOptions {
 	initialValue?: string;
 	multiSelect?: boolean;
 }
+
+// Rendered chrome above and below the item rows (title, filter, hint) plus
+// one slack row so the bottom-anchored overlay never claims the exact
+// terminal height.
+const MENU_RESERVED_ROWS = 4;
 
 export class Menu implements Component {
 	onSelect: ((item: SelectItem) => void) | undefined;
@@ -28,7 +34,7 @@ export class Menu implements Component {
 	private readonly title: string;
 	private readonly items: SelectItem[];
 	private readonly hint: string;
-	private visibleRows: number;
+	private visibleRows: number | undefined;
 	private readonly tui: TUI | undefined;
 	private filter = "";
 	private selectedValue: string | undefined;
@@ -40,7 +46,7 @@ export class Menu implements Component {
 		this.items = items;
 		this.multiSelect = options.multiSelect ?? false;
 		this.hint = options.hint ?? (this.multiSelect ? "↑↓ move · space check · enter review · esc cancel" : "enter select · esc back");
-		this.visibleRows = Math.max(1, options.visibleRows ?? 10);
+		this.visibleRows = options.visibleRows === undefined ? undefined : Math.max(1, options.visibleRows);
 		this.tui = options.tui;
 		this.selectedValue = options.initialValue ?? items[0]?.value;
 	}
@@ -54,7 +60,7 @@ export class Menu implements Component {
 		return this.filtered().find((item) => item.value === this.selectedValue) ?? null;
 	}
 
-	/** Update the row budget (e.g. on resize), preserving the selection. */
+	/** Update the row budget cap (e.g. on resize), preserving the selection. */
 	setVisibleRows(rows: number): void {
 		this.visibleRows = Math.max(1, rows);
 		this.clampSelection();
@@ -103,9 +109,16 @@ export class Menu implements Component {
 		else this.checked.add(value);
 	}
 
+	/** Effective row budget: the explicit cap when set, always bounded by the live viewport. */
+	private rowBudget(): number {
+		const cap = this.visibleRows;
+		if (!this.tui) return cap ?? Number.MAX_SAFE_INTEGER;
+		const live = Math.max(1, (this.tui.terminal.rows ?? 24) - MENU_RESERVED_ROWS);
+		return cap === undefined ? live : Math.min(cap, live);
+	}
+
 	private visibleWindow(visible: SelectItem[]): SelectItem[] {
-		const live = this.tui ? Math.max(1, (this.tui.terminal.rows ?? 24) - 5 - 3) : this.visibleRows;
-		const budget = Math.max(1, Math.min(this.visibleRows, live));
+		const budget = this.rowBudget();
 		const at = Math.max(0, visible.findIndex(item => item.value === this.selectedValue));
 		const start = Math.max(0, Math.min(visible.length - budget, at - Math.floor(budget / 2)));
 		return visible.slice(start, start + budget);
@@ -152,12 +165,12 @@ export class Menu implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.home) || matchesKey(data, Key.pageUp)) {
-			if (matchesKey(data, Key.pageUp)) this.move(-this.visibleRows);
+			if (matchesKey(data, Key.pageUp)) this.move(-this.rowBudget());
 			else this.jump("start");
 			return;
 		}
 		if (matchesKey(data, Key.end) || matchesKey(data, Key.pageDown)) {
-			if (matchesKey(data, Key.pageDown)) this.move(this.visibleRows);
+			if (matchesKey(data, Key.pageDown)) this.move(this.rowBudget());
 			else this.jump("end");
 			return;
 		}
@@ -195,8 +208,8 @@ export class Menu implements Component {
 		if (visible.length === 0) {
 			out.push(truncateToWidth(theme.dim("(no matches — esc to go back)"), content));
 		} else {
-			// Live budget: never exceed the constructed rows, shrink for
-			// short viewports so selection and cancel hint stay visible.
+			// Live budget: follow the constructed cap and the viewport so the
+			// selection and cancel hint stay visible on short windows.
 			for (const item of this.visibleWindow(visible)) {
 				const label = `${this.multiSelect ? (this.checked.has(item.value) ? "[x] " : "[ ] ") : ""}${item.label ?? item.value}`;
 				const head = item.value === selected

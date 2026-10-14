@@ -102,7 +102,7 @@ export class OAuthProgress implements Component {
 			const shown = sanitizeDisplay(this.loginUrl.replace(ANSI_SEQUENCE, "").replace(OSC_SEQUENCE, "")).replace(CONTROLS, "");
 			const wrapped = wrapTextWithAnsi(shown, content);
 			const rows = this.tui?.terminal.rows ?? 24;
-			const height = Math.max(4, Math.min(Math.floor(rows * 0.7), rows - 2));
+			const height = Math.max(4, rows);
 			this.viewportRows = Math.max(1, height - out.length - controls.length);
 			this.scrollTop = Math.max(0, Math.min(this.scrollTop, wrapped.length - this.viewportRows));
 			out.push(...wrapped.slice(this.scrollTop, this.scrollTop + this.viewportRows));

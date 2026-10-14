@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CURSOR_MARKER, stripTerminalSequences, TuiAltScreen, type Terminal } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, stripTerminalSequences, TuiAltScreen, type Terminal, type TUI } from "@earendil-works/pi-tui";
 import { App } from "../src/app.ts";
 import { TextForm } from "../src/components.ts";
 import { Menu } from "../src/components/Menu.ts";
@@ -203,6 +203,62 @@ test("exit settles outstanding dialogs and prevents new overlays", async () => {
 	assert.equal(await app.pick("After exit", []), undefined);
 });
 
+test("dialogs request a full-height overlay with no bottom margin", async (t) => {
+	const { app, tui, type } = await boot();
+	t.after(() => app.exit());
+	const captured: Array<Record<string, unknown>> = [];
+	const original = tui.showOverlay.bind(tui) as (...args: unknown[]) => unknown;
+	(tui as unknown as { showOverlay: (...args: unknown[]) => unknown }).showOverlay = (component, options) => {
+		captured.push({ ...(options as Record<string, unknown>) });
+		return original(component, options);
+	};
+	const choice = app.pick("Floor", [{ value: "a", label: "A" }]);
+	assert.equal(captured.length, 1, "one overlay opened");
+	const options = captured[0]!;
+	assert.equal(options.width, "100%");
+	assert.equal(options.maxHeight, "100%", "no 70% height cap");
+	assert.equal((options.margin as { bottom?: number } | undefined)?.bottom ?? 0, 0, "no bottom margin offsets the box");
+	type("\x1b");
+	assert.equal(await choice, undefined, "Esc still cancels the full-height picker");
+});
+
+test("a picker on a 24-row terminal fills the viewport beyond the old 10-row cap", async (t) => {
+	const { app, tui, type } = await boot(80, 24);
+	t.after(() => app.exit());
+	const items = Array.from({ length: 40 }, (_, i) => ({ value: `v${i}`, label: `Item ${i}` }));
+	const picking = app.pick("Long list", items);
+	tui.renderNow(true);
+	const dialogs = (app as unknown as { dialogs: Array<{ handle: { getBounds(): { row: number; height: number } | undefined } }> }).dialogs;
+	const bounds = dialogs.at(-1)?.handle.getBounds();
+	assert.ok(bounds, "overlay rendered");
+	assert.equal(bounds!.height, 23, "menu box runs from row 1 to the last line (24 - 1 slack row)");
+	assert.equal(bounds!.row, 1);
+	const screen = tui.getScreenLines().map(stripTerminalSequences).join("\n");
+	assert.match(screen, /Item 19\b/, "twenty rows visible, not the old ten");
+	assert.doesNotMatch(screen, /Item 20\b/, "window still bounded by the live budget");
+	type("\x1b");
+	assert.equal(await picking, undefined);
+});
+
+test("a menu on a tall terminal exposes the full live budget without the old 10/12 caps", () => {
+	const tui = { terminal: { rows: 50, columns: 80 } } as unknown as TUI;
+	const items = Array.from({ length: 60 }, (_, i) => ({ value: `v${i}`, label: `Row ${i}` }));
+	const menu = new Menu("Tall", items, { tui });
+	let cancelled = 0;
+	let selected = "";
+	menu.onCancel = () => void cancelled++;
+	menu.onSelect = (item) => void (selected = item.value);
+	const lines = menu.render(80).map((line) => stripTerminalSequences(line));
+	assert.equal(lines.length, 49, "title + filter + hint plus 46 rows (50 - chrome - one slack row)");
+	assert.match(lines.join("\n"), /Row 45/);
+	assert.doesNotMatch(lines.join("\n"), /Row 46\b/);
+	menu.handleInput("\x1b[B");
+	menu.handleInput("\r");
+	assert.equal(selected, "v1", "Enter selects the moved row in the full-height window");
+	menu.handleInput("\x1b");
+	assert.equal(cancelled, 1, "Esc still cancels the full-height menu");
+});
+
 test("text forms save and count the expanded contents of a large paste with either shortcut", () => {
 	const { term } = terminal();
 	const tui = new TuiAltScreen(term);
@@ -251,7 +307,7 @@ test("a nine-row text form reserves space for validation errors and controls", (
 		const form = new TextForm(tui, editorTheme, { title: "Persona", initial: "draft" });
 		form.setError("Shorten your instructions");
 		tui.start();
-		tui.showOverlay(form, { width: "100%", maxHeight: "70%", anchor: "bottom-center", margin: { bottom: 5 } });
+		tui.showOverlay(form, { width: "100%", maxHeight: "100%", anchor: "bottom-center" });
 		tui.renderNow(true);
 		const screen = tui.getScreenLines().map(stripTerminalSequences).join("\n");
 		assert.match(screen, /draft/);
@@ -259,7 +315,7 @@ test("a nine-row text form reserves space for validation errors and controls", (
 		assert.match(screen, /Shorten your instructions/);
 		assert.match(screen, /enter save/);
 		assert.match(screen, /esc cancel/);
-		assert.equal(form.render(40).length, 4);
+		assert.equal(form.render(40).length, 7);
 		assert.ok(form.render(40).some((line) => line.includes(CURSOR_MARKER)));
 	} finally {
 		tui.stop();
@@ -275,7 +331,8 @@ test("the form's bounded editor keeps its cursor visible at the start and end of
 		for (const key of ["\x1b[1;5H", "\x1b[1;5F"]) {
 			form.handleInput(key);
 			const rows = form.render(40);
-			assert.ok(rows.length <= 7, "form fits the available sheet height above the composer");
+			assert.ok(rows.length <= 12, "form fits the full-screen sheet");
+			assert.ok(rows.length > 7, "editor window uses more than the old 70% sheet");
 			assert.ok(rows.some((line) => line.includes(CURSOR_MARKER)), "cursor survives height budgeting");
 		}
 	} finally {

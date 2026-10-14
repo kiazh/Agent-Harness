@@ -183,7 +183,9 @@ export class ApprovalCard implements Component {
 		if (this.details.fileDiff?.truncated) diff.push(theme.dim("… diff truncated"));
 		const evidence = [...header, ...diff];
 		const chromeRows = 1 + 2 + (this.error ? 1 : 0) + 1 + (blocked ? 1 : 0) + 1;
-		const avail = Math.max(4, Math.min(Math.floor((this.lastRows * 70) / 100), this.lastRows - 2));
+		// Review sheets are full-screen now (see App.openDialog): budget the
+		// whole viewport, then subtract the card's own chrome rows.
+		const avail = Math.max(4, this.lastRows);
 		const budget = Math.max(1, avail - chromeRows);
 		const maxTop = Math.max(0, evidence.length - budget);
 		this.evidenceTop = Math.max(0, Math.min(this.evidenceTop, maxTop));

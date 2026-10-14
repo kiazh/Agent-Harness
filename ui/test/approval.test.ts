@@ -140,6 +140,7 @@ test("A01 long evidence scrolls with decision controls visible", () => {
 	const card = new ApprovalCard(
 		details({
 			argv: Array.from({ length: 20 }, (_, i) => `arg-${i}`),
+			contentPreview: Array.from({ length: 20 }, (_, i) => `preview ${i}`).join("\n"),
 			fileDiff: { diff: Array.from({ length: 30 }, (_, i) => ` line ${i}`).join("\n") },
 		}),
 		{ tui: stubTui(24) },

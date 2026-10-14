@@ -101,16 +101,21 @@ test("O01 viewer keyboard scrolls through the real overlay and Esc closes", () =
 		const viewer = new OutputViewer(store.get("s", "tool-9")!, { onClose: () => closed++ });
 		const handle = tui.showOverlay(viewer, {
 			width: "100%",
-			maxHeight: "70%",
+			maxHeight: "100%",
 			anchor: "bottom-center",
-			margin: { bottom: 2 },
 		});
 		tui.start();
 		tui.renderNow(true);
+		const bounds = handle.getBounds();
+		assert.ok(bounds, "overlay rendered");
+		assert.equal(bounds!.height, 24, "viewer fills the full-screen sheet");
+		assert.equal(bounds!.row, 0);
 		const first = tui.getScreenLines().map((line) => stripTerminalSequences(line)).join("\n");
 		assert.match(first, /Output.*terminal/);
 		assert.match(first, /server truncated/);
 		assert.match(first, /line 0/);
+		assert.match(first, /line 20\b/, "21 content rows visible in the full-height sheet");
+		assert.doesNotMatch(first, /line 21\b/);
 		assert.doesNotMatch(first, /line 59/);
 		viewer.handleInput("\x1b[F");
 		tui.renderNow(true);

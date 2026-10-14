@@ -308,12 +308,13 @@ export class ComposerBox extends Box {
  * A titled, filterable list shown as an overlay (e.g. the session picker).
  * Implemented over Menu: every picker owns a real filter buffer matched
  * against label, value and description. Kept for existing callers; new code
- * uses Menu directly.
+ * uses Menu directly. The row budget follows the live viewport unless a
+ * caller passes an explicit visibleRows cap.
  */
 export class Picker implements Component {
 	private readonly menu: Menu;
 
-	constructor(title: string, items: SelectItem[], onSelect: (item: SelectItem) => void, onCancel: () => void, visibleRows = 10, hint = "enter select · esc back", tui?: TUI) {
+	constructor(title: string, items: SelectItem[], onSelect: (item: SelectItem) => void, onCancel: () => void, visibleRows?: number, hint = "enter select · esc back", tui?: TUI) {
 		this.menu = new Menu(title, items, { visibleRows, hint, tui });
 		this.menu.onSelect = onSelect;
 		this.menu.onCancel = onCancel;

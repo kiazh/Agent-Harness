@@ -112,8 +112,8 @@ export interface OutputViewerOptions {
  * viewport layout, so a nested ScrollView keeps viewportHeight 0 and cannot
  * clip on its own. The viewer therefore owns its ScrollView as the single
  * source of scroll truth (scrollBy/scrollToStart/scrollToEnd) and windows
- * the wrapped rows itself, mirroring App's 70% overlay sheet exactly like
- * TextForm's cursor window does. Opening preserves the chat draft and
+ * the wrapped rows itself, mirroring App's full-screen overlay sheet exactly
+ * like TextForm's cursor window does. Opening preserves the chat draft and
  * transcript scroll position; closing returns to the previous dialog.
  */
 export class OutputViewer implements Component {
@@ -149,9 +149,9 @@ export class OutputViewer implements Component {
 		const wrapped = sanitizeDisplay(this.record.text || "(empty result)")
 			.split("\n")
 			.flatMap((line) => wrapTextWithAnsi(line, content));
-		// Mirror App's 70% overlay sheet (see openDialog): the viewer owns
-		// title + status + hints rows, the ScrollView budget gets the rest.
-		const height = Math.max(4, Math.min(Math.floor((rows * 70) / 100), rows - 2));
+		// Mirror App's full-screen overlay sheet (see openDialog): the viewer
+		// owns title + status + hints rows, the ScrollView budget gets the rest.
+		const height = Math.max(4, rows);
 		const budget = Math.max(1, height - 3);
 		this.scroll.updateLayout(wrapped.length, budget, () => {});
 		const top = this.scroll.scrollTop;

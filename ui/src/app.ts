@@ -525,16 +525,15 @@ export class App implements FeatureHost {
 		this.sessionTails.buffer(event);
 	}
 
-	pick(title: string, items: SelectItem[]): Promise<SelectItem | undefined> {		// Row budget follows the live viewport: title + filter + hint rows are
-		// reserved so the selected row and cancel hint survive short windows.
-		const rows = this.tui.terminal.rows ?? 24;
-		const visibleRows = Math.max(1, Math.min(10, rows - 5 - 3));
-		return this.openDialog<SelectItem>((close) => new Picker(title, items, close, () => close(), visibleRows, undefined, this.tui));
+	pick(title: string, items: SelectItem[]): Promise<SelectItem | undefined> {
+		// The overlay is full-screen: Menu derives its row budget from the
+		// live viewport with its own chrome rows (plus one slack row) reserved.
+		return this.openDialog<SelectItem>((close) => new Picker(title, items, close, () => close(), undefined, undefined, this.tui));
 	}
 
 	pickMany(title: string, items: SelectItem[]): Promise<SelectItem[] | undefined> {
 		return this.openDialog<SelectItem[]>((close) => {
-			const menu = new Menu(title, items, { multiSelect: true, tui: this.tui, visibleRows: 12 });
+			const menu = new Menu(title, items, { multiSelect: true, tui: this.tui });
 			menu.onConfirm = close;
 			menu.onCancel = () => close();
 			return menu;
@@ -548,8 +547,6 @@ export class App implements FeatureHost {
 	 */
 	pickTheme(): Promise<string | undefined> {
 		const previous = getSkin();
-		const rows = this.tui.terminal.rows ?? 24;
-		const visibleRows = Math.max(1, Math.min(10, rows - 5 - 4));
 		return this.openDialog<string>((close) => {
 			const menu = new Menu(
 				`Skins (current: ${previous})`,
@@ -558,7 +555,7 @@ export class App implements FeatureHost {
 					label: `${skin}${skin === previous ? " (current)" : ""}`,
 					description: skinDescription(skin),
 				})),
-				{ visibleRows, hint: "↑↓ preview · enter apply · esc restore", tui: this.tui, initialValue: previous },
+				{ hint: "↑↓ preview · enter apply · esc restore", tui: this.tui, initialValue: previous },
 			);
 			menu.onSelectionChange = (item) => {
 				setSkin(item.value);
@@ -675,7 +672,7 @@ export class App implements FeatureHost {
 	}
 
 	private openViewer(record: OutputRecord): Promise<void> {
-		return this.openDialog<void>((close) => new OutputViewer(record, { tui: this.tui, onClose: () => close() }), 2).then(
+		return this.openDialog<void>((close) => new OutputViewer(record, { tui: this.tui, onClose: () => close() })).then(
 			() => undefined,
 		);
 	}
@@ -697,7 +694,7 @@ export class App implements FeatureHost {
 		return `harness-${this.currentProfile}`;
 	}
 
-	private openDialog<T>(create: (close: (value?: T) => void) => Component, marginBottom = 5): Promise<T | undefined> {
+	private openDialog<T>(create: (close: (value?: T) => void) => Component): Promise<T | undefined> {
 		if (this.exiting) return Promise.resolve(undefined);
 		return new Promise((done) => {
 			let settled = false;
@@ -714,11 +711,13 @@ export class App implements FeatureHost {
 				done(value);
 			};
 			// Each dialog owns its handle, including when approvals interrupt a form.
+			// Full-screen sheet: 100% height with no bottom margin, so the overlay
+			// is bounded only by the terminal and fills whatever the component
+			// renders up to the viewport.
 			const handle = this.tui.showOverlay(create(close), {
 				width: "100%",
-				maxHeight: "70%",
+				maxHeight: "100%",
 				anchor: "bottom-center",
-				margin: { bottom: marginBottom },
 			});
 			const dialog = { handle, cancel: () => close() };
 			this.dialogs.push(dialog);
@@ -857,7 +856,7 @@ export class App implements FeatureHost {
 				{ value: "help", label: "? / F1 — shortcuts", description: "? on empty input, F1 with a draft" },
 				{ value: "commands", label: "/help — all commands", description: "/growth shows learning details" },
 				{ value: "learning", label: "□ / ▪ — activity and learning", description: "Pulses while working and briefly when learning is saved" },
-			], () => close(), () => close(), Math.max(1, Math.min(8, Math.floor((this.tui.terminal.rows ?? 24) * 0.7) - 3)), "↑↓ browse · enter/esc close", this.tui), 2);
+			], () => close(), () => close(), undefined, "↑↓ browse · enter/esc close", this.tui));
 			return { consume: true };
 		}
 

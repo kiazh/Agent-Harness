@@ -265,7 +265,7 @@ test("OAuthProgress keeps recovery controls visible and scrolls the complete lin
 		onOpen: () => {}, onCopy: () => {}, onCancel: () => {},
 	}, url, { terminal: { rows: 12, columns: 40 } } as unknown as TUI);
 	const start = progress.render(40).map(stripTerminalSequences);
-	assert.ok(start.length <= 8, "must fit the overlay height");
+	assert.equal(start.length, 12, "must fill the full-screen overlay height");
 	assert.match(start.join("\n"), /y copy/);
 	assert.match(start.join("\n"), /cancel/);
 	assert.match(start.join("\n"), /https:\/\/auth.example.com/);
