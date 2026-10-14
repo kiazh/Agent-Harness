@@ -1,0 +1,1120 @@
+{
+  "schema_version": 1,
+  "tool": "tools/e2e_gate.py",
+  "generated_at_utc": "2026-10-14T02:42:21Z",
+  "command_line": "/Users/shadow/machina/.venv/bin/python tools/e2e_gate.py --json /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/opencode/e2e_run/j1_j8_final.json",
+  "repo_root": "/Users/shadow/machina",
+  "git": {
+    "git_head": "54c5fa7",
+    "status_short": [
+      "?? docs/verification/CODEBASE_REVIEW_2026-10-13.md",
+      "?? docs/verification/proofs/2026-10-14-e2e-gate.json",
+      "?? docs/verification/proofs/2026-10-14-e2e-gate.md"
+    ],
+    "status_sha256_16": "adca54aeeb1fe1d8"
+  },
+  "venv_python": "/Users/shadow/machina/.venv/bin/python",
+  "scratch_root": "/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-jfhequza",
+  "journeys_selected": [
+    "j1",
+    "j2",
+    "j3",
+    "j4",
+    "j5",
+    "j6",
+    "j7",
+    "j8"
+  ],
+  "journeys": [
+    {
+      "journey": "j1",
+      "title": "memory-roundtrip (chat -> consolidate -> memories row + cursor)",
+      "status": "PASS",
+      "reason": "",
+      "started_at": "2026-10-14T02:42:21Z",
+      "finished_at": "2026-10-14T02:42:26Z",
+      "duration_seconds": 4.918,
+      "commands": [
+        "cd /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-jfhequza/j1 && machina chat --session fa2ba183-fbd8-4956-a219-c6d44073a622 \"<facts prompt>\"",
+        "/Users/shadow/machina/.venv/bin/python -c \"<build_agent_for_session + _consolidate_memories>\" fa2ba183-fbd8-4956-a219-c6d44073a622"
+      ],
+      "checks": [
+        {
+          "name": "cli_exit_zero",
+          "ok": true,
+          "expected": "exit code 0 (no timeout)",
+          "observed": {
+            "exit_code": 0,
+            "timed_out": false
+          }
+        },
+        {
+          "name": "cli_no_error_substrings",
+          "ok": true,
+          "expected": "stderr free of ['InterfaceError', 'Memory extraction failed']",
+          "observed": {
+            "hits": [],
+            "stderr_excerpt": " false}\nAudit event dropped before the writer started; event was not persisted\n2026-10-13 22:42:24,721 [AUDIT] {\"timestamp\": 1791945744.721049, \"event\": \"memory_consolidate\", \"session_id\": \"fa2ba183-fbd8-4956-a219-c6d44073a622\", \"agent_id\": \"harness\", \"chunks_processed\": 2, \"candidates_extracted\": 1, \"new_memories_written\": 1}\nAudit event dropped before the writer started; event was not persisted\n"
+          }
+        },
+        {
+          "name": "consolidation_call_ok",
+          "ok": true,
+          "expected": "explicit production consolidation call succeeds",
+          "observed": {
+            "ok": true,
+            "error": ""
+          }
+        },
+        {
+          "name": "consolidator_wired",
+          "ok": true,
+          "expected": "agent_factory wires a memory consolidator (provider passed)",
+          "observed": true
+        },
+        {
+          "name": "memory_row_for_session",
+          "ok": true,
+          "expected": ">=1 memories row written for this session",
+          "observed": 1
+        },
+        {
+          "name": "memory_content_fixture",
+          "ok": true,
+          "expected": "memories row content contains 'Zephyrine6923'",
+          "observed": [
+            "User adopted a pet turtle named Zephyrine6923."
+          ]
+        },
+        {
+          "name": "session_cursor_set",
+          "ok": true,
+          "expected": "sessions.state.mem_consolidated_up_to has id + at",
+          "observed": {
+            "id": "882f1972-7431-4530-b4ff-0a258d0436f9",
+            "at": "2026-10-14T02:42:23.347754+00:00"
+          }
+        }
+      ],
+      "observed": {
+        "session_id": "fa2ba183-fbd8-4956-a219-c6d44073a622",
+        "fixture_fact": "pet turtle named Zephyrine6923",
+        "cli_wall_seconds": 3.31,
+        "cli_reply_excerpt": "Resuming session: fa2ba183-fbd8-4956-a219-c6d44073a622\nModel: deepseek-chat (deepseek)\nMode: workspace (backend: host)\n\nNOTED\nIterations: 1 | Tool calls: 0 | Tokens: 6541\nSession ID: fa2ba183-fbd8-4956-a219-c6d44073a622",
+        "cursor_after_cli": {
+          "id": "882f1972-7431-4530-b4ff-0a258d0436f9",
+          "at": "2026-10-14T02:42:23.347754+00:00"
+        },
+        "memory_count_after_cli": 1,
+        "session_found": true,
+        "memory_count_final": 1,
+        "memories": [
+          {
+            "content": "User adopted a pet turtle named Zephyrine6923.",
+            "category": "fact",
+            "importance": 0.8249999999954283,
+            "created_at": "2026-10-14T02:42:24.710688+00:00"
+          }
+        ],
+        "cursor_final": {
+          "id": "882f1972-7431-4530-b4ff-0a258d0436f9",
+          "at": "2026-10-14T02:42:23.347754+00:00"
+        },
+        "revoked_grants": 1,
+        "revoke_ok": true
+      },
+      "notes": [
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-jfhequza",
+        "budget: 300s wall-clock (bounded steps sum)"
+      ]
+    },
+    {
+      "journey": "j2",
+      "title": "web-research-rag (real web_research -> context_chunks for source)",
+      "status": "PASS",
+      "reason": "",
+      "started_at": "2026-10-14T02:42:26Z",
+      "finished_at": "2026-10-14T02:42:28Z",
+      "duration_seconds": 2.48,
+      "commands": [
+        "registry.execute(\"web_research\", query=\"python json encoder and decoder documentation\", limit=1) in-session 23f7e46f-3e67-4861-ab08-c1fcfb161391"
+      ],
+      "checks": [
+        {
+          "name": "web_research_ok",
+          "ok": true,
+          "expected": "web_research completes without raising",
+          "observed": {
+            "ok": true,
+            "error": ""
+          }
+        },
+        {
+          "name": "chunks_for_json_page",
+          "ok": true,
+          "expected": ">=1 context_chunk row with document_source=https://docs.python.org/3/library/json.html",
+          "observed": 16
+        }
+      ],
+      "observed": {
+        "session_id": "23f7e46f-3e67-4861-ab08-c1fcfb161391",
+        "attempts": 1,
+        "tool_exit_code": 0,
+        "tool_result_preview": "Web research for 'python json encoder and decoder documentation':\n\n1. json — JSON encoder and decoder — Python 3.15.0 documentation — https://docs.python.org/3/library/json.html (saved to this session)\njson — JSON encoder and decoder — Python 3.15.0 documentation Theme Auto Light Dark Table of Contents json — JSON encoder and decoder Basic Usage Encoders and Decoders Exceptions Standard Compliance",
+        "chunks_for_json_page": 16,
+        "indexed_sources": [
+          {
+            "document_source": "https://docs.python.org/3/library/json.html",
+            "chunk_count": 16
+          }
+        ],
+        "revoked_grants": 1,
+        "revoke_ok": true
+      },
+      "notes": [
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-jfhequza",
+        "budget: 240s wall-clock (bounded steps sum)"
+      ]
+    },
+    {
+      "journey": "j3",
+      "title": "web-crawl (real web_crawl -> indexed chunks for source)",
+      "status": "PASS",
+      "reason": "",
+      "started_at": "2026-10-14T02:42:28Z",
+      "finished_at": "2026-10-14T02:42:30Z",
+      "duration_seconds": 1.685,
+      "commands": [
+        "registry.execute(\"web_crawl\", url=\"https://docs.python.org/3/library/json.html\", max_pages=1, max_depth=0) in-session 6175971e-d737-4058-bfab-195f2b15244d"
+      ],
+      "checks": [
+        {
+          "name": "web_crawl_ok",
+          "ok": true,
+          "expected": "web_crawl completes without raising",
+          "observed": {
+            "ok": true,
+            "error": ""
+          }
+        },
+        {
+          "name": "chunks_for_source",
+          "ok": true,
+          "expected": ">=1 context_chunk row with document_source=https://docs.python.org/3/library/json.html",
+          "observed": 16
+        }
+      ],
+      "observed": {
+        "session_id": "6175971e-d737-4058-bfab-195f2b15244d",
+        "tool_exit_code": 0,
+        "tool_result_preview": "Crawl of 'https://docs.python.org/3/library/json.html':\n\n1. https://docs.python.org/3/library/json.html (saved to this session)\njson — JSON encoder and decoder — Python 3.15.0 documentation Theme Auto Light Dark Table of Contents json — JSON encoder and decoder Basic Usage Encoders and Decoders Exceptions Standard Compliance and Interoperability Character Encodings Infinite and NaN Number Values R",
+        "chunks_for_source": 16,
+        "revoked_grants": 1,
+        "revoke_ok": true
+      },
+      "notes": [
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-jfhequza",
+        "budget: 240s wall-clock (bounded steps sum)"
+      ]
+    },
+    {
+      "journey": "j4",
+      "title": "mcp-firecrawl (connector connect -> execute_call scrape -> markdown)",
+      "status": "PASS",
+      "reason": "",
+      "started_at": "2026-10-14T02:42:30Z",
+      "finished_at": "2026-10-14T02:42:32Z",
+      "duration_seconds": 2.501,
+      "commands": [
+        "os.environ['FIRECRAWL_API_URL']='http://localhost:3002'; connect_authorized(service,'firecrawl',...) + execute_call(service,'firecrawl__firecrawl_scrape',{'url':'https://example.com','formats':['markdown']})"
+      ],
+      "checks": [
+        {
+          "name": "mcp_call_ok",
+          "ok": true,
+          "expected": "CallOutcome.ok is True",
+          "observed": {
+            "ok": true,
+            "error": ""
+          }
+        },
+        {
+          "name": "markdown_non_empty",
+          "ok": true,
+          "expected": "scrape result carries non-empty text/structured markdown",
+          "observed": {
+            "text_len": 1424,
+            "structured_len": 3071
+          }
+        }
+      ],
+      "observed": {
+        "firecrawl_api_url": "http://localhost:3002",
+        "session_id": "ce104b8a-ae92-4cab-aadc-c531b2a40814",
+        "script_exit_code": 0,
+        "tool": "firecrawl__firecrawl_scrape",
+        "text_len": 1424,
+        "text_preview": "{\n  \"markdown\": \"This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.\\n\\nهذا النطاق مُخصص للاستخدام في أمثلة التوثيق دون الحاجة إلى إذن. هذه ليست خدمة، يُرجى تجنب الاعتماد عليها لأغراض الاختبار والمراقبة.\\n\\n该域名仅用于文档示例，无需获得许可。这并非一项服务，请勿将其用于测试和监控目的。\\n\\nL’usage de ce domaine est réservé à des exem",
+        "structured_len": 3071,
+        "outcome_unknown": false,
+        "contains_example_domain": false,
+        "revoked_grants": 1,
+        "revoke_ok": true
+      },
+      "notes": [
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-jfhequza",
+        "budget: 300s wall-clock (bounded steps sum)"
+      ]
+    },
+    {
+      "journey": "j5",
+      "title": "cli-smoke (machina chat exit 0, no InterfaceError / extraction failure)",
+      "status": "PASS",
+      "reason": "",
+      "started_at": "2026-10-14T02:42:32Z",
+      "finished_at": "2026-10-14T02:42:38Z",
+      "duration_seconds": 5.695,
+      "commands": [
+        "cd /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-jfhequza/j5 && machina chat \"Reply with exactly: OK\" -q"
+      ],
+      "checks": [
+        {
+          "name": "cli_exit_zero",
+          "ok": true,
+          "expected": "exit code 0 (no timeout)",
+          "observed": {
+            "exit_code": 0,
+            "timed_out": false
+          }
+        },
+        {
+          "name": "cli_no_error_substrings",
+          "ok": true,
+          "expected": "stderr free of ['InterfaceError', 'Memory extraction failed']",
+          "observed": {
+            "hits": [],
+            "stderr_excerpt": "-chat\", \"message_count\": 2}\nAudit event dropped before the writer started; event was not persisted\n2026-10-13 22:42:38,318 [AUDIT] {\"timestamp\": 1791945758.318683, \"event\": \"llm_call_complete\", \"provider\": \"deepseek\", \"model\": \"deepseek-flash\", \"prompt_tokens\": 202, \"completion_tokens\": 1, \"total_tokens\": 203, \"tool_calls\": 0}\nAudit event dropped before the writer started; event was not persisted\n"
+          }
+        },
+        {
+          "name": "cli_reply_contains_ok",
+          "ok": true,
+          "expected": "stdout contains \"OK\" (the requested reply)",
+          "observed": {
+            "stdout_excerpt": "New session: c5695cfc-3ef9-48ad-921e-6c85997d8b6c\n\nOK\nSession ID: c5695cfc-3ef9-48ad-921e-6c85997d8b6c"
+          }
+        }
+      ],
+      "observed": {
+        "cli_wall_seconds": 5.694,
+        "stdout_contains_ok": true,
+        "stdout_excerpt": "New session: c5695cfc-3ef9-48ad-921e-6c85997d8b6c\n\nOK\nSession ID: c5695cfc-3ef9-48ad-921e-6c85997d8b6c"
+      },
+      "notes": [
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-jfhequza",
+        "budget: 300s wall-clock (bounded steps sum)"
+      ]
+    },
+    {
+      "journey": "j6",
+      "title": "compaction-triggers (SSE auto + gateway auto + explicit compress; archive/summary/state)",
+      "status": "PASS",
+      "reason": "",
+      "started_at": "2026-10-14T02:42:38Z",
+      "finished_at": "2026-10-14T02:43:18Z",
+      "duration_seconds": 40.217,
+      "commands": [
+        "/Users/shadow/machina/.venv/bin/python -c \"<context_manager.add_chunks_batch: 6 seeds + 1 document>\"",
+        "MACHINA_API_KEY=<redacted> /Users/shadow/machina/.venv/bin/python -m machina.api --host 127.0.0.1 --port 63157",
+        "POST http://127.0.0.1:63157/api/v1/sessions/926a4695-bd5e-4fc9-8fbd-0b46609473b0/prompt (SSE, X-API-Key set)",
+        "cd /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-jfhequza/j6 && machina compress 926a4695-bd5e-4fc9-8fbd-0b46609473b0",
+        "/Users/shadow/machina/.venv/bin/python -c \"<context_manager.add_chunks_batch: gateway session>\"",
+        "MACHINA_GATEWAY_TOKEN=<redacted> /Users/shadow/machina/.venv/bin/python -m machina.gateway"
+      ],
+      "checks": [
+        {
+          "name": "sse_turn_a_stream",
+          "ok": true,
+          "expected": "HTTP 200 text/event-stream terminated by [DONE]",
+          "observed": {
+            "status": 200,
+            "media_type": "text/event-stream; charset=utf-8",
+            "done_seen": true,
+            "error": ""
+          }
+        },
+        {
+          "name": "sse_turn_a_text",
+          "ok": true,
+          "expected": "streamed text contains the requested reply 'OK696A'",
+          "observed": "OK696AOK696A"
+        },
+        {
+          "name": "auto_compaction_after_sse",
+          "ok": true,
+          "expected": "SSE post-stream fired maybe_auto_compact: summary + archive + state + claim released",
+          "observed": {
+            "ok": true,
+            "session_found": true,
+            "summary_count": 1,
+            "latest_summary_id": "b5eebe87-8016-4855-b693-f2f03eadd037",
+            "archive_count": 8,
+            "archived_chunk_ids": [
+              "21903951-5c76-422a-bac3-189fa564f28d",
+              "33fc9be5-1782-45dd-9799-1742d3816fd7",
+              "43db1eba-2cf8-4528-90f2-963a791a637e",
+              "84f5843f-b81e-4cb5-aba1-99cef27ca34c",
+              "cd3a5070-4554-411f-a201-7d00b2ab7142",
+              "cf268ae6-4bdc-4ce0-9c5d-d0e224a2d42d",
+              "eee30a1f-86d4-426a-9e7f-b1ca9dd9986d",
+              "2f39a5b6-a020-4d3e-b44b-15d90a1662f3"
+            ],
+            "document_present": true,
+            "document_archived": false,
+            "claim_owner": null,
+            "claim_kind": null,
+            "last_auto_compact_tokens": 446
+          }
+        },
+        {
+          "name": "archived_ids_are_seeded",
+          "ok": true,
+          "expected": "archived compressed rows include seeded conversational chunks and never the document",
+          "observed": {
+            "archived": [
+              "21903951-5c76-422a-bac3-189fa564f28d",
+              "2f39a5b6-a020-4d3e-b44b-15d90a1662f3",
+              "33fc9be5-1782-45dd-9799-1742d3816fd7",
+              "43db1eba-2cf8-4528-90f2-963a791a637e",
+              "84f5843f-b81e-4cb5-aba1-99cef27ca34c",
+              "cd3a5070-4554-411f-a201-7d00b2ab7142",
+              "cf268ae6-4bdc-4ce0-9c5d-d0e224a2d42d",
+              "eee30a1f-86d4-426a-9e7f-b1ca9dd9986d"
+            ],
+            "seeded_count": 6,
+            "seeded_intersection": 6
+          }
+        },
+        {
+          "name": "document_survives_compaction",
+          "ok": true,
+          "expected": "document chunk stays active and is never archived by compaction",
+          "observed": {
+            "document_present": true,
+            "document_archived": false
+          }
+        },
+        {
+          "name": "sse_turn_b_stream",
+          "ok": true,
+          "expected": "second SSE turn completes normally",
+          "observed": {
+            "status": 200,
+            "done_seen": true,
+            "error": ""
+          }
+        },
+        {
+          "name": "sse_turn_b_persisted",
+          "ok": true,
+          "expected": "second user message is durably stored before the no-progress window",
+          "observed": {
+            "user_tokens": {
+              "OK100B": true
+            }
+          }
+        },
+        {
+          "name": "no_second_compaction_on_idle_turn",
+          "ok": true,
+          "expected": "no-progress guard: summary/archive/state unchanged across a 20s window after turn B",
+          "observed": {
+            "before": {
+              "summary_count": 1,
+              "latest_summary_id": "b5eebe87-8016-4855-b693-f2f03eadd037",
+              "archive_count": 8,
+              "last_auto_compact_tokens": 446
+            },
+            "after": {
+              "summary_count": 1,
+              "latest_summary_id": "b5eebe87-8016-4855-b693-f2f03eadd037",
+              "archive_count": 8,
+              "last_auto_compact_tokens": 446
+            },
+            "waited_seconds": 20.404
+          }
+        },
+        {
+          "name": "cli_compress_exit_zero",
+          "ok": true,
+          "expected": "explicit machina compress exits 0",
+          "observed": {
+            "exit_code": 0,
+            "timed_out": false
+          }
+        },
+        {
+          "name": "cli_compress_reports_result",
+          "ok": true,
+          "expected": "CLI reports a 'Context compressed: N chunks' result line",
+          "observed": "Session: 926a4695-bd5e-4fc9-8fbd-0b46609473b0 (1953 tokens)\n✓ Context compressed: 3 chunks → 4 chunks, 453 → 102 tokens (22.5% ratio, \nmethod: llm_summarize)\n"
+        },
+        {
+          "name": "explicit_compress_shares_core",
+          "ok": true,
+          "expected": "explicit path archives-before-replace and writes a new summary chunk",
+          "observed": {
+            "ok": true,
+            "session_found": true,
+            "summary_count": 1,
+            "latest_summary_id": "d98dbf62-e72d-499f-a4a6-9601da7b31b8",
+            "archive_count": 14,
+            "archived_chunk_ids": [
+              "b5eebe87-8016-4855-b693-f2f03eadd037",
+              "21903951-5c76-422a-bac3-189fa564f28d",
+              "33fc9be5-1782-45dd-9799-1742d3816fd7",
+              "43db1eba-2cf8-4528-90f2-963a791a637e",
+              "84f5843f-b81e-4cb5-aba1-99cef27ca34c",
+              "cd3a5070-4554-411f-a201-7d00b2ab7142",
+              "cf268ae6-4bdc-4ce0-9c5d-d0e224a2d42d",
+              "eee30a1f-86d4-426a-9e7f-b1ca9dd9986d",
+              "2f39a5b6-a020-4d3e-b44b-15d90a1662f3",
+              "cf268ae6-4bdc-4ce0-9c5d-d0e224a2d42d",
+              "eee30a1f-86d4-426a-9e7f-b1ca9dd9986d",
+              "2f39a5b6-a020-4d3e-b44b-15d90a1662f3",
+              "a5a3b86c-17e7-49b9-9b1e-dd3789550b1b",
+              "4c0bd061-3f7b-4cab-8560-00c5a98ea887"
+            ],
+            "document_present": true,
+            "document_archived": false,
+            "claim_owner": null,
+            "claim_kind": null,
+            "last_auto_compact_tokens": 446
+          }
+        },
+        {
+          "name": "gateway_initialize",
+          "ok": true,
+          "expected": "gateway initialize returns a result",
+          "observed": {
+            "error": null
+          }
+        },
+        {
+          "name": "gateway_turn_accepted",
+          "ok": true,
+          "expected": "gateway accepts the prompt and returns a turnId",
+          "observed": {
+            "result": {
+              "turnId": "3bbafdd68566"
+            },
+            "error": null
+          }
+        },
+        {
+          "name": "gateway_message_complete",
+          "ok": true,
+          "expected": "gateway emits message.complete",
+          "observed": true
+        },
+        {
+          "name": "gateway_reply_fixture",
+          "ok": true,
+          "expected": "message.complete.text contains 'OK508D'",
+          "observed": "OK508D"
+        },
+        {
+          "name": "auto_compaction_after_gateway_turn",
+          "ok": true,
+          "expected": "gateway post-turn fired maybe_auto_compact: summary + archive + claim released",
+          "observed": {
+            "ok": true,
+            "session_found": true,
+            "summary_count": 1,
+            "latest_summary_id": "af236dce-f560-4e5a-bb41-c4bdf7a00934",
+            "archive_count": 8,
+            "archived_chunk_ids": [
+              "0b28a194-a73a-4eb4-8b11-bf91651bb3e1",
+              "0e4dbdc2-e80a-4698-bc54-71bf2d8ee9d1",
+              "5bb958e9-fdd8-4455-a41c-3873bb15d771",
+              "841c0a3d-3293-4aae-b9af-66ce3d52036c",
+              "dd23bd55-eb34-48df-b094-855bce2a0f9d",
+              "e355c51b-df34-4d19-9957-5e0414ceb022",
+              "8f2a6075-3ae8-4261-b54a-bf165e98fe25",
+              "068b835d-4b4b-40b5-8522-b089c102f4ad"
+            ],
+            "document_present": true,
+            "document_archived": false,
+            "claim_owner": null,
+            "claim_kind": null,
+            "last_auto_compact_tokens": 455
+          }
+        }
+      ],
+      "observed": {
+        "marker": "W6SEED7322",
+        "session_id": "926a4695-bd5e-4fc9-8fbd-0b46609473b0",
+        "seeded_chunk_count": 6,
+        "document_id": "f2d63d31-0bd1-49d8-a786-d31ff66f4e36",
+        "server": {
+          "port": 63157,
+          "attempt": 1,
+          "ready": true,
+          "waited_seconds": 1.052,
+          "last_status": 200
+        },
+        "sse_turn_a": {
+          "status": 200,
+          "media_type": "text/event-stream; charset=utf-8",
+          "done_seen": true,
+          "frames_read": 5,
+          "frame_type_counts": {
+            "turn.started": 1,
+            "token_usage": 1,
+            "text": 1,
+            "error": 1,
+            "done": 1
+          },
+          "wall_seconds": 2.553,
+          "error": "",
+          "text_excerpt": "OK696A",
+          "done_content_excerpt": "OK696A"
+        },
+        "phase_a_compaction": {
+          "ok": true,
+          "session_found": true,
+          "summary_count": 1,
+          "latest_summary_id": "b5eebe87-8016-4855-b693-f2f03eadd037",
+          "archive_count": 8,
+          "archived_chunk_ids": [
+            "21903951-5c76-422a-bac3-189fa564f28d",
+            "33fc9be5-1782-45dd-9799-1742d3816fd7",
+            "43db1eba-2cf8-4528-90f2-963a791a637e",
+            "84f5843f-b81e-4cb5-aba1-99cef27ca34c",
+            "cd3a5070-4554-411f-a201-7d00b2ab7142",
+            "cf268ae6-4bdc-4ce0-9c5d-d0e224a2d42d",
+            "eee30a1f-86d4-426a-9e7f-b1ca9dd9986d",
+            "2f39a5b6-a020-4d3e-b44b-15d90a1662f3"
+          ],
+          "document_present": true,
+          "document_archived": false,
+          "claim_owner": null,
+          "claim_kind": null,
+          "last_auto_compact_tokens": 446
+        },
+        "phase_a_waited_seconds": 2.704,
+        "sse_turn_b": {
+          "status": 200,
+          "media_type": "text/event-stream; charset=utf-8",
+          "done_seen": true,
+          "frames_read": 5,
+          "frame_type_counts": {
+            "turn.started": 1,
+            "token_usage": 1,
+            "text": 1,
+            "error": 1,
+            "done": 1
+          },
+          "wall_seconds": 3.307,
+          "error": "",
+          "text_excerpt": "OK100B",
+          "done_content_excerpt": "OK100B"
+        },
+        "phase_b_stable_window": {
+          "before": {
+            "summary_count": 1,
+            "latest_summary_id": "b5eebe87-8016-4855-b693-f2f03eadd037",
+            "archive_count": 8,
+            "last_auto_compact_tokens": 446
+          },
+          "after": {
+            "summary_count": 1,
+            "latest_summary_id": "b5eebe87-8016-4855-b693-f2f03eadd037",
+            "archive_count": 8,
+            "last_auto_compact_tokens": 446
+          },
+          "waited_seconds": 20.404
+        },
+        "cli_compress_excerpt": "Session: 926a4695-bd5e-4fc9-8fbd-0b46609473b0 (1953 tokens)\n✓ Context compressed: 3 chunks → 4 chunks, 453 → 102 tokens (22.5% ratio, \nmethod: llm_summarize)\n",
+        "phase_c_explicit_compress": {
+          "ok": true,
+          "session_found": true,
+          "summary_count": 1,
+          "latest_summary_id": "d98dbf62-e72d-499f-a4a6-9601da7b31b8",
+          "archive_count": 14,
+          "archived_chunk_ids": [
+            "b5eebe87-8016-4855-b693-f2f03eadd037",
+            "21903951-5c76-422a-bac3-189fa564f28d",
+            "33fc9be5-1782-45dd-9799-1742d3816fd7",
+            "43db1eba-2cf8-4528-90f2-963a791a637e",
+            "84f5843f-b81e-4cb5-aba1-99cef27ca34c",
+            "cd3a5070-4554-411f-a201-7d00b2ab7142",
+            "cf268ae6-4bdc-4ce0-9c5d-d0e224a2d42d",
+            "eee30a1f-86d4-426a-9e7f-b1ca9dd9986d",
+            "2f39a5b6-a020-4d3e-b44b-15d90a1662f3",
+            "cf268ae6-4bdc-4ce0-9c5d-d0e224a2d42d",
+            "eee30a1f-86d4-426a-9e7f-b1ca9dd9986d",
+            "2f39a5b6-a020-4d3e-b44b-15d90a1662f3",
+            "a5a3b86c-17e7-49b9-9b1e-dd3789550b1b",
+            "4c0bd061-3f7b-4cab-8560-00c5a98ea887"
+          ],
+          "document_present": true,
+          "document_archived": false,
+          "claim_owner": null,
+          "claim_kind": null,
+          "last_auto_compact_tokens": 446
+        },
+        "phase_c_waited_seconds": 0.269,
+        "server_stop": {
+          "exit_code": -15,
+          "stderr_excerpt": "tamp\": 1791945768.405445, \"event\": \"llm_call_complete\", \"provider\": \"deepseek\", \"model\": \"deepseek-flash\", \"prompt_tokens\": 206, \"completion_tokens\": 1, \"total_tokens\": 207, \"tool_calls\": 0}\nINFO:     Shutting down\nINFO:     Waiting for application shutdown.\nboundary failed: scheduler.stop error_type=CancelledError\nINFO:     Application shutdown complete.\nINFO:     Finished server process [32883]\n"
+        },
+        "gateway_session_id": "fbf9f836-cc6d-4c50-a476-f9fed7da884a",
+        "phase_d_gateway_compaction": {
+          "ok": true,
+          "session_found": true,
+          "summary_count": 1,
+          "latest_summary_id": "af236dce-f560-4e5a-bb41-c4bdf7a00934",
+          "archive_count": 8,
+          "archived_chunk_ids": [
+            "0b28a194-a73a-4eb4-8b11-bf91651bb3e1",
+            "0e4dbdc2-e80a-4698-bc54-71bf2d8ee9d1",
+            "5bb958e9-fdd8-4455-a41c-3873bb15d771",
+            "841c0a3d-3293-4aae-b9af-66ce3d52036c",
+            "dd23bd55-eb34-48df-b094-855bce2a0f9d",
+            "e355c51b-df34-4d19-9957-5e0414ceb022",
+            "8f2a6075-3ae8-4261-b54a-bf165e98fe25",
+            "068b835d-4b4b-40b5-8522-b089c102f4ad"
+          ],
+          "document_present": true,
+          "document_archived": false,
+          "claim_owner": null,
+          "claim_kind": null,
+          "last_auto_compact_tokens": 455
+        },
+        "phase_d_waited_seconds": 2.668,
+        "gateway_stop": {
+          "exit_code": 0,
+          "stderr_excerpt": "\": 544, \"tool_calls\": 0}\nINFO machina.audit: {\"timestamp\": 1791945796.7085361, \"event\": \"llm_call_complete\", \"provider\": \"deepseek\", \"model\": \"deepseek-flash\", \"prompt_tokens\": 496, \"completion_tokens\": 48, \"total_tokens\": 544, \"tool_calls\": 0}\nDEBUG machina.gateway.server: → shutdown (id=3)\nINFO machina.gateway.server: Gateway shutdown requested\nDEBUG machina.gateway.server: ← shutdown ok (id=3)\n"
+        },
+        "revoked_grants": 1,
+        "revoke_ok": true
+      },
+      "notes": [
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-jfhequza",
+        "budget: 720s wall-clock (bounded steps sum)"
+      ]
+    },
+    {
+      "journey": "j7",
+      "title": "turn-parity (SSE turn -> stdio gateway turn -> SSE turn; frames, transcript, claims)",
+      "status": "PASS",
+      "reason": "",
+      "started_at": "2026-10-14T02:43:18Z",
+      "finished_at": "2026-10-14T02:43:29Z",
+      "duration_seconds": 10.545,
+      "commands": [
+        "MACHINA_API_KEY=<redacted> /Users/shadow/machina/.venv/bin/python -m machina.api --host 127.0.0.1 --port 63226",
+        "POST http://127.0.0.1:63226/api/v1/sessions (provider=not-a-provider, X-API-Key set)",
+        "POST http://127.0.0.1:63226/api/v1/sessions (X-API-Key set, provider=deepseek)",
+        "POST http://127.0.0.1:63226/api/v1/sessions/a9a94583-f9f4-4d60-879d-cc87354815f3/prompt (SSE, X-API-Key set)",
+        "MACHINA_GATEWAY_TOKEN=<redacted> /Users/shadow/machina/.venv/bin/python -m machina.gateway"
+      ],
+      "checks": [
+        {
+          "name": "invalid_provider_rejected",
+          "ok": true,
+          "expected": "unknown provider is rejected with 400 (PROVIDERS facade reachable from the API)",
+          "observed": {
+            "status": 400,
+            "body_excerpt": "{\"detail\": \"unknown provider: not-a-provider\"}"
+          }
+        },
+        {
+          "name": "session_created_via_http",
+          "ok": true,
+          "expected": "real HTTP session create returns a session id",
+          "observed": {
+            "status": 200,
+            "session_id": "a9a94583-f9f4-4d60-879d-cc87354815f3"
+          }
+        },
+        {
+          "name": "session_provider_roundtrip",
+          "ok": true,
+          "expected": "created session stores the configured provider",
+          "observed": "deepseek"
+        },
+        {
+          "name": "sse_turn_a_stream",
+          "ok": true,
+          "expected": "SSE turn completes with [DONE]",
+          "observed": {
+            "status": 200,
+            "done_seen": true,
+            "error": ""
+          }
+        },
+        {
+          "name": "sse_turn_a_text",
+          "ok": true,
+          "expected": "SSE streamed text contains 'PARITY4129A'",
+          "observed": "PARITY4129APARITY4129A"
+        },
+        {
+          "name": "gateway_initialize",
+          "ok": true,
+          "expected": "gateway initialize returns a result",
+          "observed": {
+            "error": null
+          }
+        },
+        {
+          "name": "gateway_turn_accepted_after_sse",
+          "ok": true,
+          "expected": "gateway prompt.submit accepted on the SSE-created session (cross-process claim release)",
+          "observed": {
+            "result": {
+              "turnId": "905cae4fb483"
+            },
+            "error": null
+          }
+        },
+        {
+          "name": "gateway_message_complete",
+          "ok": true,
+          "expected": "gateway emits message.complete carrying 'PARITY4129B'",
+          "observed": {
+            "text_excerpt": "PARITY4129B",
+            "counts": {
+              "message.start": 1,
+              "usage": 1,
+              "growth.status": 1,
+              "message.delta": 1,
+              "message.complete": 1
+            }
+          }
+        },
+        {
+          "name": "gateway_delta_stream",
+          "ok": true,
+          "expected": "gateway streamed >=1 message.delta",
+          "observed": {
+            "message.start": 1,
+            "usage": 1,
+            "growth.status": 1,
+            "message.delta": 1,
+            "message.complete": 1
+          }
+        },
+        {
+          "name": "gateway_no_error_event",
+          "ok": true,
+          "expected": "no error event frames on the gateway turn",
+          "observed": {
+            "message.start": 1,
+            "usage": 1,
+            "growth.status": 1,
+            "message.delta": 1,
+            "message.complete": 1
+          }
+        },
+        {
+          "name": "gateway_claim_released",
+          "ok": true,
+          "expected": "sessions.claim_owner is NULL after message.complete",
+          "observed": {
+            "claim": [
+              {
+                "claim_owner": null,
+                "claim_kind": null
+              }
+            ]
+          }
+        },
+        {
+          "name": "sse_turn_c_after_gateway",
+          "ok": true,
+          "expected": "SSE accepts a fresh turn on the gateway-touched session (claim reacquired)",
+          "observed": {
+            "status": 200,
+            "done_seen": true,
+            "error": ""
+          }
+        },
+        {
+          "name": "transcript_user_messages",
+          "ok": true,
+          "expected": "3 user_message rows persisted with each unique turn token",
+          "observed": {
+            "ok": true,
+            "user_message_count": 3,
+            "assistant_message_count": 3,
+            "user_tokens": {
+              "PARITY4129A": true,
+              "PARITY4129B": true,
+              "PARITY4129C": true
+            }
+          }
+        },
+        {
+          "name": "transcript_assistant_messages",
+          "ok": true,
+          "expected": ">=3 assistant_message rows persisted across both transports",
+          "observed": {
+            "assistant_message_count": 3
+          }
+        }
+      ],
+      "observed": {
+        "server": {
+          "port": 63226,
+          "attempt": 1,
+          "ready": true,
+          "waited_seconds": 1.03,
+          "last_status": 200
+        },
+        "configured_route": {
+          "provider": "deepseek",
+          "model": "deepseek-chat"
+        },
+        "session_id": "a9a94583-f9f4-4d60-879d-cc87354815f3",
+        "tokens": {
+          "a": "PARITY4129A",
+          "b": "PARITY4129B",
+          "c": "PARITY4129C"
+        },
+        "sse_turn_a": {
+          "status": 200,
+          "media_type": "text/event-stream; charset=utf-8",
+          "done_seen": true,
+          "frames_read": 5,
+          "frame_type_counts": {
+            "turn.started": 1,
+            "token_usage": 1,
+            "text": 1,
+            "error": 1,
+            "done": 1
+          },
+          "wall_seconds": 2.437,
+          "error": "",
+          "text_excerpt": "PARITY4129A",
+          "done_content_excerpt": "PARITY4129A"
+        },
+        "gateway_turn_id": "905cae4fb483",
+        "gateway_event_type_counts": {
+          "message.start": 1,
+          "usage": 1,
+          "growth.status": 1,
+          "message.delta": 1,
+          "message.complete": 1
+        },
+        "gateway_claim": {
+          "results": {
+            "claim": [
+              {
+                "claim_owner": null,
+                "claim_kind": null
+              }
+            ]
+          },
+          "waited_seconds": 0.296
+        },
+        "sse_turn_c": {
+          "status": 200,
+          "media_type": "text/event-stream; charset=utf-8",
+          "done_seen": true,
+          "frames_read": 5,
+          "frame_type_counts": {
+            "turn.started": 1,
+            "token_usage": 1,
+            "text": 1,
+            "error": 1,
+            "done": 1
+          },
+          "wall_seconds": 2.624,
+          "error": "",
+          "text_excerpt": "PARITY4129C",
+          "done_content_excerpt": "PARITY4129C"
+        },
+        "transcript": {
+          "ok": true,
+          "user_message_count": 3,
+          "assistant_message_count": 3,
+          "user_tokens": {
+            "PARITY4129A": true,
+            "PARITY4129B": true,
+            "PARITY4129C": true
+          }
+        },
+        "gateway_stop": {
+          "exit_code": 0,
+          "stderr_excerpt": "losing_owned_clients\nDEBUG machina.gateway.server: Turn 905cae4fb483 stage: releasing_ownership\nDEBUG machina.gateway.server: Turn 905cae4fb483 stage: answer_complete\nDEBUG machina.gateway.server: Turn 905cae4fb483 stage: compaction_maintenance\nDEBUG machina.gateway.server: → shutdown (id=3)\nINFO machina.gateway.server: Gateway shutdown requested\nDEBUG machina.gateway.server: ← shutdown ok (id=3)\n"
+        },
+        "server_stop": {
+          "exit_code": -15,
+          "stderr_excerpt": "tamp\": 1791945808.311431, \"event\": \"llm_call_complete\", \"provider\": \"deepseek\", \"model\": \"deepseek-flash\", \"prompt_tokens\": 210, \"completion_tokens\": 1, \"total_tokens\": 211, \"tool_calls\": 0}\nINFO:     Shutting down\nINFO:     Waiting for application shutdown.\nboundary failed: scheduler.stop error_type=CancelledError\nINFO:     Application shutdown complete.\nINFO:     Finished server process [33052]\n"
+        },
+        "revoked_grants": 0,
+        "revoke_ok": true
+      },
+      "notes": [
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-jfhequza",
+        "budget: 600s wall-clock (bounded steps sum)"
+      ]
+    },
+    {
+      "journey": "j8",
+      "title": "provider-facade (config route -> real call via usage_store -> llm_usage row + status)",
+      "status": "PASS",
+      "reason": "",
+      "started_at": "2026-10-14T02:43:29Z",
+      "finished_at": "2026-10-14T02:43:31Z",
+      "duration_seconds": 2.649,
+      "commands": [
+        "/Users/shadow/machina/.venv/bin/python -c \"<get_provider + usage_store.complete_call>\" session=e9d4bc86-89ec-4015-b959-1f410a39f7b1",
+        "cd /Users/shadow/machina && machina status"
+      ],
+      "checks": [
+        {
+          "name": "provider_call_ok",
+          "ok": true,
+          "expected": "real configured provider completes through usage_store.complete_call",
+          "observed": {
+            "ok": true,
+            "error": ""
+          }
+        },
+        {
+          "name": "provider_facade_consistent",
+          "ok": true,
+          "expected": "machina.core.provider.__all__ exports intact; PROVIDERS == PROVIDER_SPECS + specials",
+          "observed": {
+            "facade_missing": [],
+            "consistency": true
+          }
+        },
+        {
+          "name": "provider_capability_ready",
+          "ok": true,
+          "expected": "runtime _detect_providers reports the selected provider ready",
+          "observed": {
+            "chat_provider": "ready",
+            "selected": "deepseek",
+            "expected_key_env": "DEEPSEEK_API_KEY"
+          }
+        },
+        {
+          "name": "provider_resolved",
+          "ok": true,
+          "expected": "get_provider returns an LLMProvider bound to the configured model 'deepseek-chat'",
+          "observed": {
+            "provider_is_llm": true,
+            "provider_model": "deepseek-chat"
+          }
+        },
+        {
+          "name": "reply_fixture",
+          "ok": true,
+          "expected": "completion content contains 'PROV6512'",
+          "observed": "PROV6512"
+        },
+        {
+          "name": "usage_known",
+          "ok": true,
+          "expected": "provider returned positive total_tokens",
+          "observed": 16
+        },
+        {
+          "name": "llm_usage_row_complete",
+          "ok": true,
+          "expected": "durable llm_usage row is complete",
+          "observed": {
+            "status": "complete",
+            "provider": "direct",
+            "model": "deepseek-flash",
+            "prompt_tokens": 12,
+            "completion_tokens": 4,
+            "accounted_tokens": 16
+          }
+        },
+        {
+          "name": "llm_usage_known_tokens",
+          "ok": true,
+          "expected": "llm_usage row carries non-null prompt/completion tokens and accounted tokens",
+          "observed": {
+            "status": "complete",
+            "provider": "direct",
+            "model": "deepseek-flash",
+            "prompt_tokens": 12,
+            "completion_tokens": 4,
+            "accounted_tokens": 16
+          }
+        },
+        {
+          "name": "llm_usage_model",
+          "ok": true,
+          "expected": "llm_usage.model records the response-reported (served) model",
+          "observed": {
+            "row_model": "deepseek-flash",
+            "response_model": "deepseek-flash"
+          }
+        },
+        {
+          "name": "cli_status_exit_zero",
+          "ok": true,
+          "expected": "machina status exits 0",
+          "observed": {
+            "exit_code": 0,
+            "timed_out": false
+          }
+        },
+        {
+          "name": "cli_status_chat_provider_line",
+          "ok": true,
+          "expected": "status output includes the 'Chat provider' capability line",
+          "observed": "mory retrieval: dense+sparse\n  Memory extraction: ready\n  Document RAG: ready; 9 indexed documents\n  Reranker: passthrough\n  Automatic compaction: enabled\n  Sandbox: unknown\n  Jobs awaiting approval: 0\n  Research training: offline, not part of chat runtime\n\nRun `machina` to open the interactive UI.\n"
+        }
+      ],
+      "observed": {
+        "configured_route": {
+          "provider": "deepseek",
+          "model": "deepseek-chat"
+        },
+        "session_id": "e9d4bc86-89ec-4015-b959-1f410a39f7b1",
+        "fixture_token": "PROV6512",
+        "provider_call": {
+          "exit_code": 0,
+          "selected": "deepseek",
+          "model": "deepseek-chat",
+          "chat_provider": "ready",
+          "provider_class": "DirectProvider",
+          "contains_token": true,
+          "total_tokens": 16,
+          "error": ""
+        },
+        "llm_usage_row": {
+          "status": "complete",
+          "provider": "direct",
+          "model": "deepseek-flash",
+          "prompt_tokens": 12,
+          "completion_tokens": 4,
+          "accounted_tokens": 16
+        },
+        "cli_status_excerpt": "b_research\n  OpenRouter API key: set\n  Mode: workspace | Backend: host\n  Chat provider: unknown\n  Memory retrieval: dense+sparse\n  Memory extraction: ready\n  Document RAG: ready; 9 indexed documents\n  Reranker: passthrough\n  Automatic compaction: enabled\n  Sandbox: unknown\n  Jobs awaiting approval: 0\n  Research training: offline, not part of chat runtime\n\nRun `machina` to open the interactive UI.\n",
+        "revoked_grants": 1,
+        "revoke_ok": true
+      },
+      "notes": [
+        "scratch: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-e2e-gate-jfhequza",
+        "budget: 300s wall-clock (bounded steps sum)"
+      ]
+    }
+  ],
+  "summary": {
+    "passed": 8,
+    "failed": 0,
+    "skipped": 0,
+    "total": 8
+  }
+}
