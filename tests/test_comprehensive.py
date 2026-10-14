@@ -1059,13 +1059,6 @@ class TestContextManagerMocked:
             tokens = await context_manager.get_token_usage(uuid.uuid4())
             assert tokens == 150
 
-    async def test_mark_accessed(self):
-        """Test marking chunk as accessed."""
-        with patch("machina.core.context.db") as mock_db:
-            mock_db.execute = AsyncMock(return_value="UPDATE 1")
-            await context_manager.mark_accessed(uuid.uuid4())
-            mock_db.execute.assert_called_once()
-
 
 # ============================================================================
 # 5. CLI Tests
@@ -1135,7 +1128,10 @@ class TestCLI:
     def test_sessions_command_no_db(self):
         """Test sessions command without database."""
         runner = CliRunner()
-        with patch("machina.cli.db") as mock_db, patch("machina.core.session.db") as mock_session_db:
+        with (
+            patch("machina.cli.db") as mock_db,
+            patch("machina.core.session.db") as mock_session_db,
+        ):
             mock_db.connect = AsyncMock()
             mock_db.close = AsyncMock()
             mock_session_db.fetch = AsyncMock(return_value=[])
@@ -1481,9 +1477,7 @@ class TestReActAgent:
             usage={"total_tokens": 5},
             tool_calls=[],
         )
-        mock_provider.complete = AsyncMock(
-            side_effect=[tool_call_response] * 12 + [final_response]
-        )
+        mock_provider.complete = AsyncMock(side_effect=[tool_call_response] * 12 + [final_response])
 
         with patch("machina.core.agent.session_manager") as mock_sm:
             mock_sm.get = AsyncMock(return_value=mock_session)

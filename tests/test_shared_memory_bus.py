@@ -10,8 +10,8 @@ import pytest
 from machina.db.connection import Database
 from machina.memory.shared_bus import SharedMemoryBus
 from machina.memory.store import MemoryStore
-from machina.tools import registry
 from machina.tools.agents import current_agent_id, current_session_id
+from machina.tools.base import registry
 
 
 async def test_delivery_is_scoped_idempotent_and_rejects_tampering(db_pool, monkeypatch):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -186,55 +186,6 @@ class TestReadFileSizeLimit:
 
 
 # ===========================================================================
-# Fix 4: httpx.AsyncClient never closed — wire into container.stop()
-# ===========================================================================
-
-
-class TestAsyncClientClosedOnContainerStop:
-    """Container.stop() should close httpx.AsyncClient instances."""
-
-    async def test_container_stop_closes_embedder(self):
-        """Container.stop() should call close() on the RAG pipeline's embedder."""
-        from types import SimpleNamespace
-
-        from machina.core.container import Container
-
-        container = Container.testing()
-        container._started = True  # Simulate started state
-
-        # Create a mock embedder with close()
-        mock_embedder = SimpleNamespace(close=AsyncMock())
-
-        # Create a mock RAG pipeline with the embedder
-        mock_pipeline = SimpleNamespace(_embedder=mock_embedder)
-
-        container._rag_pipeline = mock_pipeline
-
-        await container.stop()
-
-        mock_embedder.close.assert_awaited_once()
-
-    async def test_container_stop_closes_reranker(self):
-        """Container.stop() should call close() on the RAG pipeline's reranker."""
-        from types import SimpleNamespace
-
-        from machina.core.container import Container
-
-        container = Container.testing()
-        container._started = True  # Simulate started state
-
-        mock_reranker = SimpleNamespace(close=AsyncMock())
-
-        mock_pipeline = SimpleNamespace(_reranker=mock_reranker)
-
-        container._rag_pipeline = mock_pipeline
-
-        await container.stop()
-
-        mock_reranker.close.assert_awaited_once()
-
-
-# ===========================================================================
 # Fix 5: SkillParser false positives on format tokens
 # ===========================================================================
 
@@ -329,33 +280,6 @@ class TestMatchTriggersWordBoundary:
         }
         matches = registry.match_triggers("cat is here")
         assert len(matches) == 1
-
-
-# ===========================================================================
-# Fix 8: Container should wire usage_store
-# ===========================================================================
-
-
-class TestContainerUsageStore:
-    """Container should expose usage_store."""
-
-    def test_container_has_usage_store(self):
-        """Container should have a usage_store property."""
-        from machina.core.container import Container
-        from machina.core.usage import UsageStore
-
-        container = Container.testing()
-        assert hasattr(container, "usage_store")
-        assert isinstance(container.usage_store, UsageStore)
-
-    def test_container_production_has_usage_store(self):
-        """Container.production() should also wire usage_store."""
-        from machina.core.container import Container
-        from machina.core.usage import UsageStore
-
-        container = Container.production()
-        assert hasattr(container, "usage_store")
-        assert isinstance(container.usage_store, UsageStore)
 
 
 # ===========================================================================

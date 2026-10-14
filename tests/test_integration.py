@@ -990,32 +990,6 @@ class TestToolRegistryIntegration:
 
 
 # ===========================================================================
-# Container Integration Tests
-# ===========================================================================
-
-
-class TestContainerIntegration:
-    """Integration tests for the dependency injection container."""
-
-    async def test_container_testing_mode(self):
-        """Test container in testing mode."""
-        from machina.core.container import Container
-
-        container = Container.testing()
-        assert container._provider is None
-        assert container._started is False
-
-    async def test_container_production_mode(self):
-        """Test container in production mode."""
-        from machina.core.container import Container
-
-        container = Container.production()
-        assert container._db is not None
-        assert container._session_manager is not None
-        assert container._context_manager is not None
-
-
-# ===========================================================================
 # Real Database Tests (Skipped if PostgreSQL not available)
 # ===========================================================================
 

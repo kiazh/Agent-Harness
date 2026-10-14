@@ -338,6 +338,7 @@ class BaseReActAgent:
         Returns a list of (ContextChunk, score) tuples for prompt assembly.
         """
         if self.rag_pipeline is None:
+            # Test-observed diagnostic: last RAG retrieval mode (no production reader).
             self._last_rag_mode = getattr(self, "_last_rag_mode", "disabled")
             return []
 

@@ -1018,6 +1018,3 @@ class JobRunner:
             provider_override=provider,
             model_override=model,
         )
-
-
-job_runner = JobRunner()

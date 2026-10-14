@@ -747,32 +747,6 @@ class ContextManager:
             results.append((chunk, sim))
         return results
 
-    async def mark_accessed(self, chunk_id: uuid.UUID) -> None:
-        """Mark a chunk as accessed (updates accessed_at for observability;
-        eviction is FIFO by created_at, not LRU)."""
-        await db.execute(
-            "UPDATE context_chunks SET accessed_at = now() WHERE id = $1",
-            chunk_id,
-        )
-
-    async def replace_chunks(self, session_id: uuid.UUID, chunks: list[ContextChunk]) -> int:
-        """Atomically replace all chunks of a session with *chunks*.
-
-        Archives originals into context_archive before deletion (AH-009) so
-        replacement is reversible. Runs in a single transaction so a failure
-        can never leave the session with its context deleted, and preserves
-        each chunk's ``created_at`` so conversation order (and recency-based
-        retrieval) survive compression. Returns the number of chunks written.
-        """
-        # Fetch originals for archival (payload-exact).
-        originals = await self.get_all_chunks(session_id)
-        return await self.replace_chunks_by_ids(
-            session_id,
-            [c.id for c in originals],
-            chunks,
-            archive_reason="compressed",
-        )
-
     async def replace_chunks_by_ids(
         self,
         session_id: uuid.UUID,
@@ -783,10 +757,9 @@ class ContextManager:
     ) -> int:
         """Replace only *original_ids* with *chunks* (AH-008).
 
-        Unlike :meth:`replace_chunks` (delete-all), concurrent inserts with
-        IDs outside *original_ids* survive. Originals are archived
-        transactionally before deletion (AH-009); a failure rolls back
-        archive+delete+insert together so originals remain recoverable.
+        Concurrent inserts with IDs outside *original_ids* survive. Originals
+        are archived transactionally before deletion (AH-009); a failure rolls
+        back archive+delete+insert together so originals remain recoverable.
 
         AH-AUDIT-014: when *expected_owner* is given, the live mutation
         token is validated INSIDE the same transaction (owner + expiry on

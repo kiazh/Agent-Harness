@@ -1,9 +1,10 @@
-"""Context compression — rolling compaction and manual compression.
+"""Context compression — chunk compression with tool-pair preservation.
 
 Provides:
 - ContextCompressor: compresses older context chunks while preserving tool call/result pairs
-- RollingCompaction: monitors token usage and triggers compression when threshold exceeded
 - CompressionConfig: configurable threshold and target ratio
+
+Automatic compaction triggers live in machina.services.maybe_auto_compact.
 """
 
 from __future__ import annotations
@@ -32,7 +33,6 @@ __all__ = [
     "CompressionConfig",
     "CompressionResult",
     "ContextCompressor",
-    "RollingCompaction",
     "build_checkpoint",
     "effective_instruction",
     "extract_checkpoint",
@@ -343,21 +343,17 @@ class ContextCompressor:
         pairs = self._identify_tool_pairs(chunks)
         recent_idx = set(range(len(recent)))
         # Any old chunk paired with a recent chunk forces its mate to move.
-        # Conversely any recent chunk paired with an old chunk pulls the mate.
         to_preserve = set(recent_idx)
         changed = True
         while changed:
             changed = False
             for i, j in pairs.items():
+                # Exactly one side preserved means the pair straddles the
+                # boundary; pull both sides into the preserved set.
                 if (i in to_preserve) != (j in to_preserve):
-                    if i not in to_preserve or j not in to_preserve:
-                        if i not in to_preserve or j not in to_preserve:
-                            pass
-                    # Pull both sides into preserved set.
-                    if i not in to_preserve or j not in to_preserve:
-                        to_preserve.add(i)
-                        to_preserve.add(j)
-                        changed = True
+                    to_preserve.add(i)
+                    to_preserve.add(j)
+                    changed = True
         if len(to_preserve) == len(recent_idx):
             return recent, old
         # Rebuild preserving original newest-first order.
@@ -813,54 +809,3 @@ class ContextCompressor:
             return f"[Memory] {payload.get('content', '')}"
         else:
             return f"[{chunk_type}] {str(payload)[:200]}"
-
-
-class RollingCompaction:
-    """Monitors token usage and triggers compression when threshold is exceeded.
-
-    Used by the agent to automatically compress context when it grows too large.
-    """
-
-    def __init__(self, config: CompressionConfig | None = None) -> None:
-        self.config = config or CompressionConfig()
-        self._last_compression_tokens: int = 0
-        self._compression_count: int = 0
-
-    def should_compress(self, current_tokens: int, context_budget: int) -> bool:
-        """Check if compression should be triggered.
-
-        Args:
-            current_tokens: Current total token count for the session.
-            context_budget: The session's context budget.
-
-        Returns:
-            True if compression should be triggered.
-        """
-        if not self.config.enabled:
-            return False
-
-        threshold_tokens = int(context_budget * self.config.threshold)
-
-        # Trigger if we're over threshold and haven't recently compressed
-        if current_tokens >= threshold_tokens:
-            # Don't compress again until we've grown since last compression
-            growth_since_last = current_tokens - self._last_compression_tokens
-            if growth_since_last >= threshold_tokens * 0.2:  # At least 20% growth
-                return True
-
-        return False
-
-    def record_compression(self, tokens_after: int) -> None:
-        """Record that compression happened at this token count."""
-        self._last_compression_tokens = tokens_after
-        self._compression_count += 1
-
-    @property
-    def compression_count(self) -> int:
-        """Number of times compression has been triggered."""
-        return self._compression_count
-
-    def reset(self) -> None:
-        """Reset compaction state."""
-        self._last_compression_tokens = 0
-        self._compression_count = 0

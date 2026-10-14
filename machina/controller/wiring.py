@@ -140,6 +140,7 @@ def log_complexity(agent: Any, user_message: str) -> None:
         from machina.controller.complexity import score_complexity
 
         out = score_complexity(user_message)
+        # Test-observed diagnostic: last advisory complexity score (no production reader).
         agent._last_complexity = out
         logger.debug("s3 complexity level=%s score=%s", out.get("level"), out.get("score"))
     except Exception:

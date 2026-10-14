@@ -12,8 +12,6 @@ from machina.observability.diagnostics import record_failure
 __all__ = [
     "Session",
     "ContextChunk",
-    "ToolCall",
-    "ToolResult",
     "ToolDefinition",
     "LLMResponse",
     "StreamEvent",
@@ -59,27 +57,6 @@ class ContextChunk:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     accessed_at: datetime | None = None
     document_source: str | None = None
-
-
-@dataclass
-class ToolCall:
-    """A tool call from the LLM."""
-
-    id: str
-    type: str = "function"
-    function_name: str = ""
-    function_arguments: str = ""
-    arguments: dict = field(default_factory=dict)
-
-
-@dataclass
-class ToolResult:
-    """The result of executing a tool."""
-
-    tool_call_id: str
-    content: str
-    tool_name: str = ""
-    is_error: bool = False
 
 
 @dataclass

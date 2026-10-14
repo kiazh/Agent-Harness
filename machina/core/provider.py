@@ -268,8 +268,6 @@ def _quota_message(resp: httpx.Response, model: str) -> str:
     reset_at = _quota_reset_at(resp)
     when = ""
     if reset_at is not None:
-        import datetime
-
         local = datetime.datetime.fromtimestamp(reset_at).astimezone()
         when = f" Quota resets {local.strftime('%Y-%m-%d %H:%M %Z')}."
     return (

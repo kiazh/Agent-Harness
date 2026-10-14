@@ -1,4 +1,4 @@
-"""Tests for context compression — ContextCompressor, RollingCompaction, CompressionConfig."""
+"""Tests for context compression — ContextCompressor, CompressionConfig."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from machina.core.compression import (
     CompressionConfig,
     CompressionResult,
     ContextCompressor,
-    RollingCompaction,
 )
 from machina.core.models import ContextChunk, LLMResponse
 
@@ -283,75 +282,6 @@ class TestContextCompressor:
         result = compressor._truncate_chunk(chunk, 100)
         assert result is not None
         assert result.token_count <= 100
-
-
-# ---------------------------------------------------------------------------
-# RollingCompaction Tests
-# ---------------------------------------------------------------------------
-
-
-class TestRollingCompaction:
-    """Tests for RollingCompaction."""
-
-    def test_should_compress_disabled(self):
-        """Test that compression is not triggered when disabled."""
-        config = CompressionConfig(enabled=False)
-        compaction = RollingCompaction(config=config)
-        assert compaction.should_compress(10000, 8000) is False
-
-    def test_should_compress_over_threshold(self):
-        """Test compression triggers when over threshold."""
-        config = CompressionConfig(enabled=True, threshold=0.8)
-        compaction = RollingCompaction(config=config)
-        # 8000 * 0.8 = 6400, so 7000 should trigger
-        assert compaction.should_compress(7000, 8000) is True
-
-    def test_should_not_compress_under_threshold(self):
-        """Test compression doesn't trigger when under threshold."""
-        config = CompressionConfig(enabled=True, threshold=0.8)
-        compaction = RollingCompaction(config=config)
-        # 8000 * 0.8 = 6400, so 5000 should not trigger
-        assert compaction.should_compress(5000, 8000) is False
-
-    def test_should_not_compress_repeatedly(self):
-        """Test compression doesn't trigger repeatedly without growth."""
-        config = CompressionConfig(enabled=True, threshold=0.8)
-        compaction = RollingCompaction(config=config)
-        # First call should trigger
-        assert compaction.should_compress(7000, 8000) is True
-        # Record compression
-        compaction.record_compression(4000)
-        # Small growth (less than 20% of threshold) should not trigger
-        assert compaction.should_compress(4500, 8000) is False
-
-    def test_should_compress_after_growth(self):
-        """Test compression triggers again after sufficient growth."""
-        config = CompressionConfig(enabled=True, threshold=0.8)
-        compaction = RollingCompaction(config=config)
-        # First compression
-        assert compaction.should_compress(7000, 8000) is True
-        compaction.record_compression(4000)
-        # After significant growth, should trigger again
-        assert compaction.should_compress(7000, 8000) is True
-
-    def test_compression_count(self):
-        """Test compression count tracking."""
-        config = CompressionConfig(enabled=True, threshold=0.5)
-        compaction = RollingCompaction(config=config)
-        assert compaction.compression_count == 0
-        compaction.record_compression(1000)
-        assert compaction.compression_count == 1
-        compaction.record_compression(800)
-        assert compaction.compression_count == 2
-
-    def test_reset(self):
-        """Test resetting compaction state."""
-        config = CompressionConfig(enabled=True, threshold=0.5)
-        compaction = RollingCompaction(config=config)
-        compaction.record_compression(1000)
-        assert compaction.compression_count == 1
-        compaction.reset()
-        assert compaction.compression_count == 0
 
 
 # ---------------------------------------------------------------------------

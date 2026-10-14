@@ -16,7 +16,6 @@ import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
-from machina.core.agent import ReActAgent
 from machina.core.agent_def import AgentDef, agent_registry
 from machina.core.assembler import PromptAssembler, get_token_count, truncate_to_tokens
 from machina.core.background_tasks import join_agent_background_tasks
@@ -166,19 +165,6 @@ class Orchestrator:
                 except OSError:
                     pass
         return True, ""
-
-    def _build_agent(self, definition: AgentDef) -> ReActAgent:
-        from machina.core.agent_factory import definition_tool_cap
-        from machina.core.provider import get_provider
-
-        provider_name = definition.provider or config.get("provider")
-        model = definition.model or config.get("model")
-        return ReActAgent(
-            provider=get_provider(provider=provider_name, model=model),
-            agent_id=definition.name,
-            system_prompt=definition.system_prompt or None,
-            allowed_tools=definition_tool_cap(definition),
-        )
 
     async def delegate(
         self,

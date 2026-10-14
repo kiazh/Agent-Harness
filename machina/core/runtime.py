@@ -418,12 +418,24 @@ def _capabilities_from_report(report: dict[str, Any]) -> list[Capability]:
             "",
         )
     )
-    from machina.rag.reranker import IdentityReranker
+    # Reranker identity is chosen lazily per pipeline (AH-AUDIT-036); before
+    # any pipeline exists, key presence is the only honest signal. The exact
+    # identity is reported by services.status_summary once initialized.
+    cohere_configured = False
+    try:
+        from machina.core.config import config as _cfg
 
-    _ = IdentityReranker  # passthrough label; configured reranker detected per-pipeline
+        cohere_configured = bool(_cfg.get("cohere_api_key"))
+    except Exception:
+        cohere_configured = False
     caps.append(
         Capability(
-            "reranker", "available", "passthrough (IdentityReranker) unless Cohere key set", ""
+            "reranker",
+            "available",
+            "cohere key configured; selected on first RAG use"
+            if cohere_configured
+            else "passthrough (IdentityReranker); set COHERE_API_KEY to enable Cohere rerank",
+            "",
         )
     )
     caps.append(Capability("compaction", report.get("compaction_config", "enabled"), "", ""))

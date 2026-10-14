@@ -16,6 +16,7 @@ import logging
 import os
 import secrets
 import subprocess
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
@@ -139,12 +140,10 @@ def _git_branch() -> str:
 
 
 def _default_agent_factory(model: str, provider: str) -> StreamingAgent:
-    # Imported lazily: building a provider requires an API key, and importing
-    # the agent pulls in the whole tool registry.
-    # NOTE (AH-021/AH-022): the gateway no longer builds directly from global
-    # model/provider in _run_turn — it resolves the session's stored
-    # definition via build_agent_for_session. This factory remains for tests
-    # and backwards compatibility.
+    # Sentinel identity only: Gateway._run_turn branches on
+    # ``self._agent_factory is _default_agent_factory`` and builds through
+    # build_agent_for_session; this body is never invoked by the gateway.
+    # The lazy imports below remain for any direct/legacy caller.
     from machina.core.agent import ReActAgent
     from machina.core.provider import get_provider
 
@@ -254,9 +253,7 @@ class Gateway:
         Sanitized: no raw keys, prompts, tool payloads, or credentials.
         Records: stage name, timestamp, elapsed time, and safe metadata.
         """
-        import time as _time
-
-        now = _time.monotonic()
+        now = time.monotonic()
         existing = self._turn_stages.get(turn_id)
         if existing:
             existing["elapsed_ms"] = int((now - existing["started_at"]) * 1000)

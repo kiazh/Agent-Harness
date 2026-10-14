@@ -87,7 +87,7 @@ async def test_ecc_agents_are_in_registry_and_gateway_with_custom_directory(monk
 
 def test_upstream_tool_scopes_map_to_real_harness_tools_without_all_tool_fallback():
     import machina.tools  # noqa: F401
-    from machina.tools.registry import registry
+    from machina.tools.base import registry
 
     known = {definition.name for definition in registry.get_tool_definitions()}
     agents = [agent for agent in BUILTIN_AGENTS.values() if agent.source == "ecc"]

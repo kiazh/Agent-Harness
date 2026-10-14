@@ -12,8 +12,8 @@ import pytest
 from machina.core.context import ContextManager
 from machina.core.serialization import payload_to_msgpack
 from machina.core.session_recall import SessionRecall
-from machina.tools import registry
 from machina.tools.agents import current_agent_id, current_session_id
+from machina.tools.base import registry
 
 
 async def test_discovery_searches_live_and_archive_without_cross_agent_leak(db_pool, monkeypatch):

@@ -18,9 +18,7 @@ from machina.core.models import (
     LLMResponse,
     Session,
     StreamEvent,
-    ToolCall,
     ToolDefinition,
-    ToolResult,
 )
 
 __all__ = [
@@ -36,9 +34,7 @@ __all__ = [
     "LLMResponse",
     "Session",
     "StreamEvent",
-    "ToolCall",
     "ToolDefinition",
-    "ToolResult",
     "Config",
     "config",
 ]
