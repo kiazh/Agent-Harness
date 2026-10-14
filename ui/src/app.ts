@@ -174,6 +174,9 @@ export class App implements FeatureHost {
 	>();
 	private readonly dialogs: Array<{ handle: OverlayHandle; cancel: () => void }> = [];
 	private exiting = false;
+	/** Re-entrancy guard: a Down pressed while the subagent list is still
+	 *  being fetched must not stack a second picker (review round 4, F1). */
+	private agentMenuOpening = false;
 	private resolveExit: () => void = () => {};
 	private inputListenerDisposer: (() => void) | undefined;
     private imageDraft = new ImageDraft();
@@ -446,23 +449,31 @@ export class App implements FeatureHost {
 	 * no-op. Listing failures are reported quietly.
 	 */
 	private async openSubagentMenu(): Promise<void> {
+		if (this.agentMenuOpening || this.dialogs.length) return;
 		const current = this.current;
 		if (!current) return;
-		const running = new Map(this.familyRows().map((row) => [row.session.id, row.running]));
-		let family: SessionInfo[];
+		this.agentMenuOpening = true;
 		try {
-			family = await listFamilySessions(this, current);
-		} catch (error) {
-			this.transcript.addNotice(`Could not list agent sessions: ${message(error)}`, "error");
-			this.tui.requestRender();
-			return;
+			const running = new Map(this.familyRows().map((row) => [row.session.id, row.running]));
+			let family: SessionInfo[];
+			try {
+				family = await listFamilySessions(this, current);
+			} catch (error) {
+				this.transcript.addNotice(`Could not list agent sessions: ${message(error)}`, "error");
+				this.tui.requestRender();
+				return;
+			}
+			// The visible session may have changed while the list was fetched,
+			// and a dialog (e.g. help) may have opened: in either case the
+			// menu is no longer appropriate.
+			if (this.exiting || this.current?.id !== current.id || this.dialogs.length) return;
+			if (family.length <= 1) return;
+			const choice = await this.pick("Switch to an agent session", agentSessionItems(family, current, running));
+			if (!choice || choice.value === current.id) return;
+			await this.family.open(choice.value);
+		} finally {
+			this.agentMenuOpening = false;
 		}
-		// The visible session may have changed while the list was fetched.
-		if (this.exiting || this.current?.id !== current.id) return;
-		if (family.length <= 1) return;
-		const choice = await this.pick("Switch to an agent session", agentSessionItems(family, current, running));
-		if (!choice || choice.value === current.id) return;
-		await this.family.open(choice.value);
 	}
 
 	/** Bounded, best-effort family refresh (see family.ts). */

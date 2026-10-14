@@ -299,6 +299,22 @@ test("(d) Down on the empty composer opens the subagent menu with run state and 
 	assert.equal(app.session()?.id, CHILD.id, "selecting a row switches through session.resume");
 });
 
+test("(d2) a second Down during the listing does not stack a second picker", async (t) => {
+	const { app, tui, type } = await boot({ sessions: [MAIN, CHILD] });
+	t.after(() => app.exit());
+	await settle();
+
+	type("\x1b[B");
+	type("\x1b[B"); // second press inside the list-fetch window
+	await settle();
+	tui.renderNow(true);
+	const dialogs = (app as unknown as { dialogs: unknown[] }).dialogs;
+	assert.equal(dialogs.length, 1, "exactly one picker overlay");
+	assert.match(screenOf(tui), /Switch to an agent session/);
+	type("\x1b"); // cancel so the app can exit cleanly
+	await settle();
+});
+
 // ─── (e) Down fall-through guards ──────────────────────────────────────────
 
 test("(e) Down falls through with a draft, with a completion open, and with no subagents", async (t) => {

@@ -267,4 +267,3 @@ class LoopbackOAuthCallback:
             writer.close()
         finally:
             self._sockets -= 1
-
