@@ -148,7 +148,16 @@ _CORE_IMPORT_CEILINGS = {
     "rag": 15,
     "connectors": 0,
     "soulspec": 4,
+    # stdio shim stays import-light: the agent runtime is imported lazily per
+    # request, so its module-level core-import count is pinned at zero.
+    "mcp_server": 0,
 }
+
+# Deferred (function-level) import cap, single-sourced for the test and for
+# machina/research/benchmark.py's architecture section (round-2 review N6:
+# the hand-mirrored literal drifted once already). Moves only with the delta
+# table documented inside test_deferred_import_count_ratchet.
+DEFERRED_IMPORT_CAP = 682
 
 
 def test_module_level_core_imports_only_shrink():
@@ -193,10 +202,28 @@ def test_deferred_import_count_ratchet():
     #   MonkeyPatch. The machina-side imports — version, locomo, db — are at
     #   module level, matching research/workflow_benchmark.py.) Census
     #   675 -> 680, so cap 677 -> 680.
+    #   Auto-applied learning wave (measured on this worktree): median census
+    #   at 7b0f83f was 677. Deltas since:
+    #     +5  machina/mcp_server/ (landed commit a92c1e8, MCP shim lane):
+    #         server, config, DB, and tool schemas are imported lazily per
+    #         request so the stdio shim cannot pull the agent runtime at
+    #         startup. That lane landed without its own ratchet update; the
+    #         guard is tree-wide, so the +5 is counted here explicitly.
+    #     +1  skills/learning.py (this change): ``_audit`` binds audit_log
+    #         through a function-level core import so the skills module-level
+    #         machina.core ceiling stays at 4, and the binding resolves per
+    #         call so monkeypatching the provider audit module intercepts.
+    #     -1  slop-cleanup wave (landed ca6fc05): pipeline._finish_search and
+    #         env_file lost their function-level imports. Net verified by
+    #         re-measuring the merged tree on 2026-10-14: census == 682.
+    #   Census 677 -> 682, so cap 680 -> 682. Unreviewed growth beyond this
+    #   still fails by design; itemize any further movement here.
     # Procedure: this number may only move with a delta table like the above
     # in this comment; silent growth fails the suite by design.
     total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))
-    assert total <= 680, f"deferred (function-level) imports grew: {total} > 680"
+    assert total <= DEFERRED_IMPORT_CAP, (
+        f"deferred (function-level) imports grew: {total} > {DEFERRED_IMPORT_CAP}"
+    )
 
 
 # God-file ceilings. Ratchets down, never up, except with a reviewed delta

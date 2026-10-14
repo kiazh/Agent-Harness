@@ -1546,7 +1546,14 @@ class BaseReActAgent:
                 tool_calls=response.tool_calls,
             )
             if staged:
-                _notify_growth(session_id, "review_done", "staged a learning proposal")
+                if staged.get("autoApplied") and staged.get("status") == "approved":
+                    # Auto-apply publishes immediately; report it as applied
+                    # (with the skill name) rather than as a pending suggestion.
+                    _notify_growth(
+                        session_id, "review_done", f"applied learned skill {staged.get('name')}"
+                    )
+                else:
+                    _notify_growth(session_id, "review_done", "suggested a learning skill")
         except Exception as exc:
             logger.warning("Learning review failed for session %s: %s", session_id, exc)
 

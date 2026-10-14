@@ -105,14 +105,34 @@ async def test_review_notifies_only_when_staged(monkeypatch):
         monkeypatch.setattr(
             learning_module.learning_reviewer,
             "review_turn",
-            AsyncMock(return_value={"id": "r1"}),
+            AsyncMock(return_value={"id": "r1", "status": "pending", "autoApplied": False}),
         )
         await agent._review_learning(
             uuid.uuid4(),
             "did something reusable",
             AgentResponse(content="done " * 10, iterations=1),
         )
-        assert seen == [("review_done", "staged a learning proposal")]
+        assert seen == [("review_done", "suggested a learning skill")]
+        # Auto-applied rows report the published skill as applied, with its name.
+        seen.clear()
+        monkeypatch.setattr(
+            learning_module.learning_reviewer,
+            "review_turn",
+            AsyncMock(
+                return_value={
+                    "id": "r2",
+                    "status": "approved",
+                    "autoApplied": True,
+                    "name": "deploy-checks",
+                }
+            ),
+        )
+        await agent._review_learning(
+            uuid.uuid4(),
+            "did something reusable",
+            AgentResponse(content="done " * 10, iterations=1),
+        )
+        assert seen == [("review_done", "applied learned skill deploy-checks")]
     finally:
         remove_growth_listener(_record)
 

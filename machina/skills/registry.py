@@ -189,6 +189,24 @@ def default_skills_dir() -> Path:
     return candidate
 
 
+def default_learned_skills_dir() -> Path:
+    """Directory for agent-learned skills — runtime data, never package data.
+
+    Learned skills are user/agent-generated runtime state; defaulting them
+    into the checkout's ``skills/`` tree leaves untracked files in a dev repo.
+    ``MACHINA_LEARNED_SKILLS_DIR`` overrides the location; an explicit
+    ``MACHINA_SKILLS_DIR`` pins one root for everything, so learned skills stay
+    alongside it. Bundled, hub, and installed skills keep using
+    :func:`default_skills_dir`.
+    """
+    override = os.environ.get("MACHINA_LEARNED_SKILLS_DIR")
+    if override:
+        return Path(override)
+    if os.environ.get("MACHINA_SKILLS_DIR"):
+        return default_skills_dir()
+    return Path.home() / ".machina" / "skills"
+
+
 def default_hub_dir() -> Path:
     return Path(os.environ.get("MACHINA_SKILL_HUB_DIR") or _PROJECT_ROOT / ".skill-hub")
 
@@ -402,10 +420,24 @@ class SkillRegistry(SkillSource):
     narrow consumer-facing interface). Internals below are untouched.
     """
 
-    def __init__(self, skills_dir: str | Path | None = None) -> None:
+    def __init__(
+        self, skills_dir: str | Path | None = None, *, learned_dir: str | Path | None = None
+    ) -> None:
         self._include_ecc = skills_dir is None
         self._ecc_bundle = None
-        self.skills_dir = Path(skills_dir) if skills_dir is not None else default_skills_dir()
+        if skills_dir is None:
+            # Production layout: bundled/installed skills come from the repo
+            # (or wheel) tree, learned skills from the user data dir, so
+            # auto-applied learning never leaves untracked files in a checkout.
+            self.skills_dir = default_skills_dir()
+            self.learned_dir = (
+                Path(learned_dir) if learned_dir is not None else default_learned_skills_dir()
+            )
+        else:
+            # Explicit root: learned skills stay in the same tree. Tests pass
+            # tmp paths here and must never reach the real user data dir.
+            self.skills_dir = Path(skills_dir)
+            self.learned_dir = Path(learned_dir) if learned_dir is not None else self.skills_dir
         self._skills: dict[str, Skill] = {}
         self._telemetry_file = self.skills_dir / "telemetry.json"
         # ``load_all()`` is called on every skill tool call and by every CLI /
@@ -421,6 +453,27 @@ class SkillRegistry(SkillSource):
         self._telemetry_baseline: dict[str, tuple[int, int]] = {}
         self._telemetry_lock = threading.Lock()
 
+    def _skill_dirs(self) -> tuple[Path, ...]:
+        """Skill roots in scan order: learned first, then bundled/installed.
+
+        ``load_all`` only lets a later directory replace a non-``builtin-ecc``
+        entry, so the curated (checkout/package) tree wins a name collision
+        with learned content: bundling and installation are never shadowed by
+        what the agent learned.
+        """
+        dirs = [self.learned_dir]
+        if self.skills_dir != self.learned_dir:
+            dirs.append(self.skills_dir)
+        return tuple(dirs)
+
+    def skill_file_exists(self, name: str) -> bool:
+        """True when any skill root has a ``SKILL.md`` for *name*.
+
+        The learning reviewer uses this as a read-before-write guard: a path
+        that exists but fails to parse still blocks a same-named proposal.
+        """
+        return any((directory / name / "SKILL.md").exists() for directory in self._skill_dirs())
+
     def _invalidate(self) -> None:
         """Mark the parsed skill cache stale so the next load_all() re-reads."""
         self._signature_cache = None
@@ -432,18 +485,19 @@ class SkillRegistry(SkillSource):
         SKILL.md, or on telemetry.json, invalidates the cached parse.
         """
         entries: list[tuple[str, int, int]] = []
-        try:
-            children = sorted(self.skills_dir.iterdir())
-        except OSError:
-            children = []
-        for child in children:
-            if not child.is_dir() or _LEGACY_INSTALL_BUILD_RE.fullmatch(child.name):
-                continue
+        for directory in self._skill_dirs():
             try:
-                stat = (child / "SKILL.md").stat()
+                children = sorted(directory.iterdir())
             except OSError:
                 continue
-            entries.append((child.name, stat.st_mtime_ns, stat.st_size))
+            for child in children:
+                if not child.is_dir() or _LEGACY_INSTALL_BUILD_RE.fullmatch(child.name):
+                    continue
+                try:
+                    stat = (child / "SKILL.md").stat()
+                except OSError:
+                    continue
+                entries.append((child.name, stat.st_mtime_ns, stat.st_size))
         try:
             telemetry_stat = self._telemetry_file.stat()
             telemetry = (telemetry_stat.st_mtime_ns, telemetry_stat.st_size)
@@ -571,7 +625,7 @@ class SkillRegistry(SkillSource):
         self._telemetry_baseline.update(next_baseline)
 
     def load_all(self, *, refresh: bool = False) -> None:
-        """Load all skills from the skills directory (reload semantics, cached).
+        """Load all skills from the learned and curated skill directories (cached).
 
         A single malformed or rejected SKILL.md (e.g. it trips the
         prompt-injection filter) is skipped with a warning rather than
@@ -592,8 +646,10 @@ class SkillRegistry(SkillSource):
 
                 self._ecc_bundle = ECCBundle()
             self._skills.update((skill.name, skill) for skill in self._ecc_bundle.skills())
-        if self.skills_dir.exists():
-            for skill_dir in sorted(self.skills_dir.iterdir()):
+        for directory in self._skill_dirs():
+            if not directory.exists():
+                continue
+            for skill_dir in sorted(directory.iterdir()):
                 if skill_dir.is_dir() and not _LEGACY_INSTALL_BUILD_RE.fullmatch(skill_dir.name):
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists():
@@ -608,7 +664,7 @@ class SkillRegistry(SkillSource):
                             if skill.source_type == "builtin-ecc":
                                 skill.source_type = "local"
                             self._skills[skill.name] = skill
-            self._load_telemetry()
+        self._load_telemetry()
         self._signature_cache = signature
 
     def get(self, name: str) -> Skill | None:
@@ -736,7 +792,16 @@ class SkillRegistry(SkillSource):
 
         # Sanitize name for directory
         safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", name.lower())
-        skill_dir = self.skills_dir / safe_name
+        # Learned content is runtime data and goes to the learned root (user
+        # data dir in production); bundled/installed/hub content stays in the
+        # curated tree. The split makes a cross-root collision possible, so
+        # refuse one explicitly: a learned write must never shadow a curated
+        # skill (or be silently shadowed by it) across roots.
+        target_root = self.learned_dir if source_type == "learned" else self.skills_dir
+        for other_root in self._skill_dirs():
+            if other_root != target_root and (other_root / safe_name / "SKILL.md").exists():
+                raise ValueError(f"skill '{name}' already exists")
+        skill_dir = target_root / safe_name
         skill_dir.mkdir(parents=True, exist_ok=True)
 
         # Build SKILL.md content

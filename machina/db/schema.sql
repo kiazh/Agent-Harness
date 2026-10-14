@@ -464,14 +464,16 @@ CREATE TABLE IF NOT EXISTS shared_memory_deliveries (
 CREATE INDEX IF NOT EXISTS idx_shared_memory_deliveries_recipient
     ON shared_memory_deliveries(recipient_agent, created_at DESC);
 
--- Bounded post-turn learning. Only reviewed proposals can become skills.
--- Fingerprints avoid paying for and staging the same turn twice after retries.
+-- Bounded post-turn learning. Proposals that pass validation publish as
+-- enabled learned skills by default (auto-applied); pending rows remain the
+-- manual fallback, 'reverted' records an undone approval. Fingerprints avoid
+-- paying for and staging the same turn twice after retries.
 CREATE TABLE IF NOT EXISTS learning_reviews (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     agent_id TEXT NOT NULL,
     turn_hash TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('reviewing', 'none', 'pending', 'approved', 'rejected', 'error')),
+    status TEXT NOT NULL CHECK (status IN ('reviewing', 'none', 'pending', 'approved', 'rejected', 'reverted', 'error')),
     name TEXT,
     description TEXT,
     triggers JSONB NOT NULL DEFAULT '[]',
@@ -479,6 +481,7 @@ CREATE TABLE IF NOT EXISTS learning_reviews (
     reason TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     reviewed_at TIMESTAMPTZ,
+    auto_applied BOOLEAN NOT NULL DEFAULT FALSE,
     UNIQUE (session_id, turn_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_learning_reviews_agent
@@ -489,6 +492,16 @@ CREATE INDEX IF NOT EXISTS idx_learning_reviews_agent
 ALTER TABLE learning_reviews ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_learning_reviews_lease
     ON learning_reviews(status, lease_expires_at) WHERE status = 'reviewing';
+
+-- Auto-apply upgrade for existing databases: 'reverted' is a terminal
+-- post-approval outcome (post-hoc revert), and auto_applied records whether
+-- the approval path was the automatic publisher. Mirrors the additive
+-- constraint-replacement idiom used for permission_approvals below.
+ALTER TABLE learning_reviews ADD COLUMN IF NOT EXISTS auto_applied BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE learning_reviews DROP CONSTRAINT IF EXISTS learning_reviews_status_check;
+ALTER TABLE learning_reviews ADD CONSTRAINT learning_reviews_status_check CHECK (
+    status IN ('reviewing', 'none', 'pending', 'approved', 'rejected', 'reverted', 'error')
+);
 
 -- ─── Permissions (Phase 5: broker grants + approvals) ──────────────────────
 

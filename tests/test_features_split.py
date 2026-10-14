@@ -59,6 +59,7 @@ def test_all_feature_methods_accessible_after_split():
         "learning.list",
         "learning.approve",
         "learning.reject",
+        "learning.revert",
         "config.get",
         "secrets.list",
         "secrets.set",

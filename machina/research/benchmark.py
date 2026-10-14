@@ -318,7 +318,11 @@ def _prefix() -> dict:
 
 def _architecture() -> dict:
     _ensure_tests_importable()
-    from tests.test_architecture_layers import GOD_FILE_CEILINGS, _deferred_import_count
+    from tests.test_architecture_layers import (
+        DEFERRED_IMPORT_CAP,
+        GOD_FILE_CEILINGS,
+        _deferred_import_count,
+    )
 
     root = _REPO_ROOT / "machina"
     total_deferred = sum(_deferred_import_count(p) for p in root.rglob("*.py"))
@@ -331,7 +335,9 @@ def _architecture() -> dict:
         "files": len(files),
         "loc": total_loc,
         "deferred_imports": total_deferred,
-        "ratchet_cap": 680,
+        # Single-sourced from tests/test_architecture_layers.py (delta table
+        # lives there); no mirrored literal to drift.
+        "ratchet_cap": DEFERRED_IMPORT_CAP,
         "god_files": god,
     }
 

@@ -113,6 +113,16 @@ DEFAULTS: dict[str, Any] = {
     "persona_default_emotion": "trust",
     "learning_review_enabled": False,
     "learning_review_max_per_session": 3,
+    # Post-turn learning publishes its own bounded, source-tagged skills:
+    # auto-applied skills are enabled on creation and participate in normal
+    # trigger injection; there is no standing human approval gate. Post-hoc
+    # review + revert (machina/skills/learning.py) is the correction path, and
+    # a precision auto-disable flips the reviewer back to stage-only when
+    # auto-applied proposals turn bad.
+    "learning_review_auto_apply": True,
+    # Rolling 24h auto-apply cap per agent; counts only auto-applied reviews.
+    # 0 disables auto-apply (proposals are only staged for manual approval).
+    "learning_review_auto_apply_per_day": 5,
     "rag_enabled": True,
     "streaming": True,
     # Embedding backend for dense retrieval (RAG documents + memory).
@@ -306,6 +316,7 @@ def _check_int_bounds(key: str, val: int) -> None:
         "usage_agent_request_limit": (0, None),
         "compression_preserve_recent": (0, 100),
         "learning_review_max_per_session": (0, 100),
+        "learning_review_auto_apply_per_day": (0, 100),
         "eviction_max_tokens": (0, None),
     }
     if key in bounds:
@@ -360,6 +371,11 @@ class Config:
     persona_default_emotion: str = "trust"
     learning_review_enabled: bool = False
     learning_review_max_per_session: int = 3
+    # Auto-apply is the default: proposals publish themselves (no standing
+    # approval gate) within the documented caps; stage-only is the fallback.
+    learning_review_auto_apply: bool = True
+    # Rolling 24h auto-apply cap per agent; counts only auto-applied reviews.
+    learning_review_auto_apply_per_day: int = 5
     rag_enabled: bool = True
     streaming: bool = True
     # Embedding backend selection for dense retrieval (RAG + memory).

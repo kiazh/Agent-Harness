@@ -7,15 +7,16 @@ import { confirm, options, requireArgs, requireSession, type Command } from "./t
 
 export const skillsCommand: Command = {
 	name: "skills",
-	description: "Skills: list, show, learn, proposals, approve, reject, delete, curator",
-	argumentHint: "[list|show|learn|proposals|approve|reject|delete|curator]",
+	description: "Skills: list, show, learn, proposals, approve, reject, revert, delete, curator",
+	argumentHint: "[list|show|learn|proposals|approve|reject|revert|delete|curator]",
 	getArgumentCompletions: options([
 		["list", "All installed skills"],
 		["show", "Read a skill <name>"],
 		["learn", "Create a skill from <file|url|skill>"],
-		["proposals", "Review suggested skills"],
+		["proposals", "Review suggested and auto-applied skills"],
 		["approve", "Approve a suggested skill <id>"],
 		["reject", "Reject a suggested skill <id>"],
+		["revert", "Revert an approved or auto-applied skill <id>"],
 		["delete", "Remove a skill <name>"],
 		["curator", "Skill health report"],
 	]),
@@ -56,20 +57,37 @@ export const skillsCommand: Command = {
 				const { reviews } = await host.request<{ reviews: LearningReviewInfo[] }>("learning.list", {
 					sessionId: session.id, limit: 50,
 				});
-				const pending = reviews.filter((review) => review.status === "pending");
-				host.print(pending.length
-					? table(["ID", "Name", "Description"], pending.map((review) => [shortId(review.id), review.name ?? "—", review.description ?? "—"]), 70)
+				// Pending proposals await a decision; approved auto-applied rows
+				// stay visible (marked) so a post-hoc revert is possible.
+				const shown = reviews.filter(
+					(review) => review.status === "pending" || (review.status === "approved" && review.autoApplied),
+				);
+				host.print(shown.length
+					? table(
+							["ID", "Status", "Name", "Description"],
+							shown.map((review) => [
+								shortId(review.id),
+								review.autoApplied && review.status === "approved" ? "auto-applied" : review.status,
+								review.name ?? "—",
+								review.description ?? "—",
+							]),
+							70,
+						)
 					: "No learning proposals waiting for review.", "plain");
 				return;
 			}
 			case "approve":
-			case "reject": {
+			case "reject":
+			case "revert": {
 				const target = requireArgs(rest, `/skills ${sub} <id>`);
 				const session = requireSession(host);
 				const { reviews } = await host.request<{ reviews: LearningReviewInfo[] }>("learning.list", {
 					sessionId: session.id, limit: 100,
 				});
-				const id = resolvePrefix(target, reviews.filter((review) => review.status === "pending").map((review) => review.id), "learning proposal");
+				const candidates = sub === "revert"
+					? reviews.filter((review) => review.status === "approved")
+					: reviews.filter((review) => review.status === "pending");
+				const id = resolvePrefix(target, candidates.map((review) => review.id), "learning proposal");
 				const { review } = await host.request<{ review: LearningReviewInfo }>(`learning.${sub}`, { sessionId: session.id, id });
 				host.print(`Learning proposal ${shortId(id)} ${review.status}.`, "success");
 				return;
@@ -101,7 +119,7 @@ export const skillsCommand: Command = {
 				return;
 			}
 			default:
-				throw new Error(`Unknown /skills option "${sub}". Try: list, show, learn, proposals, approve, reject, delete, curator.`);
+				throw new Error(`Unknown /skills option "${sub}". Try: list, show, learn, proposals, approve, reject, revert, delete, curator.`);
 		}
 	},
 };

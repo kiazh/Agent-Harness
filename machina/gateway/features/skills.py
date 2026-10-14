@@ -122,3 +122,18 @@ async def learning_reject(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]
     except (LookupError, PermissionError):
         raise RpcError(NOT_FOUND, "learning proposal not found for this agent") from None
     return {"review": review}
+
+
+async def learning_revert(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
+    """Revert an approved (typically auto-applied) learning proposal."""
+    gw.require_db()
+    from machina.skills.learning import learning_reviewer
+
+    session = await gw.get_session(params)
+    try:
+        review = await learning_reviewer.revert(_uuid(params, "id"), agent_id=session.agent_id)
+    except (LookupError, PermissionError):
+        raise RpcError(NOT_FOUND, "learning proposal not found for this agent") from None
+    except (ValueError, FileExistsError, OSError) as exc:
+        raise RpcError(OPERATION_FAILED, str(exc)) from None
+    return {"review": review}

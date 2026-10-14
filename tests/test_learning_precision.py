@@ -1,13 +1,19 @@
 """Post-turn skill-learning proposals are measured for precision, not just staged.
 
-The reviewer in ``machina.skills.learning`` stages proposals into ``learning_reviews``
-with one of six statuses. This module measures how much of what it proposes is
-actually useful:
+The reviewer in ``machina.skills.learning`` auto-publishes validated proposals
+(or stages them when auto-apply is off/capped/suppressed) into
+``learning_reviews`` with one of seven statuses. This module measures how much
+of what it proposes is actually useful:
 
 * ``acceptance_rate`` — of the proposals *made*, what fraction were accepted.
 * ``precision``       — of the proposals a human *decided* on, the accepted share.
 * ``recall_proxy``    — of review attempts, the share that yielded a proposal.
 * ``usage_rate``      — of accepted proposals, the share later used (relevance).
+
+Auto-apply health is the same data viewed from the publish side: of the
+reviews the reviewer published itself, the share later reverted or rejected.
+Crossing ``AUTO_APPLY_SUPPRESS_MIN_SAMPLE`` with a rate above
+``AUTO_APPLY_SUPPRESS_BAD_RATE`` flips the reviewer to stage-only.
 
 Zero-denominator conventions: every ratio is ``None`` (not ``0.0``) when its
 denominator is empty, so "no data" is never confused with "zero precision".
@@ -15,14 +21,19 @@ denominator is empty, so "no data" is never confused with "zero precision".
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
 
+from machina.core.models import LLMResponse
 from machina.core.session import SessionManager
 from machina.skills.learning import (
+    AUTO_APPLY_SUPPRESS_MIN_SAMPLE,
     LearningReviewer,
     compute_accepted_usage_rate,
+    compute_auto_apply_revert_rate,
+    compute_auto_apply_suppressed,
     compute_learning_precision,
 )
 from machina.skills.registry import SkillRegistry
@@ -102,6 +113,54 @@ def test_usage_rate_over_accepted_skills():
     assert compute_accepted_usage_rate([None, ""], {}) is None
 
 
+# ─── Auto-apply health: revert rate and the bounded auto-disable ───────────
+
+
+def test_auto_apply_revert_rate_counts_only_bad_outcomes():
+    assert compute_auto_apply_revert_rate(["approved", "approved"]) == pytest.approx(0.0)
+    assert compute_auto_apply_revert_rate(
+        ["reverted", "rejected", "approved", "approved"]
+    ) == pytest.approx(0.5)
+    assert compute_auto_apply_revert_rate(["reverted"]) == pytest.approx(1.0)
+    # Nothing auto-applied -> undefined, not zero (zero-denominator convention).
+    assert compute_auto_apply_revert_rate([]) is None
+
+
+def test_auto_apply_suppression_needs_sample_and_rate():
+    # Below the sample floor even a fully bad history stays on (no signal).
+    below = ["reverted"] * (AUTO_APPLY_SUPPRESS_MIN_SAMPLE - 1)
+    assert compute_auto_apply_suppressed(below) is False
+    # At the floor, exactly 30% bad is not "above" the bar.
+    floor = ["reverted"] * 3 + ["approved"] * (AUTO_APPLY_SUPPRESS_MIN_SAMPLE - 3)
+    assert compute_auto_apply_suppressed(floor) is False
+    # Above the bar with enough sample suppresses.
+    above = ["reverted"] * 4 + ["approved"] * (AUTO_APPLY_SUPPRESS_MIN_SAMPLE - 4)
+    assert compute_auto_apply_suppressed(above) is True
+    # Nothing auto-applied -> not suppressed.
+    assert compute_auto_apply_suppressed([]) is False
+
+
+class ReviewProvider:
+    model = "test-reviewer"
+
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+    async def complete(self, **kwargs):
+        return LLMResponse(content=self.content, model=self.model, usage={"total_tokens": 30})
+
+
+def _review_candidate(name: str) -> str:
+    return json.dumps(
+        {
+            "name": name,
+            "description": "Auto-apply health test skill",
+            "triggers": ["autoapply"],
+            "content": "Check health and readiness before declaring the task complete.",
+        }
+    )
+
+
 # ─── Integration: reads real proposal records from the database ────────────
 
 
@@ -169,3 +228,70 @@ async def test_precision_reports_usage_rate_of_accepted_skills(db_pool, monkeypa
         assert report["usage_rate"] == pytest.approx(0.5)
     finally:
         await db_pool.execute("DELETE FROM sessions WHERE id = $1", session.id)
+
+
+# ─── Auto-disable: the precision check flips the reviewer to stage-only ────
+
+
+async def test_auto_apply_health_and_suppression_flip_to_stage_only(db_pool, monkeypatch, tmp_path):
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    agent_id = f"precision-{uuid.uuid4()}"
+    # Seeds live in their own session so the review session's per-session cap
+    # is not consumed by the auto-apply health fixture.
+    seed_session = await SessionManager().create(title="auto disable seeds", agent_id=agent_id)
+    session = await SessionManager().create(title="auto disable", agent_id=agent_id)
+    registry = SkillRegistry(tmp_path / "skills")
+    reviewer = LearningReviewer(registry=registry)
+    audits: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "machina.core.provider.audit.audit_log",
+        lambda event, **kwargs: audits.append((event, kwargs)),
+    )
+    provider = ReviewProvider(_review_candidate("suppressed-skill"))
+    try:
+        for index in range(AUTO_APPLY_SUPPRESS_MIN_SAMPLE):
+            await db_pool.execute(
+                "INSERT INTO learning_reviews (session_id, agent_id, turn_hash, status, auto_applied) "
+                "VALUES ($1, $2, $3, $4, TRUE)",
+                seed_session.id,
+                agent_id,
+                f"seed-{index}",
+                "reverted" if index < 4 else "approved",
+            )
+        health = await reviewer.auto_apply_health(agent_id)
+        assert health["auto_applied"] == AUTO_APPLY_SUPPRESS_MIN_SAMPLE
+        assert health["reverted_or_rejected"] == 4
+        assert health["revert_rate"] == pytest.approx(0.4)
+        assert health["suppressed"] is True
+
+        proposal = await reviewer.review_turn(
+            session.id,
+            agent_id,
+            "Document the deployment workflow and steps",
+            "First do health checks then inspect logs and verify readiness.",
+            provider,
+        )
+        assert proposal is not None and proposal["status"] == "pending"
+        assert proposal["autoApplied"] is False
+        assert registry.get("suppressed-skill") is None
+        assert [event for event, _ in audits] == ["learning_auto_apply_suppressed"]
+
+        # Opportunistic re-check: the flip persists and the audit stays one-time.
+        second = await reviewer.review_turn(
+            session.id,
+            agent_id,
+            "Document the second workflow and steps",
+            "First review readiness then publish and verify the deployment.",
+            provider,
+        )
+        assert second is not None and second["status"] == "pending"
+        assert len(audits) == 1
+
+        report = await reviewer.precision(agent_id)
+        assert report["auto_applied"] == AUTO_APPLY_SUPPRESS_MIN_SAMPLE
+        assert report["auto_apply_revert_rate"] == pytest.approx(0.4)
+        assert report["auto_apply_suppressed"] is True
+    finally:
+        await db_pool.execute("DELETE FROM sessions WHERE id = $1", session.id)
+        await db_pool.execute("DELETE FROM sessions WHERE id = $1", seed_session.id)

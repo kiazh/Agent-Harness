@@ -406,6 +406,7 @@ class TestSkills:
         from machina.skills.registry import skill_registry
 
         monkeypatch.setattr(skill_registry, "skills_dir", tmp_path / "skills")
+        monkeypatch.setattr(skill_registry, "learned_dir", tmp_path / "skills")
         monkeypatch.setattr(skill_registry, "_skills", {})
         source = tmp_path / "deploy-notes.md"
         source.write_text("# Deploying\nRun the migrations first.", encoding="utf-8")

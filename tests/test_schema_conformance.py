@@ -72,6 +72,53 @@ async def test_legacy_session_upgrade_is_idempotent_and_preserves_data(db_pool):
             )
 
 
+async def test_legacy_learning_reviews_upgrade_adds_auto_apply_and_reverted(db_pool):
+    """Existing installations gain auto_applied and the 'reverted' status.
+
+    The additive ALTERs in schema.sql must upgrade a pre-auto-apply
+    ``learning_reviews`` table in place: existing rows stay, the boolean
+    defaults off, 'reverted' becomes accepted, and unknown statuses stay
+    rejected by the replaced CHECK constraint.
+    """
+    async with isolated_schema(db_pool, initialize=False) as (_, database):
+        await database.execute("""CREATE TABLE sessions (
+            id uuid PRIMARY KEY, title text, agent_id text DEFAULT 'harness', state_msgpack bytea,
+            status text DEFAULT 'active', goal text, model text, provider text,
+            context_budget int DEFAULT 8000, created_at timestamptz DEFAULT now(),
+            last_activity timestamptz DEFAULT now())""")
+        await database.execute("""CREATE TABLE learning_reviews (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            session_id uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            agent_id text NOT NULL, turn_hash text NOT NULL,
+            status text NOT NULL CHECK (
+                status IN ('reviewing', 'none', 'pending', 'approved', 'rejected', 'error')),
+            name text, description text, triggers jsonb NOT NULL DEFAULT '[]',
+            content text, reason text NOT NULL DEFAULT '',
+            created_at timestamptz NOT NULL DEFAULT now(),
+            reviewed_at timestamptz, UNIQUE (session_id, turn_hash))""")
+        sid = uuid.uuid4()
+        await database.execute("INSERT INTO sessions(id, title) VALUES ($1, 'legacy')", sid)
+        legacy = await database.fetchval(
+            "INSERT INTO learning_reviews(session_id, agent_id, turn_hash, status) "
+            "VALUES ($1, 'harness', 'legacy-turn', 'approved') RETURNING id",
+            sid,
+        )
+        await database.initialize_schema()
+        await database.initialize_schema()
+        row = await database.fetchrow(
+            "SELECT status, auto_applied FROM learning_reviews WHERE id = $1", legacy
+        )
+        assert row["status"] == "approved"
+        assert row["auto_applied"] is False
+        await database.execute(
+            "UPDATE learning_reviews SET status = 'reverted' WHERE id = $1", legacy
+        )
+        with pytest.raises(asyncpg.CheckViolationError):
+            await database.execute(
+                "UPDATE learning_reviews SET status = 'nonsense' WHERE id = $1", legacy
+            )
+
+
 async def test_fresh_schema_fks_indexes_and_projections(db_pool):
     async with isolated_schema(db_pool) as (schema, database):
         await database.initialize_schema()
