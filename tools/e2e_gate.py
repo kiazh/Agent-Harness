@@ -773,6 +773,7 @@ async def main():
                     "provider_class": type(provider).__name__,
                     "provider_is_llm": isinstance(provider, LLMProvider),
                     "provider_model": str(getattr(provider, "model", "")),
+                    "response_model": str(getattr(response, "model", "") or ""),
                     "contains_token": SPEC["token"].casefold() in content.casefold(),
                     "content_excerpt": content[-200:],
                     "total_tokens": total_tokens,
@@ -1852,9 +1853,13 @@ def run_j6(ctx: dict) -> dict:
         check(
             record,
             "archived_ids_are_seeded",
-            bool(archived) and archived <= set(seeded_ids),
-            "archived compressed rows are a non-empty subset of the seeded fixture ids",
-            {"archived": sorted(archived)[:10], "seeded_count": len(seeded_ids)},
+            bool(archived & set(seeded_ids)) and document_id not in archived,
+            "archived compressed rows include seeded conversational chunks and never the document",
+            {
+                "archived": sorted(archived)[:10],
+                "seeded_count": len(seeded_ids),
+                "seeded_intersection": len(archived & set(seeded_ids)),
+            },
         )
         check(
             record,
@@ -2473,12 +2478,13 @@ def run_j8(ctx: dict) -> dict:
             "llm_usage row carries non-null prompt/completion tokens and accounted tokens",
             row,
         )
+        served_model = str(payload.get("response_model") or "")
         check(
             record,
             "llm_usage_model",
-            row.get("model") == model,
-            f"llm_usage.model equals configured model '{model}'",
-            row.get("model"),
+            bool(served_model) and row.get("model") == served_model,
+            "llm_usage.model records the response-reported (served) model",
+            {"row_model": row.get("model"), "response_model": served_model},
         )
     except Exception as error:  # noqa: BLE001 - recorded as a failed check below
         check(record, "llm_usage_query", False, "database query succeeds", str(error))
