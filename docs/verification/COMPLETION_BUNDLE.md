@@ -303,3 +303,24 @@ eviction floor covers conversations, `{}` extraction fails retryable).
 
 Consolidated tree: **3,531 passed, 0 failed, 1 skipped, 1 xfailed**;
 `ruff check` + `format --check` green across `machina/ tools/ tests/`.
+
+- **W6** (`56ec5d0`): the compression twins collapsed — `compress_session` is now
+  a thin mapping over `compress_session_with_status` (completed->result,
+  no_op/busy/stale->None, failed->re-raise the ORIGINAL exception via a private
+  `cause` field on CompressOutcome, repr-hidden). Ownership, bounded provider
+  close, end_mutation, and record_failure keys unchanged; AH-audit comments moved
+  to the survivor. 8 pins (busy/stale both kinds, original-exception identity for
+  persistence and claim failures, cause not leaked into repr). Acceptance: j6
+  gate PASS. Full backend 3,530 passed at its landing.
+- **W5** (`1fb85cf`): `machina/core/provider.py` (2,576 lines) split into a
+  13-module package + re-export facade. 41/41 class/function bodies AST-verified
+  byte-identical; `__all__` diff-verified byte-for-byte; the four transport
+  classes stay reachable (pre-split import surface). SSE terminal validation and
+  stream retry live once in transport.py; logger pinned to the original name so
+  caplog filters keep matching. Ratchet: the single god-file entry replaced by 14
+  measured per-file ceilings (shared `GOD_FILE_CEILINGS`, also fixing a stale pin
+  in `research/benchmark.py` that would have crashed on a directory), plus two new
+  guards (no submodule imports the facade; package total only falls). 47 test
+  mutation/read repoints moved to owner modules; deferred-import census unchanged
+  (672 <= 680). Verification: focused battery 334 passed; full backend 3,565
+  passed / 0 failed; j8 gate PASS; hatchling build + artifact check OK.
