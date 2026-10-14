@@ -348,57 +348,62 @@ class LearningReviewer:
         """Approve a pending proposal and publish its skill exactly once.
 
         Publication is staged and compensable: the skill is written before the
-        approval commit, and any failure or cancellation while committing
-        removes it again so a pending review never keeps a live skill. An
-        artifact that provably belongs to this same review (matching source
-        and staged payload) is adopted instead of refused, so an interrupted
-        attempt can be completed by retrying approval.
+        approval commit, and any failure or cancellation from the status write
+        through the transaction exit (a failing COMMIT included) removes it
+        again so a pending review never keeps a live skill. An artifact that
+        provably belongs to this same review (matching source and staged
+        payload) is adopted instead of refused, so an interrupted attempt can
+        be completed by retrying approval.
         """
-        async with db.acquire() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    "SELECT * FROM learning_reviews WHERE id = $1 FOR UPDATE", review_id
-                )
-                if row is None:
-                    raise LookupError("learning proposal not found")
-                if row["agent_id"] != agent_id:
-                    raise PermissionError("learning proposal belongs to a different agent")
-                if row["status"] != "pending":
-                    return self._serialize(row)
-                triggers = (
-                    json.loads(row["triggers"])
-                    if isinstance(row["triggers"], str)
-                    else (row["triggers"] or [])
-                )
-                source = f"learning-review:{review_id}"
-                self.registry.load_all()
-                staged = self._staged_artifact(row, triggers, source)
-                if staged is None:
-                    self.registry.create_skill(
-                        row["name"],
-                        row["description"],
-                        row["content"],
-                        triggers=triggers,
-                        source=source,
-                        source_type="learned",
+        source = f"learning-review:{review_id}"
+        name: str | None = None
+        try:
+            async with db.acquire() as conn:
+                async with conn.transaction():
+                    row = await conn.fetchrow(
+                        "SELECT * FROM learning_reviews WHERE id = $1 FOR UPDATE", review_id
                     )
-                elif not staged.enabled:
-                    # A crashed attempt left our artifact disabled; approval
-                    # must publish it enabled.
-                    self.registry.set_enabled(row["name"], True)
-                try:
+                    if row is None:
+                        raise LookupError("learning proposal not found")
+                    if row["agent_id"] != agent_id:
+                        raise PermissionError("learning proposal belongs to a different agent")
+                    if row["status"] != "pending":
+                        return self._serialize(row)
+                    triggers = (
+                        json.loads(row["triggers"])
+                        if isinstance(row["triggers"], str)
+                        else (row["triggers"] or [])
+                    )
+                    name = row["name"]
+                    self.registry.load_all()
+                    staged = self._staged_artifact(row, triggers, source)
+                    if staged is None:
+                        self.registry.create_skill(
+                            row["name"],
+                            row["description"],
+                            row["content"],
+                            triggers=triggers,
+                            source=source,
+                            source_type="learned",
+                        )
+                    elif not staged.enabled:
+                        # A crashed attempt left our artifact disabled; approval
+                        # must publish it enabled.
+                        self.registry.set_enabled(row["name"], True)
                     approved = await conn.fetchrow(
                         "UPDATE learning_reviews SET status = 'approved', reviewed_at = now() "
                         "WHERE id = $1 RETURNING *",
                         review_id,
                     )
-                except BaseException:
-                    # The review did not commit: drop this review's artifact so
-                    # it cannot stay enabled against a pending review or block
-                    # the retry that re-publishes it.
-                    self._discard_artifact(row["name"], source)
-                    raise
-                return self._serialize(approved)
+                    return self._serialize(approved)
+        except BaseException:
+            # The review did not commit: the UPDATE, the transaction exit or
+            # the COMMIT itself raised. Drop this review's artifact so it
+            # cannot stay enabled against a pending review or block the retry
+            # that re-publishes it.
+            if name is not None:
+                self._discard_artifact(name, source)
+            raise
 
     def _staged_artifact(self, row: Any, triggers: Any, source: str) -> Skill | None:
         """Return this review's already-published artifact, or None if absent.

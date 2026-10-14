@@ -611,13 +611,40 @@ def onnx_embedder_available() -> bool:
         return False
 
 
+#: Provider prefixes that mark an API model id (``openai/text-embedding-3-small``):
+#: the remainder names the model on that provider's API. Model-runtime
+#: publishers (``minishlab/``, ``BAAI/``, ``Qdrant/`` …) are deliberately not
+#: in this set — their slashed ids are local model names, not API ids.
+_API_PROVIDER_PREFIXES = frozenset(
+    {"openai", "openrouter", "together", "mistral", "groq", "deepseek", "xai", "anthropic"}
+)
+
+
+def _strip_api_provider(model: str) -> str:
+    """Return the API model name inside a provider-qualified id.
+
+    ``openai/text-embedding-3-small`` names the API model
+    ``text-embedding-3-small``; only a prefix naming a known API provider is
+    split, so local model ids such as ``minishlab/potion-base-8M`` stay whole.
+    """
+    prefix, separator, remainder = model.partition("/")
+    if separator and prefix.strip().lower() in _API_PROVIDER_PREFIXES:
+        return remainder
+    return model
+
+
 def _openai_api_model(model: str) -> bool:
     """Whether *model* is an OpenAI-API embedding id (R18).
 
     These ids cannot be served by the local runtimes: fastembed rejects
     them at load and model2vec cannot fetch them, so ``auto`` must keep an
-    existing API configuration on the API backend.
+    existing API configuration on the API backend. A provider-qualified id
+    (``openai/text-embedding-3-small``) names an API provider explicitly, so
+    it is an API model id regardless of the remainder's spelling.
     """
+    prefix, separator, _remainder = model.partition("/")
+    if separator and prefix.strip().lower() in _API_PROVIDER_PREFIXES:
+        return True
     return model in OpenAIEmbedder.MODEL_DIMENSIONS or model.startswith("text-embedding-")
 
 
@@ -697,7 +724,9 @@ def resolve_embedding_settings() -> EmbeddingSettings:
     (e.g. ``minishlab/potion-base-4M``) are not forwarded to the ONNX
     runtime, so a previously working model2vec/API configuration does not
     degrade to keyword-only. fastembed-supported ids (e.g.
-    ``minishlab/potion-base-8M``) still route to ONNX. Availability is an
+    ``minishlab/potion-base-8M``) still route to ONNX. Provider-qualified
+    API ids (``openai/text-embedding-3-small``) count as API ids and the
+    remainder is the model name sent to the API. Availability is an
     import spec check only — no model loads.
     """
     backend = (_config_value("embedding_backend", "auto") or "auto").strip().lower()
@@ -718,7 +747,7 @@ def resolve_embedding_settings() -> EmbeddingSettings:
             )
         return EmbeddingSettings(
             "openai",
-            model=model or OpenAIEmbedder.DEFAULT_MODEL,
+            model=_strip_api_provider(model) or OpenAIEmbedder.DEFAULT_MODEL,
             base_url=base_url or OpenAIEmbedder.DEFAULT_BASE_URL,
             backend=backend,
         )
@@ -746,7 +775,7 @@ def resolve_embedding_settings() -> EmbeddingSettings:
     if base_url:
         return EmbeddingSettings(
             "openai",
-            model=model or OpenAIEmbedder.DEFAULT_MODEL,
+            model=_strip_api_provider(model) or OpenAIEmbedder.DEFAULT_MODEL,
             base_url=base_url,
             backend=backend,
         )
@@ -759,7 +788,7 @@ def resolve_embedding_settings() -> EmbeddingSettings:
     if _config_value("openai_api_key") or _config_value("openrouter_api_key"):
         return EmbeddingSettings(
             "openai",
-            model=model or OpenAIEmbedder.DEFAULT_MODEL,
+            model=_strip_api_provider(model) or OpenAIEmbedder.DEFAULT_MODEL,
             base_url=OpenAIEmbedder.DEFAULT_BASE_URL,
             backend=backend,
         )

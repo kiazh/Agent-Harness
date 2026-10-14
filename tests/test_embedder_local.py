@@ -264,6 +264,88 @@ async def test_auto_considers_model_backend_compatibility(monkeypatch):
     assert "text-embedding-3-small" in settings.reason
 
 
+def test_provider_qualified_ids_are_recognized_as_api_models():
+    """Re-verification: ``openai/text-embedding-3-small`` is an API model id.
+
+    The provider prefix names the API provider and the remainder is the API
+    model id; no local runtime can serve the qualified form. Model-runtime
+    publishers (minishlab, BAAI) are not API providers and stay unqualified.
+    """
+    assert embedder_module._openai_api_model("openai/text-embedding-3-small") is True
+    assert embedder_module._openai_api_model("openai/text-embedding-3-large") is True
+    assert embedder_module._openai_api_model("together/mistral-embed") is True
+    assert embedder_module._openai_api_model("deepseek/deepseek-embedding") is True
+    assert embedder_module._openai_api_model("minishlab/potion-base-8M") is False
+    assert embedder_module._openai_api_model("BAAI/bge-small-en-v1.5") is False
+
+    assert embedder_module._model_fits_onnx("openai/text-embedding-3-small") is False
+    assert embedder_module._model_fits_local("openai/text-embedding-3-small") is False
+    assert embedder_module._model_fits_onnx("BAAI/bge-small-en-v1.5") is True
+
+
+async def test_auto_routes_provider_qualified_api_ids_to_the_api(monkeypatch):
+    """With fastembed installed, auto must not forward a provider-qualified
+    API id to ONNX (fastembed rejects it at load, degrading to keyword-only).
+    Credentials route it to the API backend with the remainder as the model;
+    without credentials the result is the honest ``none`` plus a reason, and
+    fastembed-supported ids keep ONNX."""
+    monkeypatch.setattr(
+        embedder_module, "_fastembed_supports_model", lambda model: False, raising=False
+    )
+
+    _configure(
+        monkeypatch,
+        backend="auto",
+        model="openai/text-embedding-3-small",
+        openai_key="sk-test",
+        onnx_available=True,
+    )
+    settings = resolve_embedding_settings()
+    assert (settings.kind, settings.model) == ("openai", "text-embedding-3-small")
+    embedder = build_embedder(settings)
+    assert isinstance(embedder, OpenAIEmbedder)
+    assert embedder.model_name == "text-embedding-3-small"
+    await embedder.close()
+
+    # No credentials and no compatible runtime: keyword-only with a reason.
+    _configure(
+        monkeypatch,
+        backend="auto",
+        model="openai/text-embedding-3-small",
+        onnx_available=True,
+        local_available=True,
+    )
+    settings = resolve_embedding_settings()
+    assert settings.kind == "none"
+    assert "openai/text-embedding-3-small" in settings.reason
+
+    # fastembed-supported model ids keep the ONNX runtime, provider-qualified
+    # publishers included.
+    monkeypatch.setattr(
+        embedder_module,
+        "_fastembed_supports_model",
+        lambda model: model == "minishlab/potion-base-8M",
+        raising=False,
+    )
+    _configure(
+        monkeypatch,
+        backend="auto",
+        model="minishlab/potion-base-8M",
+        onnx_available=True,
+    )
+    settings = resolve_embedding_settings()
+    assert (settings.kind, settings.model) == ("onnx", "minishlab/potion-base-8M")
+
+    _configure(
+        monkeypatch,
+        backend="auto",
+        model="BAAI/bge-small-en-v1.5",
+        onnx_available=True,
+    )
+    settings = resolve_embedding_settings()
+    assert (settings.kind, settings.model) == ("onnx", "BAAI/bge-small-en-v1.5")
+
+
 def test_fastembed_runtime_rejects_the_review_models():
     """The compatibility check tracks fastembed's real supported list: at
     0.9, potion-base-4M and text-embedding-3-small are rejected while

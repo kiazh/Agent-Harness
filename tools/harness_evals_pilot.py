@@ -260,6 +260,18 @@ def _parse_float(value: Any) -> float | None:
         return None
 
 
+def score_token_f1(locomo_module: Any, answer: str, gold: Any) -> float:
+    """Token F1 against the ORIGINAL gold value — never a pre-stringified one.
+
+    LoCoMo golds can be JSON numbers (e.g. ``2024.0``). The repo's canonical
+    scorer renders numeric golds with ``format(value, "g")`` ("2024");
+    stringifying first would produce "2024.0", whose punctuation stripping
+    mangles the year into "20240" and scores a correct "2024" answer as 0.0.
+    String golds pass through unchanged.
+    """
+    return float(locomo_module.token_f1(answer, gold))
+
+
 # ---------------------------------------------------------------------------
 # Retrieval (repo venv subprocess)
 # ---------------------------------------------------------------------------
@@ -504,7 +516,7 @@ async def score_question(
                 (score.metadata or {}).get("output_tokens") or 0 for score in scores
             ),
         }
-        result["token_f1"] = round(locomo_module.token_f1(answer, str(row["answer"])), 4)
+        result["token_f1"] = round(score_token_f1(locomo_module, answer, row["answer"]), 4)
         result["judge_raised"] = [
             name
             for name, score in result["scores"].items()
@@ -719,6 +731,16 @@ def run_self_check(*, live: bool, judge_model: str, api_key: str, base_url: str)
         print("[self-check] assert_test fail path raises AssertionError:", exc)
     else:
         raise SystemExit("[self-check] expected AssertionError did not fire")
+
+    # Regression pin: numeric LoCoMo golds must reach the repo scorer as
+    # numbers. The pilot previously stringified them, so answer "2024"
+    # against gold 2024.0 scored 0.0 instead of the canonical 1.0.
+    locomo_module = load_repo_locomo(DEFAULT_REPO)
+    numeric_f1 = score_token_f1(locomo_module, "2024", 2024.0)
+    string_f1 = score_token_f1(locomo_module, "Paris!", "paris")
+    assert numeric_f1 == 1.0, f"numeric gold 2024.0 vs answer '2024' scored {numeric_f1}"
+    assert string_f1 == 1.0, f"string gold 'paris' vs answer 'Paris!' scored {string_f1}"
+    print("[self-check] numeric gold 2024.0 + answer '2024' = 1.0; string gold unchanged")
 
     if live:
         from harness_evals.metrics.rag import FaithfulnessMetric

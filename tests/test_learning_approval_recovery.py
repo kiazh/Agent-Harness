@@ -63,6 +63,39 @@ class ApprovalDB:
         return dict(self.row)
 
 
+class CommitFailingDB(ApprovalDB):
+    """ApprovalDB whose transaction exit (COMMIT) fails.
+
+    asyncpg surfaces a failed COMMIT on the transaction context manager's
+    exit, after the UPDATE body already ran. The double applies the UPDATE
+    immediately, so rollback is modeled by restoring the pre-transaction row
+    and raising from ``__aexit__``.
+    """
+
+    def __init__(
+        self,
+        row: dict,
+        *,
+        fail_commits: int = 1,
+        error_factory=lambda: OSError("synthetic DB commit failure"),
+    ):
+        super().__init__(row)
+        self.fail_commits = fail_commits
+        self.error_factory = error_factory
+
+    @asynccontextmanager
+    async def transaction(self):
+        snapshot = (dict(self.row), self.commits)
+        yield
+        if self.fail_commits:
+            self.fail_commits -= 1
+            row, commits = snapshot
+            self.row.clear()
+            self.row.update(row)
+            self.commits = commits
+            raise self.error_factory()
+
+
 def _fresh_registry(tmp_path) -> SkillRegistry:
     registry = SkillRegistry(tmp_path / "skills")
     registry.load_all()
@@ -101,6 +134,47 @@ async def test_cancelled_commit_removes_the_staged_skill(monkeypatch, tmp_path):
     with pytest.raises(asyncio.CancelledError):
         await reviewer.approve(review_id, agent_id="harness")
 
+    assert _fresh_registry(tmp_path).list_skills() == []
+
+
+async def test_commit_failure_does_not_keep_a_live_skill_and_retry_completes(monkeypatch, tmp_path):
+    """Re-verification: compensation must also cover the transaction exit.
+
+    A COMMIT that raises after the UPDATE is outside the old try boundary, so
+    ``review-demo`` stayed enabled while the durable review was still pending.
+    """
+    review_id = uuid.uuid4()
+    database = CommitFailingDB(_row(review_id), fail_commits=1)
+    monkeypatch.setattr("machina.skills.learning.db", database)
+    reviewer = LearningReviewer(SkillRegistry(tmp_path / "skills"))
+
+    with pytest.raises(OSError, match="commit"):
+        await reviewer.approve(review_id, agent_id="harness")
+
+    # The commit never happened: the durable review is still pending, and no
+    # enabled skill may outlive the failed approval.
+    assert database.row["status"] == "pending"
+    assert _fresh_registry(tmp_path).list_skills() == []
+
+    approved = await reviewer.approve(review_id, agent_id="harness")
+    assert approved["status"] == "approved"
+    assert database.commits == 1
+    skills = _fresh_registry(tmp_path).list_skills()
+    assert [skill.name for skill in skills] == ["review-demo"]
+    assert skills[0].source == f"learning-review:{review_id}"
+    assert skills[0].enabled is True
+
+
+async def test_cancelled_commit_exit_removes_the_staged_skill(monkeypatch, tmp_path):
+    review_id = uuid.uuid4()
+    database = CommitFailingDB(_row(review_id), error_factory=asyncio.CancelledError)
+    monkeypatch.setattr("machina.skills.learning.db", database)
+    reviewer = LearningReviewer(SkillRegistry(tmp_path / "skills"))
+
+    with pytest.raises(asyncio.CancelledError):
+        await reviewer.approve(review_id, agent_id="harness")
+
+    assert database.row["status"] == "pending"
     assert _fresh_registry(tmp_path).list_skills() == []
 
 
