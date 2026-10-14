@@ -81,3 +81,22 @@ def test_rag_loader_rejects_private_files(tmp_path, name):
     with pytest.raises(ValidationError, match="private"):
         loader.load(name)
     assert loader.load_directory(".") == []
+
+
+async def test_search_files_skips_sensitive_results(monkeypatch, tmp_path):
+    """R01 (2026-10-14): every opened search result is checked against the
+    shared sensitive-path definition, not only the tool's narrower private
+    list, so `credentials`/`production.env` never leak through a scan."""
+    from machina.core.config import config
+    from machina.tools import builtins
+
+    monkeypatch.setattr(config, "workspace_root", str(tmp_path))
+    (tmp_path / "notes.txt").write_text("REVIEW_TOKEN=synthetic-note\n", encoding="utf-8")
+    (tmp_path / "production.env").write_text("REVIEW_TOKEN=synthetic-dotenv\n", encoding="utf-8")
+    (tmp_path / "credentials").write_text("REVIEW_TOKEN=synthetic-credential\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("REVIEW_TOKEN=synthetic-hidden\n", encoding="utf-8")
+
+    result = await builtins.search_files("REVIEW_TOKEN", ".")
+    assert "notes.txt:1: REVIEW_TOKEN=synthetic-note" in result
+    for leaked in ("synthetic-dotenv", "synthetic-credential", "synthetic-hidden"):
+        assert leaked not in result

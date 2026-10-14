@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from machina.core.config import config
@@ -140,42 +141,78 @@ def _call_mode() -> str:
     return execution_context("terminal").mode
 
 
-def _kill_tree(process: subprocess.Popen[str]) -> None:
-    """Terminate a whole process tree (AH-AUDIT-023).
+def _group_members(pgid: int | None, process: subprocess.Popen[str]) -> bool:
+    """True while the launcher or any of its session descendants remains.
+
+    R07: a command like ``(long-work) &`` exits immediately while its child
+    keeps running, so completion must be judged on the retained process
+    group, not on ``process.poll()`` alone. Reaps an exited launcher first
+    so only live descendants (plus not-yet-reaped group zombies) count.
+    """
+    if os.name == "nt" or pgid is None:
+        return process.poll() is None
+    process.poll()
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return process.returncode is None
+    return True
+
+
+def _kill_tree(process: subprocess.Popen[str], pgid: int | None = None) -> None:
+    """Terminate a whole process tree (AH-AUDIT-023, R07).
 
     Cancelling an asyncio await never stops a thread or child on its own:
-    ownership here is explicit. POSIX kills the process group (children
-    share it via start_new_session); Windows uses taskkill /T for the
-    tree. Best effort, never raises.
+    ownership here is explicit. POSIX kills the process group; the group id
+    is retained independently of the launcher (captured at spawn), so an
+    already-exited launcher cannot hide surviving descendants. Windows uses
+    taskkill /T while the launcher pid is live. Best effort, never raises.
     """
-    try:
-        if process.poll() is not None:
+    if os.name == "nt":
+        try:
+            if process.poll() is not None:
+                return
+        except Exception:
             return
-    except Exception:
-        return
-    try:
-        if os.name == "nt":
+        try:
             subprocess.run(
                 ["taskkill", "/F", "/T", "/PID", str(process.pid)],
                 timeout=10,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-        else:
-            import signal as _signal
-
+        except Exception:
             try:
-                os.killpg(os.getpgid(process.pid), _signal.SIGKILL)
-            except (ProcessLookupError, PermissionError, OSError):
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-    except Exception:
+                process.kill()
+            except OSError:
+                pass
+        return
+    group = pgid
+    if group is None:
         try:
-            process.kill()
+            derived = os.getpgid(process.pid)
         except OSError:
+            derived = None
+        # Never killpg an inherited group this process did not create.
+        group = derived if derived == process.pid else None
+    if group is not None:
+        import signal as _signal
+
+        try:
+            os.killpg(group, _signal.SIGKILL)
+            return
+        except ProcessLookupError:
+            return
+        except (PermissionError, OSError):
             pass
+    try:
+        process.kill()
+    except OSError:
+        pass
 
 
 def _stop_container(name: str) -> None:
@@ -224,16 +261,21 @@ def _run_bounded(
         env=_sanitized_env(),
         **popen_kwargs,
     ) as process:
+        # R07: the process-group identity is retained independently of the
+        # launcher so an exited leader cannot hide surviving descendants.
+        pgid: int | None = None if os.name == "nt" else process.pid
         if process_holder is not None:
             process_holder["process"] = process
+            process_holder["pgid"] = pgid
         expired = threading.Event()
 
         def stop_on_timeout() -> None:
-            if process.poll() is None:
-                expired.set()
-                _kill_tree(process)
-                if container_name:
-                    _stop_container(container_name)
+            if not _group_members(pgid, process):
+                return
+            expired.set()
+            _kill_tree(process, pgid)
+            if container_name:
+                _stop_container(container_name)
 
         timer = threading.Timer(timeout, stop_on_timeout)
         timer.daemon = True
@@ -263,15 +305,35 @@ def _run_bounded(
             reader_thread.start()
             reader_thread.join(timeout=timeout + 1)  # Give extra time for read to complete
 
-            if stop_event is not None and stop_event.is_set() and process.poll() is None:
-                _kill_tree(process)
+            def cancelled() -> bool:
+                return stop_event is not None and stop_event.is_set()
+
+            if cancelled():
+                _kill_tree(process, pgid)
                 if container_name:
                     _stop_container(container_name)
-            if truncated and process.poll() is None:
-                _kill_tree(process)
+            if truncated:
+                # Prolific output: stop the whole group, including
+                # descendants that outlived an already-exited launcher.
+                _kill_tree(process, pgid)
+                if container_name:
+                    _stop_container(container_name)
+            # R07 completion semantics: the launcher may exit while its
+            # descendants keep running (with or without the pipe). Never
+            # return while the group still has members; the deadline timer
+            # kills whatever is alive when the deadline expires.
+            while not expired.is_set() and not cancelled() and _group_members(pgid, process):
+                time.sleep(0.02)
+            if (expired.is_set() or cancelled() or truncated) and _group_members(pgid, process):
+                _kill_tree(process, pgid)
                 if container_name:
                     _stop_container(container_name)
             process.wait()
+            # Bounded retirement: a killed descendant must not be able to act
+            # on the workspace after this call returns.
+            retire_until = time.monotonic() + 2.0
+            while _group_members(pgid, process) and time.monotonic() < retire_until:
+                time.sleep(0.02)
         finally:
             timer.cancel()
 
@@ -459,7 +521,7 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
             stop.set()
             proc = holder.get("process")
             if proc is not None:
-                _kill_tree(proc)
+                _kill_tree(proc, holder.get("pgid"))
             if container_name:
                 await asyncio.to_thread(_stop_container, container_name)
             worker.join(timeout=10)

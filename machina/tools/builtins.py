@@ -19,6 +19,7 @@ import httpx
 from machina.core.config import config
 from machina.core.exceptions import ToolError, ValidationError
 from machina.observability.diagnostics import record_failure
+from machina.permissions.policy import sensitive_path
 from machina.tools.base import registry
 
 logger = logging.getLogger(__name__)
@@ -501,8 +502,13 @@ async def search_files(pattern: str, path: str = ".", file_glob: str | None = No
             if len(files) >= _SEARCH_MAX_FILES:
                 break
             try:
-                resolve_path(str(f))
+                resolved = resolve_path(str(f))
             except ValueError:
+                continue
+            # R01: every file a search opens is checked against the shared
+            # sensitive-path definition — the tool's narrower private list
+            # alone let `credentials`/`production.env` leak into results.
+            if sensitive_path(str(resolved)):
                 continue
             if not f.is_file():
                 continue

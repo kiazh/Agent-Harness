@@ -267,3 +267,73 @@ async def test_project_test_runner_executes_without_card(workspace):
         assert "pytest" in await terminal("python -m pytest --version")
     finally:
         clear_execution_context()
+
+
+# 2026-10-14 review R01: recursive searches used to return credential
+# material (visible `credentials`/`production.env`, hidden `.env` via
+# `grep -d recurse`) without credential_access approval.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rg REVIEW_TOKEN .",
+        "rg REVIEW_TOKEN",
+        "grep -d recurse REVIEW_TOKEN .",
+        "grep -drecurse REVIEW_TOKEN .",
+        "grep --directories=recurse REVIEW_TOKEN .",
+    ],
+)
+def test_recursive_search_commands_require_review(workspace, command):
+    request = build_request(tool="terminal", **action_for_tool("terminal", {"command": command}))
+    decision = decide(request)
+    assert decision.verdict == "pending", (command, decision.reason)
+    assert "opaque_execution_review" in decision.reason
+
+
+def test_single_file_search_reads_stay_routine(workspace):
+    (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+    for command in ("rg REVIEW_TOKEN README.md", "grep REVIEW_TOKEN README.md"):
+        request = build_request(
+            tool="terminal", **action_for_tool("terminal", {"command": command})
+        )
+        assert decide(request).verdict == "allowed", command
+
+
+def test_sensitive_search_operand_requires_credential_access(workspace):
+    request = build_request(
+        tool="terminal", **action_for_tool("terminal", {"command": "rg REVIEW_TOKEN credentials"})
+    )
+    decision = decide(request)
+    assert decision.verdict == "pending"
+    assert "credential_access" in decision.reason
+
+
+# 2026-10-14 review R02: `cp -R source/. target` overwrites
+# target/.git/config exactly like the direct write that already pauses.
+def test_recursive_copy_reaching_protected_descendants_requires_review(workspace):
+    source_git = workspace / "source" / ".git"
+    source_git.mkdir(parents=True)
+    (source_git / "config").write_text("attacker-controlled\n", encoding="utf-8")
+    target_git = workspace / "target" / ".git"
+    target_git.mkdir(parents=True)
+    (target_git / "config").write_text("original\n", encoding="utf-8")
+
+    def request(command: str):
+        return build_request(tool="terminal", **action_for_tool("terminal", {"command": command}))
+
+    assert decide(request("cp source/.git/config target/.git/config")).verdict == "pending"
+    recursive = decide(request("cp -R source/. target"))
+    assert recursive.verdict == "pending"
+    assert "security_settings" in recursive.reason
+    # Directory moves recurse without a flag; same protected descendants.
+    assert decide(request("mv source/. target")).verdict == "pending"
+
+
+def test_recursive_copy_without_protected_descendants_stays_routine(workspace):
+    plain = workspace / "plain"
+    plain.mkdir()
+    (plain / "notes.txt").write_text("hello\n", encoding="utf-8")
+    (workspace / "drop").mkdir()
+    request = build_request(
+        tool="terminal", **action_for_tool("terminal", {"command": "cp -R plain/ drop/"})
+    )
+    assert decide(request).verdict == "allowed"

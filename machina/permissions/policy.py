@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from machina.observability.diagnostics import record_failure
+from machina.permissions.commands import executable_name
 
 MODES = ("ask", "workspace", "sandbox", "full")
 
@@ -106,8 +107,16 @@ def workspace_root() -> Path:
     return configured_workspace()
 
 
-def _sensitive_path(value: str, root: Path) -> bool:
-    """Match credential path components, never incidental words/usernames."""
+def sensitive_path(value: str, root: Path | None = None) -> bool:
+    """Shared sensitive-path identity for credential material (R01).
+
+    This is the ONE definition of "sensitive path" used both by the policy's
+    credential_access capability and by tools that open file contents while
+    searching (``search_files``): a descendant ``credentials`` /
+    ``production.env`` must be gated exactly like a direct read. Matches
+    credential path components, never incidental words/usernames.
+    """
+    root = root if root is not None else workspace_root()
     text = value.replace("\\", "/")
     path = Path(text).expanduser()
     # Ignore ancestors of the configured project (e.g. /home/user).
@@ -147,18 +156,27 @@ def _recursive_traversal(argv: list[str], cwd: str) -> bool:
 
     Recursive reads have unknown match sets: the pattern argument never names
     the files it reaches, so an otherwise-routine command can surface a
-    descendant credential file (e.g. ``grep -R TOKEN .`` matching ``.env``).
-    These require explicit review; plain single-file reads stay routine.
+    descendant credential file (e.g. ``grep -R TOKEN .`` matching ``.env``,
+    or ripgrep's default directory walk reaching ``credentials``). These
+    require explicit review; reads whose operand set is all regular files
+    stay routine.
     """
-    from machina.permissions.commands import executable_name
-
     if not argv:
         return False
     name = executable_name(argv[0])
     args = argv[1:]
     if name == "grep":
-        for arg in args:
+        for index, arg in enumerate(args):
             if arg in {"--recursive", "--dereference-recursive"}:
+                return True
+            # R01: -d/--directories=recurse walks descendants exactly like
+            # -R but used to slip past the compact-flag check below.
+            if arg in {"-d", "--directories"}:
+                if index + 1 < len(args) and args[index + 1] == "recurse":
+                    return True
+            if arg.startswith("--directories=") and arg.partition("=")[2] == "recurse":
+                return True
+            if arg.startswith("-d") and not arg.startswith("--") and arg[2:] == "recurse":
                 return True
             if (
                 arg.startswith("-")
@@ -174,6 +192,44 @@ def _recursive_traversal(argv: list[str], cwd: str) -> bool:
             if arg in {"--hidden", "--unrestricted", "--no-ignore"}:
                 return True
             if arg.startswith("-") and not arg.startswith("--") and "u" in arg[1:]:
+                return True
+        # R01: even without hidden-file flags, every directory path operand
+        # (or the cwd when no path operand is given) is walked by default,
+        # so visible credential files (credentials, production.env) are
+        # reachable. Read sets made only of regular-file operands stay
+        # routine.
+        pattern_from_flag = False
+        consume_next = False
+        paths: list[str] = []
+        for arg in args:
+            if consume_next:
+                consume_next = False
+                continue
+            if arg in {"-e", "--regexp", "-f", "--file"}:
+                pattern_from_flag = True
+                consume_next = True
+                continue
+            if arg.startswith(("--regexp=", "--file=")):
+                pattern_from_flag = True
+                continue
+            if not arg.startswith("--") and arg.startswith(("-e", "-f")) and arg[2:]:
+                pattern_from_flag = True
+                continue
+            if arg.startswith("-"):
+                continue
+            paths.append(arg)
+        if not pattern_from_flag:
+            # First positional is the PATTERN (rg [OPTIONS] PATTERN [PATH...]).
+            paths = paths[1:]
+        if not paths:
+            return True
+        for value in paths:
+            path = Path(value.replace("\\", "/")).expanduser()
+            base = path if path.is_absolute() else Path(cwd or ".") / path
+            try:
+                if base.is_dir():
+                    return True
+            except OSError:
                 return True
         return False
     if name == "find":
@@ -196,6 +252,96 @@ def _recursive_traversal(argv: list[str], cwd: str) -> bool:
                 return True
         return False
     return False
+
+
+_PROTECTED_COMPONENTS = frozenset({".git", ".machina"})
+
+
+def _tree_contains_component(root: Path, names: frozenset[str], *, max_entries: int = 4096) -> bool:
+    """Bounded, symlink-safe scan for protected path components (R02).
+
+    Never follows symlinks (a copied symlink is just a link, not descendants)
+    and stops after *max_entries* to keep the decision cheap on huge trees.
+    """
+    if not root.is_dir():
+        return False
+    seen = 0
+    stack = [root]
+    while stack and seen < max_entries:
+        current = stack.pop()
+        try:
+            entries = list(current.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            seen += 1
+            if seen > max_entries:
+                return False
+            if entry.name.lower() in names:
+                return True
+            try:
+                if entry.is_dir() and not entry.is_symlink():
+                    stack.append(entry)
+            except OSError:
+                continue
+    return False
+
+
+def _recursive_copy_sources(argv: list[str], cwd: str) -> list[Path]:
+    """Directory sources of a recursive ``cp``/``mv``, else ``[]``.
+
+    R02: the operands of a recursive directory write name only the roots.
+    ``cp -R source/. target`` overwrites ``target/.git/config`` although the
+    destination operand is just ``target``; returning the source roots lets
+    the policy scan the descendants the command will actually write.
+    """
+    while len(argv) > 2 and executable_name(argv[0]) == "uv" and argv[1] == "run":
+        argv = argv[2:]
+    if not argv:
+        return []
+    name = executable_name(argv[0])
+    if name not in {"cp", "mv"}:
+        return []
+    recursive = name == "mv"  # directory moves recurse without a flag
+    target_dir = ""
+    operands: list[str] = []
+    args = argv[1:]
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg in {"-t", "--target-directory"}:
+            index += 1
+            target_dir = args[index] if index < len(args) else ""
+        elif arg.startswith("--target-directory="):
+            target_dir = arg.partition("=")[2]
+        elif arg.startswith("-t") and not arg.startswith("--"):
+            target_dir = arg[2:]
+        elif arg.startswith("-"):
+            if arg in {"--recursive", "--archive"} or (
+                name == "cp" and any(ch in arg[1:].rstrip("=") for ch in "rRa")
+            ):
+                recursive = True
+        else:
+            operands.append(arg)
+        index += 1
+    if not recursive:
+        return []
+    if target_dir:
+        sources = operands
+    elif len(operands) > 1:
+        sources = operands[:-1]
+    else:
+        return []
+    roots: list[Path] = []
+    for value in sources:
+        path = Path(value.replace("\\", "/")).expanduser()
+        base = path if path.is_absolute() else Path(cwd or ".") / path
+        try:
+            if base.is_dir():
+                roots.append(base)
+        except OSError:
+            continue
+    return roots
 
 
 def _sensitive_capabilities(req: ActionRequest) -> list[str]:
@@ -229,7 +375,7 @@ def _sensitive_capabilities(req: ActionRequest) -> list[str]:
             path = Path(value).expanduser()
             paths.append(str((path if path.is_absolute() else Path(req.cwd) / path).resolve()))
     if req.operation in {"file.read", "file.write", "process.exec"}:
-        if any(_sensitive_path(v, root) for v in paths):
+        if any(sensitive_path(v, root) for v in paths):
             found.append("credential_access")
     writes_paths = req.operation == "file.write" or (
         req.operation == "process.exec"
@@ -243,6 +389,15 @@ def _sensitive_capabilities(req: ActionRequest) -> list[str]:
         for t in paths
     ):
         found.append("security_settings")
+    if req.operation == "process.exec" and first in {"cp", "mv", "uv"}:
+        # R02: a recursive directory write changes descendants that the
+        # operands never name; classify the protected ones the copy will
+        # actually reach (e.g. source/.git/config -> target/.git/config).
+        if any(
+            _tree_contains_component(source, _PROTECTED_COMPONENTS)
+            for source in _recursive_copy_sources(req.argv, req.cwd)
+        ):
+            found.append("security_settings")
     if (
         first
         in {
