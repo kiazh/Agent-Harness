@@ -179,6 +179,28 @@ def compute_auto_apply_suppressed(statuses: list[str]) -> bool:
     )
 
 
+_AUTO_APPLY_CAP_SQL = """
+    SELECT COUNT(*) FROM learning_reviews
+    WHERE agent_id = $1 AND auto_applied = TRUE
+      AND reviewed_at >= now() - interval '24 hours'
+"""
+
+
+async def _auto_apply_capacity(executor: Any, agent_id: str) -> bool:
+    """Whether the per-agent rolling 24h auto-apply cap still has room.
+
+    ``executor`` is either the module-level ``db`` (advisory check before
+    publication) or the publication transaction's connection (authoritative
+    recheck under the per-agent advisory lock), so both paths read the same
+    committed count.
+    """
+    cap = max(0, int(config.get("learning_review_auto_apply_per_day")))
+    if not cap:
+        return False
+    used = await executor.fetchval(_AUTO_APPLY_CAP_SQL, agent_id)
+    return (used or 0) < cap
+
+
 class LearningReviewer:
     """Review a completed turn once and apply or stage a safe, read-before-write skill."""
 
@@ -323,7 +345,9 @@ class LearningReviewer:
             if config.get("learning_review_auto_apply") and await self._auto_apply_allowed(
                 agent_id
             ):
-                applied = await self._auto_publish(row["id"], name, description, triggers, content)
+                applied = await self._auto_publish(
+                    row["id"], name, description, triggers, content, agent_id
+                )
                 if applied is not None:
                     return self._serialize(applied)
                 # The publish failed and its artifact was compensated; stage
@@ -396,16 +420,7 @@ class LearningReviewer:
                 )
             return False
         _auto_apply_suppressed_agents.discard(agent_id)
-        cap = max(0, int(config.get("learning_review_auto_apply_per_day")))
-        if not cap:
-            return False
-        used = await db.fetchval(
-            """SELECT COUNT(*) FROM learning_reviews
-               WHERE agent_id = $1 AND auto_applied = TRUE
-                 AND reviewed_at >= now() - interval '24 hours'""",
-            agent_id,
-        )
-        return (used or 0) < cap
+        return await _auto_apply_capacity(db, agent_id)
 
     async def _auto_publish(
         self,
@@ -414,6 +429,7 @@ class LearningReviewer:
         description: str,
         triggers: list[str],
         content: str,
+        agent_id: str,
     ) -> Any | None:
         """Publish a validated proposal as an enabled, source-tagged skill.
 
@@ -421,8 +437,16 @@ class LearningReviewer:
         status commit, and any failure — a failed COMMIT included — removes
         the fresh artifact again, so a failed publish never leaves a live
         skill behind. Returns the approved row, or ``None`` after
-        compensation so the caller can stage the proposal for manual
-        approval instead of losing it.
+        compensation (or a cap rejection; see below) so the caller can stage
+        the proposal for manual approval instead of losing it.
+
+        The per-agent rolling 24h cap is rechecked inside the publication
+        transaction under a transaction-scoped per-agent advisory lock: the
+        pre-publication gate is advisory, so two concurrent reviews can both
+        pass it. Serializing here makes the second transaction wait, then see
+        the first's committed row and stage instead of publishing (review
+        round 3, F7). The lock never spans the review's LLM call — that
+        happened before this method — and is released on commit/rollback.
         """
         source = f"learning-review:{review_id}"
         created = False
@@ -430,6 +454,12 @@ class LearningReviewer:
         try:
             async with db.acquire() as conn:
                 async with conn.transaction():
+                    await conn.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                        f"learning_auto_apply:{agent_id}",
+                    )
+                    if not await _auto_apply_capacity(conn, agent_id):
+                        return None
                     self.registry.create_skill(
                         name,
                         description,

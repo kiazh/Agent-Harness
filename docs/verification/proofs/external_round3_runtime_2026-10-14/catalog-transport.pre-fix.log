@@ -1,0 +1,5 @@
+ChatGPT outgoing content types: ['input_text']
+Image serialized as text: True
+Both account entries cached: ['A\nhttps://chatgpt.com/backend-api/codex', 'B\nhttps://chatgpt.com/backend-api/codex']
+Catalog used after B refresh: ['only-B']
+Endpoint rotation HTTP destinations: ['before.invalid'] responses: before.invalid before.invalid

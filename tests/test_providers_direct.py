@@ -81,6 +81,9 @@ def test_providers_tuple_lists_every_family():
         "xai",
         "opencode",
         "chatgpt",
+        "claude",
+        "copilot",
+        "gemini",
         "custom",
         "ollama",
     }
@@ -472,3 +475,65 @@ async def test_direct_stream_without_usage_flag_estimates_instead_of_zero():
     assert usage["prompt_tokens"] > 0
     assert usage["completion_tokens"] > 0
     assert usage["total_tokens"] == usage["prompt_tokens"] + usage["completion_tokens"]
+
+
+# ─── response-cache endpoint identity (R3-F6) ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_direct_cache_namespace_includes_endpoint_and_credential():
+    """A provider updated to another base URL (or key) must re-contact the API.
+
+    The 60s response cache is scoped by name:model today; identical requests
+    against a rotated endpoint would otherwise be answered from the previous
+    host's cached body. Endpoint + credential digest enter the namespace, so
+    both hosts receive HTTP while the same endpoint + key still hits the cache.
+    """
+    import httpx
+
+    from machina.core.provider import DirectProvider
+    from machina.core.provider.specs import ProviderSpec
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.host)
+        return httpx.Response(
+            200,
+            json={
+                "model": "fixture-model",
+                "choices": [{"message": {"content": request.url.host}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    def build(base_url: str, key: str) -> DirectProvider:
+        spec = ProviderSpec(
+            "fixture-named", base_url, "FIXTURE_NAMED_API_KEY", "fixture-model", requires_key=False
+        )
+        return DirectProvider(spec, api_key=key)
+
+    first = build("https://before.invalid/v1", "FIXTURE_KEY")
+    second = build("https://after.invalid/v1", "FIXTURE_KEY")
+    rotated = build("https://after.invalid/v1", "ROTATED_KEY")
+    for provider in (first, second, rotated):
+        await provider.client.aclose()
+        provider.client = httpx.AsyncClient(
+            base_url=provider.spec.base_url, transport=httpx.MockTransport(handler)
+        )
+        provider._rate_limiter = AsyncMock()
+    messages = [{"role": "user", "content": "fixture-identical-request"}]
+    try:
+        contents = [
+            (await provider.complete(messages)).content for provider in (first, second, rotated)
+        ]
+        assert calls == ["before.invalid", "after.invalid", "after.invalid"]
+        assert contents == ["before.invalid", "after.invalid", "after.invalid"]
+        # Same endpoint + credential: the cache still serves the repeat call.
+        again = await second.complete(messages)
+        assert calls == ["before.invalid", "after.invalid", "after.invalid"]
+        assert again.content == "after.invalid"
+    finally:
+        await first.close()
+        await second.close()
+        await rotated.close()

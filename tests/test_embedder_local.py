@@ -346,6 +346,59 @@ async def test_auto_routes_provider_qualified_api_ids_to_the_api(monkeypatch):
     assert (settings.kind, settings.model) == ("onnx", "BAAI/bge-small-en-v1.5")
 
 
+async def test_openrouter_fallback_keeps_the_qualified_model_id(monkeypatch):
+    """R3-F8: OpenRouter addresses embeddings by qualified id.
+
+    With only an OpenRouter key, ``auto`` falls back to OpenRouter inside the
+    embedder; ``openai/text-embedding-3-small`` must reach the OpenRouter
+    request body unchanged instead of being stripped to the bare OpenAI name
+    (which that API does not serve)."""
+    _configure(
+        monkeypatch,
+        backend="auto",
+        model="openai/text-embedding-3-small",
+        openrouter_key="or-test",
+        local_available=False,
+        onnx_available=False,
+    )
+    settings = resolve_embedding_settings()
+    assert (settings.kind, settings.model) == ("openai", "openai/text-embedding-3-small")
+    embedder = build_embedder(settings)
+    assert isinstance(embedder, OpenAIEmbedder)
+    assert embedder._base_url == "https://openrouter.ai/api/v1"
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["model"] = json.loads(request.content)["model"]
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.1, 0.2]}]})
+
+    await embedder._client.aclose()
+    embedder._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url=embedder._base_url
+    )
+    try:
+        await embedder.embed("qualified id")
+    finally:
+        await embedder.close()
+    assert captured["url"] == "https://openrouter.ai/api/v1/embeddings"
+    assert captured["model"] == "openai/text-embedding-3-small"
+
+
+async def test_qualified_large_model_keeps_its_dimension():
+    """The dimension lookup follows the bare model inside a qualified id."""
+    embedder = OpenAIEmbedder(
+        model="openai/text-embedding-3-large",
+        api_key="test-key",
+        base_url="https://openrouter.ai/api/v1",
+    )
+    try:
+        assert embedder.model_name == "openai/text-embedding-3-large"
+        assert embedder.dimensions == 3072
+    finally:
+        await embedder.close()
+
+
 def test_fastembed_runtime_rejects_the_review_models():
     """The compatibility check tracks fastembed's real supported list: at
     0.9, potion-base-4M and text-embedding-3-small are rejected while

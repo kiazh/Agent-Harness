@@ -12,6 +12,7 @@ import threading
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -105,7 +106,7 @@ class OpenAIEmbedder(Embedder):
                 "No API key found. Set OPENAI_API_KEY or OPENROUTER_API_KEY."
             )
 
-        self._model = model
+        self._model = _api_model_for_endpoint(model, base_url)
         self._base_url = base_url.rstrip("/")
         self._batch_size = batch_size
         self._timeout = timeout
@@ -116,7 +117,9 @@ class OpenAIEmbedder(Embedder):
         elif env_dim and env_dim.isdigit():
             self._dimensions = int(env_dim)
         else:
-            self._dimensions = self.MODEL_DIMENSIONS.get(model, 1536)
+            # Dimension lookup uses the bare model id: OpenRouter-qualified
+            # ids (``openai/text-embedding-3-large``) name the same model.
+            self._dimensions = self.MODEL_DIMENSIONS.get(_strip_api_provider(self._model), 1536)
 
         # LRU cache: hash(model:base_url:text) → embedding (guarded by lock)
         self._cache: OrderedDict[str, list[float]] = OrderedDict()
@@ -599,6 +602,38 @@ def _strip_api_provider(model: str) -> str:
     return model
 
 
+#: OpenRouter's API base; also the endpoint OpenAIEmbedder falls back to when
+#: only an OpenRouter key is configured.
+_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+def _is_openrouter_endpoint(base_url: str) -> bool:
+    """Whether *base_url* addresses OpenRouter's API."""
+    host = urlsplit((base_url or "").strip()).netloc.lower()
+    return host == "openrouter.ai" or host.endswith(".openrouter.ai")
+
+
+def _api_model_for_endpoint(model: str, base_url: str) -> str:
+    """Normalize a configured embedding id for the selected API endpoint (R3-F8).
+
+    The destination decides the spelling: OpenAI's API takes the bare id
+    (``text-embedding-3-small``), while OpenRouter's embeddings reference
+    addresses models by qualified id (``openai/text-embedding-3-small``), so
+    the prefix is stripped only where it is not wanted. For OpenRouter the
+    qualified id is preserved (only a redundant leading ``openrouter/`` is
+    dropped). Local model-runtime ids (``minishlab/potion-base-8M``) stay
+    whole either way because their publisher is not an API provider prefix.
+    """
+    if not model:
+        return model
+    if _is_openrouter_endpoint(base_url):
+        prefix, separator, remainder = model.partition("/")
+        if separator and prefix.strip().lower() == "openrouter" and remainder:
+            return remainder
+        return model
+    return _strip_api_provider(model)
+
+
 def _openai_api_model(model: str) -> bool:
     """Whether *model* is an OpenAI-API embedding id (R18).
 
@@ -668,6 +703,23 @@ def _config_value(key: str, default: str = "") -> str:
         return default
 
 
+def _api_endpoint(base_url: str) -> str:
+    """The endpoint ``OpenAIEmbedder`` will actually call for this config.
+
+    An explicit ``embedding_base_url`` is honored as-is (the embedder never
+    redirects it). Without one the embedder keeps OpenAI's default when an
+    OpenAI key exists and falls back to OpenRouter when only an OpenRouter key
+    does, so the model id must be normalized against that eventual endpoint
+    (R3-F8).
+    """
+    explicit = base_url.strip()
+    if explicit:
+        return explicit
+    if not _config_value("openai_api_key") and _config_value("openrouter_api_key"):
+        return _OPENROUTER_BASE_URL
+    return OpenAIEmbedder.DEFAULT_BASE_URL
+
+
 def resolve_embedding_settings() -> EmbeddingSettings:
     """Resolve which embedding backend would serve dense retrieval.
 
@@ -691,8 +743,10 @@ def resolve_embedding_settings() -> EmbeddingSettings:
     runtime, so a previously working model2vec/API configuration does not
     degrade to keyword-only. fastembed-supported ids (e.g.
     ``minishlab/potion-base-8M``) still route to ONNX. Provider-qualified
-    API ids (``openai/text-embedding-3-small``) count as API ids and the
-    remainder is the model name sent to the API. Availability is an
+    API ids (``openai/text-embedding-3-small``) count as API ids and are
+    normalized per selected endpoint (R3-F8): stripped for OpenAI and other
+    OpenAI-compatible destinations, preserved for OpenRouter, whose
+    embeddings reference uses the qualified spelling. Availability is an
     import spec check only — no model loads.
     """
     backend = (_config_value("embedding_backend", "auto") or "auto").strip().lower()
@@ -713,7 +767,8 @@ def resolve_embedding_settings() -> EmbeddingSettings:
             )
         return EmbeddingSettings(
             "openai",
-            model=_strip_api_provider(model) or OpenAIEmbedder.DEFAULT_MODEL,
+            model=_api_model_for_endpoint(model, _api_endpoint(base_url))
+            or OpenAIEmbedder.DEFAULT_MODEL,
             base_url=base_url or OpenAIEmbedder.DEFAULT_BASE_URL,
             backend=backend,
         )
@@ -741,7 +796,7 @@ def resolve_embedding_settings() -> EmbeddingSettings:
     if base_url:
         return EmbeddingSettings(
             "openai",
-            model=_strip_api_provider(model) or OpenAIEmbedder.DEFAULT_MODEL,
+            model=_api_model_for_endpoint(model, base_url) or OpenAIEmbedder.DEFAULT_MODEL,
             base_url=base_url,
             backend=backend,
         )
@@ -754,7 +809,7 @@ def resolve_embedding_settings() -> EmbeddingSettings:
     if _config_value("openai_api_key") or _config_value("openrouter_api_key"):
         return EmbeddingSettings(
             "openai",
-            model=_strip_api_provider(model) or OpenAIEmbedder.DEFAULT_MODEL,
+            model=_api_model_for_endpoint(model, _api_endpoint("")) or OpenAIEmbedder.DEFAULT_MODEL,
             base_url=OpenAIEmbedder.DEFAULT_BASE_URL,
             backend=backend,
         )

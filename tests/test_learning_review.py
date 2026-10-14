@@ -1120,6 +1120,78 @@ async def test_auto_apply_per_day_cap_stages_after_limit(db_pool, monkeypatch, t
         await db_pool.execute("DELETE FROM sessions WHERE id = $1", session.id)
 
 
+async def test_concurrent_auto_apply_respects_the_daily_cap(db_pool, monkeypatch, tmp_path):
+    """R3-F7: the per-agent daily cap is reserved inside the publish transaction.
+
+    The pre-publication gate is advisory; the barrier lets two reviews pass
+    it together. The in-transaction recheck (under the per-agent advisory
+    lock) must reject the second, so exactly one skill auto-applies and the
+    other proposal is staged ``pending`` for manual approval.
+    """
+    from machina.core.config import config
+
+    monkeypatch.setattr("machina.skills.learning.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+    monkeypatch.setattr(config, "learning_review_auto_apply_per_day", 1)
+    agent_id = f"review-{uuid.uuid4()}"
+    sessions = [
+        await SessionManager().create(title=f"cap concurrent {index}", agent_id=agent_id)
+        for index in range(2)
+    ]
+    registry = SkillRegistry(tmp_path / "skills")
+
+    class CoordinatedReviewer(LearningReviewer):
+        """Holds both pre-publication checks open until both have passed."""
+
+        def __init__(self):
+            super().__init__(registry=registry)
+            self.waiting = 0
+            self.both_checked = asyncio.Event()
+
+        async def _auto_apply_allowed(self, reviewed_agent_id):
+            decision = await super()._auto_apply_allowed(reviewed_agent_id)
+            self.waiting += 1
+            if self.waiting == 2:
+                self.both_checked.set()
+            await self.both_checked.wait()
+            return decision
+
+    reviewer = CoordinatedReviewer()
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                *(
+                    reviewer.review_turn(
+                        session.id,
+                        agent_id,
+                        "Document this repeatable workflow",
+                        "First inspect inputs then run checks and record the verified output.",
+                        FakeProvider(_candidate(f"concurrent-cap-{index}")),
+                    )
+                    for index, session in enumerate(sessions)
+                )
+            ),
+            timeout=10,
+        )
+        statuses = sorted(result["status"] for result in results if result is not None)
+        assert statuses == ["approved", "pending"]
+        used = await db_pool.fetchval(
+            "SELECT COUNT(*) FROM learning_reviews WHERE agent_id = $1 AND auto_applied = TRUE",
+            agent_id,
+        )
+        assert used == 1
+        fresh = SkillRegistry(tmp_path / "skills")
+        fresh.load_all()
+        live = [
+            skill.name for skill in fresh.list_skills() if skill.name.startswith("concurrent-cap-")
+        ]
+        assert len(live) == 1
+    finally:
+        await db_pool.execute("DELETE FROM learning_reviews WHERE agent_id = $1", agent_id)
+        for session in sessions:
+            await db_pool.execute("DELETE FROM sessions WHERE id = $1", session.id)
+
+
 # ─── Post-hoc revert ───────────────────────────────────────────────────────
 
 

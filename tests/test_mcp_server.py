@@ -356,6 +356,33 @@ def test_run_bounded_cancel_event_kills_the_child_tree():
     assert elapsed < 15.0
 
 
+def test_run_bounded_overflow_kills_the_child_during_reader_wait(tmp_path):
+    """R3-F9: passing the stdout cap stops the tree while readers wait.
+
+    The child flushes past the stdout cap, then sleeps before writing a
+    marker. The overflow must terminate it promptly — waiting only for the
+    pipe readers lets the side effect happen (observed pre-fix in review
+    round 3) — so the call comes back truncated (not timed out) with the
+    marker absent.
+    """
+    marker = tmp_path / "late.txt"
+    code = (
+        "import pathlib,sys,time;"
+        "sys.stdout.write('x'*65536);sys.stdout.flush();"
+        "time.sleep(0.5);"
+        "pathlib.Path(sys.argv[1]).write_text('ran after output cap');"
+        "time.sleep(2)"
+    )
+    started = time.monotonic()
+    result = child_process.run_bounded([sys.executable, "-c", code, str(marker)], timeout=5.0)
+    elapsed = time.monotonic() - started
+    assert result.truncated is True
+    assert result.timed_out is False
+    assert result.returncode is not None
+    assert not marker.exists(), "the child kept running past the stdout cap"
+    assert elapsed < 2.0, "overflow must kill promptly, not at the deadline"
+
+
 def test_child_env_carries_only_the_allowlist(monkeypatch):
     """Interop review: the MACHINA_MCP_EXTRA_ENV passthrough is gone — a set
     extension variable must not smuggle secrets (or itself) into the child."""

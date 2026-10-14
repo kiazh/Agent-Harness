@@ -1,0 +1,13 @@
+2026-10-14 16:04:02,158 [AUDIT] {"timestamp": 1792008242.1580229, "event": "llm_call_start", "provider": "fixture-named", "model": "fixture-model", "message_count": 1}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 16:04:02,188 [AUDIT] {"timestamp": 1792008242.188447, "event": "llm_call_complete", "provider": "fixture-named", "model": "fixture-model", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "tool_calls": 0}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 16:04:02,188 [AUDIT] {"timestamp": 1792008242.188969, "event": "llm_call_start", "provider": "fixture-named", "model": "fixture-model", "message_count": 1}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 16:04:02,189 [AUDIT] {"timestamp": 1792008242.1891992, "event": "llm_call_complete", "provider": "fixture-named", "model": "fixture-model", "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "tool_calls": 0}
+Audit event dropped before the writer started; event was not persisted
+ChatGPT outgoing content types: ['input_text', 'input_image']
+Image serialized as text: False
+Both account entries cached: ['A\nhttps://chatgpt.com/backend-api/codex', 'B\nhttps://chatgpt.com/backend-api/codex']
+Catalog used after B refresh: ['only-B']
+Endpoint rotation HTTP destinations: ['before.invalid', 'after.invalid'] responses: before.invalid after.invalid

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import uuid
@@ -75,8 +76,15 @@ class DirectProvider(LLMProvider):
         return {}
 
     def _cache_key_for(self, messages, tools, model: str, request=None, identity=None) -> str:
-        # Namespace by provider so identical model ids on two vendors can't collide.
-        return _cache_key(messages, tools, f"{self.spec.name}:{model}", request, identity)
+        # Namespace by provider so identical model ids on two vendors can't
+        # collide, and by endpoint + credential generation so a provider
+        # updated to another base URL (or with a rotated key) can never be
+        # answered from the previous endpoint's cached body within the TTL
+        # (review round 3, F6). The credential enters only as a short digest.
+        endpoint = str(self.spec.base_url or "").rstrip("/")
+        credential = hashlib.sha256((self.api_key or "").encode("utf-8")).hexdigest()[:16]
+        scope = f"{self.spec.name}:{endpoint}:{credential}:{model}"
+        return _cache_key(messages, tools, scope, request, identity)
 
     async def complete(
         self,

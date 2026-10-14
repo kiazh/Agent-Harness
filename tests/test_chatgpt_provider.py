@@ -369,6 +369,91 @@ async def test_reasoning_effort_sent_only_when_set(make):
     assert json.loads(make.requests[1].content)["reasoning"] == {"effort": "high"}
 
 
+# ─── multimodal user content (R3-F5) ────────────────────────────────────────
+
+
+def test_multimodal_user_content_maps_to_responses_image_inputs():
+    """Text + image blocks become ordered input_text/input_image parts.
+
+    The Responses wire takes the image as a plain ``image_url`` string (never
+    the chat-completions ``{"url": ...}`` object), so the attachment keeps its
+    image semantics instead of being serialized into a text block.
+    """
+    _, items = ChatGPTProvider._to_responses_input(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64,c3ludGhldGlj",
+                            "detail": "high",
+                        },
+                    },
+                    {"type": "text", "text": "And this one?"},
+                    {"type": "image_url", "image_url": "https://example.test/second.png"},
+                ],
+            }
+        ]
+    )
+    assert items == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "What is in this image?"},
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,c3ludGhldGlj",
+                    "detail": "high",
+                },
+                {"type": "input_text", "text": "And this one?"},
+                {"type": "input_image", "image_url": "https://example.test/second.png"},
+            ],
+        }
+    ]
+
+
+def test_plain_string_user_content_keeps_input_text_fallback():
+    _, items = ChatGPTProvider._to_responses_input([{"role": "user", "content": "hello"}])
+    assert items == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+    ]
+
+
+async def test_multimodal_payload_sends_a_real_input_image(make):
+    """The outgoing request carries an input_image block, not text flattening."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _text_stream(
+            "seen", usage={"input_tokens": 3, "output_tokens": 1, "total_tokens": 4}
+        )
+
+    provider = make.provider(handler)
+    async for _ in provider.stream_complete(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,c3ludGhldGlj"},
+                    },
+                ],
+            }
+        ]
+    ):
+        pass
+    body = json.loads(make.requests[0].content)
+    assert body["input"][0]["content"] == [
+        {"type": "input_text", "text": "What is in this image?"},
+        {"type": "input_image", "image_url": "data:image/png;base64,c3ludGhldGlj"},
+    ]
+
+
 # ─── SSE assembly ───────────────────────────────────────────────────────────
 
 

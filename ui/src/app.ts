@@ -42,7 +42,7 @@ import type {
 	SessionInfo,
 	SessionResult,
 } from "./protocol.ts";
-import { SessionTailStore, tailEntries, trimSupersededHistory, type SessionTail } from "./tail.ts";
+import { SessionTailStore, tailEntries, trimSupersededHistory, type SessionTail, type TailBlock } from "./tail.ts";
 import { editorTheme, getSkin, setSkin, SKIN_NAMES, skinDescription } from "./theme.ts";
 import { Transcript } from "./transcript.ts";
 
@@ -382,7 +382,7 @@ export class App implements FeatureHost {
 		this.transcript.clear();
 		this.transcript.addComponent(header(this.version, this.headerInfo(session)));
 		this.transcript.replay(trimSupersededHistory(history, tail));
-		if (tail.length) this.transcript.replay(tailEntries(tail));
+		this.replayTail(session, tail);
 		this.sessionTokens = this.sessionTokensById.get(session.id) ?? 0;
 		// Preserve the active turn's latest cumulative usage across switches
 		// without mixing turns: completed total plus this session's turn total.
@@ -513,6 +513,41 @@ export class App implements FeatureHost {
 	/** Consume a session's buffered tail (see tail.ts for the merge rule). */
 	private takeSessionTail(sessionId: string): SessionTail | undefined {
 		return this.sessionTails.take(sessionId);
+	}
+
+	/**
+	 * Replay a consumed hidden-session tail in rendered order. Historical
+	 * blocks re-enter through the resume path; ACTIVE blocks (streaming text,
+	 * a running tool) re-enter through the live event path carrying their
+	 * turn/tool identity, so the completion events that follow reconcile them
+	 * — instead of a historical copy duplicating the text and a "running…"
+	 * notice stranding a tool whose completion can no longer find its card
+	 * (review round 3, F12).
+	 */
+	private replayTail(session: SessionInfo, tail: TailBlock[]): void {
+		for (const block of tail) {
+			if (block.kind === "assistant" && !block.completed) {
+				this.transcript.apply({
+					protocolVersion: 2,
+					sessionId: session.id,
+					turnId: block.turnId,
+					type: "message.delta",
+					text: block.text,
+				});
+			} else if (block.kind === "tool" && !block.settled) {
+				this.transcript.apply({
+					protocolVersion: 2,
+					sessionId: session.id,
+					turnId: block.turnId,
+					type: "tool.start",
+					id: block.id,
+					name: block.name,
+					args: {},
+				});
+			} else {
+				this.transcript.replay(tailEntries([block]));
+			}
+		}
 	}
 
 	/** Drop tails that no longer route and cap the retained session count. */

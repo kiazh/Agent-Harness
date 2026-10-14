@@ -1,0 +1,4 @@
+configured per-agent/day cap: 1
+concurrent production review statuses: ['approved', 'pending']
+durable auto-applied count: 1
+live learned skills: ['concurrent-cap-1']

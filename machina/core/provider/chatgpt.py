@@ -293,6 +293,55 @@ class ChatGPTProvider(LLMProvider):
         return headers
 
     @staticmethod
+    def _responses_user_content(content: Any) -> list[dict[str, Any]]:
+        """Convert one user message body into Responses content parts (R3-F5).
+
+        Chat-completions multimodal blocks map to their Responses
+        equivalents, preserving order: ``text`` -> ``input_text`` and
+        ``image_url`` -> ``input_image``. On the Responses wire (OpenAI
+        Responses API input items; the Codex CLI request shape) the image
+        travels as a plain ``image_url`` string — a fully qualified URL or a
+        ``data:<media-type>;base64,...`` URL — never the chat-completions
+        ``{"url": ...}`` object, so an attachment stays a real image input
+        instead of a serialized Python representation inside a text block.
+        An already-Responses-shaped block (``input_text``/``input_image``)
+        passes through; unsupported blocks degrade to their JSON text so no
+        content silently disappears, and a plain string keeps the previous
+        single ``input_text`` fallback.
+        """
+        if not isinstance(content, list):
+            return [{"type": "input_text", "text": str(content or "")}]
+        parts: list[dict[str, Any]] = []
+        for block in content:
+            if not isinstance(block, dict):
+                parts.append({"type": "input_text", "text": str(block)})
+                continue
+            block_type = block.get("type")
+            if block_type in ("text", "input_text"):
+                text = block.get("text")
+                parts.append(
+                    {
+                        "type": "input_text",
+                        "text": text if isinstance(text, str) else str(text or ""),
+                    }
+                )
+                continue
+            if block_type in ("image_url", "input_image"):
+                image = block.get("image_url")
+                if isinstance(image, dict):
+                    url, detail = image.get("url"), image.get("detail")
+                else:
+                    url, detail = image, block.get("detail")
+                if url:
+                    image_part: dict[str, Any] = {"type": "input_image", "image_url": str(url)}
+                    if isinstance(detail, str) and detail:
+                        image_part["detail"] = detail
+                    parts.append(image_part)
+                continue
+            parts.append({"type": "input_text", "text": json.dumps(block, default=str)})
+        return parts or [{"type": "input_text", "text": str(content or "")}]
+
+    @staticmethod
     def _to_responses_input(
         messages: list[dict[str, Any]],
     ) -> tuple[str, list[dict[str, Any]]]:
@@ -343,7 +392,7 @@ class ChatGPTProvider(LLMProvider):
                 {
                     "type": "message",
                     "role": "user",
-                    "content": [{"type": "input_text", "text": str(content or "")}],
+                    "content": ChatGPTProvider._responses_user_content(content),
                 }
             )
         return "\n\n".join(instructions), items

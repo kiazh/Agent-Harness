@@ -304,12 +304,17 @@ def run_bounded(
             # The readers block until the child (group) closes its pipes, so
             # keep a bounded wait with periodic cancel checks: caller
             # cancellation must kill the tree promptly, not only once the
-            # deadline expires. The shared deadline keeps the total wait
-            # bounded by ``timeout`` + teardown for both readers.
+            # deadline expires. Prolific stdout is handled the same way: the
+            # reader sets ``exceeded`` as soon as the cap is passed, and the
+            # supervisor observes it here and stops the group immediately —
+            # waiting for the readers to drain would let the child keep
+            # running past the cap (review round 3, F9). The shared deadline
+            # keeps the total wait bounded by ``timeout`` + teardown for both
+            # readers.
             drain_deadline = time.monotonic() + timeout + 5
             for reader in readers:
                 while reader.is_alive() and time.monotonic() < drain_deadline:
-                    if cancelled():
+                    if cancelled() or exceeded.is_set():
                         kill_tree(process, pgid)
                     reader.join(0.05)
             if exceeded.is_set() or cancelled():
