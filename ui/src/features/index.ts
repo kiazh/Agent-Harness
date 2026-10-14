@@ -14,6 +14,7 @@ import { keysCommand } from "./keys.ts";
 import { approvalsCommand, modeCommand } from "./mode.ts";
 import { modelsCommand } from "./models.ts";
 import { mcpCommand } from "./mcp.ts";
+import { interopCommand } from "./interop.ts";
 import { outputCommand } from "./output.ts";
 import { settingsCommands } from "./settings.ts";
 import { themeCommand } from "./theme.ts";
@@ -74,6 +75,7 @@ const COMMANDS: Command[] = [
 	themeCommand,
 	outputCommand,
 	mcpCommand,
+	interopCommand,
 	...settingsCommands,
 	...appCommands,
 ];

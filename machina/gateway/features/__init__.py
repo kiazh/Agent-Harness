@@ -54,6 +54,11 @@ from machina.gateway.features.growth import (
     growth_rollback,
     growth_teach,
 )
+from machina.gateway.features.interop import (
+    interop_disable,
+    interop_enable,
+    interop_status,
+)
 from machina.gateway.features.jobs import (
     jobs_create,
     jobs_delete,
@@ -142,6 +147,9 @@ METHODS: dict[str, Handler] = {
     "growth.forget": growth_forget,
     "growth.installPolicy": growth_install_policy,
     "growth.rollback": growth_rollback,
+    "interop.status": interop_status,
+    "interop.enable": interop_enable,
+    "interop.disable": interop_disable,
     "session.fork": session_fork,
     "session.delete": session_delete,
     "session.rename": session_rename,

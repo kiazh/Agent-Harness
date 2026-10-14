@@ -408,3 +408,33 @@ export interface MCPToolView {
  verdict?: string;
  description?: string | null;
 }
+
+/** One harness row from interop.status (explicit fields; never secrets). */
+export interface InteropPlatformRow {
+ platform: string;
+ label: string;
+ installed: boolean;
+ version: string | null;
+ running: boolean;
+ registered: boolean;
+ /** null = no Machina state entry; the UI shows "manual" when registered anyway. */
+ enabled: boolean | null;
+ scope: string | null;
+ notes: string[];
+}
+
+export interface InteropStatusResult {
+ platforms: InteropPlatformRow[];
+}
+
+/** Full machina.interop.ActionResult passthrough from interop.enable/disable. */
+export interface InteropActionResult {
+ platform: string;
+ action: string;
+ ok: boolean;
+ changed: boolean;
+ message: string;
+ steps: string[];
+ verify: { ok?: boolean; detail?: string };
+ argv: string[][];
+}
