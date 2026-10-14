@@ -2,10 +2,13 @@
 
 Every subprocess is faked: these tests never spawn a real harness CLI and
 never register anything. The interop module routes all spawns through
-``machina.interop._run`` and all PATH lookups through ``_which``, so pinning
-those two seams (plus the config root helpers) fully isolates the suite from
-the machine. The autouse guard below turns any accidental real spawn into a
-loud failure instead of a silent registration.
+``machina.interop._run`` (a thin adapter over
+``machina.core.child_process.run_bounded``, round-5 review F2) and all PATH
+lookups through ``_which``, so pinning those two seams (plus the config root
+helpers) fully isolates the suite from the machine. The autouse guard below
+patches ``subprocess.Popen`` at the child-process leaf, turning any
+accidental real spawn into a loud failure instead of a silent registration;
+the real-runner leaf tests explicitly restore the real Popen.
 """
 
 from __future__ import annotations
@@ -13,7 +16,10 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -21,8 +27,10 @@ from typer.testing import CliRunner
 
 import machina.cli as cli
 import machina.interop as interop
+from machina.core import child_process
 
 runner = CliRunner()
+_REAL_POPEN = subprocess.Popen
 
 
 def _result(output: str = "", rc: int = 0, stderr: str = "", timed_out: bool = False):
@@ -50,7 +58,7 @@ def _sandboxed_homes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     def _no_real_spawn(*args, **kwargs):  # pragma: no cover - only fires on a bug
         raise AssertionError("test attempted a real subprocess spawn")
 
-    monkeypatch.setattr(interop.subprocess, "Popen", _no_real_spawn)
+    monkeypatch.setattr(child_process.subprocess, "Popen", _no_real_spawn)
     return tmp_path
 
 
@@ -237,6 +245,66 @@ def test_is_running_parses_pgrep_output(monkeypatch):
     assert interop._is_running(interop.PLATFORMS["opencode"]) is True
 
 
+# ─── Real bounded runner (child_process.run_bounded via _run, F2) ───────────
+
+
+def _real_popen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Restore the real Popen the autouse guard replaces for the suite."""
+    monkeypatch.setattr(subprocess, "Popen", _REAL_POPEN)
+
+
+def test_run_timeout_kills_the_child_tree(monkeypatch):
+    _real_popen(monkeypatch)
+    start = time.monotonic()
+    result = interop._run(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        env=interop._child_env(interop.PLATFORMS["opencode"]),
+        timeout=0.75,
+    )
+    elapsed = time.monotonic() - start
+    assert result.timed_out is True
+    assert result.returncode is not None
+    assert elapsed < 15.0
+
+
+def test_run_truncates_prolific_output(monkeypatch):
+    _real_popen(monkeypatch)
+    result = interop._run(
+        [sys.executable, "-c", "import sys; sys.stdout.write('x' * 40000)"],
+        env=interop._child_env(interop.PLATFORMS["opencode"]),
+        timeout=30.0,
+    )
+    assert result.timed_out is False
+    assert result.truncated is True
+    assert len(result.output) <= interop.MAX_OUTPUT_CHARS
+
+
+def test_run_feeds_stdin_text(monkeypatch):
+    _real_popen(monkeypatch)
+    result = interop._run(
+        [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read().strip())"],
+        env=interop._child_env(interop.PLATFORMS["opencode"]),
+        timeout=30.0,
+        stdin_text="hello-stdin\n",
+    )
+    assert result.returncode == 0
+    assert result.output.strip() == "hello-stdin"
+
+
+def test_run_spawn_failure_lands_in_stderr(monkeypatch):
+    _real_popen(monkeypatch)
+    result = interop._run(
+        ["/definitely/not/a/machina-test-binary"],
+        env=interop._child_env(interop.PLATFORMS["opencode"]),
+        timeout=5.0,
+    )
+    assert result.returncode is None
+    assert result.output == ""
+    assert result.stderr
+    assert result.timed_out is False
+    assert result.truncated is False
+
+
 # ─── Enable: idempotency, dry-run, verification, state ─────────────────────
 
 
@@ -413,6 +481,65 @@ def test_enable_unknown_platform_raises_and_bad_scope_reports():
     assert result.ok is False and "scope must be project or global" in result.message
 
 
+def test_enable_project_scope_refused_when_anchor_is_site_packages(monkeypatch, tmp_path):
+    """F3: a wheel install resolves the project anchor to site-packages."""
+    anchor = tmp_path / "venv" / "lib" / "python3.13" / "site-packages"
+    anchor.mkdir(parents=True)
+    monkeypatch.setattr(interop, "_repo_root", lambda: anchor)
+    monkeypatch.setattr(interop, "_which", lambda spec: "/fake/bin/opencode")
+
+    result = interop.enable("opencode", scope="project")
+
+    assert result.ok is False and result.changed is False
+    assert result.message == interop.PROJECT_SCOPE_NEEDS_CHECKOUT
+    assert "use --scope global" in result.message
+    assert interop.load_state() == {}, "a refused enable must not touch state"
+
+    # Global scope carries no project anchor and keeps working everywhere.
+    dry = interop.enable("opencode", scope="global", dry_run=True)
+    assert dry.ok is True
+    assert dry.argv[0][:2] == ["/fake/bin/opencode", "mcp"]
+
+
+def test_enable_project_scope_allowed_for_a_checkout_anchor(monkeypatch, tmp_path):
+    checkout = tmp_path / "machina-checkout"
+    checkout.mkdir()
+    monkeypatch.setattr(interop, "_repo_root", lambda: checkout)
+    monkeypatch.setattr(interop, "_which", lambda spec: "/fake/bin/opencode")
+
+    result = interop.enable("opencode", scope="project", dry_run=True)
+
+    assert result.ok is True and result.changed is False
+    assert "needs a source checkout" not in result.message
+    argv = result.argv[0]
+    assert argv[:3] == ["/fake/bin/opencode", "mcp", "add"]
+    assert "--global" not in argv
+
+
+def test_enable_output_step_redacts_secrets(monkeypatch):
+    """N2': CLI output tails land in ActionResult steps secret-redacted."""
+    secret = "ghp_" + "a" * 36
+
+    def fake_run(argv, *, env=None, timeout=0.0, stdin_text=None, cwd=None):
+        if argv[1:] == ["--version"]:
+            return _result("codex-cli 0.162.1\n")
+        if argv[1:3] == ["mcp", "add"]:
+            return _result(f"Added global MCP server. Authorization: Bearer {secret}\n")
+        if argv[1:4] == ["mcp", "list", "--json"]:
+            return _result(json.dumps([{"name": "machina", "enabled": True}]))
+        raise AssertionError(f"unexpected: {argv}")
+
+    monkeypatch.setattr(interop, "_which", lambda spec: "/fake/bin/codex")
+    monkeypatch.setattr(interop, "_run", fake_run)
+
+    result = interop.enable("codex")
+
+    output_steps = [step for step in result.steps if step.startswith("output:")]
+    assert len(output_steps) == 1
+    assert secret not in output_steps[0]
+    assert "[REDACTED" in output_steps[0]
+
+
 # ─── Disable ────────────────────────────────────────────────────────────────
 
 
@@ -529,6 +656,58 @@ def test_load_state_tolerates_missing_and_corrupt_files(tmp_path):
     assert interop.load_state() == {}
     path.write_text(json.dumps(["not", "a", "dict"]), encoding="utf-8")
     assert interop.load_state() == {}
+
+
+def test_record_state_concurrent_writers_keep_both_keys(monkeypatch):
+    """N1': the flock guard covers load -> merge -> atomic replace.
+
+    The slow save widens the read-modify-write window so an unguarded pair
+    of writers would deterministically drop the first writer's key (both
+    load the empty state, each replace writes only its own entry).
+    """
+    real_load = interop.load_state
+    real_save = interop._save_state
+    events: list[str] = []
+    barrier = threading.Barrier(2)
+
+    def tracking_load():
+        events.append("load")
+        return real_load()
+
+    def slow_save(state):
+        events.append("save")
+        time.sleep(0.15)
+        real_save(state)
+
+    monkeypatch.setattr(interop, "load_state", tracking_load)
+    monkeypatch.setattr(interop, "_save_state", slow_save)
+
+    def writer(key: str, version: str) -> None:
+        barrier.wait()
+        interop._record_state(
+            interop.PLATFORMS[key],
+            enabled=True,
+            scope="global",
+            verify={"ok": True, "detail": key},
+            binary=f"/fake/bin/{key}",
+            version=version,
+        )
+
+    threads = [
+        threading.Thread(target=writer, args=("codex", "codex-cli 1")),
+        threading.Thread(target=writer, args=("hermes", "hermes 2")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert not any(thread.is_alive() for thread in threads), "writers must not deadlock"
+
+    state = interop.load_state()
+    assert state["codex"]["version"] == "codex-cli 1"
+    assert state["hermes"]["version"] == "hermes 2"
+    # Serialized: each writer loads the state the other just saved.
+    assert events[:4] == ["load", "save", "load", "save"]
 
 
 # ─── CLI surface ────────────────────────────────────────────────────────────

@@ -13,12 +13,14 @@ import contextlib
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
 import pytest
 
 from machina import mcp_server
+from machina.core import child_process
 from machina.mcp_server import ProcessResult
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -310,6 +312,48 @@ def test_run_process_honors_explicit_cwd(tmp_path, monkeypatch):
     )
     assert result.returncode == 0
     assert Path(result.output.strip()).resolve() == pinned.resolve()
+
+
+def test_run_process_spawn_failure_is_typed_not_raised():
+    """F2 union: a spawn OSError comes back in the result, never raised."""
+    result = mcp_server._run_process(["/definitely/not/a/machina-test-binary"], timeout=5.0)
+    assert result.returncode is None
+    assert result.output == ""
+    assert result.stderr, "the OSError message travels in stderr"
+    assert result.timed_out is False
+    assert result.truncated is False
+
+
+def test_run_bounded_default_cwd_is_call_time_launch_directory(monkeypatch, tmp_path):
+    """N2 (union API): the leaf runner's default child cwd is call-time os.getcwd()."""
+    monkeypatch.chdir(tmp_path)
+    result = child_process.run_bounded(
+        [sys.executable, "-c", "import os, sys; sys.stdout.write(os.getcwd())"],
+        timeout=30.0,
+    )
+    assert result.returncode == 0
+    assert Path(result.stdout.strip()).resolve() == tmp_path.resolve()
+
+
+def test_run_bounded_cancel_event_kills_the_child_tree():
+    """F2 union: caller cancellation stops the group like the deadline does."""
+    cancel = threading.Event()
+    setter = threading.Timer(0.5, cancel.set)
+    setter.daemon = True
+    setter.start()
+    start = time.monotonic()
+    try:
+        result = child_process.run_bounded(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            timeout=10.0,
+            cancel_event=cancel,
+        )
+    finally:
+        setter.cancel()
+    elapsed = time.monotonic() - start
+    assert result.timed_out is False
+    assert result.returncode is not None
+    assert elapsed < 15.0
 
 
 def test_child_env_carries_only_the_allowlist(monkeypatch):

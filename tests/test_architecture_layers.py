@@ -157,7 +157,7 @@ _CORE_IMPORT_CEILINGS = {
 # machina/research/benchmark.py's architecture section (round-2 review N6:
 # the hand-mirrored literal drifted once already). Moves only with the delta
 # table documented inside test_deferred_import_count_ratchet.
-DEFERRED_IMPORT_CAP = 684
+DEFERRED_IMPORT_CAP = 685
 
 
 def test_module_level_core_imports_only_shrink():
@@ -227,6 +227,15 @@ def test_deferred_import_count_ratchet():
     #   readiness branch binds chatgpt_auth.status lazily so a status probe
     #   never imports the auth/provider modules unless chatgpt is selected.
     #   Census 683 -> 684, so cap 683 -> 684.
+    #   Round-5 interop review (2026-10-14): +1 machina/interop.py — the
+    #   enable/disable output tail embedded in ActionResult steps is now
+    #   secret-redacted (N2'); the helper binds machina.memory.redaction
+    #   lazily so importing machina.interop stays stdlib-only (same idiom as
+    #   the mcp_server shim). The F2 extraction of run_bounded into
+    #   machina/core/child_process.py added no deferred imports (stdlib
+    #   imports, module level) and kept both callers' per-call
+    #   ``_child_process`` bindings, so the census moves by exactly +1.
+    #   Census 684 -> 685, so cap 684 -> 685.
     # Procedure: this number may only move with a delta table like the above
     # in this comment; silent growth fails the suite by design.
     total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))

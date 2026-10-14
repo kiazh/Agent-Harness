@@ -18,7 +18,9 @@ Exposes exactly three tools to MCP hosts (OpenCode, Codex, Claude Desktop):
 Process discipline shares the repo's terminal-tool leaf mechanics
 (``machina/core/child_process.py``, AH-AUDIT-010/023): children run with a
 minimal environment allowlist, their own process group, a kill-tree
-deadline, and bounded output. The tool registry is deliberately not imported
+deadline, and bounded output — the dual-stream bounded runner itself lives
+in that leaf (round-5 review F2) and this shim adapts it to
+``ProcessResult``. The tool registry is deliberately not imported
 at startup so the server stays light; status imports Machina pieces lazily
 inside the call.
 """
@@ -30,10 +32,7 @@ import contextlib
 import json
 import os
 import re
-import subprocess
 import sys
-import threading
-import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -142,7 +141,7 @@ def _redacted_tail(text: str, limit: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Bounded child process runner (terminal.py idiom: process group + kill tree)
+# Bounded child process runner (thin adapter over child_process.run_bounded)
 # ---------------------------------------------------------------------------
 
 
@@ -157,11 +156,10 @@ class ProcessResult:
     truncated: bool
 
 
-# The process-group helpers (group_members / kill_tree) live in
-# machina/core/child_process.py; _run_process binds them per call via
-# _child_process(). The runner itself stays local: the shim reads stdout and
-# stderr separately and reports a timed_out flag instead of raising, unlike
-# terminal.py's single-stream CommandOutput runner.
+# The bounded runner — twin capped readers, retained-pgid group wait, timer
+# and kill-tree teardown, typed spawn-failure capture — lives once in
+# machina/core/child_process.py (round-5 review F2); _run_process binds the
+# leaf per call via _child_process() and maps its result onto ProcessResult.
 
 
 def _default_child_cwd() -> Path:
@@ -179,7 +177,7 @@ def _default_child_cwd() -> Path:
 
 
 def _run_process(cmd: list[str], *, timeout: float, cwd: Path | None = None) -> ProcessResult:
-    """Run one child in its own process group with a hard kill-tree deadline.
+    """Run one child through the shared bounded runner (round-5 review F2).
 
     ``cwd=None`` (default) runs the child in the host launch directory
     captured at call time (see ``_default_child_cwd``); pass ``cwd`` to pin a
@@ -187,103 +185,25 @@ def _run_process(cmd: list[str], *, timeout: float, cwd: Path | None = None) -> 
     chatter) are read separately, each capped. Prolific stdout stops the
     child; stderr past its cap is drained and discarded so the pipe cannot
     deadlock. On deadline expiry the whole group is killed; this function
-    never waits past ``timeout`` plus bounded teardown.
+    never waits past ``timeout`` plus bounded teardown. Spawn failures come
+    back as a typed result (``stderr``), never raised.
     """
     child_cwd = cwd if cwd is not None else _default_child_cwd()
-    mechanics = _child_process()
-    popen_kwargs: dict[str, Any] = {}
-    if os.name == "nt":
-        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    else:
-        popen_kwargs["start_new_session"] = True
-    with subprocess.Popen(
+    result = _child_process().run_bounded(
         cmd,
-        shell=False,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        cwd=str(child_cwd),
         env=_sanitized_env(),
-        **popen_kwargs,
-    ) as process:
-        # R07: retain the group id independently of the launcher so an
-        # already-exited leader cannot hide surviving descendants.
-        pgid: int | None = None if os.name == "nt" else process.pid
-        expired = threading.Event()
-        exceeded = threading.Event()
-
-        def stop_on_timeout() -> None:
-            if not mechanics.group_members(pgid, process):
-                return
-            expired.set()
-            mechanics.kill_tree(process, pgid)
-
-        def read_stream(stream: Any, parts: list[str], is_stdout: bool, cap: int) -> None:
-            total = 0
-            while True:
-                chunk = stream.read(8192)
-                if not chunk:
-                    return
-                room = cap - total
-                if room <= 0:
-                    if is_stdout:
-                        exceeded.set()
-                        return
-                    continue  # stderr past the cap: keep draining, discard
-                kept = chunk[:room]
-                parts.append(kept)
-                total += len(kept)
-                if is_stdout and len(chunk) > room:
-                    exceeded.set()
-                    return
-
-        timer = threading.Timer(timeout, stop_on_timeout)
-        timer.daemon = True
-        timer.start()
-        try:
-            if process.stdout is None or process.stderr is None:
-                raise RuntimeError("process pipes unavailable")
-            output_parts: list[str] = []
-            error_parts: list[str] = []
-            readers = [
-                threading.Thread(
-                    target=read_stream,
-                    args=(process.stdout, output_parts, True, MAX_OUTPUT_CHARS),
-                    daemon=True,
-                ),
-                threading.Thread(
-                    target=read_stream,
-                    args=(process.stderr, error_parts, False, MAX_STDERR_CHARS),
-                    daemon=True,
-                ),
-            ]
-            for reader in readers:
-                reader.start()
-            for reader in readers:
-                reader.join(timeout=timeout + 5)
-            if exceeded.is_set():
-                # Prolific stdout: stop the whole group.
-                mechanics.kill_tree(process, pgid)
-            # Completion semantics follow terminal.py: the launcher may exit
-            # while descendants keep running, so wait for the whole group —
-            # bounded by the deadline timer, which kills what is still alive.
-            while not expired.is_set() and mechanics.group_members(pgid, process):
-                time.sleep(0.02)
-            if (expired.is_set() or exceeded.is_set()) and mechanics.group_members(pgid, process):
-                mechanics.kill_tree(process, pgid)
-            process.wait()
-        finally:
-            timer.cancel()
-        return ProcessResult(
-            returncode=process.returncode,
-            output="".join(output_parts),
-            stderr="".join(error_parts),
-            timed_out=expired.is_set(),
-            truncated=exceeded.is_set(),
-        )
+        timeout=timeout,
+        cwd=child_cwd,
+        max_stdout=MAX_OUTPUT_CHARS,
+        max_stderr=MAX_STDERR_CHARS,
+    )
+    return ProcessResult(
+        returncode=result.returncode,
+        output=result.stdout,
+        stderr=result.stderr,
+        timed_out=result.timed_out,
+        truncated=result.truncated,
+    )
 
 
 # ---------------------------------------------------------------------------

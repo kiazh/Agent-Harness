@@ -320,6 +320,12 @@ def test_resolve_tokens_missing_credentials_raises_with_hint(fake_home):
     assert "codex login" in str(excinfo.value)
 
 
+def test_login_hint_points_at_the_landed_auth_login_command():
+    """F7: `machina auth login` shipped — the hint must not call it future."""
+    assert "machina auth login" in chatgpt_auth.LOGIN_HINT
+    assert "once that command lands" not in chatgpt_auth.LOGIN_HINT
+
+
 def test_status_reports_source_and_never_tokens(fake_home):
     assert chatgpt_auth.status()["signed_in"] is False
 

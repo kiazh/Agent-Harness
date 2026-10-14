@@ -29,36 +29,48 @@ Design constraints (mirrors ``machina/mcp_server``):
 * Module imports are stdlib only; the ``machina.core.child_process`` leaf is
   bound lazily per call (``_child_process``) so importing this module never
   pulls the agent runtime.
-* Every spawn is bounded (<= 30s), runs with the shared minimal environment
-  allowlist, its own process group, and a kill-tree deadline; outputs are
-  size-capped and ANSI-stripped. Platform auth files are never touched.
+* Every spawn is bounded (<= 30s) through the shared runner
+  (``child_process.run_bounded``): minimal environment allowlist, its own
+  process group, a kill-tree deadline, and size-capped ANSI-stripped output
+  that is secret-redacted before it lands in an ActionResult. Platform auth
+  files are never touched.
 * The state file is written atomically (temp + ``os.replace``) with mode
-  0600. ``MACHINA_INTEROP_STATE_FILE`` overrides its path (tests).
+  0600 under an flock guard covering the read-merge-replace section, so two
+  concurrent writers cannot drop each other's keys.
+  ``MACHINA_INTEROP_STATE_FILE`` overrides its path (tests).
 
 Scope notes: OpenCode supports project *and* global registration; Codex and
 Hermes register user-level only (their CLIs have no project flag), so a
 ``scope="project"`` request for them is clamped to ``global`` and reported
 as such. Project-scope OpenCode files resolve against the Machina checkout
-root (``_repo_root``), which is the project the registration belongs to.
+root (``_repo_root``), which is the project the registration belongs to; in
+a wheel install that anchor is site-packages, so project scope is refused
+with a pointer to ``--scope global`` (round-5 review F3).
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import shlex
 import shutil
-import subprocess
 import sys
 import tempfile
-import threading
-import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+# State-file locking follows machina/connectors/store.py: an exclusive OS
+# file lock on a sibling ``.lock`` file (POSIX flock; msvcrt on Windows).
+_WINDOWS = os.name == "nt"
+if _WINDOWS:  # pragma: no cover - platform branch
+    import msvcrt
+else:
+    import fcntl
 
 __all__ = [
     "PLATFORMS",
@@ -191,6 +203,21 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+# Installed wheels resolve ``_repo_root()`` to a site-packages directory;
+# registering project scope there would write next to the installed package
+# instead of a real checkout (round-5 review F3).
+_SITE_PACKAGES_DIRS = frozenset({"site-packages", "dist-packages"})
+
+PROJECT_SCOPE_NEEDS_CHECKOUT = (
+    "project scope needs a source checkout; use --scope global or run from the checkout"
+)
+
+
+def _in_site_packages(path: Path) -> bool:
+    """True when *path* resolves inside an installed-package tree."""
+    return any(part in _SITE_PACKAGES_DIRS for part in path.resolve().parts)
+
+
 def _hermes_home() -> Path:
     override = os.environ.get("HERMES_HOME", "").strip()
     return Path(override) if override else Path.home() / ".hermes"
@@ -264,13 +291,18 @@ def remove_argv(spec: PlatformSpec, binary: str) -> list[str] | None:
 
 
 # ---------------------------------------------------------------------------
-# Bounded child process runner (shared leaf mechanics, mcp_server idiom)
+# Bounded child process runner (thin adapter over child_process.run_bounded)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class RunResult:
-    """Outcome of one bounded child process."""
+    """Outcome of one bounded child process.
+
+    Public shape kept from before the F2 extraction; ``_run`` maps the
+    shared runner's :class:`~machina.core.child_process.BoundedResult` onto
+    it.
+    """
 
     returncode: int | None
     output: str
@@ -312,6 +344,23 @@ def _bounded(text: str, limit: int) -> str:
     return text[: max(0, limit - len("\n[truncated]"))] + "\n[truncated]"
 
 
+def _redact_output(text: str) -> str:
+    """ANSI-stripped, secret-redacted diagnostics (round-5 review N2').
+
+    Platform CLI output can echo credentials (a token in an error message);
+    the redactor is bound lazily (same idiom as ``machina/mcp_server``) so
+    importing this module stays stdlib-only, and a redaction failure
+    degrades to the raw text rather than dropping the diagnostic.
+    """
+    text = _strip_ansi(text).strip()
+    try:
+        from machina.memory.redaction import redact_secrets
+
+        return redact_secrets(text).text
+    except Exception:
+        return text
+
+
 def _run(
     argv: list[str],
     *,
@@ -320,127 +369,33 @@ def _run(
     stdin_text: str | None = None,
     cwd: Path | None = None,
 ) -> RunResult:
-    """Run one child in its own process group with a hard kill-tree deadline.
+    """Run one child through the shared bounded runner (round-5 review F2).
 
-    Mirrors ``machina/mcp_server``'s runner: stdout/stderr are read on
-    threads (each capped; prolific stdout stops the child, stderr past its
-    cap is drained and discarded), completion follows the retained process
-    group, and the deadline kills the whole tree. Never raises for spawn
-    failures — the OSError is returned in ``stderr``.
+    Thin adapter over ``machina.core.child_process.run_bounded``: process
+    group + kill-tree deadline, twin capped readers, optional stdin text,
+    and spawn failures returned in ``stderr`` (never raised). The project
+    anchor ``_repo_root()`` stays this module's default child cwd; a missing
+    anchor falls back to the call-time launch directory inside the leaf.
     """
-    mechanics = _child_process()
-    popen_kwargs: dict[str, Any] = {}
-    if os.name == "nt":
-        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    else:
-        popen_kwargs["start_new_session"] = True
-    child_cwd = cwd if cwd is not None else _repo_root()
-    if not child_cwd.is_dir():
-        child_cwd = None
-    try:
-        process = subprocess.Popen(
-            argv,
-            shell=False,
-            stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=str(child_cwd) if child_cwd is not None else None,
-            env=env,
-            **popen_kwargs,
-        )
-    except OSError as error:
-        return RunResult(
-            returncode=None, output="", stderr=str(error), timed_out=False, truncated=False
-        )
-
-    with process:
-        pgid: int | None = None if os.name == "nt" else process.pid
-        expired = threading.Event()
-        exceeded = threading.Event()
-
-        def stop_on_timeout() -> None:
-            if not mechanics.group_members(pgid, process):
-                return
-            expired.set()
-            mechanics.kill_tree(process, pgid)
-
-        def read_stream(stream: Any, parts: list[str], is_stdout: bool, cap: int) -> None:
-            total = 0
-            while True:
-                chunk = stream.read(8192)
-                if not chunk:
-                    return
-                room = cap - total
-                if room <= 0:
-                    if is_stdout:
-                        exceeded.set()
-                        return
-                    continue  # stderr past the cap: keep draining, discard
-                kept = chunk[:room]
-                parts.append(kept)
-                total += len(kept)
-                if is_stdout and len(chunk) > room:
-                    exceeded.set()
-                    return
-
-        if stdin_text is not None and process.stdin is not None:
-            try:
-                process.stdin.write(stdin_text)
-                process.stdin.close()
-            except (OSError, ValueError):
-                pass
-
-        timer = threading.Timer(timeout, stop_on_timeout)
-        timer.daemon = True
-        timer.start()
-        output_parts: list[str] = []
-        error_parts: list[str] = []
-        try:
-            if process.stdout is None or process.stderr is None:
-                return RunResult(
-                    returncode=None,
-                    output="",
-                    stderr="process pipes unavailable",
-                    timed_out=False,
-                    truncated=False,
-                )
-            readers = [
-                threading.Thread(
-                    target=read_stream,
-                    args=(process.stdout, output_parts, True, MAX_OUTPUT_CHARS),
-                    daemon=True,
-                ),
-                threading.Thread(
-                    target=read_stream,
-                    args=(process.stderr, error_parts, False, MAX_STDERR_CHARS),
-                    daemon=True,
-                ),
-            ]
-            for reader in readers:
-                reader.start()
-            for reader in readers:
-                reader.join(timeout=timeout + 5)
-            if exceeded.is_set():
-                mechanics.kill_tree(process, pgid)
-            # The launcher may exit while group descendants keep running:
-            # wait for the whole group, bounded by the deadline timer.
-            while not expired.is_set() and mechanics.group_members(pgid, process):
-                time.sleep(0.02)
-            if (expired.is_set() or exceeded.is_set()) and mechanics.group_members(pgid, process):
-                mechanics.kill_tree(process, pgid)
-            process.wait()
-        finally:
-            timer.cancel()
-        return RunResult(
-            returncode=process.returncode,
-            output="".join(output_parts),
-            stderr="".join(error_parts),
-            timed_out=expired.is_set(),
-            truncated=exceeded.is_set(),
-        )
+    anchor: Path | None = cwd if cwd is not None else _repo_root()
+    if anchor is not None and not anchor.is_dir():
+        anchor = None
+    result = _child_process().run_bounded(
+        argv,
+        env=env,
+        timeout=timeout,
+        stdin_text=stdin_text,
+        cwd=anchor,
+        max_stdout=MAX_OUTPUT_CHARS,
+        max_stderr=MAX_STDERR_CHARS,
+    )
+    return RunResult(
+        returncode=result.returncode,
+        output=result.stdout,
+        stderr=result.stderr,
+        timed_out=result.timed_out,
+        truncated=result.truncated,
+    )
 
 
 def _which(spec: PlatformSpec) -> str | None:
@@ -705,6 +660,44 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+@contextlib.contextmanager
+def _state_lock() -> Iterator[None]:
+    """Exclusive lock around one state read-modify-write (round-5 review N1').
+
+    ``_record_state`` is load -> merge -> atomic replace; two concurrent
+    writers could interleave and the last replace would drop the other's
+    keys. Mirroring ``machina/connectors/store.py``, an exclusive OS lock on
+    a sibling ``.lock`` file serializes the whole section (POSIX flock;
+    msvcrt on Windows). The lock file is created but never holds state, and
+    the atomic replace keeps the state file always readable.
+    """
+    path = state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    acquired = False
+    try:
+        if _WINDOWS:  # pragma: no cover - platform branch
+            # msvcrt locks a byte range from the current file position.
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        acquired = True
+        yield
+    finally:
+        try:
+            if acquired:
+                if _WINDOWS:  # pragma: no cover - platform branch
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 def _record_state(
     spec: PlatformSpec,
     *,
@@ -714,23 +707,24 @@ def _record_state(
     binary: str | None,
     version: str | None,
 ) -> None:
-    state = load_state()
-    previous = state.get(spec.key)
-    previous = previous if isinstance(previous, dict) else {}
-    registered_at = (
-        previous.get("registered_at")
-        if not enabled
-        else previous.get("registered_at") or _now_iso()
-    )
-    state[spec.key] = {
-        "enabled": bool(enabled),
-        "scope": scope,
-        "registered_at": registered_at,
-        "verify": {"ok": bool(verify.get("ok")), "detail": str(verify.get("detail", ""))},
-        "binary": binary,
-        "version": version,
-    }
-    _save_state(state)
+    with _state_lock():
+        state = load_state()
+        previous = state.get(spec.key)
+        previous = previous if isinstance(previous, dict) else {}
+        registered_at = (
+            previous.get("registered_at")
+            if not enabled
+            else previous.get("registered_at") or _now_iso()
+        )
+        state[spec.key] = {
+            "enabled": bool(enabled),
+            "scope": scope,
+            "registered_at": registered_at,
+            "verify": {"ok": bool(verify.get("ok")), "detail": str(verify.get("detail", ""))},
+            "binary": binary,
+            "version": version,
+        }
+        _save_state(state)
 
 
 # ---------------------------------------------------------------------------
@@ -913,6 +907,21 @@ def enable(
             steps=steps,
         )
 
+    # F3: in a wheel install the project anchor is site-packages, so a
+    # project-scope registration would target the installed package instead
+    # of a real checkout. Refuse with the actionable alternative; global
+    # scope carries no anchor and keeps working everywhere.
+    if effective_scope == "project" and _in_site_packages(_repo_root()):
+        steps.append(f"project scope anchor is an installed package: {_repo_root()}")
+        return ActionResult(
+            spec.key,
+            "enable",
+            False,
+            False,
+            PROJECT_SCOPE_NEEDS_CHECKOUT,
+            steps=steps,
+        )
+
     argv = add_argv(spec, binary, effective_scope)
     if dry_run:
         steps.append(f"would run: {shlex.join(argv)}")
@@ -957,7 +966,7 @@ def enable(
         steps.append("registration command timed out (killed)")
     else:
         steps.append(f"registration command exited {result.returncode}")
-    tail = _bounded(_strip_ansi((result.output or "") + (result.stderr or "")).strip(), 800)
+    tail = _bounded(_redact_output((result.output or "") + (result.stderr or "")), 800)
     if tail:
         steps.append(f"output: {tail}")
 
@@ -1037,7 +1046,7 @@ def disable(platform: str) -> ActionResult:
         steps.append("remove command timed out (killed)")
     else:
         steps.append(f"remove command exited {result.returncode}")
-    tail = _bounded(_strip_ansi((result.output or "") + (result.stderr or "")).strip(), 800)
+    tail = _bounded(_redact_output((result.output or "") + (result.stderr or "")), 800)
     if tail:
         steps.append(f"output: {tail}")
 

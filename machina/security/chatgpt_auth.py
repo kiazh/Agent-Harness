@@ -45,10 +45,7 @@ REDIRECT_URI = f"http://localhost:{CALLBACK_PORT}{CALLBACK_PATH}"
 AUTH_FILE_ENV = "MACHINA_CHATGPT_AUTH_FILE"
 REFRESH_SKEW_SECONDS = 120
 AUTH_NAMESPACE = "https://api.openai.com/auth"
-LOGIN_HINT = (
-    "run `codex login` (Machina imports its tokens automatically) "
-    "or `machina auth login` once that command lands"
-)
+LOGIN_HINT = "run `codex login` (Machina imports its tokens automatically) or `machina auth login`"
 _STORE_FIELDS = ("access_token", "refresh_token", "id_token", "account_id", "expires_at")
 _DEFAULT_TIMEOUT = 20.0
 
