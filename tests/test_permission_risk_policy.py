@@ -337,3 +337,140 @@ def test_recursive_copy_without_protected_descendants_stays_routine(workspace):
         tool="terminal", **action_for_tool("terminal", {"command": "cp -R plain/ drop/"})
     )
     assert decide(request).verdict == "allowed"
+
+
+# 2026-10-14 adversarial re-verification, R01 follow-up: value-taking options
+# consumed no values, so `rg -g '*' REVIEW_TOKEN` read the glob value as the
+# pattern and the pattern as a (non-directory) path; the default recursive
+# walk then escaped review and returned synthetic credentials from
+# `credentials`/`production.env`/`.env` without approval.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rg -g '*' REVIEW_TOKEN",
+        "rg --glob '*' REVIEW_TOKEN",
+        "rg --iglob '*' REVIEW_TOKEN",
+        "rg -g '*' REVIEW_TOKEN .",
+        "rg --glob '*' REVIEW_TOKEN .",
+        "rg -t md REVIEW_TOKEN",
+        "rg --max-depth 1 REVIEW_TOKEN",
+        "rg -m 5 REVIEW_TOKEN",
+        "rg -j 4 REVIEW_TOKEN",
+        "rg -A 2 REVIEW_TOKEN",
+        "rg -e REVIEW_TOKEN",
+        "rg -f patterns.txt",
+    ],
+)
+def test_rg_value_options_cannot_hide_the_default_walk(workspace, command):
+    (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+    request = build_request(tool="terminal", **action_for_tool("terminal", {"command": command}))
+    decision = decide(request)
+    assert decision.verdict == "pending", (command, decision.reason)
+    assert "opaque_execution_review" in decision.reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rg REVIEW_TOKEN README.md",
+        "rg -g '*' REVIEW_TOKEN README.md",
+        "rg --glob '*' REVIEW_TOKEN README.md",
+        "rg -t md REVIEW_TOKEN README.md",
+        "rg -m 1 REVIEW_TOKEN README.md",
+        "rg -A 2 REVIEW_TOKEN README.md",
+        "rg -e REVIEW_TOKEN README.md",
+        "rg --regexp=REVIEW_TOKEN README.md",
+        "rg -f patterns.txt README.md",
+    ],
+)
+def test_rg_value_options_with_regular_file_operand_stay_routine(workspace, command):
+    (workspace / "README.md").write_text("REVIEW_TOKEN=docs\n", encoding="utf-8")
+    (workspace / "patterns.txt").write_text("REVIEW_TOKEN\n", encoding="utf-8")
+    request = build_request(tool="terminal", **action_for_tool("terminal", {"command": command}))
+    assert decide(request).verdict == "allowed", command
+
+
+# 2026-10-14 adversarial re-verification, R02 follow-up (a): an inspection
+# truncated by the entry cap cannot prove the absence of protected
+# components; the scan used to fail open and let the copy write a .git
+# nested past 4,096 entries without approval.
+def test_recursive_copy_beyond_inspection_cap_requires_review(workspace):
+    bulk = workspace / "big" / "bulk"
+    bulk.mkdir(parents=True)
+    for index in range(4200):
+        (bulk / f"f{index:04d}").touch()
+    deep_git = bulk / "deep" / ".git"
+    deep_git.mkdir(parents=True)
+    (deep_git / "config").write_text("attacker-controlled\n", encoding="utf-8")
+    (workspace / "target").mkdir()
+    request = build_request(
+        tool="terminal", **action_for_tool("terminal", {"command": "cp -R big/. target"})
+    )
+    decision = decide(request)
+    assert decision.verdict == "pending"
+    assert "security_settings" in decision.reason
+
+
+# 2026-10-14 adversarial re-verification, R02 follow-up (b): the scanner
+# skipped symlink entries even when the effective copy dereferences them
+# (`cp -L`), so a link to a directory containing .git was copied without
+# approval. Descendants of a dereferenced link are written by the copy and
+# must be inspected; a link copied as a link (default / -P) writes none.
+def test_recursive_copy_dereferencing_symlink_to_protected_dir_requires_review(workspace):
+    real = workspace / "real"
+    (real / ".git").mkdir(parents=True)
+    (real / ".git" / "config").write_text("attacker-controlled\n", encoding="utf-8")
+    (workspace / "source").mkdir()
+    (workspace / "source" / "evil").symlink_to(real, target_is_directory=True)
+    (workspace / "target").mkdir()
+
+    def request(command):
+        return build_request(tool="terminal", **action_for_tool("terminal", {"command": command}))
+
+    for command in ("cp -RL source/. target", "cp -R --dereference source/. target"):
+        decision = decide(request(command))
+        assert decision.verdict == "pending", (command, decision.reason)
+        assert "security_settings" in decision.reason
+    # Default and -P keep links as links: no descendants are written.
+    for command in ("cp -R source/. target", "cp -RP source/. target"):
+        assert decide(request(command)).verdict == "allowed", command
+
+
+def test_recursive_copy_of_link_named_git_requires_review(workspace):
+    real_git = workspace / "real-git"
+    real_git.mkdir()
+    (real_git / "config").write_text("attacker-controlled\n", encoding="utf-8")
+    source = workspace / "source2"
+    source.mkdir()
+    (source / ".git").symlink_to(real_git, target_is_directory=True)
+    (workspace / "target2").mkdir()
+    request = build_request(
+        tool="terminal", **action_for_tool("terminal", {"command": "cp -R source2/. target2"})
+    )
+    decision = decide(request)
+    assert decision.verdict == "pending"
+    assert "security_settings" in decision.reason
+    # -H follows command-line operand links; the operand itself is the link
+    # here, so its reachable target is inspected too.
+    protected = workspace / "protected"
+    (protected / ".git").mkdir(parents=True)
+    (protected / ".git" / "config").write_text("attacker-controlled\n", encoding="utf-8")
+    linkdir = workspace / "linkdir"
+    linkdir.symlink_to(protected, target_is_directory=True)
+    (workspace / "target3").mkdir()
+    linked = build_request(
+        tool="terminal", **action_for_tool("terminal", {"command": "cp -RH linkdir target3"})
+    )
+    assert decide(linked).verdict == "pending"
+
+
+def test_recursive_copy_with_dereferenced_symlink_cycle_terminates(workspace):
+    source = workspace / "looped"
+    source.mkdir()
+    (source / "notes.txt").write_text("hello\n", encoding="utf-8")
+    (source / "self").symlink_to(source, target_is_directory=True)
+    (workspace / "loop-target").mkdir()
+    request = build_request(
+        tool="terminal", **action_for_tool("terminal", {"command": "cp -RL looped/. loop-target"})
+    )
+    assert decide(request).verdict == "allowed"

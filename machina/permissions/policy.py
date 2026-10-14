@@ -151,6 +151,108 @@ def sensitive_path(value: str, root: Path | None = None) -> bool:
     )
 
 
+# ripgrep options that consume the NEXT argv value (rg accepts both
+# ``--opt value`` and ``--opt=value`` for every option below; audited against
+# `rg --help`, ripgrep 15.x). Unconsumed values were misread as operands:
+# `rg -g '*' PATTERN` treated the glob '*' as the pattern and the real
+# pattern as a (non-directory) path, hiding the default directory walk.
+_RG_VALUE_LONG_OPTIONS = frozenset(
+    {
+        "--after-context",
+        "--before-context",
+        "--color",
+        "--colors",
+        "--context",
+        "--context-separator",
+        "--dfa-size-limit",
+        "--encoding",
+        "--engine",
+        "--field-context-separator",
+        "--field-match-separator",
+        "--file",
+        "--generate",
+        "--glob",
+        "--hostname-bin",
+        "--hyperlink-format",
+        "--iglob",
+        "--ignore-file",
+        "--max-columns",
+        "--max-count",
+        "--max-depth",
+        "--max-filesize",
+        "--path-separator",
+        "--pre",
+        "--pre-glob",
+        "--regex-size-limit",
+        "--regexp",
+        "--replace",
+        "--sort",
+        "--sortr",
+        "--threads",
+        "--type",
+        "--type-add",
+        "--type-clear",
+        "--type-not",
+    }
+)
+_RG_VALUE_SHORT_OPTIONS = frozenset("ABCdEefgjmMrtT")
+_RG_PATTERN_OPTIONS = frozenset({"-e", "--regexp", "-f", "--file"})
+
+
+def _rg_directory_walk(args: list[str], cwd: str) -> bool:
+    """True when rg will read descendants rather than named regular files.
+
+    The pattern never names the files the walk reaches, so a default
+    directory walk can surface a descendant credential file
+    (``credentials``, ``production.env``). Only reads whose operand set is
+    made entirely of regular files stay routine. Value-taking options must
+    consume their values before operand classification, otherwise a flag
+    value (or the shifted pattern) is mistaken for a path operand.
+    """
+    positionals: list[str] = []
+    pattern_from_flag = False
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if arg == "--":
+            positionals.extend(args[index:])
+            break
+        if arg.startswith("--"):
+            option = arg.partition("=")[0]
+            if option in _RG_PATTERN_OPTIONS:
+                pattern_from_flag = True
+                if "=" not in arg:
+                    index += 1  # the pattern itself
+            elif "=" not in arg and option in _RG_VALUE_LONG_OPTIONS:
+                index += 1  # the option's value
+            continue
+        if arg.startswith("-") and len(arg) > 1:
+            cluster = arg[1:]
+            for position, char in enumerate(cluster):
+                if char in {"e", "f"}:
+                    pattern_from_flag = True
+                if char in _RG_VALUE_SHORT_OPTIONS:
+                    if position == len(cluster) - 1:
+                        index += 1  # value is the next argv
+                    break
+            continue
+        positionals.append(arg)
+    paths = positionals if pattern_from_flag else positionals[1:]
+    if not paths:
+        # No path operand: rg walks the cwd.
+        return True
+    for value in paths:
+        path = Path(value.replace("\\", "/")).expanduser()
+        base = path if path.is_absolute() else Path(cwd or ".") / path
+        try:
+            if base.is_dir():
+                return True
+        except OSError:
+            return True
+    return False
+
+
 def _recursive_traversal(argv: list[str], cwd: str) -> bool:
     """True when an execution walks directory descendants.
 
@@ -197,41 +299,9 @@ def _recursive_traversal(argv: list[str], cwd: str) -> bool:
         # (or the cwd when no path operand is given) is walked by default,
         # so visible credential files (credentials, production.env) are
         # reachable. Read sets made only of regular-file operands stay
-        # routine.
-        pattern_from_flag = False
-        consume_next = False
-        paths: list[str] = []
-        for arg in args:
-            if consume_next:
-                consume_next = False
-                continue
-            if arg in {"-e", "--regexp", "-f", "--file"}:
-                pattern_from_flag = True
-                consume_next = True
-                continue
-            if arg.startswith(("--regexp=", "--file=")):
-                pattern_from_flag = True
-                continue
-            if not arg.startswith("--") and arg.startswith(("-e", "-f")) and arg[2:]:
-                pattern_from_flag = True
-                continue
-            if arg.startswith("-"):
-                continue
-            paths.append(arg)
-        if not pattern_from_flag:
-            # First positional is the PATTERN (rg [OPTIONS] PATTERN [PATH...]).
-            paths = paths[1:]
-        if not paths:
-            return True
-        for value in paths:
-            path = Path(value.replace("\\", "/")).expanduser()
-            base = path if path.is_absolute() else Path(cwd or ".") / path
-            try:
-                if base.is_dir():
-                    return True
-            except OSError:
-                return True
-        return False
+        # routine; value-taking options are consumed so flag values never
+        # masquerade as operands (R01 follow-up).
+        return _rg_directory_walk(args, cwd)
     if name == "find":
         # find walks its roots; any directory operand (or no operand at all)
         # descends into potentially sensitive dotfiles.
@@ -257,18 +327,35 @@ def _recursive_traversal(argv: list[str], cwd: str) -> bool:
 _PROTECTED_COMPONENTS = frozenset({".git", ".machina"})
 
 
-def _tree_contains_component(root: Path, names: frozenset[str], *, max_entries: int = 4096) -> bool:
-    """Bounded, symlink-safe scan for protected path components (R02).
+def _tree_contains_component(
+    root: Path,
+    names: frozenset[str],
+    *,
+    max_entries: int = 4096,
+    follow_symlinks: bool = False,
+) -> bool:
+    """Scan for protected path components reachable by a copy (R02).
 
-    Never follows symlinks (a copied symlink is just a link, not descendants)
-    and stops after *max_entries* to keep the decision cheap on huge trees.
+    Descendant symlinks are traversed only when the effective copy
+    dereferences them (``cp -L``); a copied link alone writes no descendants.
+    A truncated scan (inspection cap) cannot prove the absence of protected
+    components, so it reports True (fail closed) and forces review instead of
+    allowing the copy. Symlink cycles are guarded by a visited-target set.
     """
     if not root.is_dir():
         return False
     seen = 0
     stack = [root]
-    while stack and seen < max_entries:
+    visited: set[str] = set()
+    while stack:
         current = stack.pop()
+        try:
+            identity = str(current.resolve())
+        except OSError:
+            identity = str(current)
+        if identity in visited:
+            continue
+        visited.add(identity)
         try:
             entries = list(current.iterdir())
         except OSError:
@@ -276,24 +363,32 @@ def _tree_contains_component(root: Path, names: frozenset[str], *, max_entries: 
         for entry in entries:
             seen += 1
             if seen > max_entries:
-                return False
+                # Cannot prove absence beyond the cap: fail closed.
+                return True
             if entry.name.lower() in names:
                 return True
             try:
-                if entry.is_dir() and not entry.is_symlink():
+                if entry.is_dir() and (follow_symlinks or not entry.is_symlink()):
                     stack.append(entry)
             except OSError:
                 continue
     return False
 
 
-def _recursive_copy_sources(argv: list[str], cwd: str) -> list[Path]:
-    """Directory sources of a recursive ``cp``/``mv``, else ``[]``.
+def _recursive_copy_sources(argv: list[str], cwd: str) -> list[tuple[Path, bool]]:
+    """Directory sources of a recursive ``cp``/``mv`` plus link-follow mode.
 
     R02: the operands of a recursive directory write name only the roots.
     ``cp -R source/. target`` overwrites ``target/.git/config`` although the
     destination operand is just ``target``; returning the source roots lets
     the policy scan the descendants the command will actually write.
+
+    Follow mode mirrors cp's symlink semantics (last flag wins):
+    ``-L/--dereference`` dereferences every source symlink, so descendant
+    links are reachable during inspection; ``-P/--no-dereference`` (cp -R's
+    default) and ``-d`` keep links as links, as does ``-a/--archive``.
+    ``-H`` follows only command-line operands, which the directory check
+    below already resolves; ``mv`` renames entries and never dereferences.
     """
     while len(argv) > 2 and executable_name(argv[0]) == "uv" and argv[1] == "run":
         argv = argv[2:]
@@ -302,7 +397,9 @@ def _recursive_copy_sources(argv: list[str], cwd: str) -> list[Path]:
     name = executable_name(argv[0])
     if name not in {"cp", "mv"}:
         return []
+    is_cp = name == "cp"
     recursive = name == "mv"  # directory moves recurse without a flag
+    follow = False
     target_dir = ""
     operands: list[str] = []
     args = argv[1:]
@@ -314,13 +411,36 @@ def _recursive_copy_sources(argv: list[str], cwd: str) -> list[Path]:
             target_dir = args[index] if index < len(args) else ""
         elif arg.startswith("--target-directory="):
             target_dir = arg.partition("=")[2]
-        elif arg.startswith("-t") and not arg.startswith("--"):
-            target_dir = arg[2:]
-        elif arg.startswith("-"):
-            if arg in {"--recursive", "--archive"} or (
-                name == "cp" and any(ch in arg[1:].rstrip("=") for ch in "rRa")
-            ):
-                recursive = True
+        elif arg == "--dereference":
+            if is_cp:
+                follow = True
+        elif arg == "--no-dereference":
+            if is_cp:
+                follow = False
+        elif arg in {"--recursive", "--archive"}:
+            recursive = True
+            if arg == "--archive":
+                follow = False
+        elif arg.startswith("-") and not arg.startswith("--") and len(arg) > 1:
+            cluster = arg[1:]
+            for position, char in enumerate(cluster):
+                if char in {"r", "R", "a"}:
+                    recursive = True
+                if is_cp:
+                    if char == "L":
+                        follow = True
+                    elif char in {"P", "d", "a"}:
+                        follow = False
+                if char == "t":
+                    # -t inside a cluster: the rest (or the next argv) is
+                    # the target directory operand.
+                    rest = cluster[position + 1 :]
+                    if rest:
+                        target_dir = rest
+                    else:
+                        index += 1
+                        target_dir = args[index] if index < len(args) else ""
+                    break
         else:
             operands.append(arg)
         index += 1
@@ -332,13 +452,13 @@ def _recursive_copy_sources(argv: list[str], cwd: str) -> list[Path]:
         sources = operands[:-1]
     else:
         return []
-    roots: list[Path] = []
+    roots: list[tuple[Path, bool]] = []
     for value in sources:
         path = Path(value.replace("\\", "/")).expanduser()
         base = path if path.is_absolute() else Path(cwd or ".") / path
         try:
             if base.is_dir():
-                roots.append(base)
+                roots.append((base, follow))
         except OSError:
             continue
     return roots
@@ -393,9 +513,10 @@ def _sensitive_capabilities(req: ActionRequest) -> list[str]:
         # R02: a recursive directory write changes descendants that the
         # operands never name; classify the protected ones the copy will
         # actually reach (e.g. source/.git/config -> target/.git/config).
+        # Under `cp -L` the reachable set includes symlink targets.
         if any(
-            _tree_contains_component(source, _PROTECTED_COMPONENTS)
-            for source in _recursive_copy_sources(req.argv, req.cwd)
+            _tree_contains_component(source, _PROTECTED_COMPONENTS, follow_symlinks=follow_symlinks)
+            for source, follow_symlinks in _recursive_copy_sources(req.argv, req.cwd)
         ):
             found.append("security_settings")
     if (
