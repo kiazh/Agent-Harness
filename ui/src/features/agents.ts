@@ -1,27 +1,63 @@
-// Agent commands: agents (list, show, delete) and delegate (run a task on another agent).
+// Agent commands: agents (list, show, save, history, delete, sessions) and
+// delegate (run a task on another agent).
 
-import { keyValues, table, when } from "../format.ts";
-import type { AgentInfo, AgentSaveResult, AgentHistoryResult, DelegationResult } from "../protocol.ts";
+import { keyValues, shortId, table, when } from "../format.ts";
+import type { AgentInfo, AgentHistoryResult, AgentSaveResult, DelegationResult, ResumeResult, SessionInfo, SessionListResult } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
-import { confirm, options, requireArgs, type Command } from "./types.ts";
+import { confirm, options, requireArgs, requireSession, type Command, type FeatureHost } from "./types.ts";
+
+/** Upper bound on cursor pages scanned for the family (sessions.ts pattern). */
+const MAX_FAMILY_LIST_PAGES = 10;
+
+/**
+ * The current session's agent family: the family root (the current session's
+ * parent, or the current session itself) plus every listed session whose
+ * `parentSessionId` is that root. Paginated bound like /sessions; filtered
+ * client-side. Children of a child stay out (single-level rule, see App).
+ */
+async function listFamilySessions(host: FeatureHost, current: SessionInfo): Promise<SessionInfo[]> {
+	const rootId = current.parentSessionId ?? current.id;
+	const members = new Map<string, SessionInfo>();
+	let cursor: string | undefined;
+	for (let page = 0; ; page++) {
+		const result = await host.request<SessionListResult & { nextCursor?: string }>("session.list", {
+			limit: 200,
+			...(cursor ? { cursor } : {}),
+		});
+		for (const session of result.sessions) {
+			if (session.id === rootId || session.parentSessionId === rootId) members.set(session.id, session);
+		}
+		if (!result.nextCursor) break;
+		if (page + 1 >= MAX_FAMILY_LIST_PAGES) {
+			throw new Error(`Too many sessions to scan (${MAX_FAMILY_LIST_PAGES} pages); try /resume <id>.`);
+		}
+		cursor = result.nextCursor;
+	}
+	members.set(current.id, current); // the visible session always wins
+	const root = members.get(rootId) ?? current;
+	const children = [...members.values()].filter((session) => session.id !== rootId);
+	return [root, ...children];
+}
 
 export const agentsCommand: Command = {
 	name: "agents",
-	description: "Agents: list, show, save, history, delete",
-	argumentHint: "[list|show|save|history|delete]",
+	description: "Agents: list, show, save, history, delete · sessions switches delegated tabs (Ctrl+Shift+←/→)",
+	argumentHint: "[list|show|save|history|delete|sessions|switch]",
 	getArgumentCompletions: options([
 		["list", "All available agents"],
 		["show", "Read an agent's definition <name>"],
 		["save", "Save the current session as an agent <name>"],
 		["history", "Recent agent activity"],
 		["delete", "Remove a custom agent <name>"],
+		["sessions", "Switch to a delegated agent session (tab)"],
+		["switch", "Alias for sessions"],
 	]),
 	async run(args, host) {
 		const [sub, rest] = splitSub(args);
-		const { agents } = await host.request<{ agents: AgentInfo[] }>("agents.list");
 		switch (sub) {
 			case "":
-			case "list":
+			case "list": {
+				const { agents } = await host.request<{ agents: AgentInfo[] }>("agents.list");
 				host.print(
 					table(
 						["Name", "Source", "Tools", "Description"],
@@ -31,8 +67,37 @@ export const agentsCommand: Command = {
 					"plain",
 				);
 				return;
+			}
+			case "sessions":
+			case "switch": {
+				const current = requireSession(host);
+				// Live run state comes from the host's tab tracking when the
+				// host has it (App); other hosts report idle.
+				const running = new Map((host.familySessions?.() ?? []).map((row) => [row.session.id, row.running]));
+				const family = await listFamilySessions(host, current);
+				const rootId = current.parentSessionId ?? current.id;
+				if (family.length <= 1) {
+					host.print("No delegated agent sessions in this family yet. Use /delegate to start one; Ctrl+Shift+←/→ cycles tabs.", "plain");
+					return;
+				}
+				const choice = await host.pick("Switch to an agent session", family.map((session) => ({
+					value: session.id,
+					label: `${session.id === rootId ? "main · " : ""}${session.title || shortId(session.id)}${session.id === current.id ? " (current)" : ""}`,
+					description: `${shortId(session.id)}  ${running.get(session.id) ? "running" : "idle"}  ${when(session.lastActivity)}`,
+				})));
+				if (!choice) return;
+				if (choice.value === current.id) {
+					host.print("Already on that session.", "plain");
+					return;
+				}
+				const { session, history } = await host.request<ResumeResult>("session.resume", { sessionId: choice.value });
+				host.switchTo(session, history);
+				host.print(`Switched to "${session.title || "untitled"}" (${shortId(session.id)}).`, "plain");
+				return;
+			}
 			case "show": {
 				const name = requireArgs(rest, "/agents show <name>");
+				const { agents } = await host.request<{ agents: AgentInfo[] }>("agents.list");
 				const agent = agents.find((a) => a.name === name.toLowerCase());
 				if (!agent) throw new Error(`No agent named "${name}".`);
 				host.print(
@@ -93,7 +158,7 @@ export const agentsCommand: Command = {
 				return;
 			}
 			default:
-				throw new Error(`Unknown /agents option "${sub}". Try: list, show, save, history, delete.`);
+				throw new Error(`Unknown /agents option "${sub}". Try: list, show, save, history, delete, sessions.`);
 		}
 	},
 };

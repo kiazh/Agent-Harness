@@ -23,10 +23,12 @@ import { OAuthProgress } from "./components/OAuthProgress.ts";
 import { ApprovalCard, type ApprovalDecision } from "./components/ApprovalCard.ts";
 import { AppShell } from "./components/AppShell.ts";
 import { OutputStore, OutputViewer, type OutputRecord } from "./components/OutputViewer.ts";
+import { SessionTabs, type SessionTab } from "./components/SessionTabs.ts";
 import { AnimationCoordinator } from "./design/motion.ts";
-import { type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features/index.ts";
+import { type FamilySession, type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "./features/index.ts";
 import { guardSubmit } from "./commandDispatch.ts";
 import { type AskTextOptions, PROFILE_ID_RE, type OAuthProgressHandle, type OAuthProgressOptions } from "./features/types.ts";
+import { shortId } from "./format.ts";
 import type { GatewayClient } from "./gateway.ts";
 import { copyText as copyClipboardText } from "./clipboard.ts";
 import { clipboardImage, clipboardText, ImageDraft, imagePaths, readImageFile, type ImageAttachment } from "./images.ts";
@@ -38,6 +40,7 @@ import type {
 	InitializeResult,
 	ResumeResult,
 	SessionInfo,
+	SessionListResult,
 	SessionResult,
 } from "./protocol.ts";
 import { editorTheme, getSkin, setSkin, SKIN_NAMES, skinDescription } from "./theme.ts";
@@ -75,6 +78,72 @@ interface SessionTurn {
 	usageLatest: number;
 	/** Bounded retired turn IDs; late duplicates are inert. */
 	retired: string[];
+}
+
+/** One buffered transcript block from a hidden session's live tail. */
+type TailBlock =
+	| { kind: "assistant"; turnId: string; text: string; completed: boolean }
+	| { kind: "tool"; turnId: string; id: string; name: string; result: string; settled: boolean }
+	| { kind: "notice"; turnId: string; text: string; level: NoticeKind };
+
+/** Hidden-session preview: rendered-order blocks plus terminal dedupe. */
+interface SessionTail {
+	blocks: TailBlock[];
+	/** Bounded terminal turn IDs; late duplicate events are inert. */
+	completedTurns: string[];
+}
+
+/**
+ * Merge rule (PINNED): the buffered live tail WINS over the freshly fetched
+ * history. switchTo replays the trimmed history and then the tail, so a
+ * completed turn whose canonical text already landed in history (or a
+ * settled tool already persisted as a chunk) renders exactly once: matching
+ * trailing history entries are dropped before replay. Only the newest
+ * contiguous overlap is trimmed — the tail is the conversation suffix.
+ */
+function trimSupersededHistory(history: HistoryEntry[], tail: TailBlock[]): HistoryEntry[] {
+	const trimmed = [...history];
+	for (let index = tail.length - 1; index >= 0; index--) {
+		const block = tail[index]!;
+		const last = trimmed.at(-1);
+		if (!last) break;
+		if (block.kind === "assistant" && block.completed) {
+			if (last.role === "assistant" && last.content === block.text) trimmed.pop();
+		} else if (block.kind === "tool" && block.settled) {
+			if (
+				last.role === "tool" &&
+				last.tool === block.name &&
+				(last.content === block.result || block.result.startsWith(last.content))
+			) {
+				trimmed.pop();
+			}
+		}
+	}
+	return trimmed;
+}
+
+/** Render buffered tail blocks through the history replay path. */
+function tailEntries(tail: TailBlock[]): HistoryEntry[] {
+	const entries: HistoryEntry[] = [];
+	for (const block of tail) {
+		if (block.kind === "assistant") entries.push({ role: "assistant", content: block.text });
+		else if (block.kind === "tool") {
+			entries.push(
+				block.settled
+					? { role: "tool", tool: block.name, content: block.result }
+					// A running tool has no reported outcome yet: mark it as
+					// activity, never as a recorded result (honesty pin).
+					: { role: "system", content: `${block.name} running…` },
+			);
+		} else entries.push({ role: "system", content: block.text });
+	}
+	return entries;
+}
+
+/** Tab label: meaningful title, else the short id. */
+function tabLabel(session: SessionInfo): string {
+	const title = (session.title ?? "").trim();
+	return title && title !== "New session" ? title : shortId(session.id);
 }
 
 export class App implements FeatureHost {
@@ -116,6 +185,24 @@ export class App implements FeatureHost {
 	private sessionTokens = 0;
 	/** Preserved token counts per session so switchTo does not lose them. */
 	private readonly sessionTokensById = new Map<string, number>();
+	/**
+	 * Hidden-session live tails: transcript work that arrived while a session
+	 * was not visible. switchTo merges them (buffered tail wins over the
+	 * fetched history) and consumes them. Bounded (see pruneSessionTails).
+	 */
+	private readonly sessionTails = new Map<string, SessionTail>();
+	/** Current family members: main (root) first, delegated children after. */
+	private familyMembers: SessionInfo[] = [];
+	/** Root of the current family (current.parentSessionId ?? current.id). */
+	private familyRootId: string | undefined;
+	private readonly tabStrip = new SessionTabs();
+	private tabsVisible = false;
+	private familyRefreshPending = false;
+	private familyRefreshQueued = false;
+	/** Unknown-session ids already refreshed (throttled) — see noteUnknownSession. */
+	private readonly unknownSessionChecks = new Map<string, number>();
+	/** One tab switch at a time (rapid key repeats must not interleave). */
+	private familyOpening = false;
 	/** Bounded retained tool outputs for /output inspection (all sessions). */
 	private readonly outputStore = new OutputStore();
 	/** Open approval reviews keyed by request ID (binding captured at open). */
@@ -166,6 +253,21 @@ export class App implements FeatureHost {
 	 */
 	private static readonly MAX_RETAINED_SESSIONS = 50;
 
+	/**
+	 * Bounded family scan (200 sessions per page, like features/sessions.ts).
+	 * Children normally sit within the newest pages; the cap keeps a
+	 * pathological list from stalling tab refresh entirely.
+	 */
+	private static readonly MAX_FAMILY_PAGES = 10;
+
+	/** Memory bounds for hidden-session tails. */
+	private static readonly MAX_TAIL_SESSIONS = 20;
+	private static readonly MAX_TAIL_BLOCKS = 200;
+	private static readonly MAX_TAIL_COMPLETED_TURNS = 20;
+
+	/** Unknown-session refreshes are throttled; explicit triggers bypass. */
+	private static readonly FAMILY_REFRESH_THROTTLE_MS = 1500;
+
 	constructor(tui: TUI, client: GatewayClient, options: AppOptions = {}) {
 		this.tui = tui;
 		this.client = client;
@@ -209,7 +311,9 @@ export class App implements FeatureHost {
 			this.tui.setLayoutRoot(this.shell.root);
 		} else {
 			// Fallback for non-viewport TUIs (and test doubles): classic stacking.
+			// The tab strip renders zero rows while the family has one member.
 			this.tui.addChild(this.transcriptView);
+			this.tui.addChild(this.tabStrip);
 			this.tui.addChild(this.composer);
 			this.tui.addChild(this.footer);
 		}
@@ -322,11 +426,21 @@ export class App implements FeatureHost {
 
 	switchTo(session: SessionInfo, history: HistoryEntry[]): void {
 		if (this.current) this.sessionTokensById.set(this.current.id, this.sessionTokens);
+		// Consume this session's hidden-session tail (buffered events that
+		// arrived while it was not visible). Merge rule (PINNED, App.TailBlock):
+		// the tail is the conversation suffix and WINS over the fetched
+		// history; matching trailing history entries are trimmed first so a
+		// completed turn or settled tool renders exactly once. Consuming the
+		// tail here is the documented "clear when history is fetched"
+		// boundary: the buffer only ever holds work from after the last
+		// switch, so it cannot duplicate earlier history.
+		const tail = this.takeSessionTail(session.id)?.blocks ?? [];
 		this.updateSession(session);
 		this.rememberSession(session.id);
 		this.transcript.clear();
 		this.transcript.addComponent(header(this.version, this.headerInfo(session)));
-		this.transcript.replay(history);
+		this.transcript.replay(trimSupersededHistory(history, tail));
+		if (tail.length) this.transcript.replay(tailEntries(tail));
 		this.sessionTokens = this.sessionTokensById.get(session.id) ?? 0;
 		// Preserve the active turn's latest cumulative usage across switches
 		// without mixing turns: completed total plus this session's turn total.
@@ -335,6 +449,11 @@ export class App implements FeatureHost {
 		// review cards retained while it was hidden (R15).
 		this.restoreApprovals(session.id);
 		this.setRunning(this.inFlight.has(session.id));
+		// Family = current.parentSessionId ?? current.id plus that root's
+		// children; refresh after the local re-seed keeps the strip honest.
+		this.refreshFamilyMembers();
+		this.syncTabs();
+		void this.refreshFamily();
 		this.tui.requestRender();
 	}
 
@@ -348,6 +467,7 @@ export class App implements FeatureHost {
 			this.invalidateApprovals(session.id);
 		}
 		this.current = session;
+		this.syncTabs();
 		this.tui.requestRender();
 	}
 
@@ -369,6 +489,303 @@ export class App implements FeatureHost {
 			this.sessionRecency.splice(this.sessionRecency.indexOf(candidate), 1);
 			this.turns.delete(candidate);
 			this.sessionTokensById.delete(candidate);
+		}
+	}
+
+	// ─── agent tabs (family = root + delegated children) ────────────────────
+
+	/**
+	 * Family rule (documented, single level): the root is
+	 * `current.parentSessionId ?? current.id`; members are the root plus every
+	 * session whose `parentSessionId` is that root. If the visible session is
+	 * itself a child, its parent's family shows with the child highlighted.
+	 * Deeper descendants stay out of the strip by design.
+	 *
+	 * Re-seed synchronously so the strip renders immediately on switch; the
+	 * async refresh replaces the members with the authoritative list.
+	 */
+	private refreshFamilyMembers(): void {
+		const session = this.current;
+		if (!session) return;
+		const rootId = session.parentSessionId ?? session.id;
+		if (rootId !== this.familyRootId) {
+			this.familyRootId = rootId;
+			this.familyMembers = [];
+		}
+		this.familyMembers = [session, ...this.familyMembers.filter((member) => member.id !== session.id)];
+		// Current is a child and its root was not listed yet: keep a stub so
+		// the main marker and the family rule stay explainable.
+		if (session.parentSessionId && !this.familyMembers.some((member) => member.id === rootId)) {
+			this.familyMembers.push({
+				id: rootId,
+				title: "",
+				model: session.model,
+				provider: session.provider,
+				status: session.status,
+				lastActivity: null,
+				parentSessionId: null,
+			});
+		}
+	}
+
+	/** Family rows, main first, with run/current state for chrome and menus. */
+	private familyRows(): FamilySession[] {
+		if (!this.current) return [];
+		const rootId = this.familyRootId ?? this.current.id;
+		const members = this.familyMembers.filter(
+			(member) => member.id === rootId || member.parentSessionId === rootId,
+		);
+		if (!members.some((member) => member.id === this.current!.id)) members.unshift(this.current);
+		const main = members.find((member) => member.id === rootId);
+		const ordered = main ? [main, ...members.filter((member) => member.id !== rootId)] : [...members];
+		return ordered.map((session) => ({
+			session,
+			main: session.id === rootId,
+			running: this.inFlight.has(session.id),
+		}));
+	}
+
+	/** FeatureHost: the current family (main first) for /agents and menus. */
+	familySessions(): FamilySession[] {
+		return this.familyRows();
+	}
+
+	private syncTabs(): void {
+		this.tabStrip.setTabs(this.tabStripTabs());
+		const visible = this.familyRows().length > 1;
+		if (visible !== this.tabsVisible) {
+			this.tabsVisible = visible;
+			// Viewport hosts lay out through the shell; classic hosts mount the
+			// strip permanently and it renders zero rows while hidden.
+			this.shell.setTabs(visible ? this.tabStrip : undefined);
+		}
+	}
+
+	private tabStripTabs(): SessionTab[] {
+		return this.familyRows().map((row) => ({
+			id: row.session.id,
+			label: tabLabel(row.session),
+			main: row.main,
+			current: row.session.id === this.current?.id,
+			running: row.running,
+		}));
+	}
+
+	/**
+	 * Bounded, best-effort family listing (session.list with cursor pages,
+	 * like features/sessions.ts but smaller). Failures stay quiet: the strip
+	 * is chrome and commands surface their own errors.
+	 */
+	private async refreshFamily(): Promise<void> {
+		const current = this.current;
+		if (!current) return;
+		const rootId = current.parentSessionId ?? current.id;
+		if (this.familyRefreshPending) {
+			this.familyRefreshQueued = true;
+			return;
+		}
+		this.familyRefreshPending = true;
+		try {
+			const found: SessionInfo[] = [];
+			let cursor: string | undefined;
+			for (let page = 0; ; page++) {
+				const result = await this.client.request<SessionListResult & { nextCursor?: string }>(
+					"session.list",
+					{ limit: 200, ...(cursor ? { cursor } : {}) },
+				);
+				if (Array.isArray(result?.sessions)) found.push(...result.sessions);
+				if (!result?.nextCursor) break;
+				if (page + 1 >= App.MAX_FAMILY_PAGES) break;
+				cursor = result.nextCursor;
+			}
+			// The family root may have changed while listing; never install
+			// rows for a family the user already left.
+			const still = this.current;
+			if (!still || (still.parentSessionId ?? still.id) !== rootId) return;
+			const merged = new Map<string, SessionInfo>();
+			for (const session of found) {
+				if (session.id === rootId || session.parentSessionId === rootId) {
+					merged.set(session.id, session);
+				}
+			}
+			merged.set(still.id, still); // the visible session always wins
+			this.familyMembers = [...merged.values()];
+			this.refreshFamilyMembers();
+			for (const sessionId of [...this.unknownSessionChecks.keys()]) {
+				if (this.isFamilyMember(sessionId)) this.unknownSessionChecks.delete(sessionId);
+			}
+			while (this.unknownSessionChecks.size > 64) {
+				const oldest = [...this.unknownSessionChecks.entries()].sort((a, b) => a[1] - b[1])[0]!;
+				this.unknownSessionChecks.delete(oldest[0]);
+			}
+			this.pruneSessionTails();
+			this.syncTabs();
+			this.tui.requestRender();
+		} catch {
+			// Best-effort listing — the command path reports real failures.
+		} finally {
+			this.familyRefreshPending = false;
+			if (this.familyRefreshQueued) {
+				this.familyRefreshQueued = false;
+				void this.refreshFamily();
+			}
+		}
+	}
+
+	/** Refresh kick for events from ids that are not yet known family tabs. */
+	private noteUnknownSession(sessionId: string): void {
+		if (this.isFamilyMember(sessionId)) return;
+		const now = Date.now();
+		const last = this.unknownSessionChecks.get(sessionId) ?? 0;
+		if (now - last < App.FAMILY_REFRESH_THROTTLE_MS) return;
+		this.unknownSessionChecks.set(sessionId, now);
+		void this.refreshFamily();
+	}
+
+	private isFamilyMember(sessionId: string): boolean {
+		return this.familyRootId === sessionId || this.familyMembers.some((member) => member.id === sessionId);
+	}
+
+	/** Switch to a family tab through session.resume; one switch at a time. */
+	private async openFamilySession(sessionId: string): Promise<void> {
+		if (this.familyOpening || sessionId === this.current?.id) return;
+		this.familyOpening = true;
+		try {
+			const { session, history } = await this.request<ResumeResult>("session.resume", { sessionId });
+			this.switchTo(session, history);
+		} catch (error) {
+			this.transcript.addNotice(`Could not switch session: ${message(error)}`, "error");
+			this.tui.requestRender();
+		} finally {
+			this.familyOpening = false;
+		}
+	}
+
+	/** Ctrl+Shift+←/→: cycle the family; wraps around. */
+	private async cycleFamily(direction: 1 | -1): Promise<void> {
+		const rows = this.familyRows();
+		if (rows.length < 2) return;
+		const index = rows.findIndex((row) => row.session.id === this.current?.id);
+		const next = rows[(((index < 0 ? 0 : index) + direction) + rows.length) % rows.length]!;
+		if (next.session.id === this.current?.id) return;
+		await this.openFamilySession(next.session.id);
+	}
+
+	// ─── hidden-session live tails ──────────────────────────────────────────
+
+	private takeSessionTail(sessionId: string): SessionTail | undefined {
+		const tail = this.sessionTails.get(sessionId);
+		if (tail) this.sessionTails.delete(sessionId);
+		return tail;
+	}
+
+	private tailFor(sessionId: string): SessionTail {
+		let tail = this.sessionTails.get(sessionId);
+		if (!tail) {
+			tail = { blocks: [], completedTurns: [] };
+			this.sessionTails.set(sessionId, tail);
+			// Cap the session count without dropping the entry just created:
+			// family-based pruning runs on refresh, where parentage is known.
+			while (this.sessionTails.size > App.MAX_TAIL_SESSIONS) {
+				const candidate = [...this.sessionTails.keys()].find(
+					(id) => id !== sessionId && id !== this.current?.id && !this.inFlight.has(id),
+				);
+				if (candidate === undefined) break;
+				this.sessionTails.delete(candidate);
+			}
+		}
+		return tail;
+	}
+
+	/**
+	 * Tails are bounded twice: sessions that can no longer need one
+	 * (not current, not in flight, not family) are dropped, and the retained
+	 * session count is capped.
+	 */
+	private pruneSessionTails(): void {
+		for (const sessionId of [...this.sessionTails.keys()]) {
+			if (
+				sessionId === this.current?.id ||
+				this.inFlight.has(sessionId) ||
+				this.isFamilyMember(sessionId)
+			) {
+				continue;
+			}
+			this.sessionTails.delete(sessionId);
+		}
+		while (this.sessionTails.size > App.MAX_TAIL_SESSIONS) {
+			const candidate = [...this.sessionTails.keys()].find(
+				(sessionId) => sessionId !== this.current?.id && !this.inFlight.has(sessionId),
+			);
+			if (candidate === undefined) break;
+			this.sessionTails.delete(candidate);
+		}
+	}
+
+	/**
+	 * Buffer one hidden-session event into its live tail. Only the newest
+	 * turn's activity is previewed; completed turns collapse to their
+	 * canonical final text (switchTo trims the matching history copy), so a
+	 * re-fetched history never double-renders. Approval events are owned by
+	 * their own retention (pendingApprovals), never by the tail.
+	 */
+	private bufferHiddenEvent(event: GatewayEvent): void {
+		const tail = this.tailFor(event.sessionId);
+		if (tail.completedTurns.includes(event.turnId)) return;
+		switch (event.type) {
+			case "message.delta": {
+				const last = tail.blocks.at(-1);
+				if (last?.kind === "assistant" && last.turnId === event.turnId && !last.completed) {
+					last.text += event.text;
+				} else {
+					tail.blocks.push({ kind: "assistant", turnId: event.turnId, text: event.text, completed: false });
+				}
+				break;
+			}
+			case "tool.start":
+				tail.blocks.push({ kind: "tool", turnId: event.turnId, id: event.id, name: event.name, result: "", settled: false });
+				break;
+			case "tool.complete": {
+				const block = [...tail.blocks].reverse().find(
+					(candidate) => candidate.kind === "tool" && candidate.id === event.id && !candidate.settled,
+				);
+				if (block && block.kind === "tool") {
+					block.result = event.result;
+					block.settled = true;
+				} else {
+					tail.blocks.push({ kind: "tool", turnId: event.turnId, id: event.id, name: event.name, result: event.result, settled: true });
+				}
+				break;
+			}
+			case "message.complete": {
+				tail.completedTurns.push(event.turnId);
+				if (tail.completedTurns.length > App.MAX_TAIL_COMPLETED_TURNS) tail.completedTurns.shift();
+				// Completed work is persisted to history at completion: keep only
+				// the canonical final text as the tail's fallback and let the
+				// fetched history own the tool cards.
+				tail.blocks = tail.blocks.filter((block) => block.turnId !== event.turnId);
+				if (event.text) {
+					tail.blocks.push({ kind: "assistant", turnId: event.turnId, text: event.text, completed: true });
+				}
+				break;
+			}
+			case "error":
+				tail.blocks.push({ kind: "notice", turnId: event.turnId, text: event.message, level: "error" });
+				break;
+			case "message.stopping":
+				tail.blocks.push({ kind: "notice", turnId: event.turnId, text: "Stopping…", level: "warning" });
+				break;
+			case "turn.ownership_lost":
+				tail.blocks.push({ kind: "notice", turnId: event.turnId, text: "Turn ownership was lost; stopping the running action.", level: "warning" });
+				break;
+			case "turn.cleanup_pending":
+				tail.blocks.push({ kind: "notice", turnId: event.turnId, text: "Stopping: waiting for the running action to finish cleanup.", level: "warning" });
+				break;
+			default:
+				return; // usage/approval/growth frames never render into a tail
+		}
+		if (tail.blocks.length > App.MAX_TAIL_BLOCKS) {
+			tail.blocks.splice(0, tail.blocks.length - App.MAX_TAIL_BLOCKS);
 		}
 	}
 
@@ -699,6 +1116,7 @@ export class App implements FeatureHost {
 				{ value: "exit", label: "Ctrl+D — exit", description: "When input is empty and idle" },
 				{ value: "clear", label: "Ctrl+L — clear chat", description: "When idle" },
 				{ value: "complete", label: "Tab — complete", description: "Commands and arguments" },
+				{ value: "tabs", label: "Ctrl+Shift+←/→ — switch agents", description: "Cycle the main session and delegated child tabs" },
 				{ value: "help", label: "? / F1 — shortcuts", description: "? on empty input, F1 with a draft" },
 				{ value: "commands", label: "/help — all commands", description: "/growth shows learning details" },
 				{ value: "learning", label: "□ / ▪ — activity and learning", description: "Pulses while working and briefly when learning is saved" },
@@ -723,6 +1141,16 @@ export class App implements FeatureHost {
 		}
 		if (matchesKey(data, Key.ctrl("l")) && !this.running) {
 			this.clear();
+			return { consume: true };
+		}
+		// Agent tabs: Ctrl+Shift+←/→ cycles the current family (main session
+		// plus delegated children). Chosen because nothing else in the app
+		// binds them — the editor uses plain/alt/ctrl arrows for movement and
+		// ctrl+pageUp/PageDown for paging; the alt screen uses ctrl+up/down.
+		// Consumed only while a multi-member family exists.
+		const cycle = matchesKey(data, Key.ctrlShift("right")) ? 1 : matchesKey(data, Key.ctrlShift("left")) ? -1 : 0;
+		if (cycle !== 0 && this.familyRows().length > 1) {
+			void this.cycleFamily(cycle as 1 | -1);
 			return { consume: true };
 		}
 		if (
@@ -845,6 +1273,7 @@ export class App implements FeatureHost {
 		this.setRunning(true);
 		this.inFlight.add(sessionId);
 		this.inFlightSessionId = sessionId;
+		this.syncTabs();
 		// Register the submitting record before dispatch: gateway work is
 		// asynchronous and events can arrive before the RPC result.
 		const record = this.turnRecord(sessionId);
@@ -955,6 +1384,7 @@ export class App implements FeatureHost {
 		if (this.inFlightSessionId === sessionId) {
 			this.inFlightSessionId = undefined;
 		}
+		this.syncTabs();
 	}
 
 	private cancel(): void {
@@ -996,11 +1426,27 @@ export class App implements FeatureHost {
 			if (this.footer.pulseGrowth()) this.tui.requestRender();
 			return;
 		}
+		const hidden = event.sessionId !== this.current?.id;
+		// Family bookkeeping runs before the turn-state gate: delegated child
+		// streams may arrive for sessions this TUI never submitted to (no
+		// inFlight entry) and must still surface as tabs. A completed delegate
+		// tool proves the child session exists; unknown ids trigger a
+		// throttled, bounded refresh.
+		if (event.type === "tool.complete" && event.name === "delegate") {
+			void this.refreshFamily();
+		} else if (hidden && !this.isFamilyMember(event.sessionId)) {
+			this.noteUnknownSession(event.sessionId);
+		}
+		if (!this.inFlight.has(event.sessionId)) {
+			// Delegated child stream (no local turn binding): preview it in the
+			// hidden session's tail; terminal dedupe lives in the tail itself.
+			if (hidden) this.bufferHiddenEvent(event);
+			return;
+		}
 		// A turn's events may arrive after the user switched sessions, so match
 		// against in-flight turns, not just the current session. Non-visible
 		// completion still retires and accounts; it never renders, opens
 		// dialogs, or disturbs the visible session.
-		if (!this.inFlight.has(event.sessionId)) return;
 		const record = this.turns.get(event.sessionId);
 		if (!record) return;
 		const eventTurn = turnIdentity(event);
@@ -1030,6 +1476,10 @@ export class App implements FeatureHost {
 			}
 			record.hadEvents = true;
 		}
+		// Bound turn accepted: a hidden session keeps a live tail so switching
+		// back shows the work done while it was invisible (switchTo merges it
+		// with the fetched history — buffered tail wins, no duplicates).
+		if (hidden) this.bufferHiddenEvent(event);
 		// Retain reported output for local inspection (visible or not, but
 		// only for the bound turn). Never refetched, never re-executed.
 		if (event.type === "tool.complete") {

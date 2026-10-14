@@ -26,6 +26,15 @@ export type AskTextResult = string | undefined;
 /** Profile ids double as agent-scope slugs: lowercase, dashes, max 40 chars. */
 export const PROFILE_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
+/** One session in the current session's agent family (the tab strip rows). */
+export interface FamilySession {
+	session: SessionInfo;
+	/** True for the family root — the main session the family is anchored to. */
+	main: boolean;
+	/** A turn is currently in flight for this session. */
+	running: boolean;
+}
+
 /** What a command can do to the app. Implemented by App. */
 export interface FeatureHost {
 	request<T>(method: string, params?: Record<string, unknown>): Promise<T>;
@@ -65,6 +74,12 @@ export interface FeatureHost {
 	setProfile(userId: string): void;
 	/** Agent name for newly created sessions (undefined = shared default). */
 	sessionAgent(): string | undefined;
+	/**
+	 * Sessions in the current agent family, main first (the tab strip rows).
+	 * Optional: hosts without tab tracking omit it and commands fall back to
+	 * filtering session.list client-side.
+	 */
+	familySessions?(): FamilySession[];
 	/** Write a file relative to the working directory; returns the absolute path. */
 	writeFile(path: string, text: string): Promise<string>;
 	onConfig(result: ConfigResult): void;

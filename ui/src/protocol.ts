@@ -8,6 +8,8 @@ export interface SessionInfo {
 	provider: string;
 	status: string;
 	lastActivity: string | null;
+	/** Delegating session id for child sessions; null/absent for roots. */
+	parentSessionId?: string | null;
 }
 
 export interface InitializeResult {
@@ -154,6 +156,8 @@ export interface LearningReviewInfo {
 	triggers: string[];
 	content: string | null;
 	reason: string;
+	/** Published by the reviewer itself (auto-apply); absent on old servers. */
+	autoApplied?: boolean;
 }
 
 export interface ProfileInfo {

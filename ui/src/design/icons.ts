@@ -14,6 +14,8 @@ export const ICONS = {
 	errorAlt: "✗",
 	interrupted: "○",
 	unknown: "?",
+	tabRunning: "●",
+	tabIdle: "○",
 	noticeSuccess: "✓",
 	noticeWarning: "!",
 	noticeError: "✗",

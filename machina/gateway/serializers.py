@@ -27,6 +27,12 @@ def session_to_dict(session: Session) -> dict[str, Any]:
         "provider": session.provider or "",
         "status": session.status,
         "lastActivity": session.last_activity.isoformat() if session.last_activity else None,
+        # Additive orchestration link: delegated child sessions carry the
+        # session that spawned them; root sessions carry null. The UI uses it
+        # to build the agent tab strip (parent family grouping).
+        "parentSessionId": (
+            str(session.parent_session_id) if getattr(session, "parent_session_id", None) else None
+        ),
     }
 
 

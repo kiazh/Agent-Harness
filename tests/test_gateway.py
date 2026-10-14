@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from machina.core.models import AgentResponse, ContextChunk, StreamEvent
+from machina.core.models import AgentResponse, ContextChunk, Session, StreamEvent
 from machina.gateway.server import (
     DATABASE_UNAVAILABLE,
     INVALID_PARAMS,
@@ -24,6 +24,7 @@ from machina.gateway.server import (
     UNAUTHORIZED,
     Gateway,
     history_from_chunks,
+    session_to_dict,
 )
 
 TEST_DSN = os.environ.get("MACHINA_TEST_DATABASE_URL", "")
@@ -329,6 +330,18 @@ def test_history_from_chunks_is_chronological():
         {"role": "tool", "tool": "read_file", "content": "x = 1"},
         {"role": "assistant", "content": "answer"},
     ]
+
+
+def test_session_to_dict_carries_parent_link():
+    """Orchestration pin: children expose their parent; roots expose null."""
+    root = Session(id=uuid.uuid4(), title="root")
+    child = Session(id=uuid.uuid4(), title="child", parent_session_id=root.id)
+
+    assert session_to_dict(root)["parentSessionId"] is None
+    assert session_to_dict(child)["parentSessionId"] == str(root.id)
+    # Additive: every pre-existing field keeps its shape.
+    assert session_to_dict(child)["title"] == "child"
+    assert session_to_dict(child)["status"] == "active"
 
 
 # ─── sessions and turns (real test database) ──────────────────────────────────

@@ -18,9 +18,9 @@ import { outputCommand } from "./output.ts";
 import { settingsCommands } from "./settings.ts";
 import { themeCommand } from "./theme.ts";
 import { contextCommands } from "./context.ts";
-import type { AskTextOptions, AskTextResult, Command, FeatureHost, NoticeKind } from "./types.ts";
+import type { AskTextOptions, AskTextResult, Command, FamilySession, FeatureHost, NoticeKind } from "./types.ts";
 
-export type { AskTextOptions, AskTextResult, Command, FeatureHost, NoticeKind };
+export type { AskTextOptions, AskTextResult, Command, FamilySession, FeatureHost, NoticeKind };
 
 const appCommands: Command[] = [
 	{
@@ -50,7 +50,7 @@ const helpCommand: Command = {
 	description: "Show available commands",
 	async run(_args, host) {
 		host.print(
-			`${helpText(COMMANDS)}\n\nKeys: Enter send · Shift+Enter newline · Esc stop reply · Tab complete · Ctrl+C exit`,
+			`${helpText(COMMANDS)}\n\nKeys: Enter send · Shift+Enter newline · Esc stop reply · Tab complete · Ctrl+C exit · Ctrl+Shift+←/→ switch agent tabs`,
 			"plain",
 		);
 	},
