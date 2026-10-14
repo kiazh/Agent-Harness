@@ -31,6 +31,63 @@ def test_shim_points_at_matches_prefix_case_insensitively() -> None:
     assert not _shim_points_at('exec "/other/.venv/bin/machina" "$@"', "/app")
 
 
+def test_shim_points_at_rejects_sibling_checkouts() -> None:
+    """R4-027: a sibling checkout sharing the prefix is a different install."""
+    from machina.cli import _shim_points_at
+
+    root = "/Users/x/machina"
+    for sibling in ("machina-old", "machina2", "machinaX", "machina_old", "machina.bak"):
+        shim = f'exec "/Users/x/{sibling}/.venv/bin/machina" "$@"\n'
+        assert not _shim_points_at(shim, root), sibling
+
+
+def test_shim_points_at_rejects_segment_extension_before_match() -> None:
+    """R4-027: ``old/x/machina`` is not the absolute ``/x/machina`` checkout."""
+    from machina.cli import _shim_points_at
+
+    assert not _shim_points_at('exec "old/x/machina/.venv/bin/machina" "$@"', "/x/machina")
+
+
+def test_shim_points_at_accepts_exact_and_containing_paths() -> None:
+    """R4-027: exact path, quoted exec, path inside app_root, containing dir all match."""
+    from machina.cli import _shim_points_at
+
+    root = "/Users/x/machina"
+    assert _shim_points_at(root, root)
+    assert _shim_points_at(f'exec "{root}" "$@"', root)
+    assert _shim_points_at(f'exec "{root}/.venv/bin/machina" "$@"', root)
+    assert _shim_points_at(f"cd {root} && .venv/bin/machina chat", root)
+
+
+def test_shim_points_at_case_insensitive_whole_segments() -> None:
+    """R4-027: case folding applies, but never fuses with a longer sibling name."""
+    from machina.cli import _shim_points_at
+
+    assert _shim_points_at('exec "/USERS/X/MACHINA/.venv/bin/machina" "$@"', "/users/x/machina")
+    assert not _shim_points_at(
+        'exec "/USERS/X/MACHINA2/.venv/bin/machina" "$@"', "/users/x/machina"
+    )
+
+
+def test_shim_points_at_strips_trailing_separator_from_root() -> None:
+    """R4-027: a trailing separator on app_root neither breaks nor broadens the match."""
+    from machina.cli import _shim_points_at
+
+    root = "/Users/x/machina/"
+    assert _shim_points_at(f'exec "{root}.venv/bin/machina" "$@"', root)
+    assert not _shim_points_at('exec "/Users/x/machina-old/.venv/bin/machina" "$@"', root)
+
+
+def test_shim_points_at_skips_rejected_occurrence_and_matches_later_one() -> None:
+    """R4-027: an earlier sibling mention does not mask a later valid occurrence."""
+    from machina.cli import _shim_points_at
+
+    shim = (
+        'echo "/Users/x/machina-old is elsewhere"\nexec "/Users/x/machina/.venv/bin/machina" "$@"\n'
+    )
+    assert _shim_points_at(shim, "/Users/x/machina")
+
+
 def test_uninstall_ask_path_only_keeps_files(tmp_path: Path, monkeypatch) -> None:
     """Yes to PATH, no to files: PATH helper runs, files stay."""
     import machina.cli as cli
@@ -261,3 +318,20 @@ def test_uninstall_full_yes_to_all_removes_everything(tmp_path: Path, monkeypatc
     assert not fake_env.exists()
     assert not (fake_root / ".venv").exists()
     assert not fake_root.exists()
+
+
+def test_uninstall_keeps_shim_of_sibling_checkout(tmp_path: Path, monkeypatch) -> None:
+    """R4-027: a shim exec'ing a sibling checkout is not this install's shim."""
+    import machina.cli as cli
+
+    fake_root, _fake_env, _removed = _isolate_uninstall(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    shim = home / ".local" / "bin" / "machina"
+    shim.parent.mkdir(parents=True)
+    shim.write_text(f'exec "{fake_root}-old/.venv/bin/machina" "$@"\n', encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli.app, ["uninstall"], input="y\nn\nn\nn\nn\n")
+    assert result.exit_code == 0, result.output
+    assert "points elsewhere" in result.output
+    assert shim.is_file()

@@ -396,3 +396,38 @@ def test_chat_help_documents_exit_statuses():
     result = runner.invoke(cli.app, ["chat", "--help"])
     assert result.exit_code == 0
     assert "Exit status" in result.output
+
+
+# ─── R4-017: _run keeps the caller's loop (SIGINT cancellability) ───────────
+
+
+def test_run_uses_the_calling_threads_loop_and_supports_fallbacks():
+    """`_run` must run the coroutine on the caller's loop (main thread).
+
+    That is what puts asyncio's first-SIGINT cancellation contract in
+    charge of Ctrl+C for `machina chat`. Callers already inside a running
+    event loop must keep the worker fallback, and non-main threads (where
+    asyncio cannot install signal handlers) must keep working. The
+    subprocess-level SIGINT proof lives in tests/test_cli_turn_e2e.py.
+    """
+    import threading
+
+    async def identify():
+        return threading.current_thread() is threading.main_thread(), 42
+
+    assert cli._run(identify()) == (True, 42), "main-thread runs use the caller's loop"
+
+    off_thread: list[tuple[bool, int]] = []
+
+    def worker() -> None:
+        off_thread.append(cli._run(identify()))
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join(timeout=30)
+    assert off_thread and off_thread[0][1] == 42, "non-main-thread callers still work"
+
+    async def inside_loop():
+        return cli._run(identify())
+
+    assert asyncio.run(inside_loop())[1] == 42, "running-loop callers keep the fallback"

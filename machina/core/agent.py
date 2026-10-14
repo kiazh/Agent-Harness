@@ -123,26 +123,24 @@ def instrument_stream(func):
     @wraps(func)
     async def wrapper(self, session_id, user_message, verbose=True, **kwargs):
         start = time.monotonic()
-        # S3.1(a) BEGIN stream turn-scope (revert: delete 3-line block; cost seam only)
-        _s3cm = turn_scope()
-        # S3.1(a) END stream turn-scope
-        with span("agent.run_stream", agent_id=self.agent_id, session_id=str(session_id)):
-            try:
-                with _s3cm:
-                    async for event in func(self, session_id, user_message, verbose, **kwargs):
-                        if event.type == "done":
-                            if event.response is not None and not event.response.needs_approval:
-                                await self._complete_growth(event.response, session_id=session_id)
-                            metrics.record_latency("agent.run", (time.monotonic() - start) * 1000)
-                            metrics.increment_counter("agent.run.calls")
-                            session = await session_manager.get(session_id)
-                            await plugin_registry.dispatch(
-                                "post_agent_run", session, event.response
-                            )
-                        yield event
-            except Exception:
-                metrics.record_error("agent.run")
-                raise
+        # R4-010/R4-064: the turn scope and the OTel stream span are owned by
+        # the stream's driving transport (see TurnEngine.stream). Drivers that
+        # pull each `__anext__` in its own task need both set before those
+        # tasks are created: a contextvar/span entered inside this generator
+        # would neither survive across steps nor detach in its own context.
+        try:
+            async for event in func(self, session_id, user_message, verbose, **kwargs):
+                if event.type == "done":
+                    if event.response is not None and not event.response.needs_approval:
+                        await self._complete_growth(event.response, session_id=session_id)
+                    metrics.record_latency("agent.run", (time.monotonic() - start) * 1000)
+                    metrics.increment_counter("agent.run.calls")
+                    session = await session_manager.get(session_id)
+                    await plugin_registry.dispatch("post_agent_run", session, event.response)
+                yield event
+        except Exception:
+            metrics.record_error("agent.run")
+            raise
 
     return wrapper
 
@@ -224,6 +222,7 @@ _TOOL_TIMEOUTS: dict[str, float] = {
     "learn_directory": 120.0,
 }
 _TOOL_TIMEOUT_DEFAULT = 30.0
+_TERMINAL_CAP = 300.0  # R4-019: terminal's schema max (1..300); tools/terminal.py.
 
 # Independent tool calls in one assistant message run concurrently, capped so a
 # model that emits a large batch cannot spawn unbounded subprocesses / queries.
@@ -967,6 +966,8 @@ class BaseReActAgent:
                         _spec = _perm_tools.action_for_tool(tool_name, tool_args)
                         if tool_name in {"mcp_call", "mcp_connect", "mcp_disconnect"}:
                             tool_timeout = int(_spec.get("timeout", 60)) + 1
+                        elif tool_name == "terminal":
+                            tool_timeout = min(max(int(_spec.get("timeout", 60)), 1), _TERMINAL_CAP)
                         from machina.core.execution_context import resolve_execution_context
 
                         _context = await resolve_execution_context(str(session_id), tool_name)
@@ -1084,6 +1085,9 @@ class BaseReActAgent:
                 # tool failure that permits another provider call.
                 raise
             except Exception as e:
+                if isinstance(e, asyncio.TimeoutError):
+                    # R4-019: wait_for raises a message-less TimeoutError; type it.
+                    e = f"tool '{tool_name}' timed out after {tool_timeout:g}s"
                 logger.exception("Tool execution failed for '%s'", tool_name)
                 audit_log(
                     "tool_call_error",
@@ -1152,7 +1156,7 @@ class BaseReActAgent:
                         tool_name=tool_name,
                         tool_result=result_str,
                         tool_call_id=finished["call_id"],
-                        tool_outcome="outcome_unknown" if finished.get("_outcome_unknown") else "",
+                        tool_outcome=_tool_outcome(finished),
                     )
                     # AH-AUDIT-030: typed pause alongside the result so live
                     # consumers need not wait for the terminal response.
@@ -1218,6 +1222,7 @@ class BaseReActAgent:
                     tool_name=tool_name,
                     tool_result=result_str,
                     tool_call_id=item["call_id"],
+                    tool_outcome=_tool_outcome(item),
                 )
                 # AH-AUDIT-030: typed pause event on the stream (not just in
                 # the terminal done response) so SSE/transports can pause

@@ -33,9 +33,12 @@ from machina.cli.providers import app as providers_app
 from machina.core.background_tasks import drain_background_tasks
 from machina.core.config import SECRET_KEYS, config
 from machina.core.context import context_manager
+from machina.core.execution_context import begin_turn_scope, end_turn_scope
 from machina.core.provider.specs import provider_names
 from machina.core.session import session_manager
 from machina.db.connection import db
+from machina.observability.diagnostics import record_failure
+from machina.observability.tracing import span
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +70,20 @@ def main(
 
 
 def _run(coro):
-    """Run an async coroutine from a sync Typer command."""
+    """Run an async coroutine from a sync Typer command.
+
+    When the caller's thread has no running loop (the normal CLI case),
+    the coroutine runs on that thread's loop. On the main thread that
+    keeps asyncio's first-SIGINT contract active: Ctrl+C cancels the
+    running task, its cleanup paths run, and the interrupt surfaces after
+    them. Callers already inside a running event loop keep the previous
+    worker-thread isolation; non-main threads (where asyncio cannot
+    install signal handlers) simply run the loop on their own thread.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
     import concurrent.futures
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
@@ -190,8 +206,9 @@ def chat(
 
     Exit statuses: 0 completed, 1 failed (including a session already busy
     with another live turn), 3 paused — the turn is waiting for an approval
-    decision. Paused/failed runs point at the terminal response, never only
-    at the session ID.
+    decision, 130 interrupted — Ctrl+C cancelled the running turn and its
+    cleanup ran. Paused/failed runs point at the terminal response, never
+    only at the session ID.
     """
     if mode is not None:
         normalized = mode.strip().lower()
@@ -243,6 +260,19 @@ def chat(
             else:
                 session = await session_manager.create(title=message[:50], goal=message[:100])
                 output.muted(f"New session: {session.id}")
+                # R4-018: mirror the gateway/REST session-create paths — a
+                # persistent `full` default is disclosed consent, so activate
+                # the same session-scoped full grant. Without it every
+                # governed headless tool call pauses with an approval this
+                # transport cannot resolve (exit 3).
+                try:
+                    from machina.gateway.features.mode import grant_full_default
+
+                    if await grant_full_default(session):
+                        output.muted("FULL HOST mode active for this session (saved full default).")
+                except Exception as grant_error:
+                    record_failure("cli.chat.grant_full_default", grant_error)
+                    logger.warning("full-mode grant activation failed: %s", grant_error)
 
             # R04: headless chat is a first-class transport — claim the shared
             # session turn before building or streaming anything, so a live
@@ -284,6 +314,7 @@ def chat(
                 ),
                 name=f"cli-turn-renew-{turn_id}",
             )
+            turn_scope_token = None
             try:
                 # Same shared factory as gateway/REST/jobs (definition, shared
                 # memory/RAG, authority). Headless: no approver → broker returns
@@ -317,22 +348,33 @@ def chat(
                 # including cancellation — BEFORE the claim is released below
                 # and before the provider/database close, never at event-loop
                 # shutdown after them.
-                async with contextlib.aclosing(
-                    agent.run_stream(session.id, message, verbose=False)
-                ) as stream:
-                    async for event in stream:
-                        if ownership_lost.is_set():
-                            break
-                        if event.type == "text":
-                            streamed_parts.append(event.content)
-                            console.out(event.content, end="", highlight=False)
-                        elif event.type == "tool_call" and verbose:
-                            console.print(f"\n[yellow]→ {escape(event.tool_name)}[/yellow]")
-                        elif event.type == "tool_result" and verbose:
-                            preview = str(event.tool_result)[:120].replace("\n", " ")
-                            console.print(f"[dim]  ← {escape(preview)}[/dim]")
-                        elif event.type == "done":
-                            final = event.response
+                # R4-010: driver-owned turn scope (contextvar must exist
+                # before per-step tasks — see TurnEngine.stream).
+                turn_scope_token = begin_turn_scope()
+                # R4-064: driver-owned OTel stream span — the CLI drives
+                # the relay inline in this one task, so enter and detach
+                # share a context.
+                with span(
+                    "agent.run_stream",
+                    agent_id=str(getattr(agent, "agent_id", "")),
+                    session_id=str(session.id),
+                ):
+                    async with contextlib.aclosing(
+                        agent.run_stream(session.id, message, verbose=False)
+                    ) as stream:
+                        async for event in stream:
+                            if ownership_lost.is_set():
+                                break
+                            if event.type == "text":
+                                streamed_parts.append(event.content)
+                                console.out(event.content, end="", highlight=False)
+                            elif event.type == "tool_call" and verbose:
+                                console.print(f"\n[yellow]→ {escape(event.tool_name)}[/yellow]")
+                            elif event.type == "tool_result" and verbose:
+                                preview = str(event.tool_result)[:120].replace("\n", " ")
+                                console.print(f"[dim]  ← {escape(preview)}[/dim]")
+                            elif event.type == "done":
+                                final = event.response
                 console.print()
             except asyncio.CancelledError:
                 # Loss cancels this task through _cancel_owned_work: that is
@@ -341,6 +383,8 @@ def chat(
                 if not ownership_lost.is_set():
                     raise
             finally:
+                if turn_scope_token is not None:
+                    end_turn_scope(turn_scope_token)
                 renew_task.cancel()
                 try:
                     await asyncio.gather(renew_task, return_exceptions=True)
@@ -353,8 +397,6 @@ def chat(
                 try:
                     await end_turn(session.id, turn_token)
                 except Exception as release_error:
-                    from machina.observability.diagnostics import record_failure
-
                     record_failure("cli.chat.release_turn", release_error)
                     logger.warning(
                         "Session %s turn claim release failed: %s", session.id, release_error
@@ -394,7 +436,14 @@ def chat(
                 pass
             await db.close()
 
-    _run(_chat())
+    try:
+        _run(_chat())
+    except KeyboardInterrupt:
+        # R4-017: Ctrl+C — asyncio cancelled the running turn on the main
+        # loop; _chat's finally blocks already released the claim and closed
+        # the provider/database. Report the conventional SIGINT status
+        # instead of Click's generic "Aborted!" (exit 1).
+        raise typer.Exit(130) from None
 
 
 @app.command()
@@ -1926,8 +1975,20 @@ def _filter_path_entries(path_value: str, remove: list[str]) -> str:
 
 
 def _shim_points_at(shim_text: str, app_root: str) -> bool:
-    """True when a ``~/.local/bin/machina`` shim execs an ``machina`` inside ``app_root``."""
-    return app_root.rstrip("/\\").lower() in shim_text.lower()
+    """True when a ``~/.local/bin/machina`` shim execs an ``machina`` inside ``app_root``.
+
+    Whole path segments only, case-insensitively: ``/x/machina`` never matches a
+    shim pointing at a sibling checkout such as ``/x/machina-old``.
+    """
+    root = app_root.rstrip("/\\").lower()
+    text = shim_text.lower()
+    for at in range(len(text) - len(root) + 1):
+        if not text.startswith(root, at):
+            continue
+        end = at + len(root)
+        if not any(c.isalnum() or c in "-._~" for c in text[at - 1 : at] + text[end : end + 1]):
+            return True
+    return False
 
 
 def _docker_container_exists(name: str = "machina-db") -> bool:

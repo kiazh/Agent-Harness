@@ -22,6 +22,7 @@ from machina.api.routes.models import PromptRequest
 from machina.api.routes.shared import _redact_value, _serialize_event
 from machina.core.config import config
 from machina.core.exceptions import StaleOwnershipError
+from machina.core.execution_context import begin_turn_scope, end_turn_scope
 from machina.core.models import StreamEvent
 from machina.core.session import session_manager
 from machina.core.turn_engine import TurnEngine, TurnSpec
@@ -141,6 +142,20 @@ async def _stream_session(
             renew_interval_s=_renew_interval,
         )
         engine.start_renewal(ownership_lost=_ownership_lost)
+        # R4-010: driver-owned turn scope — every `_owned_step` task copies
+        # this context, so the scope is visible to all steps and the reset
+        # stays in the context that created the token.
+        #
+        # R4-064 follow-up (stopped here, deliberately): no OTel span around
+        # this drive loop. An async generator can be resumed by one task and
+        # finalized by another (per-step `_owned_step` tasks here; Starlette
+        # closing the response on disconnect), and opentelemetry's context
+        # detach fails + logs in the foreign context. Unlike the turn-mode
+        # reset there is no tolerant detach available for spans, so this
+        # driver owns no span; gateway/CLI (single-task drivers) carry the
+        # stream span. Evidence: proofs/codebase_review_round4_2026-10-14/
+        # R4-063_064_observability.md.
+        turn_scope_token = begin_turn_scope()
         try:
             from machina.permissions.broker import set_approval_handler
 
@@ -324,11 +339,18 @@ async def _stream_session(
             _stream_cancelled = True
             raise
         finally:
+            end_turn_scope(turn_scope_token)
             _record_stage("cleanup_started")
             if resume_token is not None:
                 from machina.permissions.broker import resume_approval_var
 
-                resume_approval_var.reset(resume_token)
+                try:
+                    resume_approval_var.reset(resume_token)
+                except ValueError:
+                    # Same as the turn scope above: an async-generator close
+                    # can run in a different task context; the resumed
+                    # request context is already gone.
+                    pass
             active = _renew_state.get("active")
             if active is not None and not active.done():
                 active.cancel()

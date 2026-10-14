@@ -25,6 +25,7 @@ from machina import __version__
 from machina.core.background_tasks import drain_background_tasks
 from machina.core.config import config
 from machina.core.context import context_manager
+from machina.core.execution_context import begin_turn_scope, end_turn_scope
 from machina.core.models import Session
 from machina.core.provider import PROVIDERS
 from machina.core.runtime import RuntimeServices, runtime_services
@@ -55,6 +56,7 @@ from machina.gateway.errors import (  # noqa: F401 — re-exported for clients a
 from machina.gateway.features._common import _bool
 from machina.gateway.serializers import history_from_chunks, session_to_dict
 from machina.observability.diagnostics import record_failure
+from machina.observability.tracing import span
 
 __all__ = [
     "Gateway",
@@ -894,7 +896,18 @@ class Gateway:
                     # Optional fallback preserves the primary outcome; report no payload.
                     record_failure("server._run_turn", _boundary_error)
 
-        _set_handler(_turn_approver, principal="tui", turn_id=turn_id)
+        def _approval_resolved(card: dict) -> None:
+            # R4-065: the broker expired the deadline itself (no human
+            # decision). Retire the card on the same channel as decisions.
+            emit(
+                "approval.resolved",
+                requestId=str(card.get("request_id", "")),
+                status=str(card.get("status") or "expired"),
+            )
+
+        _set_handler(
+            _turn_approver, principal="tui", turn_id=turn_id, on_resolved=_approval_resolved
+        )
         # Growth indicator: background training (consolidation wins, staged
         # reviews) surfaces as growth.status events on this turn's stream.
         from machina.core.agent import add_growth_listener, remove_growth_listener
@@ -919,6 +932,7 @@ class Gateway:
         # share ONE signal; on_lost cancels owned work via _TurnHooks.
         engine.start_renewal(ownership_lost=_ownership_lost)
         try:
+            turn_scope_token = None
             try:
                 # AH-021/AH-022: resolve the session's stored model/provider and
                 # agent definition (allowed_tools/persona). Resumed sessions
@@ -962,57 +976,70 @@ class Gateway:
                     )
                 self._record_stage(turn_id, "waiting_for_provider", session_id=sid)
                 engine.attach(agent)
-                # W2: the shared engine owns boundary-safe streaming redaction,
-                # tool-call pairing/truncation, token accounting and final
-                # capture; this loop only serializes semantic events.
-                async for turn_event in engine.stream():
-                    if turn_event.kind == "delta":
-                        emit("message.delta", text=turn_event.payload["text"])
-                    elif turn_event.kind == "tool_start":
-                        self._record_stage(turn_id, "running_tool", session_id=sid)
-                        self._turn_progress[turn_id] = {
-                            "tokens": engine.tokens,
-                            "iterations": 0,
-                            "toolCalls": engine.tool_count,
-                        }
-                        emit(
-                            "tool.start",
-                            id=turn_event.payload["id"],
-                            name=turn_event.payload["name"],
-                            args=turn_event.payload["args"],
-                        )
-                    elif turn_event.kind == "tool_complete":
-                        payload = turn_event.payload
-                        emit(
-                            "tool.complete",
-                            id=payload["id"],
-                            name=payload["name"],
-                            result=payload["result"],
-                            truncated=payload["truncated"],
-                            isError=payload["isError"],
-                            **({"outcome": payload["outcome"]} if "outcome" in payload else {}),
-                        )
-                    elif turn_event.kind == "needs_approval":
-                        # Stream pause markers are surfaced by SSE as typed
-                        # frames; the gateway emits approval cards through the
-                        # broker handler only (never twice).
-                        continue
-                    elif turn_event.kind == "usage":
-                        self._turn_progress[turn_id] = {
-                            "tokens": engine.tokens,
-                            "iterations": 0,
-                            "toolCalls": engine.tool_count,
-                        }
-                        emit("usage", tokens=turn_event.payload["tokens"])
-                    elif turn_event.kind == "done":
-                        final_response = engine.final
-                        self._turn_progress[turn_id] = {
-                            "tokens": (getattr(final_response, "tokens_used", 0) or engine.tokens),
-                            "iterations": (getattr(final_response, "iterations", 0) or 0),
-                            "toolCalls": len(getattr(final_response, "tool_calls", None) or []),
-                        }
-                    else:
-                        logger.warning("Unknown turn event kind: %s", turn_event.kind)
+                # R4-010: driver-owned turn scope — the context must be set
+                # before per-step tasks are created (see TurnEngine.stream).
+                turn_scope_token = begin_turn_scope()
+                # R4-064: driver-owned OTel stream span — this transport
+                # drives the relay inline in one task, so the span is
+                # entered and detached in the same context.
+                with span(
+                    "agent.run_stream",
+                    agent_id=str(getattr(agent, "agent_id", "")),
+                    session_id=str(session_id),
+                ):
+                    # W2: the shared engine owns boundary-safe streaming redaction,
+                    # tool-call pairing/truncation, token accounting and final
+                    # capture; this loop only serializes semantic events.
+                    async for turn_event in engine.stream():
+                        if turn_event.kind == "delta":
+                            emit("message.delta", text=turn_event.payload["text"])
+                        elif turn_event.kind == "tool_start":
+                            self._record_stage(turn_id, "running_tool", session_id=sid)
+                            self._turn_progress[turn_id] = {
+                                "tokens": engine.tokens,
+                                "iterations": 0,
+                                "toolCalls": engine.tool_count,
+                            }
+                            emit(
+                                "tool.start",
+                                id=turn_event.payload["id"],
+                                name=turn_event.payload["name"],
+                                args=turn_event.payload["args"],
+                            )
+                        elif turn_event.kind == "tool_complete":
+                            payload = turn_event.payload
+                            emit(
+                                "tool.complete",
+                                id=payload["id"],
+                                name=payload["name"],
+                                result=payload["result"],
+                                truncated=payload["truncated"],
+                                isError=payload["isError"],
+                                **({"outcome": payload["outcome"]} if "outcome" in payload else {}),
+                            )
+                        elif turn_event.kind == "needs_approval":
+                            # Stream pause markers are surfaced by SSE as typed
+                            # frames; the gateway emits approval cards through the
+                            # broker handler only (never twice).
+                            continue
+                        elif turn_event.kind == "usage":
+                            self._turn_progress[turn_id] = {
+                                "tokens": engine.tokens,
+                                "iterations": 0,
+                                "toolCalls": engine.tool_count,
+                            }
+                            emit("usage", tokens=turn_event.payload["tokens"])
+                        elif turn_event.kind == "done":
+                            final_response = engine.final
+                            self._turn_progress[turn_id] = {
+                                "tokens": (
+                                    getattr(final_response, "tokens_used", 0) or engine.tokens
+                                ),
+                                "iterations": (getattr(final_response, "iterations", 0) or 0),
+                                "toolCalls": len(getattr(final_response, "tool_calls", None) or []),
+                            }
+                        else:
+                            logger.warning("Unknown turn event kind: %s", turn_event.kind)
             except asyncio.CancelledError:
                 # AH-AUDIT-028: do NOT emit terminal completion here. Emit a
                 # stopping state (UI stays blocked), run cleanup + ownership
@@ -1025,6 +1052,8 @@ class Gateway:
                 logger.exception("Turn %s failed", turn_id)
                 emit("error", message="agent turn failed")
             finally:
+                if turn_scope_token is not None:
+                    end_turn_scope(turn_scope_token)
                 # Release the approval handler and cancel any still-pending
                 # approval waits (cancellation stops owned waits, not siblings).
                 try:

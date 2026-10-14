@@ -101,8 +101,17 @@ def begin_turn_scope() -> Token:
 
 
 def end_turn_scope(token: Token) -> None:
-    """Leave a turn scope entered with begin_turn_scope."""
-    _turn_scope.reset(token)
+    """Leave a turn scope entered with begin_turn_scope.
+
+    Async generators can be closed from a different task context than the one
+    that entered the scope (client disconnect on per-step stream drivers); a
+    cross-context reset raises ValueError in CPython. The scope's original
+    context is tearing down in that case, so the reset is skipped.
+    """
+    try:
+        _turn_scope.reset(token)
+    except ValueError:
+        pass
 
 
 def _valid_turn_scope() -> _TurnModeSnapshot | None:
