@@ -929,27 +929,17 @@ class BaseReActAgent:
                     # LP-08: publish this agent's authority for delegation
                     # children (restored afterwards like all caller scope).
                     try:
-                        from machina.core.agent_factory import cap_child_authority
+                        from machina.core.agent_factory import check_mode_cap, merge_authority
                         from machina.core.agent_factory import parent_authority_var as _pav
 
                         # R-02: Preserve inherited authority (max_mode, etc.)
                         # and intersect its tools with this agent's definition.
                         _inherited = dict(getattr(self, "_authority", {}) or {})
                         _ambient = _pav.get() or {}
-                        _full_sources = list(_inherited.get("full_grant_sources") or [])
-                        _inherited["tools"] = cap_child_authority(_inherited, _ambient.get("tools"))
-                        from machina.core.agent_factory import check_mode_cap
-
                         if _ambient.get("max_mode") is not None:
                             check_mode_cap(_inherited, _ambient["max_mode"])
-                        _inherited.update({k: v for k, v in _ambient.items() if k != "tools"})
-                        _inherited["full_grant_sources"] = _full_sources + [
-                            source
-                            for source in _ambient.get("full_grant_sources", [])
-                            if source not in _full_sources
-                        ]
-                        _merged = dict(_inherited)
-                        _parent_tools = _inherited.get("tools")
+                        _merged = merge_authority(_inherited, _ambient)
+                        _parent_tools = _merged.get("tools")
                         if _parent_tools is None:
                             _merged["tools"] = self.allowed_tools
                         elif self.allowed_tools is None:

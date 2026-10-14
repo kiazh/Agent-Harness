@@ -97,22 +97,7 @@ async def build_agent_for_session(
 
     # A resumed/forked child keeps the restrictions stamped at delegation.
     # Newly supplied authority can narrow these caps but cannot replace them.
-    durable = dict(getattr(session, "delegation_authority", {}) or {})
-    supplied = dict(authority or {})
-    merged = {**durable, **supplied}
-    full_sources = list(durable.get("full_grant_sources") or [])
-    merged["full_grant_sources"] = full_sources + [
-        source for source in supplied.get("full_grant_sources", []) if source not in full_sources
-    ]
-    merged["tools"] = cap_child_authority(durable, supplied.get("tools"))
-    if durable.get("max_mode") is not None:
-        if _MODE_RANK.get(str(supplied.get("max_mode") or "full"), 0) >= _MODE_RANK.get(
-            str(durable["max_mode"]), 0
-        ):
-            merged["max_mode"] = durable["max_mode"]
-    if durable.get("terminal_backend") == "sandbox":
-        merged["terminal_backend"] = "sandbox"
-    authority = merged
+    authority = merge_authority(getattr(session, "delegation_authority", {}) or {}, authority or {})
 
     requested = session.agent_id or "harness"
     try:
@@ -137,7 +122,8 @@ async def build_agent_for_session(
         )
         model = model_override or session.model or definition.model or config.get("model")
         system_prompt = definition.system_prompt or None
-        allowed_tools = definition.tools or None
+        # Explicit AgentDef -> authority translation; see definition_tool_cap.
+        allowed_tools = definition_tool_cap(definition)
         agent_id = definition.name
     else:
         from machina.core.config import config as _cfg
@@ -209,7 +195,7 @@ async def build_agent_for_session(
 def cap_child_authority(
     parent_authority: dict, definition_tools: list[str] | None
 ) -> list[str] | None:
-    """Child tools = definition âˆ© parent caps (Phase 4.5/6, LP-08).
+    """Child tools = definition ∩ parent caps (Phase 4.5/6, LP-08).
 
     A restricted parent cannot create an unrestricted child; broad parent
     access never expands a child's restrictive definition. Key presence/None
@@ -221,6 +207,59 @@ def cap_child_authority(
     if definition_tools is None:
         return list(parent_tools)
     return [t for t in definition_tools if t in parent_tools]
+
+
+def definition_tool_cap(definition: object) -> list[str] | None:
+    """Translate AgentDef tools into authority-layer tools, explicitly.
+
+    Two conventions meet here and must never be conflated by truthiness:
+
+    - AgentDef convention (machina/core/agent_def.py): an EMPTY tools list
+      means every registered tool (it is the default).
+    - Authority convention (this module): None = unrestricted, [] = zero
+      tools.
+
+    The translation is deliberately spelled out so a call site can never
+    silently reinterpret one convention as the other.
+    """
+    tools = list(getattr(definition, "tools", None) or [])
+    return tools or None
+
+
+def merge_authority(base: dict | None, overlay: dict | None) -> dict:
+    """Compose an authority overlay onto a base without ever widening it.
+
+    Single source of truth for authority composition (factory build,
+    agent-loop ambient merge, delegation). Semantics, by key presence:
+
+    - tools: intersection with None-as-unrestricted (cap_child_authority).
+      An explicit ``[]`` overlay yields ``[]`` (never folded to unrestricted).
+    - max_mode: rank-min of the two; the present one when either is absent.
+      This helper never raises — callers that must reject escalation apply
+      check_mode_cap first (agent loop, delegate).
+    - full_grant_sources: order-preserving union (base first).
+    - terminal_backend: a sandbox base pins the result to sandbox.
+    - every other overlay key overrides the base.
+    """
+    base = dict(base or {})
+    overlay = dict(overlay or {})
+    merged = {**base, **{key: value for key, value in overlay.items() if key != "tools"}}
+    merged["tools"] = cap_child_authority(base, overlay.get("tools"))
+    base_max = base.get("max_mode")
+    overlay_max = overlay.get("max_mode")
+    if base_max is not None and overlay_max is not None:
+        base_rank = _MODE_RANK.get(str(base_max).lower(), 0)
+        overlay_rank = _MODE_RANK.get(str(overlay_max).lower(), 0)
+        merged["max_mode"] = base_max if base_rank <= overlay_rank else overlay_max
+    elif base_max is not None:
+        merged["max_mode"] = base_max
+    sources = list(base.get("full_grant_sources") or [])
+    merged["full_grant_sources"] = sources + [
+        source for source in (overlay.get("full_grant_sources") or []) if source not in sources
+    ]
+    if base.get("terminal_backend") == "sandbox":
+        merged["terminal_backend"] = "sandbox"
+    return merged
 
 
 _MODE_RANK = {"ask": 0, "workspace": 1, "sandbox": 2, "full": 3}

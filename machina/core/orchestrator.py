@@ -97,10 +97,14 @@ class Orchestrator:
         self._agent_factory = agent_factory
 
     async def _default_agent(self, definition: AgentDef, authority: dict | None = None):
-        from machina.core.agent_factory import build_agent_for_session, cap_child_authority
+        from machina.core.agent_factory import (
+            build_agent_for_session,
+            cap_child_authority,
+            definition_tool_cap,
+        )
         from machina.core.models import Session as _Session
 
-        tools = cap_child_authority(authority or {}, definition.tools or None)
+        tools = cap_child_authority(authority or {}, definition_tool_cap(definition))
         # Build through the shared factory for identical dependency wiring;
         # synthesize a session view carrying the child identity.
         import uuid as _uuid
@@ -164,6 +168,7 @@ class Orchestrator:
         return True, ""
 
     def _build_agent(self, definition: AgentDef) -> ReActAgent:
+        from machina.core.agent_factory import definition_tool_cap
         from machina.core.provider import get_provider
 
         provider_name = definition.provider or config.get("provider")
@@ -172,7 +177,7 @@ class Orchestrator:
             provider=get_provider(provider=provider_name, model=model),
             agent_id=definition.name,
             system_prompt=definition.system_prompt or None,
-            allowed_tools=definition.tools or None,
+            allowed_tools=definition_tool_cap(definition),
         )
 
     async def delegate(
@@ -231,23 +236,20 @@ class Orchestrator:
         from machina.core.agent_factory import (
             cap_child_authority,
             check_mode_cap,
+            definition_tool_cap,
+            merge_authority,
             parent_authority_var,
         )
         from machina.core.session_mode import resolve_effective_mode
 
         parent = dict(parent_authority_var.get() or {})
-        inherited_full_sources = list(parent.get("full_grant_sources") or [])
         if authority:
             # An explicit restriction cannot erase an ambient restriction.
-            parent["tools"] = cap_child_authority(parent, authority.get("tools"))
             if authority.get("max_mode") is not None:
                 check_mode_cap(parent, authority["max_mode"])
-            parent.update({k: v for k, v in authority.items() if k != "tools"})
-        parent["full_grant_sources"] = inherited_full_sources + [
-            source
-            for source in parent.get("full_grant_sources", [])
-            if source not in inherited_full_sources
-        ]
+        # Unconditional: merge_authority always materializes full_grant_sources,
+        # which downstream inheritance relies on.
+        parent = merge_authority(parent, authority or {})
         parent_mode = await resolve_effective_mode(
             str(parent_session_id) if parent_session_id else None
         )
@@ -259,7 +261,7 @@ class Orchestrator:
             parent_mode = str(parent.get("max_mode") or "ask")
         child_authority = dict(parent)
         child_authority["max_mode"] = parent_mode
-        child_authority["tools"] = cap_child_authority(parent, definition.tools or None)
+        child_authority["tools"] = cap_child_authority(parent, definition_tool_cap(definition))
         if parent_mode == "sandbox" or config.get("terminal_sandbox") == "docker":
             child_authority["terminal_backend"] = "sandbox"
 
