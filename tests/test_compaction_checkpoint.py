@@ -84,7 +84,9 @@ async def test_checkpoint_round_trip_async_llm_path():
     cp = _checkpoint()
     comp = ContextCompressor(config=CompressionConfig(llm_summarize=True, preserve_recent=2))
     with mock.patch.object(usage_store, "complete_call", side_effect=fake_complete_call):
-        result = await comp.acompress(_chunks(), uuid.uuid4(), "harness", llm_provider=provider, checkpoint=cp)
+        result = await comp.acompress(
+            _chunks(), uuid.uuid4(), "harness", llm_provider=provider, checkpoint=cp
+        )
     summaries = [c for c in result.compressed_chunks if c.chunk_type == "compression_summary"]
     assert summaries
     recovered = extract_checkpoint(summaries[0].payload)

@@ -84,7 +84,9 @@ async def test_gateway_startup_calls_cleanup(monkeypatch):
     from machina.gateway.server import Gateway
 
     mock_cleanup = AsyncMock(return_value=0)
-    monkeypatch.setattr("machina.core.usage.usage_store.cleanup_orphaned_reservations", mock_cleanup)
+    monkeypatch.setattr(
+        "machina.core.usage.usage_store.cleanup_orphaned_reservations", mock_cleanup
+    )
     migration = AsyncMock()
     monkeypatch.setattr("machina.db.connection.db.initialize_runtime_schema", migration)
 

@@ -106,9 +106,7 @@ async def test_p7_real_guard_denies_connect_before_launch(monkeypatch, tmp_path)
     authority_token = parent_authority_var.set({"tools": ["read_file"], "max_mode": "ask"})
     try:
         with pytest.raises(ApprovalDenied, match="outside parent authority"):
-            await connect_authorized(
-                service, "fixture", "session", "harness", preview["digest"]
-            )
+            await connect_authorized(service, "fixture", "session", "harness", preview["digest"])
         launched.assert_not_awaited()
     finally:
         parent_authority_var.reset(authority_token)

@@ -250,14 +250,26 @@ def test_distinct_url_and_pattern_loops_never_stagnate():
     for i in range(6):
         hist, stop = wiring.check_stagnation(
             hist,
-            [{"tool": "web_extract", "args": {"url": f"https://page-{i}.example"},
-              "result_preview": "", "outcome": "completed"}],
+            [
+                {
+                    "tool": "web_extract",
+                    "args": {"url": f"https://page-{i}.example"},
+                    "result_preview": "",
+                    "outcome": "completed",
+                }
+            ],
         )
         assert stop is None, f"stop fired at round {i}: {stop}"
     hist, stop = wiring.check_stagnation(
         hist,
-        [{"tool": "web_extract", "args": {"url": "https://page-6.example"},
-          "result_preview": "", "outcome": "completed"}],
+        [
+            {
+                "tool": "web_extract",
+                "args": {"url": "https://page-6.example"},
+                "result_preview": "",
+                "outcome": "completed",
+            }
+        ],
     )
     assert stop is None
 
@@ -265,8 +277,14 @@ def test_distinct_url_and_pattern_loops_never_stagnate():
     for i in range(6):
         hist2, stop = wiring.check_stagnation(
             hist2,
-            [{"tool": "search_files", "args": {"pattern": f"needle{i}", "path": "."},
-              "result_preview": "", "outcome": "completed"}],
+            [
+                {
+                    "tool": "search_files",
+                    "args": {"pattern": f"needle{i}", "path": "."},
+                    "result_preview": "",
+                    "outcome": "completed",
+                }
+            ],
         )
         assert stop is None, f"search_files stop fired at round {i}: {stop}"
 
@@ -280,8 +298,14 @@ def test_identical_url_loop_still_stagnates_at_k():
     for _ in range(8):
         hist, stop = wiring.check_stagnation(
             hist,
-            [{"tool": "web_extract", "args": {"url": "https://same.example"},
-              "result_preview": "", "outcome": "completed"}],
+            [
+                {
+                    "tool": "web_extract",
+                    "args": {"url": "https://same.example"},
+                    "result_preview": "",
+                    "outcome": "completed",
+                }
+            ],
         )
         if stop:
             break

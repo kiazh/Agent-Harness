@@ -39,9 +39,7 @@ def clean_turn():
         session_mode.reset_for_tests()
 
 
-async def test_child_task_cannot_read_stale_mode_after_invalidation(
-    clean_turn, monkeypatch
-):
+async def test_child_task_cannot_read_stale_mode_after_invalidation(clean_turn, monkeypatch):
     from machina.core import session_mode
 
     sid = str(uuid.uuid4())

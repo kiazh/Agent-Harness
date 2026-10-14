@@ -45,9 +45,7 @@ async def _rpc(gw: Gateway, frames: list, rid: int, method: str, params: dict | 
     if params is not None:
         frame["params"] = params
     await gw.handle_line(json.dumps(frame))
-    return next(
-        f for f in reversed(frames) if f.get("id") == rid and "method" not in f
-    )
+    return next(f for f in reversed(frames) if f.get("id") == rid and "method" not in f)
 
 
 def _event_types(frames: list) -> list[str]:
@@ -302,9 +300,7 @@ async def test_session_resume_history_is_bounded(monkeypatch):
         for index in range(total)
     ]
     monkeypatch.setattr(session_manager, "get", AsyncMock(return_value=session))
-    monkeypatch.setattr(
-        context_manager, "get_transcript_chunks", AsyncMock(return_value=chunks)
-    )
+    monkeypatch.setattr(context_manager, "get_transcript_chunks", AsyncMock(return_value=chunks))
 
     gw = Gateway(lambda _frame: None, owns_db=False)
     gw._db_ready = True
@@ -356,9 +352,7 @@ async def test_embedded_rpc_gateway_initialize_does_not_re_enable_env_token(monk
     monkeypatch.setenv("MACHINA_GATEWAY_NO_SCHEDULER", "1")
     monkeypatch.setattr(db_mod.db, "connect", AsyncMock())
     monkeypatch.setattr(db_mod.db, "initialize_runtime_schema", AsyncMock())
-    monkeypatch.setattr(
-        usage_store, "cleanup_orphaned_reservations", AsyncMock(return_value=0)
-    )
+    monkeypatch.setattr(usage_store, "cleanup_orphaned_reservations", AsyncMock(return_value=0))
 
     result = await rpc.call("initialize", {"protocolVersion": 2, "model": "embedded-model"})
 
@@ -440,16 +434,12 @@ async def test_session_set_model_uses_provider_registry(monkeypatch):
     """
     from machina.gateway.features import sessions as feature
 
-    session = SimpleNamespace(
-        id=uuid.uuid4(), agent_id="harness", model=None, provider="testprov"
-    )
+    session = SimpleNamespace(id=uuid.uuid4(), agent_id="harness", model=None, provider="testprov")
     set_model = AsyncMock()
     monkeypatch.setattr(feature.session_manager, "set_model", set_model)
     monkeypatch.setattr(feature.session_manager, "get", AsyncMock(return_value=session))
     monkeypatch.setattr(feature, "PROVIDERS", ("testprov",), raising=False)
-    gw = SimpleNamespace(
-        require_db=lambda: None, get_session=AsyncMock(return_value=session)
-    )
+    gw = SimpleNamespace(require_db=lambda: None, get_session=AsyncMock(return_value=session))
 
     result = await feature.session_set_model(
         gw, {"sessionId": str(session.id), "provider": "testprov"}
@@ -459,6 +449,4 @@ async def test_session_set_model_uses_provider_registry(monkeypatch):
 
     # A provider the registry does not know stays rejected.
     with pytest.raises(RpcError):
-        await feature.session_set_model(
-            gw, {"sessionId": str(session.id), "provider": "openai"}
-        )
+        await feature.session_set_model(gw, {"sessionId": str(session.id), "provider": "openai"})

@@ -46,9 +46,7 @@ async def test_crawl_connects_only_to_public_same_host_pages(monkeypatch):
     def responder():
         return _ok(pages.pop(0))
 
-    connected = _fake_pinned_transport(
-        monkeypatch, {"example.com": (["93.184.216.34"], responder)}
-    )
+    connected = _fake_pinned_transport(monkeypatch, {"example.com": (["93.184.216.34"], responder)})
     outcome = await crawl_module.web_crawl("https://example.com/", max_pages=5, max_depth=1)
 
     assert connected == ["93.184.216.34", "93.184.216.34"]

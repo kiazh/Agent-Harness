@@ -156,9 +156,9 @@ EPHEMERAL = {"type": "ephemeral"}
 
 def _wire(payload: dict) -> bytes:
     """Serialize exactly like httpx.encode_json does on the wire."""
-    return json.dumps(
-        payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
-    ).encode("utf-8")
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode(
+        "utf-8"
+    )
 
 
 def _enable_prompt_cache() -> None:
@@ -226,7 +226,7 @@ def _anthropic_sse() -> httpx.Response:
 
 def _openai_sse(model: str = OR_ANTHROPIC_MODEL) -> httpx.Response:
     body = (
-        f'data: {json.dumps({"model": model, "choices": [{"delta": {"content": "OK"}}]})}\n\n'
+        f"data: {json.dumps({'model': model, 'choices': [{'delta': {'content': 'OK'}}]})}\n\n"
         "data: [DONE]\n\n"
     )
     return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
@@ -286,9 +286,7 @@ async def make():
         provider.client = _client("http://localhost:11434", handler)
         return provider
 
-    yield SimpleNamespace(
-        openrouter=openrouter, anthropic=anthropic, direct=direct, ollama=ollama
-    )
+    yield SimpleNamespace(openrouter=openrouter, anthropic=anthropic, direct=direct, ollama=ollama)
 
     for client in clients:
         await client.aclose()
@@ -437,9 +435,7 @@ async def test_enabled_anthropic_marks_system_tail_and_last_tool_only(make):
     await provider.complete(MESSAGES, tools=TOOLS)
 
     payload = recorder.payload
-    assert payload["system"] == [
-        {"type": "text", "text": SYSTEM_TEXT, "cache_control": EPHEMERAL}
-    ]
+    assert payload["system"] == [{"type": "text", "text": SYSTEM_TEXT, "cache_control": EPHEMERAL}]
     assert payload["tools"][-1]["cache_control"] == EPHEMERAL
     assert all("cache_control" not in tool for tool in payload["tools"][:-1])
     assert "cache_control" not in json.dumps(payload["messages"])
@@ -634,9 +630,7 @@ async def test_off_attachment_logs_nothing(make, caplog):
         await provider.complete(MESSAGES, tools=TOOLS)
 
     assert not [
-        record
-        for record in caplog.records
-        if "prompt cache breakpoints attached" in record.message
+        record for record in caplog.records if "prompt cache breakpoints attached" in record.message
     ]
 
 

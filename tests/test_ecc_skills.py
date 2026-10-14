@@ -127,7 +127,9 @@ async def test_default_skills_reach_first_provider_call(streaming, monkeypatch):
     monkeypatch.setattr(
         "machina.core.agent.context_manager.get_latest_images", AsyncMock(return_value=[])
     )
-    monkeypatch.setattr("machina.core.agent.BaseReActAgent._reserve_usage", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "machina.core.agent.BaseReActAgent._reserve_usage", AsyncMock(return_value=None)
+    )
     monkeypatch.setattr("machina.core.agent.BaseReActAgent._finish_usage", AsyncMock())
 
     class Provider:

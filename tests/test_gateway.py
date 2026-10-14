@@ -175,9 +175,7 @@ class TestProtocolErrors:
         config_module = sys.modules["machina.core.config"]
 
         env_file = tmp_path / ".env"
-        env_file.write_text(
-            "MACHINA_MODEL=openrouter/free\nMACHINA_PROVIDER=openrouter\n"
-        )
+        env_file.write_text("MACHINA_MODEL=openrouter/free\nMACHINA_PROVIDER=openrouter\n")
         monkeypatch.setenv("MACHINA_ENV_FILE", str(env_file))
         monkeypatch.setenv("MACHINA_MODEL", "openrouter/free")
         monkeypatch.setenv("MACHINA_PROVIDER", "openrouter")

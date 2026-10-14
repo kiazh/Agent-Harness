@@ -207,17 +207,27 @@ class _FakeUsageDb:
 
 
 async def _fixture_run(store, session_id, agent_id):
-    r1 = await store.reserve(session_id, agent_id, "fake", "m", [{"role": "user", "content": "hi"}], [], 8)
+    r1 = await store.reserve(
+        session_id, agent_id, "fake", "m", [{"role": "user", "content": "hi"}], [], 8
+    )
     await store.finish(r1, {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14})
-    r2 = await store.reserve(session_id, agent_id, "fake", "m", [{"role": "user", "content": "hi"}], [], 8)
+    r2 = await store.reserve(
+        session_id, agent_id, "fake", "m", [{"role": "user", "content": "hi"}], [], 8
+    )
     await store.finish(r2, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 9})
-    r3 = await store.reserve(session_id, agent_id, "fake", "m", [{"role": "user", "content": "hi"}], [], 8)
+    r3 = await store.reserve(
+        session_id, agent_id, "fake", "m", [{"role": "user", "content": "hi"}], [], 8
+    )
     await store.finish(
         r3, {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10, "estimated": True}
     )
-    r4 = await store.reserve(session_id, agent_id, "fake", "m", [{"role": "user", "content": "hi"}], [], 8)
+    r4 = await store.reserve(
+        session_id, agent_id, "fake", "m", [{"role": "user", "content": "hi"}], [], 8
+    )
     await store.finish(r4, failed=True)
-    r5 = await store.reserve(session_id, agent_id, "fake", "m", [{"role": "user", "content": "hi"}], [], 8)
+    r5 = await store.reserve(
+        session_id, agent_id, "fake", "m", [{"role": "user", "content": "hi"}], [], 8
+    )
     await store.finish(r5, {})
 
 
@@ -240,15 +250,21 @@ async def test_reconciliation_equals_usage_ledger_figures(monkeypatch):
         known = fin["prompt"] is not None and fin["completion"] is not None
         exp_in += fin["prompt"] or 0
         exp_out += fin["completion"] or 0
-        exp_acc += fin["accounted"] if fin["accounted"] is not None else fake_db.reserved[fin["reservation_id"]]
+        exp_acc += (
+            fin["accounted"]
+            if fin["accounted"] is not None
+            else fake_db.reserved[fin["reservation_id"]]
+        )
         exp_unknown += 0 if known else 1
 
     report = turn_report("t-rec")
     assert report["llm_calls"] == 5 == len(fake_db.finishes)
     assert report["input_tokens"] == exp_in == 10
     assert report["output_tokens"] == exp_out == 4
-    assert report["accounted_tokens"] == exp_acc == 14 + 9 + sum(
-        fake_db.reserved[f["reservation_id"]] for f in fake_db.finishes[2:]
+    assert (
+        report["accounted_tokens"]
+        == exp_acc
+        == 14 + 9 + sum(fake_db.reserved[f["reservation_id"]] for f in fake_db.finishes[2:])
     )
     assert report["unknown_calls"] == exp_unknown == 3
 
@@ -434,16 +450,12 @@ async def _run_gateway_turn(monkeypatch, frames, turn_id, agent, text="read a.py
     session_id = uuid.uuid4()
     monkeypatch.setattr(
         "machina.gateway.server.session_manager.get_fresh",
-        AsyncMock(
-            return_value=SimpleNamespace(agent_id="harness", model="m", provider="p")
-        ),
+        AsyncMock(return_value=SimpleNamespace(agent_id="harness", model="m", provider="p")),
     )
     monkeypatch.setattr(
         "machina.core.agent_factory.close_agent_provider", AsyncMock(return_value=None)
     )
-    monkeypatch.setattr(
-        "machina.services.maybe_auto_compact", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr("machina.services.maybe_auto_compact", AsyncMock(return_value=None))
     gateway = Gateway(frames.append, agent_factory=lambda model, provider: agent)
     await gateway._run_turn(session_id, turn_id, text)
     return session_id
@@ -453,7 +465,9 @@ async def test_gateway_turn_traced_and_completes_with_raising_sink(monkeypatch):
     from machina.core.intent import classify_task
 
     frames = []
-    session_id = await _run_gateway_turn(monkeypatch, frames, "gw-t1", _FakeAgent(_scripted_events()))
+    session_id = await _run_gateway_turn(
+        monkeypatch, frames, "gw-t1", _FakeAgent(_scripted_events())
+    )
     assert len(_completes(frames)) == 1
     assert _completes(frames)[0]["text"] == "Looking done."
 

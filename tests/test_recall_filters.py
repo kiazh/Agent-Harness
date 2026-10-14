@@ -32,9 +32,27 @@ def _mock_db(monkeypatch, rows):
 async def test_polluted_archive_returns_real_instruction_first(monkeypatch):
     sid = uuid.uuid4()
     rows = [
-        _row(sid, uuid.uuid4(), "Skill tdd-guide [0:500/1200]: workflow steps red green", 0.9, "tool_call"),
-        _row(sid, uuid.uuid4(), f"[live] prior | session={sid} chunk={uuid.uuid4()} | echoed catalog text", 0.8, "assistant_message"),
-        _row(sid, uuid.uuid4(), "Deploy with read-only scope, do not edit files outside /tmp", 0.1, "user_message"),
+        _row(
+            sid,
+            uuid.uuid4(),
+            "Skill tdd-guide [0:500/1200]: workflow steps red green",
+            0.9,
+            "tool_call",
+        ),
+        _row(
+            sid,
+            uuid.uuid4(),
+            f"[live] prior | session={sid} chunk={uuid.uuid4()} | echoed catalog text",
+            0.8,
+            "assistant_message",
+        ),
+        _row(
+            sid,
+            uuid.uuid4(),
+            "Deploy with read-only scope, do not edit files outside /tmp",
+            0.1,
+            "user_message",
+        ),
     ]
     _mock_db(monkeypatch, rows)
     hits = await SessionRecall().discover("harness", "deploy scope files")
@@ -83,7 +101,14 @@ async def test_recency_filter(monkeypatch):
     sid = uuid.uuid4()
     now = datetime.now(UTC)
     rows = [
-        _row(sid, uuid.uuid4(), "alpha old instruction", 0.9, "user_message", occurred=now - timedelta(days=30)),
+        _row(
+            sid,
+            uuid.uuid4(),
+            "alpha old instruction",
+            0.9,
+            "user_message",
+            occurred=now - timedelta(days=30),
+        ),
         _row(sid, uuid.uuid4(), "alpha new instruction", 0.1, "user_message", occurred=now),
     ]
     _mock_db(monkeypatch, rows)

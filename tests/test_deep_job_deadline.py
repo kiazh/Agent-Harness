@@ -81,7 +81,8 @@ class JobBoundary:
 def boundary(monkeypatch, request):
     state = JobBoundary(request.param)
     monkeypatch.setattr(
-        "machina.core.scheduler.RUN_LEASE_SECONDS", 0.1 if request.param == "ownership_loss" else 0.01
+        "machina.core.scheduler.RUN_LEASE_SECONDS",
+        0.1 if request.param == "ownership_loss" else 0.01,
     )
     monkeypatch.setattr("machina.core.turns.try_begin_turn", state.begin_turn)
     monkeypatch.setattr("machina.core.turns.end_turn", state.end_turn)

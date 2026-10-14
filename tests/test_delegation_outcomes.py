@@ -111,9 +111,7 @@ async def test_failed_wrapper_label_never_responded(delegation, monkeypatch):
 
     orch = delegation.build(_failed_child(delegation, "LLM provider error. Check server logs."))
     monkeypatch.setattr(module, "orchestrator", orch)
-    monkeypatch.setattr(
-        agent_registry, "list", AsyncMock(return_value=[AgentDef(name="coder")])
-    )
+    monkeypatch.setattr(agent_registry, "list", AsyncMock(return_value=[AgentDef(name="coder")]))
     receipt = await delegate("coder", "work")
     assert "failed" in receipt
     assert "responded" not in receipt
@@ -135,9 +133,7 @@ async def test_effective_deadline_is_120_through_real_tool_path(monkeypatch):
         return SimpleNamespace(status="complete", response="ok", tokens=0, needs_approval=[])
 
     monkeypatch.setattr(module.orchestrator, "delegate", fake_delegate)
-    monkeypatch.setattr(
-        agent_registry, "list", AsyncMock(return_value=[AgentDef(name="coder")])
-    )
+    monkeypatch.setattr(agent_registry, "list", AsyncMock(return_value=[AgentDef(name="coder")]))
     assert module.delegation_deadline.get() is None
     await delegate("coder", "work")
     delta = captured["deadline_in"] - captured["now"]
@@ -159,9 +155,7 @@ async def test_inherited_shorter_deadline_clips_through_real_tool_path(monkeypat
         return SimpleNamespace(status="complete", response="ok", tokens=0, needs_approval=[])
 
     monkeypatch.setattr(module.orchestrator, "delegate", fake_delegate)
-    monkeypatch.setattr(
-        agent_registry, "list", AsyncMock(return_value=[AgentDef(name="coder")])
-    )
+    monkeypatch.setattr(agent_registry, "list", AsyncMock(return_value=[AgentDef(name="coder")]))
     loop = _asyncio.get_running_loop()
     inherited = loop.time() + 10
     token = module.delegation_deadline.set(inherited)
@@ -229,9 +223,7 @@ async def test_typed_failure_parent_charges_once_run_and_stream(
     agent = ReActAgent(provider=SimpleNamespace(model="fake"), allowed_tools=["delegate"])
     orch = delegation.build(_failed_child(delegation, content))
     monkeypatch.setattr(module, "orchestrator", orch)
-    monkeypatch.setattr(
-        agent_registry, "list", AsyncMock(return_value=[AgentDef(name="coder")])
-    )
+    monkeypatch.setattr(agent_registry, "list", AsyncMock(return_value=[AgentDef(name="coder")]))
     monkeypatch.setattr("machina.tools.agents.db.fetchval", AsyncMock(return_value="harness"))
     monkeypatch.setattr(agent, "_prepare_context", AsyncMock(return_value=(parent, [])))
     monkeypatch.setattr(agent, "_flush_pending_chunks", AsyncMock())

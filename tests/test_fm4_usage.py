@@ -41,9 +41,7 @@ async def test_finish_written_does_not_count_lost(monkeypatch):
         usage_mod, "db", SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
     )
     before = metrics.get_counter("usage.finish_lost")
-    written = await UsageStore().finish(
-        uuid.uuid4(), {"prompt_tokens": 1, "completion_tokens": 1}
-    )
+    written = await UsageStore().finish(uuid.uuid4(), {"prompt_tokens": 1, "completion_tokens": 1})
     assert written is True
     assert metrics.get_counter("usage.finish_lost") == before
 

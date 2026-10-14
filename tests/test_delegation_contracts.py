@@ -204,9 +204,7 @@ async def test_waiting_approval_bypasses_verification(delegation, monkeypatch):
     spy.assert_not_called()
 
 
-async def test_cancelled_mid_write_propagates_without_verification(
-    delegation, monkeypatch
-):
+async def test_cancelled_mid_write_propagates_without_verification(delegation, monkeypatch):
     import asyncio
 
     import machina.core.progress as progress
@@ -220,9 +218,7 @@ async def test_cancelled_mid_write_propagates_without_verification(
             raise asyncio.CancelledError()
 
     with pytest.raises(asyncio.CancelledError):
-        await delegation.build(Child()).delegate(
-            "coder", "work", expected_artifact_path="x.md"
-        )
+        await delegation.build(Child()).delegate("coder", "work", expected_artifact_path="x.md")
     spy.assert_not_called()
 
 
@@ -274,9 +270,7 @@ async def test_contract_in_run_and_stream_parents(delegation, monkeypatch, strea
         return await real_delegate(agent_name, task, **kwargs)
 
     monkeypatch.setattr(module, "orchestrator", SimpleNamespace(delegate=_delegate_with_ws))
-    monkeypatch.setattr(
-        agent_registry, "list", AsyncMock(return_value=[AgentDef(name="coder")])
-    )
+    monkeypatch.setattr(agent_registry, "list", AsyncMock(return_value=[AgentDef(name="coder")]))
     monkeypatch.setattr("machina.tools.agents.db.fetchval", AsyncMock(return_value="harness"))
     monkeypatch.setattr(agent, "_prepare_context", AsyncMock(return_value=(parent, [])))
     monkeypatch.setattr(agent, "_flush_pending_chunks", AsyncMock())
@@ -298,7 +292,9 @@ async def test_contract_in_run_and_stream_parents(delegation, monkeypatch, strea
         # Call tool's underlying function with contract args directly.
         assert kwargs["agent"] == "coder"
         result = await m.orchestrator.delegate(
-            kwargs["agent"], kwargs["task"], **{k: v for k, v in kwargs.items() if k not in ("agent", "task")}
+            kwargs["agent"],
+            kwargs["task"],
+            **{k: v for k, v in kwargs.items() if k not in ("agent", "task")},
         )
         from machina.tools.agents import DelegationToolResult
 

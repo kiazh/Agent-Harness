@@ -83,9 +83,7 @@ async def test_runtime_refresh_reconnects_after_unavailable_startup(monkeypatch)
         assert fake.connect_calls == 2, "refresh() must retry db.connect()"
         assert second["db"] == "ready"
         assert fake.schema_calls == 1
-        assert {"database", "chat_provider", "jobs"} <= {
-            c["name"] for c in second["capabilities"]
-        }
+        assert {"database", "chat_provider", "jobs"} <= {c["name"] for c in second["capabilities"]}
     finally:
         await services.shutdown()
 

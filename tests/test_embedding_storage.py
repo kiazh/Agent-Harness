@@ -101,7 +101,10 @@ async def test_single_approval_preserves_pending_embedding(gate):
     connection.fetchrow = AsyncMock(side_effect=fetchrow)
     memory = MagicMock(id=uuid.uuid4())
     store = MagicMock(add=AsyncMock(return_value=memory))
-    with patch("machina.memory.approval.db", database), patch("machina.memory.approval.memory_store", store):
+    with (
+        patch("machina.memory.approval.db", database),
+        patch("machina.memory.approval.memory_store", store),
+    ):
         approved = await gate.approve(pending_id)
 
     assert approved is memory
@@ -131,7 +134,10 @@ async def test_batch_approval_preserves_pending_embedding(gate, agent_id):
 
     connection.fetch = AsyncMock(side_effect=fetch)
     store = MagicMock(add=AsyncMock(return_value=MagicMock(id=uuid.uuid4())))
-    with patch("machina.memory.approval.db", database), patch("machina.memory.approval.memory_store", store):
+    with (
+        patch("machina.memory.approval.db", database),
+        patch("machina.memory.approval.memory_store", store),
+    ):
         count = await gate.approve_all(agent_id=agent_id)
 
     assert count == 1

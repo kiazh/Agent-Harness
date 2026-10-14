@@ -144,12 +144,8 @@ def _setup_agent(monkeypatch):
         "compression_enabled",
     ):
         monkeypatch.setattr(config, name, False)
-    session = Session(
-        id=uuid.uuid4(), agent_id="v2-hints-test", execution_mode="workspace"
-    )
-    monkeypatch.setattr(
-        "machina.core.agent.session_manager.get", AsyncMock(return_value=session)
-    )
+    session = Session(id=uuid.uuid4(), agent_id="v2-hints-test", execution_mode="workspace")
+    monkeypatch.setattr("machina.core.agent.session_manager.get", AsyncMock(return_value=session))
     monkeypatch.setattr("machina.core.agent.session_manager.update_activity", AsyncMock())
     for method in (
         "add_chunk",

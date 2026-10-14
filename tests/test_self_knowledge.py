@@ -42,7 +42,9 @@ def setup_agent(monkeypatch, *, allowed_tools=None):
         "get_recent_context",
         "get_latest_images",
     ):
-        monkeypatch.setattr(f"machina.core.agent.context_manager.{method}", AsyncMock(return_value=[]))
+        monkeypatch.setattr(
+            f"machina.core.agent.context_manager.{method}", AsyncMock(return_value=[])
+        )
     monkeypatch.setattr("machina.core.agent.usage_store.reserve", AsyncMock(return_value=None))
     monkeypatch.setattr("machina.core.agent.usage_store.finish", AsyncMock())
 

@@ -69,7 +69,9 @@ async def _run_turn(monkeypatch, *, rag_pipeline=None, archive_search=None):
 
 
 async def test_archive_search_hang_is_bounded_at_5s(monkeypatch):
-    agent, response, recorder = await _run_turn(monkeypatch, archive_search=AsyncMock(side_effect=_hang))
+    agent, response, recorder = await _run_turn(
+        monkeypatch, archive_search=AsyncMock(side_effect=_hang)
+    )
     assert response.content == "still answered"
     assert response.outcome == "completed"
     assert 5 in recorder.seen, f"archive lookup must carry a 5s bound, saw {recorder.seen}"

@@ -30,9 +30,7 @@ class _Agent:
     async def run_stream(self, session_id, user_message, verbose=False, **_kw):
         yield StreamEvent(
             type="done",
-            response=AgentResponse(
-                content="ok", tool_calls=[], tokens_used=1, iterations=1
-            ),
+            response=AgentResponse(content="ok", tool_calls=[], tokens_used=1, iterations=1),
         )
 
 
@@ -112,9 +110,7 @@ def test_write_diff_and_card_redact_secrets(tmp_path):
         cwd=".",
         tool="terminal",
     )
-    card = _approval_view(
-        exec_req, {"request_id": exec_req.request_id, "status": "pending"}
-    )
+    card = _approval_view(exec_req, {"request_id": exec_req.request_id, "status": "pending"})
     assert all(secret not in arg for arg in card["argv"])
     assert secret not in card["shell"]
 

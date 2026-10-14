@@ -224,9 +224,7 @@ def test_uninstall_full_yes_to_all_removes_everything(tmp_path: Path, monkeypatc
     # FM7 W3: checkout deletion now requires a real source-tree marker.
     (fake_root / ".git").mkdir()
     fake_env = tmp_path / ".env"
-    fake_env.write_text(
-        "DATABASE_URL=postgresql://u:p@localhost:5432/machina\n", encoding="utf-8"
-    )
+    fake_env.write_text("DATABASE_URL=postgresql://u:p@localhost:5432/machina\n", encoding="utf-8")
     home = tmp_path / "home"
     shim = home / ".local" / "bin" / "machina"
     shim.parent.mkdir(parents=True)

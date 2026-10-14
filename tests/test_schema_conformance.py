@@ -141,6 +141,7 @@ def static_queries():
             if sqlite_dialect and "?" in query:
                 return False
             return bool(re.match(r"\s*(SELECT|INSERT|UPDATE|DELETE)\b", query, re.I))
+
         constants = {}
         for assignment in tree.body:
             if isinstance(assignment, ast.Assign):

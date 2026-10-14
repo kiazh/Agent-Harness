@@ -178,6 +178,7 @@ def test_scorer_is_pure_no_network(monkeypatch):
 
 # --- B3: skill preselect cache --------------------------------------------------
 
+
 def test_preselect_identical_queries_rank_once(tmp_path):
     from machina.controller.preselect import SkillPreselectCache
     from machina.skills.registry import SkillRegistry
@@ -235,9 +236,7 @@ def test_preselect_reuses_rank_skills_without_reimplementing(tmp_path, monkeypat
 
 # --- zero provider calls by construction ---------------------------------------
 
-BANNED_IMPORTS = re.compile(
-    r"^\s*(?:import|from)\s+([\w.]+)", re.M
-)
+BANNED_IMPORTS = re.compile(r"^\s*(?:import|from)\s+([\w.]+)", re.M)
 BANNED_MODULES = (
     "provider",
     "llm",

@@ -219,7 +219,9 @@ async def test_needs_approval_tool_entry_is_paused_not_completed(tmp_path):
 
     set_approval_handler(None)  # headless: pending actions pause, never run
     try:
-        agent = BaseReActAgent(provider=AsyncMock(), agent_id="fm8-agent", allowed_tools=["terminal"])
+        agent = BaseReActAgent(
+            provider=AsyncMock(), agent_id="fm8-agent", allowed_tools=["terminal"]
+        )
         made: list = []
         pending: list = []
         [
