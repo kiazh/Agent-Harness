@@ -459,3 +459,8 @@ Consolidated tree: **3,531 passed, 0 failed, 1 skipped, 1 xfailed**;
   injected and the flash reports the true spawn result (`64d9125`).
   Suite after the round: **3,734 passed / 0 failed**; ruff green (493
   files); final gate re-run recorded below when it completes.
+- **Certification after the re-verification round**: final j1-j8 gate on the
+  tree carrying all six adversarial-round fixes + the TUI clipboard fix:
+  **8 PASS / 0 FAIL / 0 SKIP** (proof: docs/verification/proofs/2026-10-14-e2e-gate.*,
+  re-committed). Suite on the same tree: **3,734 passed / 0 failed**; ruff
+  green (493 files).
