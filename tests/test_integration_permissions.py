@@ -974,8 +974,8 @@ def test_rag_cold_start_initializes_shared_pipeline():
 
     import machina.rag.pipeline as pipemod
 
-    real_embedder = pipemod.OpenAIEmbedder
-    pipemod.OpenAIEmbedder = _FakeEmbedder  # type: ignore[assignment]
+    real_factory = pipemod.build_embedder
+    pipemod.build_embedder = lambda settings=None: _FakeEmbedder()  # type: ignore[assignment]
     try:
         from machina.core import agent_factory as fac
 
@@ -985,7 +985,7 @@ def test_rag_cold_start_initializes_shared_pipeline():
         first = asyncio.run(fac._shared_rag_pipeline())
         assert asyncio.run(fac._shared_rag_pipeline()) is first
     finally:
-        pipemod.OpenAIEmbedder = real_embedder  # type: ignore[assignment]
+        pipemod.build_embedder = real_factory  # type: ignore[assignment]
         ragmod._rag_pipeline = real_global
 
 

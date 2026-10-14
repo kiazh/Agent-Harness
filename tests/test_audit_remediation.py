@@ -738,6 +738,10 @@ def test_032_pipeline_without_keys_is_keyword_only(monkeypatch):
 
     monkeypatch.setattr(config, "openai_api_key", "")
     monkeypatch.setattr(config, "openrouter_api_key", "")
+    # "auto" with no keys and no local runtime installed stays keyword-only.
+    monkeypatch.setattr(
+        "machina.rag.embedder.local_embedder_available", lambda: False, raising=False
+    )
     from machina.rag.pipeline import RAGPipeline
 
     pipe = RAGPipeline()

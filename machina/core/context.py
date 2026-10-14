@@ -1149,6 +1149,47 @@ class ContextManager:
             )
         return result
 
+    async def search_archive_dense(
+        self, session_id: uuid.UUID, query_embedding: list[float], top_k: int = 3
+    ) -> list[tuple[ContextChunk, float]]:
+        """Dense recall of archived chunks without resurrection side effects.
+
+        Read-only sibling of search_archive_text: ranks by cosine similarity
+        over stored embeddings and, unlike resurrect_context, never bumps
+        resurrection_count — read/benchmark paths must not mutate archive
+        state just by looking at it.
+        """
+        embedding_str = embedding_to_str(query_embedding)
+        rows = await db.fetch(
+            """
+            SELECT *, 1 - (embedding <=> $1::vector) AS similarity
+            FROM context_archive
+            WHERE session_id = $2 AND embedding IS NOT NULL
+            ORDER BY embedding <=> $1::vector
+            LIMIT $3
+            """,
+            embedding_str,
+            session_id,
+            top_k,
+        )
+        result = []
+        for row in rows:
+            result.append(
+                (
+                    ContextChunk(
+                        id=row["chunk_id"],
+                        session_id=session_id,
+                        agent_id=row.get("agent_id") or "harness",
+                        chunk_type=row.get("chunk_type") or "document",
+                        payload=msgpack.unpackb(row["payload_msgpack"], raw=False),
+                        token_count=row.get("token_count") or 0,
+                        created_at=row.get("original_created_at") or row["archived_at"],
+                    ),
+                    float(row["similarity"]),
+                )
+            )
+        return result
+
     async def evict_old_chunks(
         self,
         session_id: uuid.UUID,

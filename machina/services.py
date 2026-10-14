@@ -583,6 +583,9 @@ async def status_summary() -> dict[str, Any]:
         # Optional fallback preserves the primary outcome; report no payload.
         record_failure("services.status_summary.retrieval", _boundary_error)
         retrieval = {"mode": "keyword-only"}
+    memory_mode = retrieval.get("mode", "keyword-only")
+    if retrieval.get("backend") and retrieval.get("model"):
+        memory_mode = f"{memory_mode} ({retrieval['backend']}:{retrieval['model']})"
     try:
         rag_docs = await db.fetchval(
             "SELECT COUNT(DISTINCT COALESCE(document_source, id::text)) FROM context_chunks WHERE chunk_type = 'document'"
@@ -659,7 +662,7 @@ async def status_summary() -> dict[str, Any]:
             "backend": backend,
             "workspace": workspace,
             "chatProvider": runtime.get("chat_provider", "unknown"),
-            "memoryRetrieval": retrieval.get("mode", "keyword-only"),
+            "memoryRetrieval": memory_mode,
             "memoryRetrievalReason": retrieval.get("reason", ""),
             "memoryExtraction": extraction,
             "documentRag": (

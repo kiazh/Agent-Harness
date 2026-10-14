@@ -170,9 +170,20 @@ def test_locomo_evidence_metrics_and_invalid_ids(tmp_path):
         evaluate_retrieval(dataset, lambda question, turns, k: ["missing"])
 
 
-async def test_archive_backend_scores_and_cleans_up(db_pool, monkeypatch):
+async def test_archive_backend_scores_dense_and_cleans_up(db_pool, monkeypatch):
     monkeypatch.setattr("machina.core.context.db", db_pool)
     monkeypatch.setattr("machina.core.session.db", db_pool)
+
+    # Deterministic fake embeddings (1536-dim storage space) keep this test
+    # hermetic while exercising the real archive indexing + dense SQL path.
+    async def fake_embed_texts(texts):
+        return [[0.1] * 1536 for _ in texts]
+
+    async def fake_embed_query(text):
+        return [0.1] * 1536
+
+    monkeypatch.setattr("machina.memory.embeddings.embed_texts", fake_embed_texts)
+    monkeypatch.setattr("machina.memory.embeddings.embed_query", fake_embed_query)
     dataset = [
         Conversation(
             turns=(DialogueTurn("D1:1", "Ada", "The telescope observed a nebula"),),
@@ -182,6 +193,36 @@ async def test_archive_backend_scores_and_cleans_up(db_pool, monkeypatch):
     before = await db_pool.fetchval("SELECT COUNT(*) FROM context_archive")
     metrics = await evaluate_archive_retrieval(dataset, k=1)
     assert metrics.hit_rate == 1
+    assert metrics.search_mode == "hybrid x1"
+    # Dense and keyword component paths are both measured, not inferred.
+    assert metrics.components["dense"]["questions"] == 1
+    assert metrics.components["keyword-only"]["questions"] == 1
+    assert metrics.components["hybrid"]["hit_rate"] == 1
+    assert await db_pool.fetchval("SELECT COUNT(*) FROM context_archive") == before
+
+
+async def test_archive_backend_falls_back_to_keyword_without_embedder(db_pool, monkeypatch):
+    monkeypatch.setattr("machina.core.context.db", db_pool)
+    monkeypatch.setattr("machina.core.session.db", db_pool)
+
+    async def no_embed_texts(texts):
+        return None
+
+    async def no_embed_query(text):
+        return None
+
+    monkeypatch.setattr("machina.memory.embeddings.embed_texts", no_embed_texts)
+    monkeypatch.setattr("machina.memory.embeddings.embed_query", no_embed_query)
+    dataset = [
+        Conversation(
+            turns=(DialogueTurn("D1:1", "Ada", "The telescope observed a nebula"),),
+            questions=(Question("Which telescope observed a nebula?", ("D1:1",)),),
+        )
+    ]
+    before = await db_pool.fetchval("SELECT COUNT(*) FROM context_archive")
+    metrics = await evaluate_archive_retrieval(dataset, k=1)
+    assert metrics.hit_rate == 1
+    assert metrics.search_mode == "keyword-only x1"
     assert await db_pool.fetchval("SELECT COUNT(*) FROM context_archive") == before
 
 

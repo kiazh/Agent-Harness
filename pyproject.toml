@@ -32,6 +32,9 @@ dependencies = [
 [project.optional-dependencies]
 secrets = ["boto3>=1.34.0"]
 connectors = ["mcp==2.3.0"]
+# Zero-API local embeddings (model2vec static models, pure NumPy). The
+# runtime default; base installs without it stay keyword-only (or OpenAI).
+embeddings-local = ["model2vec>=0.10.0"]
 workflow-trial = ["langgraph>=1.2.12", "langgraph-checkpoint-postgres>=3.1.2", "psycopg[binary]>=3.1"]
 dev = [
     "pytest>=8.0.0",

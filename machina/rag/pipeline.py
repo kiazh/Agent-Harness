@@ -25,7 +25,7 @@ from machina.memory.authority import is_catalog_or_echo
 from machina.memory.redaction import redact_secrets
 from machina.observability.diagnostics import record_failure
 from machina.rag.chunker import Chunk, RecursiveCharacterTextSplitter, normalize_language
-from machina.rag.embedder import Embedder, OpenAIEmbedder
+from machina.rag.embedder import Embedder, OpenAIEmbedder, build_embedder
 from machina.rag.loaders import Document, FileLoader
 from machina.rag.reranker import IdentityReranker, Reranker
 from machina.rag.search import DOCUMENT_TYPES, HybridSearch, SearchResult
@@ -131,11 +131,10 @@ class RAGPipeline:
         elif embedder is not None:
             self._embedder = embedder
         else:
-            try:
-                self._embedder = OpenAIEmbedder()
-            except Exception as e:
-                logger.warning("embedder unavailable, keyword-only pipeline: %s", e)
-                self._embedder = None
+            # Config-driven selection: OpenAI-compatible endpoint, local
+            # model2vec runtime, or None for honest keyword-only operation.
+            # build_embedder never raises; it logs the degradation.
+            self._embedder = build_embedder()
         self._chunker = chunker or RecursiveCharacterTextSplitter(
             chunk_size=self._config.chunk_size,
             chunk_overlap=self._config.chunk_overlap,

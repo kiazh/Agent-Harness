@@ -200,15 +200,28 @@ def _locomo(args: argparse.Namespace) -> dict:
                 if not db.connected:
                     await db.connect()
                 archive = await evaluate_archive_retrieval(conversations, k=5)
+                archive_k10 = await evaluate_archive_retrieval(conversations, k=10)
                 recall, latency_ms = await evaluate_session_recall(conversations, k=5)
-                return archive, recall, latency_ms
+                return archive, archive_k10, recall, latency_ms
 
-            archive, recall, latency_ms = asyncio.run(_with_db())
+            archive, archive_k10, recall, latency_ms = asyncio.run(_with_db())
             result["production_archive_search"] = {
                 "evidence_recall": round(archive.evidence_recall, 3),
                 "hit_rate": round(archive.hit_rate, 3),
                 "mrr": round(archive.mean_reciprocal_rank, 3),
                 "k": archive.k,
+                "search_mode": archive.search_mode,
+                "components": archive.components,
+            }
+            # Recall@k growth for the production engine (same questions),
+            # mirroring the TF-IDF baseline view (separate run at k=10).
+            result["production_archive_search_k10"] = {
+                "evidence_recall": round(archive_k10.evidence_recall, 3),
+                "hit_rate": round(archive_k10.hit_rate, 3),
+                "mrr": round(archive_k10.mean_reciprocal_rank, 3),
+                "k": archive_k10.k,
+                "search_mode": archive_k10.search_mode,
+                "components": archive_k10.components,
             }
             result["production_session_recall"] = {
                 "evidence_recall": round(recall.evidence_recall, 3),

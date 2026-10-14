@@ -1,7 +1,8 @@
-"""Embedding models — abstract interface with OpenAI text-embedding-3-small."""
+"""Embedding models — abstract interface with OpenAI-compatible and local backends."""
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import importlib as _importlib
 import logging
@@ -10,6 +11,7 @@ import sys as _sys
 import threading
 from abc import ABC, abstractmethod
 from collections import OrderedDict
+from dataclasses import dataclass
 
 import httpx
 
@@ -82,10 +84,14 @@ class OpenAIEmbedder(Embedder):
         timeout: float = 30.0,
         dimensions: int | None = None,
     ) -> None:
+        # An explicitly configured base_url (llama.cpp / Ollama / LM Studio)
+        # is honored as-is: the OpenRouter fallback below must not silently
+        # redirect it, and no key is required for such local servers.
+        default_endpoint = (base_url or self.DEFAULT_BASE_URL).rstrip("/") == self.DEFAULT_BASE_URL
         self.api_key = (
             api_key or _core_symbol("machina.core.config", "config").get("openai_api_key") or ""
         )
-        if not self.api_key:
+        if not self.api_key and default_endpoint:
             # Fall back to OpenRouter if no OpenAI key
             self.api_key = (
                 _core_symbol("machina.core.config", "config").get("openrouter_api_key") or ""
@@ -94,7 +100,7 @@ class OpenAIEmbedder(Embedder):
                 base_url = "https://openrouter.ai/api/v1"
                 logger.info("Using OpenRouter for embeddings (no OPENAI_API_KEY set)")
 
-        if not self.api_key:
+        if not self.api_key and default_endpoint:
             raise _core_symbol("machina.core.exceptions", "ProviderError")(
                 "No API key found. Set OPENAI_API_KEY or OPENROUTER_API_KEY."
             )
@@ -116,12 +122,12 @@ class OpenAIEmbedder(Embedder):
         self._cache: OrderedDict[str, list[float]] = OrderedDict()
         self._cache_lock = threading.Lock()
 
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             timeout=timeout,
         )
 
@@ -283,3 +289,329 @@ class OpenAIEmbedder(Embedder):
     def cache_size(self) -> int:
         """Current number of cached embeddings."""
         return len(self._cache)
+
+
+class LocalEmbedder(Embedder):
+    """Zero-API local embeddings via model2vec static models (pure NumPy).
+
+    ``model2vec`` is imported and the model weights are loaded lazily on the
+    first embed call — never at import or construction — and the loaded
+    model is reused for every later call on the instance. ``close()``
+    unloads the weights; the next call reloads them from the local HF cache.
+
+    Storage note: machina's pgvector columns are fixed ``vector(1536)``.
+    Static potion models emit far fewer dimensions, so vectors are
+    zero-padded to ``EMBEDDING_DIMENSIONS`` (default 1536). Zero padding
+    leaves cosine similarity unchanged, so dense search works without a
+    schema migration; ``native_dimensions`` reports the model's real width.
+    """
+
+    DEFAULT_MODEL = "minishlab/potion-base-8M"
+    DEFAULT_PAD_DIMENSIONS = 1536
+    DEFAULT_BATCH_SIZE = 64
+    # Known native widths: lets dimensions/native_dimensions answer without
+    # forcing a model download. Unknown ids fall back to the loaded model.
+    NATIVE_DIMENSIONS: dict[str, int] = {
+        "minishlab/potion-base-2M": 64,
+        "minishlab/potion-base-4M": 128,
+        "minishlab/potion-base-8M": 256,
+        "minishlab/potion-base-32M": 512,
+        "minishlab/potion-retrieval-32M": 512,
+        "minishlab/potion-multilingual-128M": 256,
+    }
+
+    def __init__(
+        self,
+        model: str | None = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        pad_to: int | None = None,
+    ) -> None:
+        self._model_id = (model or "").strip() or self.DEFAULT_MODEL
+        self._batch_size = batch_size
+        env_pad = os.getenv("EMBEDDING_DIMENSIONS", "")
+        if pad_to is None:
+            pad_to = int(env_pad) if env_pad.isdigit() else self.DEFAULT_PAD_DIMENSIONS
+        self._pad_to = pad_to
+        self._model = None
+        self._native_dimensions: int | None = None
+        self._dimensions: int | None = None
+        self._load_lock = threading.Lock()
+
+    @property
+    def model_name(self) -> str:
+        return self._model_id
+
+    @property
+    def native_dimensions(self) -> int:
+        """The model's real output width (before storage padding)."""
+        if self._native_dimensions is None:
+            known = self.NATIVE_DIMENSIONS.get(self._model_id)
+            if known is None:
+                known = int(getattr(self._load_model(), "dim"))
+            self._native_dimensions = known
+        return self._native_dimensions
+
+    @property
+    def dimensions(self) -> int:
+        """Effective (stored) width: padded when the schema is wider."""
+        if self._dimensions is None:
+            native = self.native_dimensions
+            self._dimensions = self._pad_to if self._pad_to >= native else native
+        return self._dimensions
+
+    def _load_model(self):
+        """Import/load model2vec and the weights once (thread-safe)."""
+        if self._model is None:
+            with self._load_lock:
+                if self._model is None:
+                    from model2vec import StaticModel
+
+                    self._model = StaticModel.from_pretrained(self._model_id, force_download=False)
+        return self._model
+
+    def _encode(self, texts: list[str]) -> list[list[float]]:
+        """Blocking encode (runs on a worker thread) with storage padding."""
+        model = self._load_model()
+        vectors = model.encode(
+            list(texts),
+            batch_size=self._batch_size,
+            show_progress_bar=False,
+            use_multiprocessing=False,
+        )
+        rows = vectors.tolist()
+        width = self.dimensions
+        if rows and len(rows[0]) < width:
+            for row in rows:
+                row.extend([0.0] * (width - len(row)))
+        return rows
+
+    async def embed(self, text: str) -> list[float]:
+        """Embed a single text (model weights load lazily on first call)."""
+        if not text:
+            return [0.0] * self.dimensions
+        return (await self.embed_batch([text]))[0]
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Embed a batch; empty strings map to zero vectors, like the API backends."""
+        if not texts:
+            return []
+        results: list[list[float] | None] = [None] * len(texts)
+        pending: list[str] = []
+        pending_indices: list[int] = []
+        for index, text in enumerate(texts):
+            if text:
+                pending.append(text)
+                pending_indices.append(index)
+            else:
+                results[index] = [0.0] * self.dimensions
+        if pending:
+            _core_symbol("machina.core.provider", "audit_log")(
+                "rag_embed_start", model=self._model_id, count=len(pending), provider="local"
+            )
+            try:
+                encoded = await asyncio.to_thread(self._encode, pending)
+            except Exception as e:
+                _core_symbol("machina.core.provider", "audit_log")(
+                    "rag_embed_error", model=self._model_id, error=str(e)
+                )
+                logger.error("Local embedding call failed: %s", e)
+                raise
+            for index, vector in zip(pending_indices, encoded, strict=True):
+                results[index] = vector
+            _core_symbol("machina.core.provider", "audit_log")(
+                "rag_embed_complete", model=self._model_id, count=len(encoded)
+            )
+        return results  # type: ignore[return-value]
+
+    async def close(self) -> None:
+        """Unload the static model; the next embed call reloads from cache."""
+        with self._load_lock:
+            self._model = None
+
+
+@dataclass(frozen=True)
+class EmbeddingSettings:
+    """Resolved embedding backend choice (config-only; never loads a model)."""
+
+    kind: str  # "openai" | "local" | "none"
+    model: str = ""
+    base_url: str = ""
+    backend: str = "auto"  # configured embedding_backend value
+    reason: str = ""  # why unavailable when kind == "none"
+
+
+def local_embedder_available() -> bool:
+    """Whether the optional model2vec runtime is importable."""
+    try:
+        from importlib.util import find_spec
+
+        return find_spec("model2vec") is not None
+    except Exception:
+        return False
+
+
+def _config_value(key: str, default: str = "") -> str:
+    try:
+        from machina.core.config import config
+
+        value = config.get(key)
+        return default if value is None else str(value)
+    except Exception:
+        return default
+
+
+def resolve_embedding_settings() -> EmbeddingSettings:
+    """Resolve which embedding backend would serve dense retrieval.
+
+    Selection matrix for ``embedding_backend``:
+
+    - ``off``    → none (keyword-only, explicit).
+    - ``local``  → local model2vec when installed, else none.
+    - ``openai`` → OpenAI-compatible server; a key is required unless an
+      explicit ``embedding_base_url`` names a keyless local server.
+    - ``auto``   → an explicit ``embedding_base_url`` first (OpenAI-compatible
+      local server, keyless allowed); then the local model2vec runtime
+      (local-first design rule: embedding compute stays on-host); then
+      OpenAI/OpenRouter credentials as a fallback; else none.
+
+    The configured ``embedding_model`` is honored by whichever backend is
+    selected. Availability is an import spec check only — no model loads.
+    """
+    backend = (_config_value("embedding_backend", "auto") or "auto").strip().lower()
+    model = _config_value("embedding_model").strip()
+    base_url = _config_value("embedding_base_url").strip()
+    if backend not in ("auto", "local", "openai", "off"):
+        return EmbeddingSettings(
+            "none", backend=backend, reason=f"unknown embedding_backend {backend!r}"
+        )
+    if backend == "off":
+        return EmbeddingSettings(
+            "none", backend=backend, reason="embedding_backend=off (dense retrieval disabled)"
+        )
+    if backend == "openai":
+        if not (_config_value("openai_api_key") or _config_value("openrouter_api_key") or base_url):
+            return EmbeddingSettings(
+                "none", backend=backend, reason="embedding_backend=openai but no key or base_url"
+            )
+        return EmbeddingSettings(
+            "openai",
+            model=model or OpenAIEmbedder.DEFAULT_MODEL,
+            base_url=base_url or OpenAIEmbedder.DEFAULT_BASE_URL,
+            backend=backend,
+        )
+    if backend == "local":
+        if not local_embedder_available():
+            return EmbeddingSettings(
+                "none",
+                model=model or LocalEmbedder.DEFAULT_MODEL,
+                backend=backend,
+                reason="embedding_backend=local but model2vec is not installed",
+            )
+        return EmbeddingSettings(
+            "local", model=model or LocalEmbedder.DEFAULT_MODEL, backend=backend
+        )
+    # auto
+    if base_url:
+        return EmbeddingSettings(
+            "openai",
+            model=model or OpenAIEmbedder.DEFAULT_MODEL,
+            base_url=base_url,
+            backend=backend,
+        )
+    if local_embedder_available():
+        return EmbeddingSettings(
+            "local", model=model or LocalEmbedder.DEFAULT_MODEL, backend=backend
+        )
+    if _config_value("openai_api_key") or _config_value("openrouter_api_key"):
+        return EmbeddingSettings(
+            "openai",
+            model=model or OpenAIEmbedder.DEFAULT_MODEL,
+            base_url=OpenAIEmbedder.DEFAULT_BASE_URL,
+            backend=backend,
+        )
+    return EmbeddingSettings("none", backend=backend, reason="no embedding provider configured")
+
+
+def build_embedder(settings: EmbeddingSettings | None = None) -> Embedder | None:
+    """Build the configured embedder, or None for honest keyword-only fallback.
+
+    Never raises for an unavailable provider: callers keep keyword-only
+    retrieval and report the degradation honestly.
+    """
+    resolved = settings or resolve_embedding_settings()
+    if resolved.kind == "none":
+        logger.info("no embedding backend: %s", resolved.reason)
+        return None
+    try:
+        if resolved.kind == "local":
+            return LocalEmbedder(model=resolved.model)
+        return OpenAIEmbedder(model=resolved.model, base_url=resolved.base_url)
+    except Exception as e:
+        logger.warning("embedding backend %r unavailable: %s", resolved.kind, e)
+        return None
+
+
+_shared_embedder: Embedder | None = None
+_shared_embedder_identity: tuple | None = None
+_shared_embedder_lock = threading.Lock()
+
+
+def _embedder_identity(settings: EmbeddingSettings) -> tuple[str, str, str, str]:
+    """Identity of the resolved backend; key digest catches credential rotation."""
+    key_digest = ""
+    if settings.kind == "openai":
+        credential = _config_value("openai_api_key") or _config_value("openrouter_api_key")
+        if credential:
+            key_digest = hashlib.sha256(credential.encode("utf-8")).hexdigest()[:16]
+    return (settings.kind, settings.model, settings.base_url, key_digest)
+
+
+async def _close_quietly(embedder: Embedder) -> None:
+    try:
+        await embedder.close()
+    except Exception as _boundary_error:
+        from machina.observability.diagnostics import record_failure
+
+        record_failure("rag.embedder.close", _boundary_error)
+
+
+def _schedule_close(embedder: Embedder) -> None:
+    """Close a rotated-out embedder on the running loop, if there is one."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(_close_quietly(embedder))
+
+
+def get_shared_embedder() -> Embedder | None:
+    """Process-wide cached embedder (built once; rebuilt on config change).
+
+    Local model weights load once and are reused across queries instead of
+    reloading per call. Unavailable backends are cached as None so repeated
+    calls stay cheap; a configuration or credential change rebuilds the
+    instance and the replaced one is closed. Use
+    :func:`close_shared_embedder` at shutdown.
+    """
+    global _shared_embedder, _shared_embedder_identity
+    settings = resolve_embedding_settings()
+    identity = _embedder_identity(settings)
+    with _shared_embedder_lock:
+        if _shared_embedder_identity == identity:
+            return _shared_embedder
+        previous = _shared_embedder
+        _shared_embedder = build_embedder(settings)
+        _shared_embedder_identity = identity
+    if previous is not None:
+        _schedule_close(previous)
+    return _shared_embedder
+
+
+async def close_shared_embedder() -> None:
+    """Drop and close the shared embedder (shutdown seam)."""
+    global _shared_embedder, _shared_embedder_identity
+    with _shared_embedder_lock:
+        embedder, _shared_embedder = _shared_embedder, None
+        _shared_embedder_identity = None
+    if embedder is not None:
+        await _close_quietly(embedder)

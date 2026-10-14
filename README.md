@@ -143,7 +143,7 @@ Type `/` for commands. Management commands open pickers or forms; `?` on empty i
 ## What is included
 
 - Streaming agent execution through the CLI, TUI/gateway and HTTP API, with cancellation, session ownership and bounded cleanup.
-- Persistent conversations, context compaction, memory search and document retrieval. Semantic retrieval needs embedding configuration; keyword retrieval is available without it.
+- Persistent conversations, context compaction, memory search and document retrieval. Semantic retrieval runs through an OpenAI-compatible endpoint or the optional zero-API local `model2vec` runtime (`pip install 'Machina[embeddings-local]'`; backend `auto` is local-first). Keyword retrieval is available without either.
 - File, shell, web, memory and document tools, subject to the permission broker and the selected execution backend.
 - Deterministic directory learning: the read-only `learn_directory` tool builds a bounded, cached repository digest (totals, largest modules, entry points, tests, import hubs) with **no model calls**; repeat calls are served from the content-hash cache.
 - **42 curated ECC skills**, bundled offline and selected by task evidence. Relevant excerpts are disclosed progressively rather than injecting the entire library into each prompt.
@@ -167,7 +167,8 @@ older records that contain only previews. Text never saved by older versions can
 Memory supports durable facts and preferences across conversations. Document
 retrieval follows a separate load → chunk → embed/index → search → optional
 rerank pipeline. PostgreSQL lexical indexes provide search without an embedding
-service; configured embeddings add semantic similarity. Persona-aware ranking
+service; the OpenAI-compatible adapter or the local `model2vec` runtime adds
+semantic similarity. Persona-aware ranking
 can influence which memories are relevant. Neither retrieval nor storage makes
 a model's unsupported claims true: retrieved material remains evidence to assess.
 
@@ -267,7 +268,7 @@ Stdio runs on the host and is refused in sandbox mode. HTTP redirects and enviro
 | Provider transport | httpx | Cloud/local model APIs, streaming, timeouts and HTTP boundaries |
 | Cloud models | OpenRouter and direct vendor adapters | Provider/model selection without requiring a single hosted platform |
 | Local models | Ollama | Local inference through an accessible Ollama service |
-| Document embeddings | OpenAI-compatible embeddings | Semantic document retrieval; default `text-embedding-3-small` |
+| Document embeddings | OpenAI-compatible or local model2vec (`embeddings-local` extra) | Semantic document/memory retrieval; `auto` is local-first: explicit endpoint, then local runtime, then an API key |
 | Document reranking | Cohere or passthrough fallback | Optional reranking after retrieval |
 | Web search and extraction | DuckDuckGo by default; optional SearXNG; direct HTTP text extraction | Search/fetch tools with network policy checks and session-scoped web research in RAG |
 | MCP | Python MCP SDK **2.3.0**, stdio and Streamable HTTP | Reviewed server connection and native remote tool execution |
@@ -387,6 +388,9 @@ Important settings include `DATABASE_URL`, `MACHINA_PROVIDER`, `MACHINA_MODEL`, 
 | `MACHINA_PROVIDER` | Chat provider adapter | `openrouter` |
 | `MACHINA_MODEL` | Model identifier | `openrouter/free`; availability is provider-dependent |
 | `MACHINA_REASONING_EFFORT` | Requested reasoning depth | Blank uses provider default |
+| `MACHINA_EMBEDDING_BACKEND` | Dense-retrieval embedding backend | `auto` (endpoint → local model2vec → OpenAI/OpenRouter fallback → keyword-only); `local`, `openai` or `off` force a choice |
+| `MACHINA_EMBEDDING_MODEL` | Embedding model id for the selected backend | Blank uses the backend default (`text-embedding-3-small` or `minishlab/potion-base-8M`) |
+| `MACHINA_EMBEDDING_BASE_URL` | Explicit OpenAI-compatible embedding endpoint (llama.cpp, Ollama, LM Studio) | Blank; keyless local servers are supported |
 | `MACHINA_EXECUTION_MODE` | Default mode for new sessions | `ask` |
 | `MACHINA_PERSONA_DESCRIPTION` | Requested tone and character | Empty; maximum 2,000 characters |
 | `MACHINA_MEMORY_ENABLED` | Automatic memory integration | `true` |
@@ -668,7 +672,7 @@ Machina/
 | MCP stdio refuses sandbox mode | Host stdio is outside that execution boundary; choose a supported transport/backend configuration |
 | MCP asks for approval in full mode | Untrusted remote calls still need exact consent; trusted reads require an explicit verified allowlist |
 | Persona appears unchanged in a conversation | Saved defaults apply through the profile/context; inspect `/persona` and `/growth`, and distinguish requested persona from trial revisions |
-| Semantic retrieval is absent | Configure embeddings and indexed content; lexical retrieval remains available |
+| Semantic retrieval is absent | Install the local runtime (`pip install 'Machina[embeddings-local]'`), configure `MACHINA_EMBEDDING_BASE_URL`, or set `OPENAI_API_KEY`; lexical retrieval remains available |
 | Animation is distracting | Set `MACHINA_UI_REDUCED_MOTION=1` |
 | Database/UI tests skip | Configure the dedicated test DSN and real gateway prerequisites; skipped tests are not passing evidence |
 

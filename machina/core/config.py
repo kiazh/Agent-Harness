@@ -115,6 +115,18 @@ DEFAULTS: dict[str, Any] = {
     "learning_review_max_per_session": 3,
     "rag_enabled": True,
     "streaming": True,
+    # Embedding backend for dense retrieval (RAG documents + memory).
+    # "auto": explicit embedding_base_url → OpenAI-compatible endpoint (keyless
+    # local servers allowed); else installed local model2vec runtime →
+    # LocalEmbedder (local-first design rule); else OpenAI/OpenRouter key →
+    # OpenAIEmbedder; else keyword-only.
+    # "local" forces model2vec, "openai" forces the API adapter, "off" forces None.
+    "embedding_backend": "auto",
+    # Model id for the selected backend (empty = backend default:
+    # text-embedding-3-small for OpenAI, minishlab/potion-base-8M for local).
+    "embedding_model": "",
+    # Explicit OpenAI-compatible endpoint (llama.cpp, Ollama, LM Studio, ...).
+    "embedding_base_url": "",
     # PILOT (default off): attach Anthropic-style ephemeral prompt-cache
     # breakpoints to the two stable-prefix ends — the final system content
     # block and the last tool schema entry. Provider-dependent: honored by
@@ -208,6 +220,11 @@ def validate_value(key: str, value: Any) -> Any:
         normalized = str(value).strip().lower()
         if normalized not in ("", "low", "medium", "high"):
             raise ValueError("reasoning_effort must be ''|low|medium|high")
+        return normalized
+    if key == "embedding_backend":
+        normalized = str(value).strip().lower()
+        if normalized not in ("auto", "local", "openai", "off"):
+            raise ValueError("embedding_backend must be auto|local|openai|off")
         return normalized
     if key not in DEFAULTS:
         return value
@@ -309,6 +326,10 @@ class Config:
     learning_review_max_per_session: int = 3
     rag_enabled: bool = True
     streaming: bool = True
+    # Embedding backend selection for dense retrieval (RAG + memory).
+    embedding_backend: str = "auto"
+    embedding_model: str = ""
+    embedding_base_url: str = ""
     prompt_cache_enabled: bool = False
     theme: str = "codex"
     # API keys and service URLs

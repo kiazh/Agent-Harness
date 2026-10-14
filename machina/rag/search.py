@@ -274,41 +274,7 @@ class HybridSearch:
         RRF(d) = Σ 1 / (k + rank_i(d))
         where k=60 (default), rank_i is the 1-based rank in result list i.
         """
-        chunk_scores: dict[uuid.UUID, SearchResult] = {}
-
-        # Process dense results
-        for rank, (chunk, score) in enumerate(dense_results, start=1):
-            rrf_score = 1.0 / (self._rrf_k + rank)
-            if chunk.id in chunk_scores:
-                chunk_scores[chunk.id].rrf_score += rrf_score
-                chunk_scores[chunk.id].dense_score = score
-            else:
-                chunk_scores[chunk.id] = SearchResult(
-                    chunk=chunk,
-                    score=score,
-                    dense_score=score,
-                    rrf_score=rrf_score,
-                )
-
-        # Process sparse results
-        for rank, (chunk, score) in enumerate(sparse_results, start=1):
-            rrf_score = 1.0 / (self._rrf_k + rank)
-            if chunk.id in chunk_scores:
-                chunk_scores[chunk.id].rrf_score += rrf_score
-                chunk_scores[chunk.id].sparse_score = score
-            else:
-                chunk_scores[chunk.id] = SearchResult(
-                    chunk=chunk,
-                    score=score,
-                    sparse_score=score,
-                    rrf_score=rrf_score,
-                )
-
-        # Update final score to RRF score
-        for result in chunk_scores.values():
-            result.score = result.rrf_score
-
-        return list(chunk_scores.values())
+        return rrf_fuse(dense_results, sparse_results, rrf_k=self._rrf_k)
 
     def _row_to_chunk(self, row: asyncpg.Record) -> ContextChunk:
         """Convert a database row to a ContextChunk.
@@ -339,3 +305,51 @@ class HybridSearch:
             created_at=row["created_at"],
             accessed_at=row["accessed_at"],
         )
+
+
+def rrf_fuse(
+    dense_results: list[tuple[ContextChunk, float]],
+    sparse_results: list[tuple[ContextChunk, float]],
+    rrf_k: int = 60,
+) -> list[SearchResult]:
+    """Reciprocal Rank Fusion over (chunk, score) result lists.
+
+    RRF(d) = Σ 1 / (k + rank_i(d)) with k=60 by default; rank_i is the
+    1-based rank in result list i. Shared by hybrid search and benchmarks so
+    fusion semantics stay identical wherever rankings are combined.
+    """
+    chunk_scores: dict[uuid.UUID, SearchResult] = {}
+
+    # Process dense results
+    for rank, (chunk, score) in enumerate(dense_results, start=1):
+        rrf_score = 1.0 / (rrf_k + rank)
+        if chunk.id in chunk_scores:
+            chunk_scores[chunk.id].rrf_score += rrf_score
+            chunk_scores[chunk.id].dense_score = score
+        else:
+            chunk_scores[chunk.id] = SearchResult(
+                chunk=chunk,
+                score=score,
+                dense_score=score,
+                rrf_score=rrf_score,
+            )
+
+    # Process sparse results
+    for rank, (chunk, score) in enumerate(sparse_results, start=1):
+        rrf_score = 1.0 / (rrf_k + rank)
+        if chunk.id in chunk_scores:
+            chunk_scores[chunk.id].rrf_score += rrf_score
+            chunk_scores[chunk.id].sparse_score = score
+        else:
+            chunk_scores[chunk.id] = SearchResult(
+                chunk=chunk,
+                score=score,
+                sparse_score=score,
+                rrf_score=rrf_score,
+            )
+
+    # Update final score to RRF score
+    for result in chunk_scores.values():
+        result.score = result.rrf_score
+
+    return list(chunk_scores.values())

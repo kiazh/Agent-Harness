@@ -15,7 +15,7 @@ import time
 import uuid
 from collections import Counter
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +50,12 @@ class RetrievalMetrics:
     mean_reciprocal_rank: float
     mean_retrieved_bytes: float
     k: int
+    # Retrieval path actually observed (e.g. "tfidf", "keyword-only",
+    # "hybrid x1595" / "hybrid x1590,keyword-only x5") for honest reporting.
+    search_mode: str = ""
+    # Per-path scores measured on the same questions/index (archive eval):
+    # {"dense": {...}, "keyword-only": {...}, "hybrid": {...}}.
+    components: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -141,7 +147,7 @@ def evaluate_retrieval(
         for question in conversation.questions
         if question.evidence
     ]
-    return evaluate_rankings(conversations, rankings, k=k)
+    return replace(evaluate_rankings(conversations, rankings, k=k), search_mode="tfidf")
 
 
 def evaluate_rankings(
@@ -192,6 +198,20 @@ def evaluate_rankings(
     )
 
 
+#: Per-branch candidate depth before RRF fusion (production RAG uses the
+#: same default: HybridSearch.DEFAULT_TOP_K = 50).
+_ARCHIVE_RETRIEVAL_DEPTH = 50
+
+
+def _component_metrics(metrics: RetrievalMetrics) -> dict[str, Any]:
+    return {
+        "evidence_recall": round(metrics.evidence_recall, 4),
+        "hit_rate": round(metrics.hit_rate, 4),
+        "mrr": round(metrics.mean_reciprocal_rank, 4),
+        "questions": metrics.questions,
+    }
+
+
 async def evaluate_archive_retrieval(
     conversations: Sequence[Conversation],
     *,
@@ -199,36 +219,104 @@ async def evaluate_archive_retrieval(
 ) -> RetrievalMetrics:
     """Replay annotated turns through the actual PostgreSQL archive search.
 
+    Dense path: when an embedding backend is configured and available, every
+    turn is embedded through the production memory embedder (the same shared
+    instance queries use) and archived with its vector. Each question is then
+    answered by read-only dense recall AND PostgreSQL FTS over the same rows,
+    fused with the production RRF (``machina.rag.search.rrf_fuse``). Dense
+    and keyword rankings are scored separately in ``components`` so "dense
+    was measured" is verifiable; the fused ranking is the headline metric,
+    mirroring how production hybrid search answers queries when an embedder
+    exists. Without a provider the original keyword-only path runs.
+
     A connected, initialized database is required. Temporary sessions and
     archive rows are deleted after each conversation, including on failure.
     """
     from machina.core.context import context_manager
     from machina.core.serialization import payload_to_msgpack
     from machina.core.session import session_manager
+    from machina.memory.embeddings import embed_query, embed_texts
+    from machina.rag.search import rrf_fuse
 
+    depth = max(_ARCHIVE_RETRIEVAL_DEPTH, k)
     rankings: list[list[str]] = []
+    dense_rankings: list[list[str]] = []
+    keyword_rankings: list[list[str]] = []
+    modes: Counter[str] = Counter()
+    query_seconds: list[float] = []
     for conversation in conversations:
         session = await session_manager.create(title="LoCoMo retrieval evaluation")
         try:
+            turns = list(conversation.turns)
+            # Production indexing path: embeddings come from the shared
+            # memory embedder, so stored vectors and query vectors share one
+            # enforced space. None (no provider/failure) keeps rows
+            # keyword-searchable only.
+            embeddings = await embed_texts([turn.text for turn in turns])
             identifiers = {}
-            for turn in conversation.turns:
+            for position, turn in enumerate(turns):
                 chunk_id = uuid.uuid4()
                 identifiers[chunk_id] = turn.dia_id
                 await context_manager.archive_chunk(
                     session.id,
                     chunk_id,
                     payload_to_msgpack({"content": turn.text, "speaker": turn.speaker}),
+                    embedding=embeddings[position] if embeddings is not None else None,
                     agent_id="benchmark",
                     chunk_type="dialogue",
                 )
             for question in conversation.questions:
                 if not question.evidence:
                     continue
-                matches = await context_manager.search_archive_text(session.id, question.text, k)
-                rankings.append([identifiers[chunk.id] for chunk, _ in matches])
+                query_embedding = (
+                    await embed_query(question.text) if embeddings is not None else None
+                )
+                if query_embedding is not None:
+                    started = time.perf_counter()
+                    dense = await context_manager.search_archive_dense(
+                        session.id, query_embedding, depth
+                    )
+                    sparse = await context_manager.search_archive_text(
+                        session.id, question.text, depth
+                    )
+                    fused = sorted(
+                        rrf_fuse(dense, sparse), key=lambda result: result.rrf_score, reverse=True
+                    )
+                    query_seconds.append(time.perf_counter() - started)
+                    dense_rankings.append([identifiers[chunk.id] for chunk, _ in dense])
+                    keyword_rankings.append([identifiers[chunk.id] for chunk, _ in sparse])
+                    rankings.append([identifiers[result.chunk.id] for result in fused])
+                    modes["hybrid"] += 1
+                else:
+                    started = time.perf_counter()
+                    matches = await context_manager.search_archive_text(
+                        session.id, question.text, k
+                    )
+                    query_seconds.append(time.perf_counter() - started)
+                    keyword_rankings.append([identifiers[chunk.id] for chunk, _ in matches])
+                    rankings.append([identifiers[chunk.id] for chunk, _ in matches])
+                    modes["keyword-only"] += 1
         finally:
             await session_manager.delete(session.id)
-    return evaluate_rankings(conversations, rankings, k=k)
+    metrics = evaluate_rankings(conversations, rankings, k=k)
+    components: dict[str, dict[str, Any]] = {}
+    if modes.get("hybrid") and not modes.get("keyword-only"):
+        # All questions ran the fused path: dense/keyword component scores
+        # are directly comparable on the same question set.
+        components["dense"] = _component_metrics(
+            evaluate_rankings(conversations, dense_rankings, k=k)
+        )
+        components["keyword-only"] = _component_metrics(
+            evaluate_rankings(conversations, keyword_rankings, k=k)
+        )
+        components["hybrid"] = _component_metrics(metrics)
+        components["hybrid"]["mean_query_latency_ms"] = (
+            round(1000 * sum(query_seconds) / len(query_seconds), 2) if query_seconds else 0.0
+        )
+    elif modes.get("keyword-only"):
+        components["keyword-only"] = _component_metrics(metrics)
+    mode = ",".join(f"{name} x{count}" for name, count in sorted(modes.items()))
+    return replace(metrics, search_mode=mode or "keyword-only", components=components)
 
 
 async def evaluate_session_recall(
@@ -292,7 +380,10 @@ async def evaluate_session_recall(
         finally:
             for session_id in session_ids:
                 await session_manager.delete(session_id)
-    metrics = evaluate_rankings(conversations, rankings, k=k)
+    metrics = replace(
+        evaluate_rankings(conversations, rankings, k=k),
+        search_mode="keyword-only" if not title_only else "title-only",
+    )
     mean_latency_ms = 1000 * sum(query_seconds) / len(query_seconds) if query_seconds else 0.0
     return metrics, mean_latency_ms
 

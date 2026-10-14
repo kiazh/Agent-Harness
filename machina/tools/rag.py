@@ -19,11 +19,13 @@ logger = logging.getLogger(__name__)
 # Global RAG pipeline instance (lazy-initialized)
 _rag_pipeline: RAGPipeline | None = None
 _rag_pipeline_lock = asyncio.Lock()
-# IDENTITY (digest of the API key), not boolean presence, of the Cohere
-# credential the shared instance was built with. Rotation to another nonempty
-# key must rebuild the pipeline; comparing presence alone kept the old client
-# (and its old key) serving all later requests (AH-AUDIT-036).
-_rag_pipeline_identity: str | None = None
+# IDENTITY of the shared instance: (digest of the Cohere API key it was
+# built with, (embedding_backend, embedding_model, embedding_base_url)).
+# Rotation of any component — a different nonempty Cohere key or an
+# embedding backend/model/endpoint change — must rebuild the pipeline;
+# comparing presence alone kept the old client (and its old key) serving all
+# later requests (AH-AUDIT-036).
+_rag_pipeline_identity: tuple[str | None, tuple[str, str, str]] | None = None
 
 
 def _cohere_configured() -> bool:
@@ -58,6 +60,25 @@ def _built_cohere_identity(pipeline: RAGPipeline | None) -> str | None:
     return _cohere_key_digest(getattr(reranker, "api_key", None))
 
 
+def _current_embedding_identity() -> tuple[str, str, str]:
+    """Configured embedding backend identity (backend, model, base_url)."""
+    try:
+        from machina.core.config import config as _cfg
+
+        return (
+            str(_cfg.get("embedding_backend") or "auto"),
+            str(_cfg.get("embedding_model") or ""),
+            str(_cfg.get("embedding_base_url") or ""),
+        )
+    except Exception:
+        return ("auto", "", "")
+
+
+def _current_pipeline_identity() -> tuple[str | None, tuple[str, str, str]]:
+    """Identity of everything the shared pipeline is configured from (fresh read)."""
+    return (_current_cohere_identity(), _current_embedding_identity())
+
+
 def _build_shared_pipeline() -> RAGPipeline:
     """Choose the configured reranker (AH-AUDIT-036).
 
@@ -84,12 +105,13 @@ def _build_shared_pipeline() -> RAGPipeline:
 async def get_rag_pipeline() -> RAGPipeline:
     """Get or create the global RAG pipeline instance.
 
-    Rebuilds when the Cohere credential IDENTITY changes (rotation to a
-    different nonempty key, appearance, or disappearance), so the reranker
-    client always matches the configured key. Reuses when unchanged.
+    Rebuilds when the pipeline IDENTITY changes: the Cohere credential it
+    was built with (rotation to a different nonempty key, appearance, or
+    disappearance) or the configured embedding backend/model/endpoint.
+    Reuses when unchanged.
     """
     global _rag_pipeline, _rag_pipeline_identity
-    current = _current_cohere_identity()
+    current = _current_pipeline_identity()
     if _rag_pipeline is None or _rag_pipeline_identity != current:
         async with _rag_pipeline_lock:
             # Double-check after acquiring lock
@@ -99,9 +121,13 @@ async def get_rag_pipeline() -> RAGPipeline:
                 # build fell back without binding a key, keep the configured
                 # identity so a failing client is not rebuilt on every
                 # request; a real rotation changes `current` and still
-                # forces the rebuild.
+                # forces the rebuild. Embedding identity stays config-derived:
+                # build_embedder degrades to keyword-only without changing it.
                 built = _built_cohere_identity(_rag_pipeline)
-                _rag_pipeline_identity = built if built is not None else current
+                _rag_pipeline_identity = (
+                    built if built is not None else current[0],
+                    current[1],
+                )
     return _rag_pipeline
 
 

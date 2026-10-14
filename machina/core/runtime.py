@@ -244,6 +244,29 @@ class RuntimeServices:
                 except Exception:
                     logger.exception("background drain failed")
                 try:
+                    from machina.rag.embedder import close_shared_embedder
+
+                    await _bounded_cleanup(
+                        close_shared_embedder(),
+                        timeout=min(0.1 if cancellation is not None else 5, timeout),
+                        label="embedder close",
+                    )
+                    from machina.tools import rag as _rag_tools
+
+                    _pipeline_embedder = getattr(
+                        getattr(_rag_tools, "_rag_pipeline", None), "_embedder", None
+                    )
+                    if _pipeline_embedder is not None:
+                        await _bounded_cleanup(
+                            _pipeline_embedder.close(),
+                            timeout=min(0.1 if cancellation is not None else 5, timeout),
+                            label="rag embedder close",
+                        )
+                except asyncio.CancelledError as e:
+                    cancellation = e
+                except Exception:
+                    logger.exception("embedder shutdown failed")
+                try:
                     from machina.db.connection import db
 
                     await _bounded_cleanup(
@@ -302,12 +325,22 @@ def _detect_providers() -> dict[str, Any]:
             reason = f"unknown provider {selected!r}"
     except Exception as e:
         reason = str(e)
-    embedding_ready = bool(config.get("openai_api_key") or config.get("openrouter_api_key"))
+    try:
+        from machina.rag.embedder import resolve_embedding_settings
+
+        embedding = resolve_embedding_settings()
+        embedding_ready = embedding.kind != "none"
+        embedding_detail = (
+            f"{embedding.kind}:{embedding.model}" if embedding_ready else embedding.reason
+        )
+    except Exception as e:
+        embedding_ready, embedding_detail = False, str(e)
     return {
         "chat_provider": "ready" if key_ok else "unavailable",
         "chat_provider_reason": reason,
         "chat_provider_selected": selected,
         "embedding": "ready" if embedding_ready else "keyword-only",
+        "embedding_detail": embedding_detail,
     }
 
 
@@ -397,12 +430,22 @@ def _capabilities_from_report(report: dict[str, Any]) -> list[Capability]:
         )
     )
     emb = report.get("embedding", "keyword-only")
+    emb_detail = str(report.get("embedding_detail") or "")
+    if emb == "keyword-only":
+        emb_reason = emb_detail or "no embedding provider configured"
+        emb_next = (
+            "set OPENAI_API_KEY, configure MACHINA_EMBEDDING_BASE_URL, or install the "
+            "local runtime (pip install 'Machina[embeddings-local]') for dense retrieval"
+        )
+    else:
+        emb_reason = f"dense retrieval via {emb_detail}" if emb_detail else ""
+        emb_next = ""
     caps.append(
         Capability(
             "memory_retrieval",
             "degraded" if emb == "keyword-only" else "available",
-            "no embedding provider configured" if emb == "keyword-only" else "",
-            "set OPENAI_API_KEY for dense retrieval" if emb == "keyword-only" else "",
+            emb_reason,
+            emb_next,
         )
     )
     caps.append(
