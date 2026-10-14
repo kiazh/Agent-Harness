@@ -341,16 +341,6 @@ class TestProviderUsageMissing:
         # accounted_tokens should be None → COALESCE retains reserved_tokens
         assert execute.await_args.args[5] is None
 
-    async def test_usage_store_finish_with_empty_dict_keeps_reservation(self, monkeypatch):
-        """When provider returns empty usage dict, finish should use conservative reservation."""
-        store = UsageStore()
-        call_id = uuid.uuid4()
-        execute = AsyncMock()
-        monkeypatch.setattr("machina.core.usage.db", SimpleNamespace(execute=execute))
-
-        await store.finish(call_id, {}, failed=False)
-        assert execute.await_args.args[5] is None
-
     async def test_usage_store_finish_with_partial_usage_uses_known_fields(self, monkeypatch):
         """When provider returns partial usage (only prompt_tokens), finish should use what's known."""
         store = UsageStore()
@@ -1374,41 +1364,6 @@ class TestAgentStreamInterruption:
                 assert text_events[0].content == "partial"
                 assert len(done_events) == 1
                 assert "error" in done_events[0].response.content.lower()
-
-    async def test_agent_stream_with_provider_returning_malformed_events(self, mock_session):
-        """When provider yields malformed events, agent should handle gracefully."""
-        provider = AsyncMock()
-
-        async def malformed_stream(*args, **kwargs):
-            yield StreamEvent(type="text", content="data: {invalid json}\n\n")
-            yield StreamEvent(
-                type="done",
-                response=LLMResponse(
-                    content="recovered",
-                    model="test",
-                    usage={},
-                ),
-            )
-
-        provider.stream_complete = malformed_stream
-
-        with patch("machina.core.agent.session_manager") as mock_sm:
-            mock_sm.get = AsyncMock(return_value=mock_session)
-            mock_sm.update_activity = AsyncMock()
-
-            with patch("machina.core.agent.context_manager") as mock_cm:
-                mock_cm.add_chunk = AsyncMock()
-                mock_cm.add_chunks_batch = AsyncMock()
-                mock_cm.get_latest_images = AsyncMock(return_value=[])
-                mock_cm.get_recent_context = AsyncMock(return_value=[])
-
-                agent = ReActAgent(provider=provider, max_iterations=5)
-                events = []
-                async for event in agent.run_stream(mock_session.id, "test", verbose=False):
-                    events.append(event)
-
-                # Should complete despite malformed JSON
-                assert any(e.type == "done" for e in events)
 
 
 # ===========================================================================

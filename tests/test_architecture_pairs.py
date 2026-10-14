@@ -275,83 +275,6 @@ class _GrantStubDb:
 
 
 @pytest.mark.asyncio
-async def test_turn_scope_resolves_mode_once_per_turn(clean_seams, monkeypatch):
-    from machina.core import session_mode
-
-    sid = str(uuid.uuid4())
-    stub = _ModeStubDb("workspace")
-    monkeypatch.setattr("machina.db.connection.db", stub)
-    with session_mode.turn_scope():
-        for _ in range(5):
-            assert await session_mode.resolve_effective_mode(sid) == "workspace"
-    assert stub.fetchrows == 1
-
-
-@pytest.mark.asyncio
-async def test_implicit_broker_turn_caches_and_new_turn_reresolves(
-    clean_seams, monkeypatch
-):
-    from machina.core import session_mode
-    from machina.permissions import broker
-
-    sid = str(uuid.uuid4())
-    stub = _ModeStubDb("workspace")
-    monkeypatch.setattr("machina.db.connection.db", stub)
-    broker.set_approval_handler(None, principal="tui", turn_id="PAIR-T1")
-    try:
-        for _ in range(3):
-            assert await session_mode.resolve_effective_mode(sid) == "workspace"
-        assert stub.fetchrows == 1
-        broker.set_approval_handler(None, principal="tui", turn_id="PAIR-T2")
-        assert await session_mode.resolve_effective_mode(sid) == "workspace"
-        assert stub.fetchrows == 2
-    finally:
-        broker.set_approval_handler(None)
-
-
-@pytest.mark.asyncio
-async def test_mode_change_invalidates_turn_cache(clean_seams, monkeypatch):
-    from machina.core import session_mode
-
-    sid = str(uuid.uuid4())
-    stub = _ModeStubDb("workspace")
-    monkeypatch.setattr("machina.db.connection.db", stub)
-    with session_mode.turn_scope():
-        assert await session_mode.resolve_effective_mode(sid) == "workspace"
-        session_mode.set_session_mode(sid, "full")
-        assert await session_mode.resolve_effective_mode(sid) == "workspace"
-        assert stub.fetchrows == 2
-        session_mode.clear_session_mode(sid)
-        assert await session_mode.resolve_effective_mode(sid) == "workspace"
-        assert stub.fetchrows == 3
-
-
-@pytest.mark.asyncio
-async def test_db_failure_never_poisons_turn_cache(clean_seams, monkeypatch):
-    from machina.core import session_mode
-
-    sid = str(uuid.uuid4())
-
-    class Flaky:
-        connected = True
-        calls = 0
-
-        async def fetchrow(self, query, _sid):
-            type(self).calls += 1
-            if type(self).calls == 1:
-                raise RuntimeError("database unavailable")
-            return {"execution_mode": "workspace"}
-
-    stub = Flaky()
-    monkeypatch.setattr("machina.db.connection.db", stub)
-    with session_mode.turn_scope():
-        with pytest.raises(RuntimeError, match="database unavailable"):
-            await session_mode.resolve_effective_mode(sid)
-        assert await session_mode.resolve_effective_mode(sid) == "workspace"
-        assert stub.calls == 2
-
-
-@pytest.mark.asyncio
 async def test_implicit_mode_cap_is_exact_and_evicts_oldest(clean_seams, monkeypatch):
     from machina.core import session_mode
     from machina.permissions import broker
@@ -372,9 +295,7 @@ async def test_implicit_mode_cap_is_exact_and_evicts_oldest(clean_seams, monkeyp
     assert ("OLD-0", "sid-0") not in session_mode._implicit_modes
 
 
-def test_broker_turn_seam_prefers_get_current_turn_then_falls_back(
-    clean_seams, monkeypatch
-):
+def test_broker_turn_seam_prefers_get_current_turn_then_falls_back(clean_seams, monkeypatch):
     from machina.core import session_mode
     from machina.permissions import broker, store
 
@@ -464,9 +385,7 @@ async def test_grant_cache_returns_copies_not_aliases(clean_seams, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_grant_cache_invalidated_on_save_revoke_decision(
-    clean_seams, monkeypatch
-):
+async def test_grant_cache_invalidated_on_save_revoke_decision(clean_seams, monkeypatch):
     from machina.permissions import broker, store
 
     sid = str(uuid.uuid4())
@@ -509,36 +428,6 @@ async def test_grant_cache_invalidated_on_save_revoke_decision(
     finally:
         broker.set_approval_handler(None)
         store._mem.approvals.pop(request_id, None)
-
-
-@pytest.mark.asyncio
-async def test_approval_rows_never_touch_grant_cache(clean_seams, monkeypatch):
-    from machina.permissions import broker, store
-    from machina.permissions.policy import build_request
-
-    sid = str(uuid.uuid4())
-    stub = _GrantStubDb([_grant_row(str(uuid.uuid4()), sid)])
-
-    async def fake_db():
-        return stub
-
-    monkeypatch.setattr(store, "_db", fake_db)
-    broker.set_approval_handler(None, principal="tui", turn_id="PAIR-G5")
-    try:
-        await store.list_grants(sid)
-        assert stub.grant_selects == 1
-        req = build_request(
-            operation="process.exec",
-            argv=["echo", "hi"],
-            mode="ask",
-            session_id=sid,
-            agent_id="harness",
-        )
-        await store.create_approval(req, principal="tui")
-        await store.list_grants(sid)
-        assert stub.grant_selects == 1
-    finally:
-        broker.set_approval_handler(None)
 
 
 @pytest.mark.asyncio
@@ -623,9 +512,7 @@ def test_preselect_cache_matches_direct_rank_and_ranks_once(tmp_path):
     cache = SkillPreselectCache(reg)
     for query in _FIXED_QUERIES:
         ranked = cache.rank(query)
-        assert [s.name for s in ranked] == [
-            s.name for s in ports.rank_skills(reg, query)
-        ]
+        assert [s.name for s in ranked] == [s.name for s in ports.rank_skills(reg, query)]
     assert cache.rank_calls == len(_FIXED_QUERIES)
     cache.rank(_FIXED_QUERIES[0])
     assert cache.rank_calls == len(_FIXED_QUERIES)

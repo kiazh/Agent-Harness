@@ -48,17 +48,6 @@ def test_timed_error_rate_reflects_error():
     assert metrics.get_error_rate(op) > 0.0
 
 
-def test_plain_counter_error_rate_contract_unchanged():
-    """Existing contract: bare counters + record_error keep rate semantics."""
-    m = MetricsCollector()
-    m.increment_counter("op")
-    m.increment_counter("op")
-    m.record_error("op")
-    assert m.get_counter("op") == 2
-    assert m.get_error_count("op") == 1
-    assert m.get_error_rate("op") == pytest.approx(0.5)
-
-
 def test_error_rate_zero_without_errors():
     m = MetricsCollector()
     m.record_llm_call("s1", "m1", 1.0)

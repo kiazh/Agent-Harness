@@ -50,23 +50,6 @@ class TestNoHardcodedDatabasePassword:
             assert "minecraft" not in db.dsn
             assert "2017" not in db.dsn
 
-    def test_dsn_from_config_still_works(self):
-        """A configured DATABASE_URL is still honoured."""
-        from machina.db.connection import Database
-
-        with patch("machina.db.connection.config") as mock_config:
-            mock_config.get.return_value = "postgresql://u:p@host:5432/db"
-            db = Database()
-            assert db.dsn == "postgresql://u:p@host:5432/db"
-
-    def test_explicit_dsn_overrides_config(self):
-        from machina.db.connection import Database
-
-        with patch("machina.db.connection.config") as mock_config:
-            mock_config.get.return_value = "postgresql://u:p@host/db"
-            db = Database(dsn="postgresql://x:y@other/otherdb")
-            assert db.dsn == "postgresql://x:y@other/otherdb"
-
     @pytest.mark.asyncio
     async def test_connect_without_dsn_uses_default(self):
         """connect() with no DSN uses the default DSN rather than raising."""

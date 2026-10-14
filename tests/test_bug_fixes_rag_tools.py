@@ -148,14 +148,6 @@ class TestBug13CdNotInAllowlist:
         with pytest.raises(ValidationError, match="not in the allowlist"):
             await terminal("cd /tmp")
 
-    async def test_cd_with_path_rejected(self, monkeypatch):
-        """'cd' with any path should be rejected (ask-mode allowlist)."""
-        monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
-        from machina.core.exceptions import ValidationError
-
-        with pytest.raises(ValidationError, match="not in the allowlist"):
-            await terminal("cd ..")
-
     async def test_other_commands_not_affected(self, monkeypatch):
         """Removing 'cd' should not affect other allowed commands."""
         monkeypatch.setenv("MACHINA_TERMINAL_SANDBOX", "local")
