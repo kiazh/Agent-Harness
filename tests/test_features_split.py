@@ -71,6 +71,11 @@ def test_all_feature_methods_accessible_after_split():
         "secrets.list",
         "secrets.set",
         "secrets.clear",
+        "models.list",
+        "models.setEffort",
+        "providers.list",
+        "providers.add",
+        "providers.remove",
         "profile.get",
         "profile.set",
         "profile.list",
@@ -103,6 +108,7 @@ def test_submodules_importable():
         interop,
         jobs,
         memory,
+        providers_feature,
         secrets,
         sessions,
         skills,
@@ -117,6 +123,8 @@ def test_submodules_importable():
     assert hasattr(secrets, "secrets_list")
     assert hasattr(interop, "interop_status")
     assert hasattr(auth_chatgpt, "auth_chatgpt_status")
+    assert hasattr(providers_feature, "models_list")
+    assert hasattr(providers_feature, "providers_add")
 
 
 def test_register_still_works():

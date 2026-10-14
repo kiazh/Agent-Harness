@@ -29,9 +29,11 @@ from machina.cli.growth import app as growth_app
 from machina.cli.interop import app as interop_app
 from machina.cli.launcher import launch_ui
 from machina.cli.output import console
+from machina.cli.providers import app as providers_app
 from machina.core.background_tasks import drain_background_tasks
 from machina.core.config import SECRET_KEYS, config
 from machina.core.context import context_manager
+from machina.core.provider.specs import provider_names
 from machina.core.session import session_manager
 from machina.db.connection import db
 
@@ -45,6 +47,7 @@ app = typer.Typer(
 app.add_typer(auth_app, name="auth")
 app.add_typer(growth_app, name="growth")
 app.add_typer(interop_app, name="interop")
+app.add_typer(providers_app, name="providers")
 
 
 @app.callback()
@@ -1320,18 +1323,9 @@ def setup(
     if not non_interactive:
         # Default provider + model (non-secret .env values, applied to every
         # turn until /provider or /model overrides them for the session).
-        known_providers = (
-            "openrouter",
-            "openai",
-            "anthropic",
-            "google",
-            "mistral",
-            "groq",
-            "together",
-            "deepseek",
-            "xai",
-            "ollama",
-        )
+        # provider_names() covers built-ins plus any user-added named
+        # providers (machina providers add ...), so setup accepts them too.
+        known_providers = tuple(provider_names())
         try:
             current_provider = existing.get("MACHINA_PROVIDER", "").strip() or "openrouter"
             while True:

@@ -96,9 +96,11 @@ DEFAULTS: dict[str, Any] = {
     "temperature": 0.7,
     "max_tokens": 4096,
     # Reasoning depth for providers that support it: "" (provider default),
-    # "low", "medium" or "high". Sent as reasoning_effort (OpenAI, DeepSeek,
-    # xAI, Groq, Together), reasoning.effort (OpenRouter), a thinking budget
-    # (Anthropic) or the think flag (Ollama); ignored where unsupported.
+    # "low"/"medium"/"high" wire-wide, and "xhigh"/"max" for the ChatGPT
+    # catalog tiers (per-model validated by the chatgpt provider). Sent as
+    # reasoning_effort (OpenAI, DeepSeek, xAI, Groq, Together),
+    # reasoning.effort (OpenRouter), a thinking budget (Anthropic) or the
+    # think flag (Ollama); ignored where unsupported.
     "reasoning_effort": "",
     "rate_limit_calls_per_minute": 10,
     # Zero disables a budget. Limits include requests that fail after reaching
@@ -269,9 +271,12 @@ def validate_value(key: str, value: Any) -> Any:
             raise ValueError("terminal_sandbox must be disabled|local|docker")
         return normalized
     if key == "reasoning_effort":
+        # low/medium/high are the classic wire vocabulary; xhigh/max are
+        # live-verified ChatGPT (Codex catalog) levels — the per-model set
+        # is validated by the chatgpt provider against the catalog entry.
         normalized = str(value).strip().lower()
-        if normalized not in ("", "low", "medium", "high"):
-            raise ValueError("reasoning_effort must be ''|low|medium|high")
+        if normalized not in ("", "low", "medium", "high", "xhigh", "max"):
+            raise ValueError("reasoning_effort must be ''|low|medium|high|xhigh|max")
         return normalized
     if key == "embedding_backend":
         normalized = str(value).strip().lower()

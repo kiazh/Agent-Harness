@@ -12,7 +12,7 @@ from machina.core.provider.chatgpt import ChatGPTProvider
 from machina.core.provider.direct import DirectProvider
 from machina.core.provider.ollama import OllamaProvider
 from machina.core.provider.openrouter import OpenRouterProvider
-from machina.core.provider.specs import PROVIDER_SPECS, PROVIDERS, ProviderSpec
+from machina.core.provider.specs import PROVIDER_SPECS, ProviderSpec, provider_names
 
 
 def _custom_provider(model: str | None, reasoning_effort: str | None) -> LLMProvider:
@@ -41,6 +41,48 @@ def _custom_provider(model: str | None, reasoning_effort: str | None) -> LLMProv
         requires_key=False,
     )
     return DirectProvider(spec, model=model, reasoning_effort=reasoning_effort)
+
+
+def _named_provider(
+    name: str, model: str | None, reasoning_effort: str | None
+) -> LLMProvider | None:
+    """User-added named provider from the security store (None when absent).
+
+    Same OpenAI-compatible transport as ``custom``, but with a persisted
+    name/base URL and its model catalog pulled from ``GET {base}/models``.
+    The key is resolved through the shared secret idiom (env -> .env ->
+    backend) under the store-assigned env name; keyless local endpoints are
+    a supported mode, matching ``custom``.
+    """
+    from machina.security.providers import get_provider_entry, resolve_provider_key
+
+    entry = get_provider_entry(name)
+    if entry is None:
+        return None
+    resolved_model = model or str(entry.get("default_model") or "") or _first_known_model(entry)
+    if not resolved_model:
+        raise ValidationError(
+            f"provider {name!r} has no known model yet; refresh its catalog "
+            f"(/provider add or /models) or pass an explicit model id"
+        )
+    spec = ProviderSpec(
+        name=name,
+        base_url=str(entry.get("base_url") or ""),
+        api_key_env=str(entry.get("api_key_env") or ""),
+        default_model=resolved_model,
+        description="User-added OpenAI-compatible provider",
+        requires_key=False,
+    )
+    key = resolve_provider_key(entry)
+    return DirectProvider(
+        spec, api_key=key or None, model=resolved_model, reasoning_effort=reasoning_effort
+    )
+
+
+def _first_known_model(entry: dict) -> str:
+    models = entry.get("models") if isinstance(entry.get("models"), list) else []
+    ids = [str(item.get("id") or "").strip() for item in models if isinstance(item, dict)]
+    return next((identifier for identifier in ids if identifier), "")
 
 
 def _opencode_spec() -> ProviderSpec:
@@ -84,4 +126,9 @@ def get_provider(
         return DirectProvider(
             spec, model=model or spec.default_model, reasoning_effort=reasoning_effort
         )
-    raise ValidationError(f"Unknown provider: {provider}. Choose one of: {', '.join(PROVIDERS)}")
+    named = _named_provider(provider, model, reasoning_effort)
+    if named is not None:
+        return named
+    raise ValidationError(
+        f"Unknown provider: {provider}. Choose one of: {', '.join(provider_names())}"
+    )

@@ -157,7 +157,7 @@ _CORE_IMPORT_CEILINGS = {
 # machina/research/benchmark.py's architecture section (round-2 review N6:
 # the hand-mirrored literal drifted once already). Moves only with the delta
 # table documented inside test_deferred_import_count_ratchet.
-DEFERRED_IMPORT_CAP = 685
+DEFERRED_IMPORT_CAP = 689
 
 
 def test_module_level_core_imports_only_shrink():
@@ -236,6 +236,22 @@ def test_deferred_import_count_ratchet():
     #   imports, module level) and kept both callers' per-call
     #   ``_child_process`` bindings, so the census moves by exactly +1.
     #   Census 684 -> 685, so cap 684 -> 685.
+    #   Model-catalog lane (2026-10-14, this change): +4 deferred imports,
+    #   each a deliberate cycle/dependency-delaying binding:
+    #     +1 machina/core/provider/catalog.py — chatgpt_auth is imported
+    #        inside fetch_catalog_for_account so the catalog module (which
+    #        context_windows imports) stays loadable without the auth stack.
+    #     +1 machina/core/provider/factory.py — security.providers binds
+    #        inside _named_provider so provider resolution works without the
+    #        user store module unless a named provider is actually requested.
+    #     +1 machina/core/provider/specs.py — security.providers binds inside
+    #        _named_provider_names so dynamic PROVIDERS membership keeps a
+    #        core->security edge only at call time.
+    #     +1 machina/core/context_windows.py — catalog.window_for binds inside
+    #        the chatgpt branch so the window lookup stays a light leaf for
+    #        its many lazy importers. (All other new imports in this lane were
+    #        hoisted to module level; the census moved by exactly +4.)
+    #   Census 685 -> 689, so cap 685 -> 689.
     # Procedure: this number may only move with a delta table like the above
     # in this comment; silent growth fails the suite by design.
     total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))
@@ -292,13 +308,25 @@ def test_deferred_import_count_ratchet():
 #     opencode base-url override; specs.py 104 -> 125: ProviderSpec.requires_key
 #     + OpenCode Zen preset + "custom" PROVIDERS entry; direct.py 337 -> 339:
 #     keyless specs send no Authorization header). Package total 3511 -> 3578.
+#   model-catalog lane (2026-10-14, this change): +622 provider lines —
+#     new core/provider/catalog.py (508): live ChatGPT/Codex catalog fetch
+#     (client_version newest-first, ChatGPT-Account-ID), TTL + negative-TTL
+#     in-process cache, Codex CLI cache read-back, bundled verified fallback,
+#     per-model effort/slug validation, context windows. chatgpt.py 590 -> 616:
+#     catalog-validated model slug + per-model effort resolution replacing the
+#     global normalize_reasoning_effort call. factory.py 87 -> 134: named
+#     user-added providers resolve through machina.security.providers with a
+#     cached-default-model fallback and an explicit no-models error.
+#     specs.py 125 -> 166: dynamic PROVIDERS membership for named providers
+#     (tuple subclass __contains__) + provider_names() listing helper.
+#     Package total 3578 -> 4200 by exactly this delta.
 GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
     ("core/agent.py", 2057),
     ("core/compression.py", 999),
     ("core/provider/__init__.py", 52),
     ("core/provider/_log.py", 10),
     ("core/provider/reasoning.py", 61),
-    ("core/provider/specs.py", 125),
+    ("core/provider/specs.py", 166),
     ("core/provider/audit.py", 147),
     ("core/provider/rate_limit.py", 79),
     ("core/provider/caches.py", 97),
@@ -308,8 +336,9 @@ GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
     ("core/provider/ollama.py", 378),
     ("core/provider/direct.py", 339),
     ("core/provider/anthropic.py", 564),
-    ("core/provider/chatgpt.py", 590),
-    ("core/provider/factory.py", 87),
+    ("core/provider/chatgpt.py", 616),
+    ("core/provider/factory.py", 134),
+    ("core/provider/catalog.py", 508),
 )
 
 
@@ -325,7 +354,9 @@ def test_god_file_ceilings_only_fall(relative_path, ceiling):
 # 2915 = 2804 at split landing + 111 for the reviewed R06/R08 delta above.
 # 3511 = 2915 + 596 for the reviewed chatgpt-lane delta above.
 # 3578 = 3511 + 67 for the reviewed free-models lane delta above.
-_PROVIDER_PACKAGE_TOTAL_CEILING = 3578
+# 4200 = 3578 + 622 for the reviewed model-catalog lane delta above
+#        (new catalog.py + chatgpt/factory/specs growth).
+_PROVIDER_PACKAGE_TOTAL_CEILING = 4200
 
 
 def test_provider_package_total_only_falls():

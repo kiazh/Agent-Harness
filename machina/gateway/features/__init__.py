@@ -92,6 +92,13 @@ from machina.gateway.features.mode import (
     mode_revoke,
     mode_set,
 )
+from machina.gateway.features.providers_feature import (
+    models_list,
+    models_set_effort,
+    providers_add,
+    providers_list,
+    providers_remove,
+)
 from machina.gateway.features.secrets import secrets_clear, secrets_list, secrets_set
 from machina.gateway.features.sessions import (
     context_compress,
@@ -195,6 +202,11 @@ METHODS: dict[str, Handler] = {
     "secrets.list": secrets_list,
     "secrets.set": secrets_set,
     "secrets.clear": secrets_clear,
+    "models.list": models_list,
+    "models.setEffort": models_set_effort,
+    "providers.list": providers_list,
+    "providers.add": providers_add,
+    "providers.remove": providers_remove,
     "profile.get": profile_get,
     "profile.set": profile_set,
     "profile.list": profile_list,

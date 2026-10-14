@@ -18,6 +18,7 @@ import logging
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from machina.core.background_tasks import drain_background_tasks
 from machina.core.cleanup import cancel_and_join as _bounded_join
@@ -346,7 +347,11 @@ def _detect_providers() -> dict[str, Any]:
             key_ok = bool(config.get(PROVIDER_SPECS[selected].config_key))
             reason = "" if key_ok else f"{env_name} not set"
         else:
-            reason = f"unknown provider {selected!r}"
+            readiness = _named_provider_readiness(selected)
+            if readiness is None:
+                reason = f"unknown provider {selected!r}"
+            else:
+                key_ok, reason = readiness
     except Exception as e:
         reason = str(e)
     try:
@@ -368,20 +373,71 @@ def _detect_providers() -> dict[str, Any]:
     }
 
 
+def _tcp_reachable(host: str, port: int, timeout: float = 1.5) -> bool:
+    """Cheap TCP connect probe (never a protocol/API call)."""
+    import socket
+
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def _endpoint_reachable(base_url: str, timeout: float = 1.5) -> bool:
+    """Host:port reachability for an http(s) endpoint URL."""
+    try:
+        parsed = urlparse(str(base_url or ""))
+    except ValueError:
+        return False
+    host = parsed.hostname
+    if not host:
+        return False
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return _tcp_reachable(host, port, timeout)
+
+
+def _named_provider_readiness(name: str) -> tuple[bool, str] | None:
+    """Readiness for a user-added provider: (ready, reason), None when absent.
+
+    Honest three-state surface: "ready" (reachable, key set or keyless local),
+    "no key" (remote endpoint without a credential), "unreachable" (probe
+    failed). A keyless loopback endpoint reports ready with a note. The probe
+    is a bounded TCP connect, never a model call.
+    """
+    from machina.security.providers import (
+        get_provider_entry,
+        is_loopback_base_url,
+        resolve_provider_key,
+    )
+
+    entry = get_provider_entry(name)
+    if entry is None:
+        return None
+    base = str(entry.get("base_url") or "")
+    if not base:
+        return False, "base_url missing from the provider store"
+    key = resolve_provider_key(entry)
+    if not key and not is_loopback_base_url(base):
+        return False, f"no key set ({entry.get('api_key_env')}); add it with /keys or /provider"
+    if not _endpoint_reachable(base):
+        return False, f"{base} unreachable"
+    if not key:
+        return True, "no key (local endpoint)"
+    return True, ""
+
+
 def _ollama_reachable(timeout: float = 1.5) -> bool:
     """Cheap TCP probe of the Ollama daemon (never a model call)."""
     import os
-    import socket
-    from urllib.parse import urlparse
 
     raw = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
     try:
         parsed = urlparse(raw if "://" in raw else f"http://{raw}")
         host, port = parsed.hostname or "localhost", parsed.port or 11434
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except Exception:
+    except ValueError:
         return False
+    return _tcp_reachable(host, port, timeout)
 
 
 def _detect_sandbox() -> dict[str, Any]:

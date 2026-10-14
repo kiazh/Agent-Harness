@@ -61,13 +61,20 @@ def _is_openrouter(provider) -> bool:
     return _provider_name(provider) == "openrouter"
 
 
+def _is_chatgpt(provider) -> bool:
+    return _provider_name(provider) == "chatgpt"
+
+
 def context_window_for(model: str | None, provider=None) -> int:
     """Documented context window for *model*, or the default for unknown ids.
 
-    OpenRouter catalog metadata is provider-scoped: it only applies when
-    *provider* identifies the OpenRouter family (name or instance). Base,
-    local and other direct providers always use the curated fallback so one
-    serving's capacity never leaks into another provider's estimate.
+    Provider-scoped metadata: OpenRouter catalog windows and the ChatGPT
+    account catalog windows apply only when *provider* names that family
+    (name or instance). The chatgpt lookup is network-free — it reads the
+    in-process live catalog, the Codex CLI's local cache, or the bundled
+    verified snapshot, in that order. Base, local and other direct providers
+    always use the curated fallback so one serving's capacity never leaks
+    into another provider's estimate.
     """
     # Anything non-string (e.g. test doubles) behaves like an unknown model.
     name = model.lower() if isinstance(model, str) else ""
@@ -75,6 +82,14 @@ def context_window_for(model: str | None, provider=None) -> int:
         cached = _provider_windows.get(name)
         if cached is not None:
             return cached
+    if _is_chatgpt(provider):
+        # Function-level import: context_windows stays a dependency-light
+        # leaf for its many lazy importers (see architecture guard).
+        from machina.core.provider.catalog import window_for
+
+        window = window_for(name)
+        if window:
+            return window
     best = 0
     window = DEFAULT_CONTEXT_WINDOW
     for key, value in MODEL_CONTEXT_WINDOWS.items():

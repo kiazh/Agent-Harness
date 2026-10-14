@@ -128,3 +128,30 @@ No raw `mcp.call` RPC bypass exists. Native `mcp_list`, `mcp_describe` and
 adds optional `outcome: "outcome_unknown"` for a dispatched call without a known
 terminal result. Missing outcome preserves legacy behavior; unknown never renders
 as success. OAuth/HTTP credential authentication remains unavailable.
+
+## Provider catalogs and user-added providers (2026-10-14)
+
+Authenticated human management methods:
+
+| Method | Params | Result |
+|---|---|---|
+| `models.list` | `{provider?, refresh?}` | `{provider, source, models, fetchError, fetchedAt?}` |
+| `models.setEffort` | `{effort, persist?}` | `{provider, model, effort, supported}` |
+| `providers.list` | `{}` | `{selected, providers: [{name, kind, selected, baseUrl?, keySet?, keylessLocal?, apiKeyEnv?, modelsCount?, modelsFetchedAt?}]}` |
+| `providers.add` | `{name, baseUrl, apiKey?, persistKey?}` | `{provider, baseUrl, apiKeyEnv, keySet, keySaved, models, fetchError}` |
+| `providers.remove` | `{name}` | `{provider, removed, selected, switchedTo}` |
+
+`models.list` defaults to the gateway's selected provider. For `chatgpt` it
+returns the live per-account Codex catalog (slugs, per-model `efforts` and
+context windows) with `source` in `live|codex-cache|fallback` and a
+`fetchError` when live discovery failed; for user-added providers it returns
+the pulled OpenAI-compatible `/models` rows. `models.setEffort` validates
+`effort` against the selected model's catalog entry (chatgpt) or the shared
+`low|medium|high` vocabulary and applies it to the session config; an
+unsupported level is invalid params with the supported set in the message.
+`providers.add` saves the entry even when the model pull fails (the failure is
+reported in `fetchError`); keys are never returned or stored in the JSON store
+— they are written to the git-ignored `.env` via the same mechanism `/keys`
+uses. `providers.remove` refuses built-ins and switches the active provider to
+`openrouter` when the removed one was selected. No token or key value ever
+appears in any response field.

@@ -122,4 +122,45 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
 # "custom" — any OpenAI-compatible endpoint configured via CUSTOM_BASE_URL
 # (built dynamically in factory.py, so it is deliberately absent from
 # PROVIDER_SPECS, the fixed vendor table).
-PROVIDERS = ("openrouter", *tuple(PROVIDER_SPECS), "anthropic", "chatgpt", "custom", "ollama")
+#
+# User-added named providers (machina.security.providers store, Phase B) are
+# also deliberately absent from this tuple: ``PROVIDERS`` is a registry whose
+# ``in`` check consults the store dynamically, so validation sites that do
+# ``provider in PROVIDERS`` accept named providers without caching a stale
+# list. Iteration yields the built-ins only (pinned by the registry-accuracy
+# test); call :func:`provider_names` for a listing that includes named ones.
+
+
+class _ProviderRegistry(tuple):
+    """Built-in provider names with dynamic membership for named providers."""
+
+    def __contains__(self, value: object) -> bool:
+        if tuple.__contains__(self, value):
+            return True
+        if not isinstance(value, str) or not value:
+            return False
+        return value in _named_provider_names()
+
+
+def _named_provider_names() -> tuple[str, ...]:
+    """Names in the user store; a broken/absent store counts as none.
+
+    Function-level import keeps ``core.provider.specs`` loadable without the
+    security layer (same idiom as ``core.config``'s .env resolver).
+    """
+    try:
+        from machina.security.providers import provider_names
+
+        return provider_names()
+    except Exception:
+        return ()
+
+
+def provider_names() -> tuple[str, ...]:
+    """All selectable provider names: built-ins, then user-added ones."""
+    return (*PROVIDERS, *_named_provider_names())
+
+
+PROVIDERS: tuple[str, ...] = _ProviderRegistry(
+    ("openrouter", *tuple(PROVIDER_SPECS), "anthropic", "chatgpt", "custom", "ollama")
+)

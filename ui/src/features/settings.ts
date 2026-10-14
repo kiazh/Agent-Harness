@@ -1,10 +1,22 @@
 // Settings commands: config, profile, status, model, provider.
 
 import { keyValues, table } from "../format.ts";
-import type { ConfigGetResult, ConfigSetResult, ProfileInfo, ProfileListResult, StatusResult, UsageResult } from "../protocol.ts";
+import type {
+	ConfigGetResult,
+	ConfigSetResult,
+	EffortSetResult,
+	ProfileInfo,
+	ProfileListResult,
+	ProviderAddResult,
+	ProviderInfo,
+	ProviderRemoveResult,
+	ProvidersListResult,
+	StatusResult,
+	UsageResult,
+} from "../protocol.ts";
 import { splitSub } from "../commands.ts";
 import { applyModel, CURATED_MODELS, filterCuratedModels, pickCuratedModel } from "./models.ts";
-import { formatValue, options, PROFILE_ID_RE, type Command, type FeatureHost } from "./types.ts";
+import { confirm, formatValue, options, PROFILE_ID_RE, type Command, type FeatureHost } from "./types.ts";
 
 function printProfile(host: FeatureHost, profile: ProfileInfo): void {
 	const prefs = Object.entries(profile.preferences);
@@ -89,6 +101,122 @@ async function setConfig(host: FeatureHost, key: string, value: string, persist:
 
 const PERSONA_MAX_LENGTH = 2000;
 const PERSONA_EXAMPLE = "Be concise, warm, and direct. Explain tradeoffs clearly.";
+
+// ─── /provider helpers: list, add, remove user-added providers ──────────────
+
+function providerRow(p: ProviderInfo): string[] {
+	return [
+		p.selected ? `${p.name} (current)` : p.name,
+		p.kind,
+		p.baseUrl ?? "—",
+		p.kind === "named" ? (p.keySet ? "set" : p.keylessLocal ? "keyless local" : "missing") : "—",
+		p.kind === "named" ? String(p.modelsCount ?? 0) : "—",
+	];
+}
+
+async function printProviders(host: FeatureHost): Promise<void> {
+	const result = await host.request<ProvidersListResult>("providers.list");
+	const rows = result.providers.map(providerRow);
+	const body = table(["Provider", "Kind", "Base URL", "Key", "Models"], rows, 36);
+	host.print(
+		`${body}\n\nCurrent: ${result.selected}\nUser-added provider keys live in .env (never shown; manage with /provider add).`,
+		"plain",
+	);
+}
+
+async function addProvider(host: FeatureHost, rest: string): Promise<void> {
+	const parts = rest.trim().split(/\s+/).filter(Boolean);
+	let name = parts[0] ?? "";
+	let baseUrl = parts[1] ?? "";
+	if (!name) {
+		name =
+			(await host.askText({
+				title: "Provider name",
+				description: "Lowercase letters, digits and dashes (e.g. my-vllm). Used in /provider and /models.",
+				placeholder: "my-provider",
+				maxLength: 32,
+			}))?.trim().toLowerCase() ?? "";
+		if (!name) return;
+	}
+	if (!baseUrl) {
+		baseUrl =
+			(await host.askText({
+				title: `Base URL for ${name}`,
+				description: "OpenAI-compatible endpoint; /models is fetched from it and chat goes to /chat/completions.",
+				placeholder: "http://127.0.0.1:8000/v1",
+				maxLength: 500,
+			}))?.trim() ?? "";
+		if (!baseUrl) return;
+	}
+	const key =
+		(await host.askText({
+			title: `API key for ${name} (optional)`,
+			description: "Leave empty for keyless local endpoints. Stored in .env like /keys — masked, never shown again.",
+			placeholder: "leave empty for no key",
+			secret: true,
+		}))?.trim() ?? "";
+	const confirmed = await confirm(host, `Add provider "${name}" at ${baseUrl}?`, "Add");
+	if (!confirmed) return;
+	let result: ProviderAddResult;
+	try {
+		result = await host.request<ProviderAddResult>("providers.add", { name, baseUrl, apiKey: key || undefined });
+	} catch (error) {
+		// The submitted key must never echo in an error string.
+		const message = (error instanceof Error ? error.message : String(error)).split(key).join("[redacted]");
+		host.print(`Could not add ${name}: ${message}`, "error");
+		return;
+	}
+	if (result.fetchError) {
+		host.print(
+			`Provider "${result.provider}" saved, but model fetch failed: ${result.fetchError}\nFix the URL/key and re-run /provider add ${result.provider} ${result.baseUrl}.`,
+			"warning",
+		);
+	} else {
+		const preview = result.models.slice(0, 8).map((m) => m.id).join(", ");
+		host.print(
+			`Provider "${result.provider}" added — ${result.models.length} model(s) pulled${preview ? `: ${preview}${result.models.length > 8 ? ", …" : ""}` : ""}.\nSwitch with /provider ${result.provider}, then pick a model with /models (or /default-model).`,
+			"success",
+		);
+	}
+	if (result.keySaved) {
+		host.print(`Key stored in .env as ${result.apiKeyEnv} (0600, never shown).`, "plain");
+	} else if (result.keySet) {
+		host.print("Key set for this session only (not persisted).", "plain");
+	}
+}
+
+async function removeProvider(host: FeatureHost, rest: string): Promise<void> {
+	let name = rest.trim().toLowerCase();
+	if (!name) {
+		const result = await host.request<ProvidersListResult>("providers.list");
+		const named = result.providers.filter((p) => p.kind === "named");
+		if (!named.length) {
+			host.print("No user-added providers to remove (built-in providers cannot be removed).", "warning");
+			return;
+		}
+		const choice = await host.pick(
+			"Remove which provider?",
+			named.map((p) => ({
+				value: p.name,
+				label: p.name,
+				description: `${p.baseUrl ?? "?"} · key ${p.keySet ? "set" : "not set"} · ${p.modelsCount ?? 0} model(s)`,
+			})),
+		);
+		if (!choice) return;
+		name = choice.value;
+	}
+	const confirmed = await confirm(host, `Remove provider "${name}"? Its .env key entry is cleared.`, "Remove");
+	if (!confirmed) return;
+	try {
+		const result = await host.request<ProviderRemoveResult>("providers.remove", { name });
+		host.print(
+			`Provider "${result.provider}" removed${result.switchedTo ? `; switched to ${result.switchedTo}` : ""}.`,
+			"success",
+		);
+	} catch (error) {
+		host.print(`Could not remove ${name}: ${error instanceof Error ? error.message : String(error)}`, "error");
+	}
+}
 
 function personaError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -217,9 +345,12 @@ export const settingsCommands: Command[] = [
 	},
 	{
 		name: "provider",
-		description: "Show or set the provider",
-		argumentHint: "[openrouter|openai|anthropic|chatgpt|google|mistral|groq|together|deepseek|xai|opencode|custom|ollama]",
+		description: "Show or set a provider; add/remove user-added providers",
+		argumentHint: "[list|add [name url]|remove [name]|openrouter|openai|anthropic|chatgpt|google|mistral|groq|together|deepseek|xai|opencode|custom|ollama|<name>]",
 		getArgumentCompletions: options([
+			["list", "List built-in and user-added providers"],
+			["add", "Add a provider (name + base URL + optional key)"],
+			["remove", "Remove a user-added provider"],
 			["openrouter", "OpenRouter (multi-model)"],
 			["openai", "OpenAI direct"],
 			["anthropic", "Anthropic direct"],
@@ -235,11 +366,25 @@ export const settingsCommands: Command[] = [
 			["ollama", "Ollama (local models)"],
 		]),
 		async run(args, host) {
-			if (!args) {
+			const [sub, rest] = splitSub(args);
+			if (sub === "list") {
+				await printProviders(host);
+				return;
+			}
+			if (sub === "add") {
+				await addProvider(host, rest);
+				return;
+			}
+			if (sub === "remove") {
+				await removeProvider(host, rest);
+				return;
+			}
+			if (!sub) {
 				const { config } = await host.request<ConfigGetResult>("config.get");
 				host.print(`Provider: ${config.provider}`, "plain");
 				host.print(
-					"ChatGPT-account models need no API key — sign in with /auth first.",
+					"ChatGPT-account models need no API key — sign in with /auth first. " +
+						"User-added providers: /provider list · /provider add · /provider remove.",
 					"plain",
 				);
 			} else {
@@ -254,12 +399,14 @@ export const settingsCommands: Command[] = [
 	},
 	{
 		name: "effort",
-		description: "Show or set reasoning effort (low|medium|high|off)",
-		argumentHint: "[low|medium|high|off]",
+		description: "Show or set reasoning effort (ChatGPT: per-model low..max)",
+		argumentHint: "[low|medium|high|xhigh|max|off]",
 		getArgumentCompletions: options([
 			["low", "Shallow reasoning, fast and cheap"],
 			["medium", "Balanced reasoning depth"],
 			["high", "Deep reasoning for hard problems"],
+			["xhigh", "Extra-high (ChatGPT catalog tier)"],
+			["max", "Maximum depth (ChatGPT catalog tier)"],
 			["off", "Provider default (no effort override)"],
 		]),
 		async run(args, host) {
@@ -269,7 +416,11 @@ export const settingsCommands: Command[] = [
 				host.print(`Reasoning effort: ${config.reasoning_effort || "off (provider default)"}`, "plain");
 				return;
 			}
-			await setConfig(host, "reasoning_effort", value, false);
+			const result = await host.request<EffortSetResult>("models.setEffort", { effort: value });
+			host.print(
+				`Reasoning effort: ${result.effort ?? "off (provider default)"} · supported for ${result.model || result.provider}: ${result.supported.join("/")}`,
+				"success",
+			);
 		},
 	},
 	{

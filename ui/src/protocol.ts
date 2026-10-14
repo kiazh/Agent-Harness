@@ -114,6 +114,75 @@ export interface SecretsSetResult {
 	envFile: string | null;
 }
 
+// ─── Provider model catalogs (models.list / models.setEffort) ──────────────
+
+/** One model row from the provider catalog (chatgpt: efforts + windows). */
+export interface ModelCatalogInfo {
+	id: string;
+	displayName?: string;
+	description?: string;
+	/** Per-model reasoning efforts (wire-valid; from THAT model's entry). */
+	efforts?: string[];
+	advertisedEfforts?: string[];
+	defaultEffort?: string | null;
+	contextWindow?: number | null;
+	maxContextWindow?: number | null;
+	source?: string;
+}
+
+export interface ModelsListResult {
+	provider: string;
+	/** "live" | "codex-cache" | "fallback" | "cache" | "none". */
+	source: string;
+	models: ModelCatalogInfo[];
+	/** Why live discovery did not answer (honest fallback reporting). */
+	fetchError: string | null;
+	fetchedAt?: string | null;
+}
+
+export interface EffortSetResult {
+	provider: string;
+	model: string;
+	effort: string | null;
+	supported: string[];
+}
+
+// ─── User-added providers (providers.list / providers.add / providers.remove)
+
+export interface ProviderInfo {
+	name: string;
+	kind: "builtin" | "named";
+	selected: boolean;
+	baseUrl?: string | null;
+	keySet?: boolean;
+	keylessLocal?: boolean;
+	apiKeyEnv?: string | null;
+	modelsCount?: number;
+	modelsFetchedAt?: string | null;
+}
+
+export interface ProvidersListResult {
+	selected: string;
+	providers: ProviderInfo[];
+}
+
+export interface ProviderAddResult {
+	provider: string;
+	baseUrl: string;
+	apiKeyEnv: string;
+	keySet: boolean;
+	keySaved: boolean;
+	models: ModelCatalogInfo[];
+	fetchError: string | null;
+}
+
+export interface ProviderRemoveResult {
+	provider: string;
+	removed: boolean;
+	selected: string;
+	switchedTo: string | null;
+}
+
 export interface MemoryInfo {
 	id: string;
 	content: string;

@@ -1024,6 +1024,7 @@ test("/keys expert set failure redacts the value", async () => {
 
 test("/models picker applies the curated model and provider", async () => {
 	const host = new FakeHost();
+	host.responses["models.list"] = { provider: "openrouter", source: "none", models: [], fetchError: null };
 	host.responses["config.set"] = (p: Record<string, unknown>) => ({ model: "m", provider: "p", key: p.key, value: p.value });
 	host.responses["session.setModel"] = { sessionId: SESSION.id, model: "llama3.1", provider: "ollama" };
 	host.picks.push("ollama::llama3.1");
@@ -1031,6 +1032,7 @@ test("/models picker applies the curated model and provider", async () => {
 	assert.deepEqual(
 		host.calls.map((c) => [c.method, c.params]),
 		[
+			["models.list", {}],
 			["config.set", { key: "provider", value: "ollama" }],
 			["config.set", { key: "model", value: "llama3.1" }],
 			["session.setModel", { sessionId: SESSION.id, model: "llama3.1", provider: "ollama" }],
@@ -1055,6 +1057,154 @@ test("/models curated list includes the ChatGPT account and OpenCode Zen default
 	assert.match(opencode?.description ?? "", /OPENCODE_API_KEY/);
 	assert.deepEqual(filterCuratedModels("chatgpt").map((e) => e.provider), ["chatgpt"]);
 	assert.deepEqual(filterCuratedModels("opencode").map((e) => e.provider), ["opencode"]);
+});
+
+test("/models catalog prints the provider catalog with per-model efforts", async () => {
+	const host = new FakeHost();
+	host.responses["models.list"] = {
+		provider: "chatgpt",
+		source: "live",
+		fetchError: null,
+		models: [
+			{ id: "gpt-6.1-sol", efforts: ["low", "medium", "high", "xhigh", "max"], contextWindow: 500000, source: "live" },
+			{ id: "gpt-6-luna", efforts: ["low", "medium", "high", "xhigh", "max"], contextWindow: 272000, source: "live" },
+		],
+	};
+	await run("/models catalog", host);
+	assert.deepEqual(host.calls, [{ method: "models.list", params: { refresh: true } }]);
+	const text = host.last().text;
+	assert.match(text, /gpt-6\.1-sol/);
+	assert.match(text, /low\/medium\/high\/xhigh\/max/);
+	assert.match(text, /500K/);
+	assert.match(text, /source: live/);
+});
+
+test("/models catalog reports fetch errors honestly", async () => {
+	const host = new FakeHost();
+	host.responses["models.list"] = {
+		provider: "chatgpt",
+		source: "fallback",
+		fetchError: "catalog fetch returned HTTP 503",
+		models: [{ id: "gpt-6.1-sol", efforts: ["low", "high"], contextWindow: 500000, source: "fallback" }],
+	};
+	await run("/models catalog", host);
+	assert.match(host.last().text, /live fetch failed: catalog fetch returned HTTP 503/);
+	assert.match(host.last().text, /source: fallback/);
+});
+
+test("/models picker uses the real provider catalog when available", async () => {
+	const host = new FakeHost();
+	host.responses["models.list"] = {
+		provider: "chatgpt",
+		source: "live",
+		fetchError: null,
+		models: [{ id: "gpt-6-luna", efforts: ["low", "high"], contextWindow: 272000, source: "live", description: "Balanced" }],
+	};
+	host.responses["config.set"] = (p: Record<string, unknown>) => ({ model: "m", provider: p.provider, key: p.key, value: p.value });
+	host.responses["session.setModel"] = { sessionId: SESSION.id, model: "gpt-6-luna", provider: "chatgpt" };
+	host.picks.push("chatgpt::gpt-6-luna");
+	await run("/models", host);
+	assert.deepEqual(
+		host.calls.map((c) => [c.method, c.params]),
+		[
+			["models.list", {}],
+			["config.set", { key: "provider", value: "chatgpt" }],
+			["config.set", { key: "model", value: "gpt-6-luna" }],
+			["session.setModel", { sessionId: SESSION.id, model: "gpt-6-luna", provider: "chatgpt" }],
+		],
+	);
+	assert.ok(host.printed.some((p) => /Catalog: 1 model\(s\) from chatgpt \(live\)/.test(p.text)));
+});
+
+test("/provider list shows built-in and user-added providers", async () => {
+	const host = new FakeHost();
+	host.responses["providers.list"] = {
+		selected: "acme",
+		providers: [
+			{ name: "openrouter", kind: "builtin", selected: false },
+			{
+				name: "acme",
+				kind: "named",
+				selected: true,
+				baseUrl: "http://127.0.0.1:9000/v1",
+				keySet: true,
+				keylessLocal: true,
+				apiKeyEnv: "MACHINA_PROVIDER_ACME_API_KEY",
+				modelsCount: 2,
+			},
+		],
+	};
+	await run("/provider list", host);
+	const text = host.last().text;
+	assert.match(text, /acme \(current\)/);
+	assert.match(text, /127\.0\.0\.1:9000\/v1/);
+	assert.match(text, /Current: acme/);
+});
+
+test("/provider add collects name/URL/key and reports the pulled models", async () => {
+	const host = new FakeHost();
+	host.responses["providers.add"] = (p: Record<string, unknown>) => ({
+		provider: p.name,
+		baseUrl: p.baseUrl,
+		apiKeyEnv: "MACHINA_PROVIDER_ACME_API_KEY",
+		keySet: true,
+		keySaved: true,
+		models: [{ id: "m1" }, { id: "m2" }],
+		fetchError: null,
+	});
+	host.textQueue.push("acme", "http://127.0.0.1:9000/v1", "sk-secret-value");
+	host.picks.push("yes");
+	await run("/provider add", host);
+	assert.deepEqual(host.calls, [
+		{ method: "providers.add", params: { name: "acme", baseUrl: "http://127.0.0.1:9000/v1", apiKey: "sk-secret-value" } },
+	]);
+	assert.equal(host.asked.length, 3);
+	assert.ok(host.asked.some((a) => a.secret === true), "key collected through a masked editor");
+	const texts = host.printed.map((p) => p.text).join("\n");
+	assert.match(texts, /2 model\(s\) pulled: m1, m2/);
+	assert.match(texts, /Switch with \/provider acme/);
+	assert.ok(!texts.includes("sk-secret-value"), "key never echoed");
+});
+
+test("/provider add reports fetch failures without losing the entry", async () => {
+	const host = new FakeHost();
+	host.responses["providers.add"] = {
+		provider: "acme",
+		baseUrl: "http://127.0.0.1:9000/v1",
+		apiKeyEnv: "MACHINA_PROVIDER_ACME_API_KEY",
+		keySet: false,
+		keySaved: false,
+		models: [],
+		fetchError: "could not reach http://127.0.0.1:9000/v1 (ConnectError)",
+	};
+	host.textQueue.push("acme", "http://127.0.0.1:9000/v1", "");
+	host.picks.push("yes");
+	await run("/provider add", host);
+	assert.match(host.last().text, /saved, but model fetch failed: could not reach/);
+});
+
+test("/provider remove asks before removing and reports the switch", async () => {
+	const host = new FakeHost();
+	host.responses["providers.remove"] = { provider: "acme", removed: true, selected: "openrouter", switchedTo: "openrouter" };
+	host.picks.push("yes");
+	await run("/provider remove acme", host);
+	assert.deepEqual(host.calls, [{ method: "providers.remove", params: { name: "acme" } }]);
+	assert.match(host.last().text, /Provider "acme" removed; switched to openrouter/);
+});
+
+test("/provider remove cancels cleanly when declined", async () => {
+	const host = new FakeHost();
+	host.picks.push("no");
+	await run("/provider remove acme", host);
+	assert.equal(host.calls.length, 0);
+});
+
+test("/effort routes through per-model validation", async () => {
+	const host = new FakeHost();
+	host.responses["models.setEffort"] = { provider: "chatgpt", model: "gpt-6-luna", effort: "max", supported: ["low", "medium", "high", "xhigh", "max"] };
+	await run("/effort max", host);
+	assert.deepEqual(host.calls, [{ method: "models.setEffort", params: { effort: "max" } }]);
+	assert.match(host.last().text, /supported for gpt-6-luna: low\/medium\/high\/xhigh\/max/);
 });
 
 test("/compact is an alias for /compress", () => {

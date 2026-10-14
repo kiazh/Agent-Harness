@@ -116,6 +116,14 @@ def reset_singletons(monkeypatch):
 
     provider_module._cache_clear()
 
+    # The ChatGPT catalog module keeps in-process live/CLI-cache state; one
+    # test's seeded catalog must not leak into the next (nor the developer's
+    # real ~/.codex/models_cache.json, which individual tests re-isolate via
+    # a fake HOME/CODEX_HOME when they need a hermetic catalog).
+    from machina.core.provider import catalog as provider_catalog
+
+    provider_catalog.clear_catalog_cache()
+
     # In-memory config is process-global: one test's config.set would leak
     # into the next. Snapshot non-secret values and session overrides.
     from machina.core.config import DEFAULTS, SECRET_KEYS, config

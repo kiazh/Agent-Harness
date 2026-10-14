@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "provider": "hermes-live",
+  "model": "stepfun/step-5-preview:free",
+  "content": "MACHINA-NAMED-PROOF-OK",
+  "usage": {
+    "prompt_tokens": 29,
+    "completion_tokens": 55,
+    "total_tokens": 84
+  },
+  "readiness": {
+    "chat_provider": "ready",
+    "chat_provider_reason": "no key (local endpoint)",
+    "chat_provider_selected": "hermes-live"
+  },
+  "keyless": true
+}

@@ -54,6 +54,46 @@ def test_legacy_spend_configuration_does_not_cap_model_capacity():
     assert turn_token_budget(None, 8000) == 32_000
 
 
+# ─── chatgpt catalog windows (provider-scoped, like OpenRouter) ─────────────
+
+
+def _seed_chatgpt_catalog(monkeypatch, tmp_path):
+    """Seed the live catalog from the REAL 2026-10-14 fixture, hermetically."""
+    import json
+    from pathlib import Path
+
+    from machina.core.provider import catalog
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    (tmp_path / "codex-home").mkdir()
+    catalog.clear_catalog_cache()
+    payload = json.loads(
+        (Path(__file__).resolve().parent / "fixtures" / "model_catalog_chatgpt.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    models = catalog.parse_catalog(payload, source="live")
+    monkeypatch.setattr(catalog, "fetch_live_catalog", lambda *args, **kwargs: models)
+    catalog.refresh_live_catalog("token-1", "acct-1", force=True)
+
+
+def test_chatgpt_catalog_windows_apply_only_to_chatgpt(monkeypatch, tmp_path):
+    _seed_chatgpt_catalog(monkeypatch, tmp_path)
+    # 500K for the 6.1-sol entry, 272K for the others — from the catalog.
+    assert context_window_for("gpt-6.1-sol", "chatgpt") == 500_000
+    assert context_window_for("gpt-6-luna", "chatgpt") == 272_000
+    assert context_window_for("chatgpt/gpt-6.1-sol", "chatgpt") == 500_000
+    # Not provider-scoped: a same-named model on another provider keeps the
+    # curated/default behavior.
+    assert context_window_for("gpt-6.1-sol", "custom") == DEFAULT_CONTEXT_WINDOW
+    assert context_window_for("gpt-6.1-sol") == DEFAULT_CONTEXT_WINDOW
+
+
+def test_chatgpt_unknown_slug_keeps_default(monkeypatch, tmp_path):
+    _seed_chatgpt_catalog(monkeypatch, tmp_path)
+    assert context_window_for("gpt-9-future", "chatgpt") == DEFAULT_CONTEXT_WINDOW
+
+
 def test_effective_turn_budget_prefers_session_then_provider_then_config():
     import uuid
 

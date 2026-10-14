@@ -10,12 +10,13 @@ from __future__ import annotations
 import base64
 import json
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
-from machina.core.exceptions import ProviderError, RateLimitError
+from machina.core.exceptions import ProviderError, RateLimitError, ValidationError
 from machina.core.models import LLMResponse, ToolDefinition
 from machina.core.provider import ChatGPTProvider, get_provider
 from machina.core.provider.rate_limit import AsyncTokenBucket
@@ -202,10 +203,13 @@ async def make(monkeypatch, tmp_path):
         model: str | None = "gpt-6.1-sol",
         tokens: dict | None = None,
         write_store: bool = True,
+        reasoning_effort: str | None = None,
     ) -> ChatGPTProvider:
         if write_store:
             chatgpt_auth.save_tokens(tokens or _tokens(), auth_file)
-        provider = ChatGPTProvider(model=model, auth_path=str(auth_file))
+        provider = ChatGPTProvider(
+            model=model, reasoning_effort=reasoning_effort, auth_path=str(auth_file)
+        )
         provider._rate_limiter = AsyncTokenBucket(rate=0, capacity=0)
 
         def recording_handler(request: httpx.Request) -> httpx.Response:
@@ -660,3 +664,107 @@ def test_providers_tuple_includes_chatgpt():
     from machina.core.provider import PROVIDERS
 
     assert "chatgpt" in PROVIDERS
+
+
+# ─── catalog-backed slug + effort validation ────────────────────────────────
+
+CATALOG_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "model_catalog_chatgpt.json"
+
+
+def _seed_live_catalog(monkeypatch):
+    """Seed the in-process live catalog from the REAL 2026-10-14 fixture."""
+    from machina.core.provider import catalog
+
+    payload = json.loads(CATALOG_FIXTURE.read_text(encoding="utf-8"))
+    models = catalog.parse_catalog(payload, source="live")
+    monkeypatch.setattr(catalog, "fetch_live_catalog", lambda *args, **kwargs: models)
+    catalog.refresh_live_catalog("token-1", "acct-1", force=True)
+    return catalog
+
+
+async def test_unknown_model_rejected_against_live_catalog(make, monkeypatch):
+    _seed_live_catalog(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - must not run
+        return _text_stream("should not be reached")
+
+    provider = make.provider(handler)
+    with pytest.raises(ValidationError) as excinfo:
+        async for _ in provider.stream_complete(MESSAGES, model="gpt-9-future"):
+            pass
+    assert "gpt-9-future" in str(excinfo.value)
+    assert "available: gpt-6.1-sol, gpt-6-luna" in str(excinfo.value)
+    assert make.requests == []  # rejected before any network use
+    await provider.close()
+
+
+async def test_per_model_effort_validation_rejects_ultra(make, monkeypatch):
+    _seed_live_catalog(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - must not run
+        return _text_stream("should not be reached")
+
+    provider = make.provider(handler)
+    with pytest.raises(ValidationError) as excinfo:
+        async for _ in provider.stream_complete(MESSAGES, reasoning_effort="ultra"):
+            pass
+    message = str(excinfo.value)
+    assert "supported: low, medium, high, xhigh, max" in message
+    assert make.requests == []
+    await provider.close()
+
+
+async def test_catalog_efforts_reach_the_wire(make, monkeypatch):
+    _seed_live_catalog(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _text_stream("ok", usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})
+
+    provider = make.provider(handler, model="gpt-6-luna")
+    async for _ in provider.stream_complete(MESSAGES, reasoning_effort="max"):
+        pass
+    await provider.close()
+    payload = json.loads(make.requests[-1].content)
+    assert payload["model"] == "gpt-6-luna"
+    assert payload["reasoning"] == {"effort": "max"}
+
+
+async def test_config_effort_key_is_validated_per_model(make, monkeypatch):
+    _seed_live_catalog(monkeypatch)
+    from machina.core.config import config
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _text_stream("ok", usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})
+
+    monkeypatch.setattr(config, "_session_overrides", {"reasoning_effort": "xhigh"})
+    provider = make.provider(handler)
+    async for _ in provider.stream_complete(MESSAGES):
+        pass
+    await provider.close()
+    assert json.loads(make.requests[-1].content)["reasoning"] == {"effort": "xhigh"}
+
+    # The config layer itself refuses Codex-client-only values before the
+    # provider ever sees them (config vocabulary: '', low..high, xhigh, max).
+    monkeypatch.setattr(config, "_session_overrides", {"reasoning_effort": "ultra"})
+    with pytest.raises(ValueError):
+        config.get("reasoning_effort")
+
+
+async def test_instance_default_effort_is_model_validated(make, monkeypatch):
+    _seed_live_catalog(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _text_stream("ok", usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})
+
+    provider = make.provider(handler, reasoning_effort="max")
+    async for _ in provider.stream_complete(MESSAGES):
+        pass
+    await provider.close()
+    assert json.loads(make.requests[-1].content)["reasoning"] == {"effort": "max"}
+
+    bad = make.provider(handler, reasoning_effort="ultra")
+    with pytest.raises(ValidationError) as excinfo:
+        async for _ in bad.stream_complete(MESSAGES):
+            pass
+    assert "supported: low, medium, high, xhigh, max" in str(excinfo.value)
+    await bad.close()

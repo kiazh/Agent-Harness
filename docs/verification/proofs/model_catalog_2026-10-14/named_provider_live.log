@@ -1,0 +1,75 @@
++zsh:1> MACHINA=.venv/bin/machina 
++zsh:1> .venv/bin/machina providers add hermes-live http://127.0.0.1:8645/v1 --no-key
+Provider hermes-live saved at http://127.0.0.1:8645/v1.
+423 model(s) pulled.
+~unbiased/pareto-latest, unbiased/pareto-26.9, liquid/lfm-2.5-24b-a2b, 
+google/gemini-4-argon, google/gemini-4-argon:batch, meta/muse-wonder, 
+stepfun/step-5-preview, anthropic/claude-haiku-5.5…
+Use it with machina --provider hermes-live --model <id> or save the default in 
+/provider once the UI is open.
++zsh:1> .venv/bin/machina providers list
+                                   Providers                                    
+┏━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━┓
+┃ Provider           ┃ Kind    ┃ Base URL             ┃ Key           ┃ Models ┃
+┡━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━┩
+│ openrouter         │ builtin │ —                    │ —             │      — │
+│ openai             │ builtin │ —                    │ —             │      — │
+│ anthropic          │ builtin │ —                    │ —             │      — │
+│ google             │ builtin │ —                    │ —             │      — │
+│ mistral            │ builtin │ —                    │ —             │      — │
+│ groq               │ builtin │ —                    │ —             │      — │
+│ together           │ builtin │ —                    │ —             │      — │
+│ deepseek (current) │ builtin │ —                    │ —             │      — │
+│ xai                │ builtin │ —                    │ —             │      — │
+│ opencode           │ builtin │ —                    │ —             │      — │
+│ chatgpt            │ builtin │ —                    │ —             │      — │
+│ custom             │ builtin │ —                    │ —             │      — │
+│ ollama             │ builtin │ —                    │ —             │      — │
+│ hermes-live        │ user    │ http://127.0.0.1:86… │ keyless local │    423 │
+└────────────────────┴─────────┴──────────────────────┴───────────────┴────────┘
+User-added keys live in the git-ignored .env (0600) and are resolved like every 
+other credential (environment -> *_FILE -> Vault/AWS).
++zsh:1> .venv/bin/machina providers models hermes-live --json
++zsh:1> jq '{provider, baseUrl, count: (.models|length), first: [.models[0:5][].id]}'
+{
+  "provider": "hermes-live",
+  "baseUrl": "http://127.0.0.1:8645/v1",
+  "count": 423,
+  "first": [
+    "~unbiased/pareto-latest",
+    "unbiased/pareto-26.9",
+    "liquid/lfm-2.5-24b-a2b",
+    "google/gemini-4-argon",
+    "google/gemini-4-argon:batch"
+  ]
+}
++zsh:1> .venv/bin/python docs/verification/proofs/model_catalog_2026-10-14/proof_named_provider_live.py
+2026-10-14 15:03:54,945 [AUDIT] {"timestamp": 1792004634.9452102, "event": "llm_call_start", "provider": "hermes-live", "model": "stepfun/step-5-preview:free", "message_count": 1}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 15:03:56,723 [AUDIT] {"timestamp": 1792004636.723477, "event": "llm_call_complete", "provider": "hermes-live", "model": "stepfun/step-5-preview:free", "prompt_tokens": 29, "completion_tokens": 55, "total_tokens": 84, "tool_calls": 0}
+Audit event dropped before the writer started; event was not persisted
+store: 423 cached models for hermes-live (env=MACHINA_PROVIDER_HERMES_LIVE_API_KEY)
+runtime readiness: {'chat_provider': 'ready', 'chat_provider_reason': 'no key (local endpoint)', 'chat_provider_selected': 'hermes-live'}
+factory resolved: DirectProvider base=http://127.0.0.1:8645/v1 model=stepfun/step-5-preview:free key=0B
+{
+  "ok": true,
+  "provider": "hermes-live",
+  "model": "stepfun/step-5-preview:free",
+  "content": "MACHINA-NAMED-PROOF-OK",
+  "usage": {
+    "prompt_tokens": 29,
+    "completion_tokens": 55,
+    "total_tokens": 84
+  },
+  "readiness": {
+    "chat_provider": "ready",
+    "chat_provider_reason": "no key (local endpoint)",
+    "chat_provider_selected": "hermes-live"
+  },
+  "keyless": true
+}
++zsh:1> .venv/bin/machina providers remove hermes-live --yes
+Provider hermes-live removed.
++zsh:1> .venv/bin/machina providers list --json
++zsh:1> jq '[.[] | select(.kind=="user")] | length'
+0

@@ -414,7 +414,13 @@ are served by your ChatGPT plan, not the metered API. Tokens live in
 `~/.machina/auth/chatgpt.json` — Machina's own store; logout never touches
 `~/.codex/auth.json`. The transport follows the open-source Codex protocol: the
 backend is undocumented and can drift, so protocol mismatches surface as typed
-errors rather than silent wrong answers.
+errors rather than silent wrong answers. The model list is pulled from your
+account rather than hardcoded: `machina providers models chatgpt` (or
+`/models catalog` in the TUI) fetches the live Codex catalog with each model's
+context window and its own reasoning-effort set; only effort levels the wire
+accepts for that model are offered, and a rejected level names the supported
+set. When the live fetch is unavailable the listing falls back to the Codex
+CLI's read-only cache and then to a dated snapshot of verified rows.
 
 **Custom endpoints.** The `custom` provider reaches any OpenAI-compatible
 endpoint (LM Studio, vLLM, llama.cpp, a Hermes loopback proxy, …) through
@@ -426,6 +432,15 @@ endpoint (LM Studio, vLLM, llama.cpp, a Hermes loopback proxy, …) through
 `OPENCODE_BASE_URL`). Zen lists free and paid models, but the free tier is gated
 to the OpenCode client: keyless or placeholder-key requests answer HTTP 403
 (`FreeTierError`), so use a genuine console key.
+
+**Your own providers.** `machina providers add <name> <base_url>` (or the
+TUI's `/provider add`) registers any OpenAI-compatible endpoint; the key is
+stored as `MACHINA_PROVIDER_<NAME>_API_KEY` in the git-ignored `.env` (never
+in the metadata file — `--no-key` marks a keyless local endpoint) and its
+model catalog is pulled from `GET {base_url}/models`. Added providers behave
+like built-ins everywhere: `/provider`, `/models`, `MACHINA_PROVIDER=<name>`,
+and the gateway. `machina providers list|remove|models` manages them;
+metadata lives in `~/.machina/providers.json` (0600).
 
 Example non-secret defaults for an Ollama installation:
 
@@ -459,6 +474,7 @@ Important settings include `DATABASE_URL`, `MACHINA_PROVIDER`, `MACHINA_MODEL`, 
 | `OPENCODE_BASE_URL` | Optional base-URL override for the OpenCode Zen preset | Blank uses `https://opencode.ai/inference/v1` |
 | `CUSTOM_BASE_URL` | OpenAI-compatible endpoint for the `custom` provider (LM Studio, vLLM, llama.cpp) | Blank; required by `custom` |
 | `CUSTOM_API_KEY` | Optional key for the `custom` provider | Blank; keyless local servers are supported |
+| `MACHINA_PROVIDERS_FILE` | User-added provider store (names, base URLs, pulled catalogs) | `~/.machina/providers.json` (0600); keys live in `.env` as `MACHINA_PROVIDER_<NAME>_API_KEY` |
 | `MACHINA_EMBEDDING_BACKEND` | Dense-retrieval embedding backend | `off` (keyword-only default; LoCoMo showed static and bge-small dense hybrids below keyword-only at k=5). `auto` = endpoint → local ONNX → local model2vec → OpenAI/OpenRouter keys → keyword-only; `onnx`, `local`, `openai` force a choice |
 | `MACHINA_EMBEDDING_MODEL` | Embedding model id for the selected backend | Blank uses the backend default (`text-embedding-3-small`, `BAAI/bge-small-en-v1.5` or `minishlab/potion-base-8M`) |
 | `MACHINA_EMBEDDING_BASE_URL` | Explicit OpenAI-compatible embedding endpoint (llama.cpp, Ollama, LM Studio) | Blank; keyless local servers are supported |

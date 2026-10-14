@@ -1,0 +1,367 @@
+{
+  "probed_at": "2026-10-14T19:03:13Z",
+  "live": {
+    "entries": 9,
+    "visible": 7,
+    "models": [
+      {
+        "id": "gpt-6.1-sol",
+        "displayName": "GPT-6.1-Sol",
+        "description": "Latest workhorse model for coding and everyday work.",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "advertisedEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "defaultEffort": "low",
+        "contextWindow": 500000,
+        "maxContextWindow": 872000,
+        "source": "live"
+      },
+      {
+        "id": "gpt-6-astra",
+        "displayName": "GPT-6-Astra",
+        "description": "Frontier intelligence for the most demanding work.",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "advertisedEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "defaultEffort": "low",
+        "contextWindow": 272000,
+        "maxContextWindow": 872000,
+        "source": "live"
+      },
+      {
+        "id": "gpt-6-sol",
+        "displayName": "GPT-6-Sol",
+        "description": "Previous generation workhorse model.",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "advertisedEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "defaultEffort": "medium",
+        "contextWindow": 272000,
+        "maxContextWindow": 872000,
+        "source": "live"
+      },
+      {
+        "id": "gpt-6-luna",
+        "displayName": "GPT-6-Luna",
+        "description": "Fast and affordable model for easier tasks.",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "advertisedEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "contextWindow": 272000,
+        "maxContextWindow": 872000,
+        "source": "live"
+      },
+      {
+        "id": "gpt-5.6-sol",
+        "displayName": "GPT-5.6-Sol",
+        "description": "Older generation workhorse model.",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "advertisedEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "defaultEffort": "low",
+        "contextWindow": 272000,
+        "maxContextWindow": 872000,
+        "source": "live"
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "displayName": "GPT-5.6-Terra",
+        "description": "Older balanced model for straightforward work.",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "advertisedEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "defaultEffort": "medium",
+        "contextWindow": 272000,
+        "maxContextWindow": 872000,
+        "source": "live"
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "displayName": "GPT-5.6-Luna",
+        "description": "Older fast and efficient model.",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "advertisedEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "contextWindow": 272000,
+        "maxContextWindow": 872000,
+        "source": "live"
+      }
+    ]
+  },
+  "effort_validation": {
+    "accepted_xhigh": "xhigh",
+    "ultra_rejected": "ValidationError: reasoning effort 'ultra' is not supported for gpt-6.1-sol (advertised by the Codex catalog but rejected by the Responses transport: HTTP 400, live-verified 2026-10-14); supported: low, medium, high, xhigh, max"
+  },
+  "gateway_models_list": {
+    "source": "live",
+    "fetchError": null,
+    "model_count": 7,
+    "models": [
+      {
+        "id": "gpt-6.1-sol",
+        "displayName": "GPT-6.1-Sol",
+        "description": "Latest workhorse model for coding and everyday work.",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "advertisedEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "defaultEffort": "low",
+        "contextWindow": 500000,
+        "maxContextWindow": 872000,
+        "source": "live"
+      },
+      {
+        "id": "gpt-6-astra",
+        "displayName": "GPT-6-Astra",
+        "description": "Frontier intelligence for the most demanding work.",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "advertisedEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "defaultEffort": "low",
+        "contextWindow": 272000,
+        "maxContextWindow": 872000,
+        "source": "live"
+      },
+      {
+        "id": "gpt-6-sol",
+        "displayName": "GPT-6-Sol",
+        "description": "Previous generation workhorse model.",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "advertisedEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "defaultEffort": "medium",
+        "contextWindow": 272000,
+        "maxContextWindow": 872000,
+        "source": "live"
+      },
+      {
+        "id": "gpt-6-luna",
+        "displayName": "GPT-6-Luna",
+        "description": "Fast and affordable model for easier tasks.",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "advertisedEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "contextWindow": 272000,
+        "maxContextWindow": 872000,
+        "source": "live"
+      },
+      {
+        "id": "gpt-5.6-sol",
+        "displayName": "GPT-5.6-Sol",
+        "description": "Older generation workhorse model.",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "advertisedEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "defaultEffort": "low",
+        "contextWindow": 272000,
+        "maxContextWindow": 872000,
+        "source": "live"
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "displayName": "GPT-5.6-Terra",
+        "description": "Older balanced model for straightforward work.",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "advertisedEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "defaultEffort": "medium",
+        "contextWindow": 272000,
+        "maxContextWindow": 872000,
+        "source": "live"
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "displayName": "GPT-5.6-Luna",
+        "description": "Older fast and efficient model.",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "advertisedEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "contextWindow": 272000,
+        "maxContextWindow": 872000,
+        "source": "live"
+      }
+    ]
+  },
+  "gateway_set_effort": {
+    "applied": {
+      "provider": "chatgpt",
+      "model": "gpt-6.1-sol",
+      "effort": "xhigh",
+      "supported": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "ultra_error": "reasoning effort 'ultra' is not supported for gpt-6.1-sol (advertised by the Codex catalog but rejected by the Responses transport: HTTP 400, live-verified 2026-10-14); supported: low, medium, high, xhigh, max"
+  }
+}

@@ -16,8 +16,16 @@ live on 2026-10-14 (see ``docs/verification/proofs/chatgpt_auth_2026-10-14/``):
   does not put them on the wire.
 * A successful stream ends with ``response.completed``; a clean EOF without it
   raises the typed truncated-stream error (same discipline as ``direct.py``).
-* Model ids are Codex catalog slugs (``gpt-6.1-sol`` is the current default;
-  ``chatgpt/<slug>`` prefixes are accepted and stripped).
+* Model ids are Codex catalog slugs (``gpt-6.1-sol`` is the current
+  priority-1 default; ``chatgpt/<slug>`` prefixes are accepted and
+  stripped). The catalog is discovered live per account
+  (:mod:`machina.core.provider.catalog`): when fresh live data is present an
+  unknown slug is rejected with a typed error naming the available models;
+  per-call ``reasoning_effort`` is validated against THAT model's catalog
+  entry and an unsupported level is rejected with the supported set in the
+  message (``ultra`` is catalog-advertised but wire-rejected, so it is never
+  offered). Listing surfaces (``/models``, ``machina providers models``)
+  refresh live data; the provider itself never makes an extra network call.
 
 Credential resolution order: ``~/.machina/auth/chatgpt.json`` -> import
 ``~/.codex/auth.json`` (read-only there) -> :class:`ChatGPTAuthError` with the
@@ -37,14 +45,15 @@ from typing import Any
 import httpx
 
 from machina import __version__
+from machina.core.config import config
 from machina.core.exceptions import ProviderError, RateLimitError
 from machina.core.metrics import metrics
 from machina.core.models import LLMResponse, StreamEvent, ToolDefinition
 from machina.core.provider._log import logger
 from machina.core.provider.audit import audit_log
 from machina.core.provider.base import LLMProvider
+from machina.core.provider.catalog import validate_effort, validate_model_slug
 from machina.core.provider.rate_limit import _get_rate_limiter
-from machina.core.provider.reasoning import _resolve_effort, normalize_reasoning_effort
 from machina.core.provider.transport import (
     _truncated_stream_error,
     _validate_messages,
@@ -247,7 +256,10 @@ class ChatGPTProvider(LLMProvider):
         auth_path: str | None = None,
     ) -> None:
         self.model = self._normalize_model(model) or self.DEFAULT_MODEL
-        self._default_effort = normalize_reasoning_effort(reasoning_effort)
+        # Stored raw (lowercased); per-model validation against the catalog
+        # entry happens when a call resolves its effective model, so a bad
+        # level fails with the supported set for THAT model, not a global one.
+        self._default_effort = str(reasoning_effort or "").strip().lower()
         self._rate_limiter = _get_rate_limiter(_PROVIDER_NAME)
         self._auth_path = auth_path
         self.client = httpx.AsyncClient(
@@ -336,6 +348,19 @@ class ChatGPTProvider(LLMProvider):
             )
         return "\n\n".join(instructions), items
 
+    def _resolve_effort(self, model: str, explicit: str | None) -> str:
+        """Catalog-validated effort: per-call > instance > config key.
+
+        Same precedence as every other provider, but the allowed set comes
+        from the catalog entry for *model* (wire-filtered), never a
+        cross-model static vocabulary.
+        """
+        if explicit is not None:
+            return validate_effort(model, explicit)
+        if self._default_effort:
+            return validate_effort(model, self._default_effort)
+        return validate_effort(model, config.get("reasoning_effort"))
+
     def _payload(
         self,
         messages: list[dict[str, Any]],
@@ -351,7 +376,7 @@ class ChatGPTProvider(LLMProvider):
             "store": False,
             "stream": True,
         }
-        effort = _resolve_effort(reasoning_effort, self._default_effort)
+        effort = self._resolve_effort(model, reasoning_effort)
         if effort:
             payload["reasoning"] = {"effort": effort}
         if tools:
@@ -402,6 +427,7 @@ class ChatGPTProvider(LLMProvider):
         await self._rate_limiter.acquire()
 
         resolved_model = model or self.model
+        validate_model_slug(resolved_model)
         payload = self._payload(messages, resolved_model, tools, reasoning_effort)
         audit_log(
             "llm_stream_start",
