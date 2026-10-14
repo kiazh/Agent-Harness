@@ -545,3 +545,37 @@ read-only references.
   j9 opencode-MCP both green on real components (proof committed at
   docs/verification/proofs/2026-10-14-e2e-gate.*). Backend suite on the
   same tree: 3,776 passed / 0 failed.
+
+## 16. Program close-out (2026-10-14, final)
+
+- **Standing holistic review: EXHAUSTED.** Three rounds (round 1 → staged
+  plan; round 2 → committed-red proofs + N-series findings; round 3 → final
+  10-section ledger, "tree releasable on my evidence"). Every H/M/N/L
+  finding is FIXED, RESOLVED-DIFFERENTLY-acceptable, or ACCEPTED-BY-DECISION;
+  the single open code nit (the oauth_callback._invalid() no-op seam) was
+  removed in `3b238dd`.
+- **Decisions recorded**: the two untracked external review documents
+  (CODEBASE_REVIEW_2026-10-13.md / -14.md) remain as-authored/untracked per
+  the owner convention (they are the source records the ledger cites); the
+  723KB session fixture was relocated to docs/verification/fixtures/
+  (`e2a08cc`); the `approve_rollback` diagnostic-key rename and the
+  shim `--json` chat mode remain optional/deferred (round-3 §10 risks).
+- **Accepted risks (round-3 §10, not to fix)**: j9 is per-machine (needs
+  opencode + registration); auto-apply crash window recovers via post-hoc
+  review/revert (no startup reconciler); precision auto-disable is
+  opportunistic; learned telemetry co-located with the curated tree;
+  MACHINA_LEARNED_SKILLS_DIR is the relocation override; family listings
+  bounded to 2,000 sessions; tail-dedupe prefix heuristic pinned for the
+  exercised cases; the MCP shim parses CLI text until a --json mode lands.
+- **Final certification (frozen tree)**: e2e gate **j1-j9: 9 PASS / 0 FAIL /
+  0 SKIP** (`57eee68`); backend suite **3,776 passed / 0 failed**; UI
+  **370 tests / 364 pass / 0 fail / 6 env-gated skips**; ruff check+format
+  green (497 files); architecture ratchets green (deferred imports 682/682,
+  mcp_server 0/0, tools 21/21, skills 4/4).
+- **Delivered today (context)**: adversarial re-verification of the
+  2026-10-14 review (6 findings fixed); always-active skill learning with
+  safety envelope; agent tabs for delegated sessions; Machina MCP server
+  (OpenCode/Codex interop keystone) with a real cross-harness round-trip;
+  TUI clipboard truth; README truth refresh; slop cleanup; Stages 0-5 of
+  the consolidation plan. Standing directives (§14) govern what runs
+  continuously from here.
