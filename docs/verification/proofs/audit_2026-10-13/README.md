@@ -38,7 +38,7 @@ assertion); for those the green proof is listed explicitly.
 | `effects=('exec',)` ignored by cache | `audit_cache_effects.py` | `af9d938` | NOT REPRODUCED (exec-effect tool ran twice) |
 | Cohere key rotation keeps old client | `audit_cohere_rotation.py` | `54a8151` | NOT REPRODUCED (pipeline rebuilt; reranker uses key-TWO) |
 | Export deletes unrelated files | `audit_export_destructive.py` | `0c9eeee` | NOT REPRODUCED (`important.txt survived: True`; only manifest-owned files unlinked) |
-| `/init` truncates existing AGENTS.md | `audit_init_overwrite_real_app.mjs` **cannot flip post-fix** | `660a063` | real app path now raises the refusal; `init_overwrite_green.mjs` → `CLAIM NOT REPRODUCED (old content survived)` |
+| `/init` truncates existing AGENTS.md | `audit_init_overwrite_real_app.mjs` (tree-level) | `660a063` | real app path raises the refusal (exit 1, file intact); `init_overwrite_green.mjs` → `CLAIM NOT REPRODUCED (old content survived)`. NOTE: the older `audit_init_overwrite.mjs` cannot flip — its fake host deliberately reimplements the pre-fix truncating write (see its own comment), so it re-confirms the hazard rather than testing the tree. |
 | PEM streaming redaction leak | `audit_pem_stream_leak.py` | `a8de932` | NOT REPRODUCED (all three modes leak-free; oversized body → single marker) |
 | `outcome='failed'` recorded as success | `audit_scheduler_failed_outcome.py` | `54a8151` | NOT REPRODUCED (error `RuntimeError: agent outcome: failed` recorded) |
 | SSE partial frame + clean EOF yields `done` | `audit_provider_sse.py` | `a8de932` | repro now raises `ProviderError: ... ended without a terminal frame` before any `done` |
@@ -61,6 +61,12 @@ assertion); for those the green proof is listed explicitly.
 
 ## Notes
 
+- `audit_init_overwrite.mjs` is a cannot-flip harness by construction: its fake
+  `host.writeFile` deliberately reimplements the pre-fix truncating code, so it
+  re-confirms the original hazard rather than testing the fixed tree. The
+  tree-level probes are `audit_init_overwrite_real_app.mjs` (real
+  `App.prototype.writeFile`; now raises the refusal) and `init_overwrite_green.mjs`
+  (fixed-flow replay; `CLAIM NOT REPRODUCED`).
 - `audit_redos_child.py` is the isolated-matcher child spawned by
   `audit_redos.py`; running it standalone exits 1 by design.
 - `probe_ui_import.mjs` / `probe_app_import.mjs` are import probes used while

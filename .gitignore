@@ -104,3 +104,6 @@ coverage.xml
 
 # Installed Node dependencies are restored from the lockfile
 node_modules/
+
+# Proof artifacts: evidence logs under docs/verification/proofs/ are tracked
+!docs/verification/proofs/**/*.log

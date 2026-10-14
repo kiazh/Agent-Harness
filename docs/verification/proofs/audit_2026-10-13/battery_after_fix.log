@@ -1,0 +1,275 @@
+===== audit_approval_credentials.py =====
+proposal_of(argv) contains raw secret: False
+display_of contains raw secret:       False
+stored record contains raw secret:    False
+live approval card contains secret:   False
+REST /api/v1/approvals contains secret: False
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_cache_effects.py =====
+first : executed 'same' (run #1)
+second: executed 'same' (run #2)
+declared effects: ('exec',)
+actual executions: 2 ['same', 'same']
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_cache_workspace.py =====
+workspace A: registry read -> 'workspace-a-content\n'
+workspace A: direct   read -> 'workspace-a-content\n'
+workspace B: registry read -> 'workspace-b-content\n'
+workspace B: direct   read -> 'workspace-b-content\n'
+cache keys: []
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_chunker_preamble.py =====
+go chunks: 3 symbols: [None, 'func Alpha', 'func Beta']
+go preamble 'package main' present: True
+go preamble 'import "fmt"' present: True
+language='py'  symbols: [None, 'def alpha', 'def beta']
+language='python' symbols: [None, 'def alpha', 'def beta']
+language='python' keeps preamble 'import os': True
+CLAIM NOT REPRODUCED (as stated)
+exit: 1
+===== audit_cli_model_override.py =====
+exit code: 0
+cli output: Model: provider-default-model (ollama)
+cli output: Session ID: e7be8c36-5018-4e8b-99b6-376bad955453
+factory received kwargs: {'provider_override': 'ollama', 'model_override': 'my-model'}
+session provider/model: None None
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_cohere_rotation.py =====
+embedder unavailable, keyword-only pipeline: ProviderError
+embedder unavailable, keyword-only pipeline: ProviderError
+pipeline 1 built with key: cohere-key-ONE
+after rotation to 'cohere-key-TWO'
+same pipeline object reused: False
+pipeline 2 reranker still uses key: cohere-key-TWO
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_consolidator_shape.py =====
+/Users/shadow/machina/machina/memory/consolidator.py:582 (_extract_memories)
+Failed to parse LLM memory extraction response as JSON: JSONDecodeError
+JSONDecodeError
+/Users/shadow/machina/machina/memory/consolidator.py:576 (_extract_memories)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/json/__init__.py:352 (loads)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/json/decoder.py:345 (decode)
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/json/decoder.py:363 (raw_decode)
+Memory extraction failed for session ed15270f-52da-46ea-855b-7cfb9ab4ea78
+RuntimeError
+/Users/shadow/machina/machina/memory/consolidator.py:246 (_consolidate_session_impl)
+/Users/shadow/machina/machina/memory/consolidator.py:612 (_extract_memories)
+LLM returns '{}'      -> status='failed' checkpoint=None
+LLM returns 'not json' -> status='failed' checkpoint=None
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_context_eviction.py =====
+A evicted 0, B evicted 10 (each bound: 10)
+conversations left: 10 (started with 20)
+documents left: 10 (protected newest ten)
+archived rows for session: 10
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_export_destructive.py =====
+before export: ['important.txt']
+after export : ['SOUL.md', 'important.txt', 'soul.json']
+important.txt survived: True
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_find_write_flags.py =====
+find . -name '*.txt' -fprint captured.txt -> pending (sensitive capability requires explicit approval: opaque_execution_review)
+find . -delete -> pending (sensitive capability requires explicit approval: destructive_system,opaque_execution_review)
+local find execution: 1 find: -fprint: unknown primary or operator
+captured.txt created: False
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_grant_capability_green.py =====
+permission grant stored in-memory only (DB unavailable)
+permission grant stored in-memory only (DB unavailable)
+REST route stored grant capability: ['credential_access,file.read']
+after real 'session' grant, same read decision: allowed (scoped grant covers credential_access)
+gateway mirror stored grant capability: ['credential_access,file.read']
+after gateway 'session' grant, same read decision: allowed (scoped grant covers credential_access)
+SAFE BEHAVIOR CONFIRMED
+exit: 0
+===== audit_grant_capability.py =====
+permission grant stored in-memory only (DB unavailable)
+permission grant stored in-memory only (DB unavailable)
+initial decision: pending (sensitive capability requires explicit approval: credential_access)
+stored grant capability: ['file.read']
+after 'session' grant, same read decision: pending (sensitive capability requires explicit approval: credential_access)
+=> grant does NOT cover the reviewed capability
+control grant with capability=credential_access: allowed (scoped grant covers credential_access)
+CLAIM CONFIRMED
+exit: 0
+===== audit_oauth_ipv6.py =====
+'http://[::1]:8080/mcp' -> 'http://[::1]:8080/mcp'
+'https://[2001:db8::1]/resource' -> 'https://[2001:db8::1]/resource'
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_pem_stream_leak.py =====
+block size: 39054 chars (MAX_BUFFERED_PEM=32768)
+whole-string: body leaked: False
+streaming: body leaked: False
+unfinished stream: body leaked: False
+whole unfinished redacted: False
+CLAIM NOT REPRODUCED (as stated)
+exit: 1
+===== audit_provider_sse.py =====
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/Users/shadow/machina/docs/verification/proofs/audit_2026-10-13/audit_provider_sse.py", line 32, in main
+    async for event in provider.stream_complete(
+    ...<2 lines>...
+        events.append(event)
+  File "/Users/shadow/machina/machina/core/provider/direct.py", line 289, in stream_complete
+    raise _truncated_stream_error(self.spec.name, resolved_model)
+machina.core.exceptions.ProviderError: deepseek stream ended without a terminal frame ([DONE] or finish_reason) for audit-model
+exit: 1
+===== audit_rag_race.py =====
+2026-10-13 23:31:42,874 [AUDIT] {"timestamp": 1791948702.8739998, "event": "rag_index_complete", "session_id": "92a53841-613c-4724-a113-bdef8e54c5cf", "source": "audit-race.md", "chunks_stored": 1}
+Audit event dropped before the writer started; event was not persisted
+2026-10-13 23:31:42,884 [AUDIT] {"timestamp": 1791948702.884771, "event": "rag_index_complete", "session_id": "92a53841-613c-4724-a113-bdef8e54c5cf", "source": "audit-race.md", "chunks_stored": 1}
+Audit event dropped before the writer started; event was not persisted
+2026-10-13 23:31:42,893 [AUDIT] {"timestamp": 1791948702.893672, "event": "rag_index_complete", "session_id": "92a53841-613c-4724-a113-bdef8e54c5cf", "source": "audit-race.md", "chunks_stored": 1}
+Audit event dropped before the writer started; event was not persisted
+2026-10-13 23:31:42,903 [AUDIT] {"timestamp": 1791948702.903917, "event": "rag_index_complete", "session_id": "92a53841-613c-4724-a113-bdef8e54c5cf", "source": "audit-race.md", "chunks_stored": 1}
+Audit event dropped before the writer started; event was not persisted
+2026-10-13 23:31:42,913 [AUDIT] {"timestamp": 1791948702.9131699, "event": "rag_index_complete", "session_id": "92a53841-613c-4724-a113-bdef8e54c5cf", "source": "audit-race.md", "chunks_stored": 1}
+Audit event dropped before the writer started; event was not persisted
+2026-10-13 23:31:42,923 [AUDIT] {"timestamp": 1791948702.923049, "event": "rag_index_complete", "session_id": "92a53841-613c-4724-a113-bdef8e54c5cf", "source": "audit-race.md", "chunks_stored": 1}
+Audit event dropped before the writer started; event was not persisted
+8 concurrent replacements -> chunks stored for one document: 1
+CLAIM NOT REPRODUCED in this run
+exit: 1
+===== audit_recursive_read.py =====
+decision: cat .env          -> pending (sensitive capability requires explicit approval: credential_access)
+decision: grep -R TOKEN .   -> pending (sensitive capability requires explicit approval: opaque_execution_review)
+Traceback (most recent call last):
+  File "/Users/shadow/machina/docs/verification/proofs/audit_2026-10-13/audit_recursive_read.py", line 52, in <module>
+    assert d_grep.verdict == "allowed", "policy layer did not allow; can't continue"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: policy layer did not allow; can't continue
+exit: 1
+===== audit_redos_child.py =====
+  File "/Users/shadow/machina/docs/verification/proofs/audit_2026-10-13/audit_redos_child.py", line 19, in main
+    result = await registry.execute("search_files", pattern="(a+)+$", path=str(work))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/shadow/machina/machina/tools/base.py", line 364, in execute
+    result = await tool.func(**kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/shadow/machina/machina/tools/builtins.py", line 509, in search_files
+    matches = await _match_files_bounded(pattern, files)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/shadow/machina/machina/tools/builtins.py", line 433, in _match_files_bounded
+    raise ToolError(
+    ...<2 lines>...
+    ) from None
+machina.core.exceptions.ToolError: Search timed out after 3s for pattern '(a+)+$' (possible catastrophic backtracking); matcher terminated
+exit: 1
+===== audit_redos.py =====
+child finished within 5s unexpectedly:  nded
+    raise ToolError(
+    ...<2 lines>...
+    ) from None
+machina.core.exceptions.ToolError: Search timed out after 3s for pattern '(a+)+$' (possible catastrophic backtracking); matcher terminated
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_retriever_dupes.py =====
+input candidate ids: ['6f175067', '21db558e', '19db295a']
+output ids: ['6f175067', '21db558e', '19db295a']
+output length: 3; candidate 0 repeated: 1x
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_scheduler_failed_outcome.py =====
+Job audit failed outcome (47f130ce-58c5-4e6e-acfa-a10c36219930) failed
+RuntimeError
+/Users/shadow/machina/machina/core/scheduler.py:657 (run_due_once)
+/Users/shadow/machina/machina/core/scheduler.py:945 (_execute)
+run_due_once returned: True
+recorded finish error: 'RuntimeError: agent outcome: failed'
+recorded paused_for: None
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_services_estimator.py =====
+execution cap for tools=[] (definition_tool_cap): None
+estimator total with tools=[]: 7732
+effective full tool-schema tokens: 3115
+undercount (missing schema): 3115
+CLAIM CONFIRMED (execution unrestricted; estimator counted zero schemas)
+exit: 0
+===== audit_stale_memory_claim.py =====
+A: created + approved (durable + memory mirror approved)
+B: durable row now status=claimed consumed=True
+A: memory mirror still status=approved consumed=False
+A: db.connected = False
+A: claim_execution from stale mirror -> False
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_traces_double_yield.py =====
+tracing enabled: True active turn: None
+raised: ValueError: original body error
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_agents_save.mjs =====
+agents.save params: {"name":"helper","description":"My helper description","systemPrompt":"","tools":[]}
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_approval_ids.mjs =====
+case1 '/approvals allow' (no id): threw Usage: /approvals allow <id>. Run /approvals to list pending ids. (nothing dispatched=true)
+case2 '/approvals allow aa' (ambiguous, both start with aa): threw "aa" matches 2 pending approvals; use a longer id:
+aaaaaaaa (terminal cmd-1)
+aaabbbbb (file.write file-2) (nothing dispatched=true)
+case3 '/approvals allow aaaaaaaa' (unique): dispatched [{"requestId":"aaaaaaaa-1111-4000-a000-000000000001","verdict":"approved","sessionId":"sess-1"}]
+exit: 0
+===== audit_init_overwrite_real_app.mjs =====
+file:///Users/shadow/machina/ui/src/app.ts:575
+				throw new Error(`Refusing to overwrite existing file ${full}. Delete it first or choose another path.`);
+				      ^
+
+Error: Refusing to overwrite existing file /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/audit-init-app-kBD9p9/AGENTS.md. Delete it first or choose another path.
+    at writeFile (file:///Users/shadow/machina/ui/src/app.ts:575:11)
+    at async Object.run (file:///Users/shadow/machina/ui/src/features/codex.ts:40:17)
+    at async file:///Users/shadow/machina/docs/verification/proofs/audit_2026-10-13/audit_init_overwrite_real_app.mjs:22:3
+
+Node.js v26.10.0
+exit: 1
+===== audit_init_overwrite.mjs =====
+printed: Created /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/audit-init-9a7zBF/AGENTS.md. Edit it to teach the agent about this project.
+old content survived: false
+new content present: true
+CLAIM CONFIRMED (existing AGENTS.md silently replaced)
+exit: 0
+===== audit_text_c1.mjs =====
+"A0;attackB" -> sanitized: "AB" | validator says clean: false | C1 survived: false
+"AB" -> sanitized: "AB" | validator says clean: false | C1 survived: false
+"ApayloadB" -> sanitized: "AB" | validator says clean: false | C1 survived: false
+CLAIM NOT REPRODUCED
+exit: 1
+===== audit_installer_env.sh =====
+installer resolved target: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T//audit-start.txUzBU/rel.env
+child CLI resolved target:   /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/audit-app.O5PRIQ/rel.env
+CLAIM CONFIRMED (installer and child CLI target different files)
+exit: 0
+
+########## GREEN-SIDE REPLAYS ##########
+===== init_overwrite_green.mjs =====
+printed: ["Refusing to overwrite existing file /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/green-init-app-FBAN0Q/AGENTS.md. Delete it first or choose another path."]
+refusal reported: true
+old content survived: true
+new content present: false
+CLAIM NOT REPRODUCED (existing AGENTS.md preserved; refusal reported)
+exit: 0
+===== installer_env_green.sh =====
+ordering: resolve line 179 < export line 183 < init 345 / doctor 381
+installer resolved+exported: /var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T//green-start.wKLRjB/rel.env
+child CLI resolved target:  /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/green-start.wKLRjB/rel.env
+CLAIM NOT REPRODUCED (installer and child CLI agree: /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/green-start.wKLRjB/rel.env)
+exit: 0
+
+[footer] Re-run after the structural wave (W6/W5/W2) on the finished tree: identical verdicts to the first acceptance run; the provider split and compression dedup do not affect any audited behavior.
