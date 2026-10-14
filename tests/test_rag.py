@@ -259,6 +259,39 @@ class MyClass:
         chunks = chunker.split_code(code, language="python")
         assert len(chunks) > 0
 
+    def test_split_code_preserves_preamble_before_first_symbol(self):
+        """Header content (package/imports) is never dropped by symbol split."""
+        code = (
+            "package main\n\n"
+            'import "fmt"\n\n'
+            'const Greeting = "hi"\n\n'
+            "func Alpha() { fmt.Println(Greeting) }\n\n"
+            "func Beta() {}\n"
+        )
+        chunks = RecursiveCharacterTextSplitter().split_code(code, language="go")
+        emitted = "".join(c.text for c in chunks)
+        assert "package main" in emitted
+        assert 'import "fmt"' in emitted
+        assert any(c.metadata.get("symbol") == "func Alpha" for c in chunks)
+
+    def test_split_code_normalizes_language_aliases(self):
+        """Extension aliases ('py') select the same splitting as 'python'."""
+        code = (
+            "import os\n\n"
+            "CONST = 1\n\n"
+            "def alpha():\n    return os.name\n\n"
+            "def beta():\n    return CONST\n"
+        )
+        chunker = RecursiveCharacterTextSplitter()
+        alias_chunks = chunker.split_code(code, language="py")
+        canonical_chunks = chunker.split_code(code, language="python")
+        assert [c.metadata.get("symbol") for c in alias_chunks] == [
+            c.metadata.get("symbol") for c in canonical_chunks
+        ]
+        assert any(c.metadata.get("symbol") == "def alpha" for c in alias_chunks)
+        # Preamble survives under the alias too.
+        assert "import os" in "".join(c.text for c in alias_chunks)
+
     def test_chunk_indices(self, chunker, sample_text):
         """Test that chunks have sequential indices."""
         chunks = chunker.split_text(sample_text)
@@ -382,6 +415,22 @@ class TestRAGPipeline:
         with patch("machina.rag.pipeline.db", mock_db):
             result = await pipeline.index_session_context(uuid.uuid4())
             assert isinstance(result, list)
+
+    def test_chunk_document_normalizes_code_extension_alias(self):
+        """A '.py' extension from the loader still selects symbol splitting."""
+        from machina.rag.pipeline import RAGConfig
+
+        pipeline = RAGPipeline(config=RAGConfig(enable_embeddings=False))
+        doc = Document(
+            content=(
+                "import os\n\ndef alpha():\n    return os.name\n\ndef beta():\n    return os.sep\n"
+            ),
+            source="sample.py",
+            doc_type="code",
+            metadata={"extension": ".py"},
+        )
+        chunks = pipeline._chunk_document(doc)
+        assert any(c.metadata.get("symbol") == "def alpha" for c in chunks)
 
 
 # ===========================================================================
