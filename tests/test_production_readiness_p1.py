@@ -5,6 +5,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+import pytest
+
 # ─── 1. Delegation cleanup NameError ─────────────────────────────────────
 
 
@@ -606,3 +608,203 @@ async def test_compress_outcome_statuses(db_pool, monkeypatch):
         assert remaining == 5
     finally:
         await db_pool.execute("DELETE FROM sessions WHERE id=$1", sess.id)
+
+
+# ─── 11. W6: compress_session delegates its statuses to the with_status twin ─
+
+
+def _w6_chunks(session_id):
+    from machina.core.models import ContextChunk
+
+    return [
+        ContextChunk(
+            id=uuid.uuid4(),
+            session_id=session_id,
+            agent_id="harness",
+            chunk_type="user_message",
+            payload={"content": f"message {i}: " + "detail " * 40},
+            token_count=100,
+        )
+        for i in range(6)
+    ]
+
+
+def _w6_patch_reads(monkeypatch, chunks):
+    """Provider-free compaction setup: fixed chunks, truncation path, owned claim."""
+    from machina.core import context as ctxmod
+    from machina.core.config import config
+
+    monkeypatch.setattr(config, "compression_llm_summarize", False)
+    monkeypatch.setattr(config, "compression_preserve_recent", 2)
+
+    async def _all_chunks(session_id):
+        return list(chunks)
+
+    monkeypatch.setattr(ctxmod.context_manager, "get_all_chunks", _all_chunks)
+    monkeypatch.setattr(ctxmod.context_manager, "replace_chunks_by_ids", _w6_replace)
+
+
+async def _w6_replace(session_id, ids, new_chunks, archive_reason="compressed", **kwargs):
+    return len(new_chunks)
+
+
+async def test_w6_compress_session_busy_returns_none(monkeypatch):
+    """W6 pin: busy (claim held elsewhere) stays None through the wrapper."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import machina.services as svc
+    from machina.core import turns as turns_mod
+
+    monkeypatch.setattr(turns_mod, "begin_mutation", AsyncMock(return_value=None))
+    session = SimpleNamespace(id=uuid.uuid4(), agent_id="harness")
+    assert await svc.compress_session(session) is None
+
+
+@pytest.mark.parametrize("stale_name", ["StaleOwnershipError", "StaleSnapshotError"])
+async def test_w6_compress_session_stale_returns_none(monkeypatch, stale_name):
+    """W6 pin: stale fencing collapses to None (legacy contract), no re-raise."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import machina.services as svc
+    from machina.core import turns as turns_mod
+    from machina.core.exceptions import StaleOwnershipError, StaleSnapshotError
+
+    monkeypatch.setattr(turns_mod, "begin_mutation", AsyncMock(return_value="token-w6"))
+    monkeypatch.setattr(turns_mod, "end_mutation", AsyncMock(return_value=True))
+    sid = uuid.uuid4()
+    _w6_patch_reads(monkeypatch, _w6_chunks(sid))
+
+    stale_cls = {
+        "StaleOwnershipError": StaleOwnershipError,
+        "StaleSnapshotError": StaleSnapshotError,
+    }[stale_name]
+
+    async def _stale_replace(session_id, ids, new_chunks, archive_reason="compressed", **kwargs):
+        raise stale_cls("fence refused")
+
+    monkeypatch.setattr(
+        "machina.core.context.context_manager.replace_chunks_by_ids", _stale_replace
+    )
+    session = SimpleNamespace(id=sid, agent_id="harness")
+    assert await svc.compress_session(session) is None
+
+
+async def test_w6_compress_session_reraises_original_persistence_error(monkeypatch):
+    """W6 pin: unexpected failures re-raise the SAME original exception object."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import machina.services as svc
+    from machina.core import turns as turns_mod
+
+    class PersistenceBoom(RuntimeError):
+        pass
+
+    boom = PersistenceBoom("db down")
+    monkeypatch.setattr(svc, "record_failure", lambda op, e: None)
+    monkeypatch.setattr(turns_mod, "begin_mutation", AsyncMock(return_value="token-w6"))
+    monkeypatch.setattr(turns_mod, "end_mutation", AsyncMock(return_value=True))
+    sid = uuid.uuid4()
+    _w6_patch_reads(monkeypatch, _w6_chunks(sid))
+
+    async def _boom_replace(session_id, ids, new_chunks, archive_reason="compressed", **kwargs):
+        raise boom
+
+    monkeypatch.setattr("machina.core.context.context_manager.replace_chunks_by_ids", _boom_replace)
+    session = SimpleNamespace(id=sid, agent_id="harness")
+    with pytest.raises(PersistenceBoom) as excinfo:
+        await svc.compress_session(session)
+    assert excinfo.value is boom
+
+
+async def test_w6_compress_session_reraises_claim_error_and_records(monkeypatch):
+    """W6 pin: a failing claim raises (legacy) and is now recorded under the
+    shared 'services.compress_session' key."""
+    from types import SimpleNamespace
+
+    import machina.services as svc
+    from machina.core import turns as turns_mod
+
+    recorded = []
+    monkeypatch.setattr(svc, "record_failure", lambda op, e: recorded.append((op, e)))
+    boom = RuntimeError("claim boom")
+
+    async def _begin(session_id):
+        raise boom
+
+    monkeypatch.setattr(turns_mod, "begin_mutation", _begin)
+    session = SimpleNamespace(id=uuid.uuid4(), agent_id="harness")
+    with pytest.raises(RuntimeError) as excinfo:
+        await svc.compress_session(session)
+    assert excinfo.value is boom
+    assert recorded == [("services.compress_session", boom)]
+
+
+async def test_w6_with_status_failed_carries_cause_not_leaked_into_repr(monkeypatch):
+    """W6 pin: failed keeps the original cause for the wrapper; repr stays bounded."""
+    from types import SimpleNamespace
+
+    import machina.services as svc
+    from machina.core import turns as turns_mod
+
+    recorded = []
+    monkeypatch.setattr(svc, "record_failure", lambda op, e: recorded.append((op, e)))
+    boom = RuntimeError("provider payload secret")
+
+    async def _begin(session_id):
+        raise boom
+
+    monkeypatch.setattr(turns_mod, "begin_mutation", _begin)
+    session = SimpleNamespace(id=uuid.uuid4(), agent_id="harness")
+    out = await svc.compress_session_with_status(session)
+    assert out.status == "failed"
+    assert out.error == "RuntimeError"
+    assert out.cause is boom
+    assert "provider payload secret" not in repr(out)
+    assert recorded == [("services.compress_session", boom)]
+
+
+async def test_w6_with_status_stale_carries_cause_not_leaked_into_repr(monkeypatch):
+    """W6 pin: stale statuses keep their cause diagnostic, repr stays bounded."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import machina.services as svc
+    from machina.core import turns as turns_mod
+    from machina.core.exceptions import StaleOwnershipError
+
+    monkeypatch.setattr(turns_mod, "begin_mutation", AsyncMock(return_value="token-w6"))
+    monkeypatch.setattr(turns_mod, "end_mutation", AsyncMock(return_value=True))
+    sid = uuid.uuid4()
+    _w6_patch_reads(monkeypatch, _w6_chunks(sid))
+
+    async def _stale_replace(session_id, ids, new_chunks, archive_reason="compressed", **kwargs):
+        raise StaleOwnershipError("fence refused")
+
+    monkeypatch.setattr(
+        "machina.core.context.context_manager.replace_chunks_by_ids", _stale_replace
+    )
+    session = SimpleNamespace(id=sid, agent_id="harness")
+    out = await svc.compress_session_with_status(session)
+    assert out.status == "stale_ownership"
+    assert out.error == "StaleOwnershipError"
+    assert isinstance(out.cause, StaleOwnershipError)
+    assert "fence refused" not in repr(out)
+
+
+async def test_w6_with_status_busy_has_no_cause(monkeypatch):
+    """W6 pin: busy carries no cause and no leaked repr field."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import machina.services as svc
+    from machina.core import turns as turns_mod
+
+    monkeypatch.setattr(turns_mod, "begin_mutation", AsyncMock(return_value=None))
+    session = SimpleNamespace(id=uuid.uuid4(), agent_id="harness")
+    out = await svc.compress_session_with_status(session)
+    assert out.status == "busy"
+    assert out.cause is None
+    assert "cause" not in repr(out)

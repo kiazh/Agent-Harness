@@ -28,7 +28,7 @@ __all__ = [
 ]
 
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -38,11 +38,14 @@ class CompressOutcome:
     status: no_op | completed | stale_ownership | stale_snapshot | failed | busy
     result: CompressionResult when completed, else None.
     error: bounded diagnostic for failed (never raw payloads).
+    cause: original exception behind failed/stale statuses, consumed by the
+        legacy compress_session wrapper; never rendered or serialized.
     """
 
     status: str
     result: CompressionResult | None = None
     error: str = ""
+    cause: BaseException | None = field(default=None, repr=False, compare=False)
 
 
 class ServiceError(Exception):
@@ -137,109 +140,9 @@ async def compress_session_with_status(
             mutation_token = await begin_mutation(session.id)
         except Exception as exc:
             record_failure("services.compress_session", exc)
-            return CompressOutcome(status="failed", error=type(exc).__name__)
+            return CompressOutcome(status="failed", error=type(exc).__name__, cause=exc)
         if not mutation_token:
             return CompressOutcome(status="busy")
-    llm_provider = None
-    try:
-        all_chunks = await context_manager.get_all_chunks(session.id)
-        chunks = [c for c in all_chunks if c.chunk_type != "document"]
-        if not chunks:
-            return CompressOutcome(status="no_op")
-
-        comp_config = _compression_config()
-        if comp_config.llm_summarize:
-            from machina.core.provider import get_provider
-
-            try:
-                llm_provider = get_provider(
-                    provider=provider or config.get("provider"), model=model or config.get("model")
-                )
-            except Exception:
-                llm_provider = None
-
-        from machina.core.compression import ContextCompressor as _CC
-
-        compressor = _CC(config=comp_config)
-        if hasattr(compressor, "acompress"):
-            result = await compressor.acompress(
-                chunks=chunks,
-                session_id=session.id,
-                agent_id=session.agent_id,
-                llm_provider=llm_provider,
-            )
-        else:
-            result = ContextCompressor(config=comp_config).compress(
-                chunks=chunks,
-                session_id=session.id,
-                agent_id=session.agent_id,
-                llm_provider=llm_provider,
-            )
-        if result.original_count == 0:
-            return CompressOutcome(status="no_op", result=result)
-        from machina.core.exceptions import StaleOwnershipError, StaleSnapshotError
-
-        try:
-            await context_manager.replace_chunks_by_ids(
-                session.id,
-                [c.id for c in chunks],
-                result.compressed_chunks,
-                archive_reason="compressed",
-                expected_owner=mutation_token,
-            )
-        except StaleOwnershipError as exc:
-            return CompressOutcome(status="stale_ownership", error=type(exc).__name__)
-        except StaleSnapshotError as exc:
-            return CompressOutcome(status="stale_snapshot", error=type(exc).__name__)
-        return CompressOutcome(status="completed", result=result)
-    except Exception as exc:
-        record_failure("services.compress_session", exc)
-        return CompressOutcome(status="failed", error=type(exc).__name__)
-    finally:
-        try:
-            close = getattr(llm_provider, "close", None)
-            if callable(close):
-                try:
-                    import asyncio as _asyncio
-                    import inspect as _inspect
-
-                    r = close()
-                    if _inspect.isawaitable(r):
-                        await _asyncio.wait_for(r, timeout=5)
-                except Exception as e:
-                    import logging as _logging
-
-                    _logging.getLogger(__name__).warning(
-                        "compression provider close failed: %s", e, exc_info=True
-                    )
-        finally:
-            if owned:
-                try:
-                    await end_mutation(session.id, mutation_token)
-                except Exception as _boundary_error:
-                    record_failure("services.compress_session", _boundary_error)
-
-
-async def compress_session(
-    session: Session,
-    *,
-    model: str | None = None,
-    provider: str | None = None,
-    mutation_token: str | None = None,
-) -> CompressionResult | None:
-    """Compress a session's context in place (backward-compatible wrapper).
-
-    Returns the CompressionResult on completion, else None for no-op, busy,
-    or stale outcomes. Unexpected failures raise (legacy behavior) — use
-    compress_session_with_status when the distinction matters.
-    """
-    from machina.core.turns import begin_mutation, end_mutation
-
-    owned = mutation_token is None
-    if owned:
-        mutation_token = await begin_mutation(session.id)
-        if not mutation_token:
-            return None
     # H-04: Ownership lifetime starts immediately after claim acquisition.
     # All reads, config, provider construction, compression, persistence,
     # and cleanup happen inside this owning try/finally.
@@ -255,7 +158,7 @@ async def compress_session(
         all_chunks = await context_manager.get_all_chunks(session.id)
         chunks = [c for c in all_chunks if c.chunk_type != "document"]
         if not chunks:
-            return None
+            return CompressOutcome(status="no_op")
 
         comp_config = _compression_config()
         if comp_config.llm_summarize:
@@ -288,7 +191,7 @@ async def compress_session(
                 llm_provider=llm_provider,
             )
         if result.original_count == 0:
-            return None
+            return CompressOutcome(status="no_op", result=result)
         # AH-AUDIT-014/015: the live mutation token travels INTO the
         # archive/delete/insert transaction (fenced there on the DB clock),
         # and the captured original ID set is validated exactly. Stale
@@ -304,9 +207,14 @@ async def compress_session(
                 archive_reason="compressed",
                 expected_owner=mutation_token,
             )
-        except (StaleOwnershipError, StaleSnapshotError):
-            return None
-        return result
+        except StaleOwnershipError as exc:
+            return CompressOutcome(status="stale_ownership", error=type(exc).__name__, cause=exc)
+        except StaleSnapshotError as exc:
+            return CompressOutcome(status="stale_snapshot", error=type(exc).__name__, cause=exc)
+        return CompressOutcome(status="completed", result=result)
+    except Exception as exc:
+        record_failure("services.compress_session", exc)
+        return CompressOutcome(status="failed", error=type(exc).__name__, cause=exc)
     finally:
         # Owned compression provider closes on EVERY exit: success, no-op,
         # summarization/persistence failure, cancellation, or timeout.
@@ -336,6 +244,35 @@ async def compress_session(
                 except Exception as _boundary_error:
                     # Optional fallback preserves the primary outcome; report no payload.
                     record_failure("services.compress_session", _boundary_error)
+
+
+async def compress_session(
+    session: Session,
+    *,
+    model: str | None = None,
+    provider: str | None = None,
+    mutation_token: str | None = None,
+) -> CompressionResult | None:
+    """Compress a session's context in place (backward-compatible wrapper).
+
+    Delegates to compress_session_with_status: returns the CompressionResult
+    on completion, else None for no-op, busy, or stale outcomes. Unexpected
+    failures re-raise the original exception (legacy behavior) — use
+    compress_session_with_status when the distinction matters.
+    """
+    outcome = await compress_session_with_status(
+        session, model=model, provider=provider, mutation_token=mutation_token
+    )
+    if outcome.status == "completed":
+        return outcome.result
+    if outcome.status == "failed":
+        # Legacy contract: the raised exception is the original failure
+        # object, not a wrapper. The bounded error string is a fallback only.
+        if outcome.cause is not None:
+            raise outcome.cause
+        raise RuntimeError(outcome.error or "compression failed")
+    # no_op | busy | stale_ownership | stale_snapshot collapse to None.
+    return None
 
 
 async def _estimate_next_request(session_id) -> int:
