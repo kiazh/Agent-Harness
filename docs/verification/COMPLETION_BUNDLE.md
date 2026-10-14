@@ -324,3 +324,22 @@ Consolidated tree: **3,531 passed, 0 failed, 1 skipped, 1 xfailed**;
   mutation/read repoints moved to owner modules; deferred-import census unchanged
   (672 <= 680). Verification: focused battery 334 passed; full backend 3,565
   passed / 0 failed; j8 gate PASS; hatchling build + artifact check OK.
+
+- **W2** (`5a35ded` + `d166302`): the two turn loops now run on one engine.
+  Step 1 landed `machina/core/turn_engine.py` (relay: redaction feed +
+  exactly-once withheld tail, stable-id tool pairing with FIFO fallback,
+  4000-char post-redaction truncation, token accounting, needs_approval
+  extraction; close: stop renewal -> shielded bounded end_turn -> join ->
+  provider close with the audited RF4-C1/W7 cancellation semantics; 20 unit
+  pins). Steps 2-5 adopted it in gateway (relay+terminal, close) and SSE
+  (relay, close), keeping per-transport supervisors, approval policy, frame
+  serialization, growth listeners, trace spans and boundary keys in the
+  adapters. Explicit SSE wire deltas accepted: tool frames always carry an
+  id and pair by stable id; tool results truncate at 4000 chars after
+  redaction; terminal tokens fall back to the accumulated counter; unknown
+  event types are logged/skipped. Net -67 lines across the two transports;
+  j7 PASSed after every step; full backend 3,576 passed / 0 failed under
+  the orchestrator's own run.
+- **Structural verification**: the full j1-j8 e2e gate was re-run on the
+  finished tree (proof committed alongside this entry) — see
+  `docs/verification/proofs/2026-10-14-e2e-gate.*`.
