@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -37,17 +38,27 @@ def _live_tasks() -> list[asyncio.Task]:
 
 
 async def _cancel_and_settle(tasks: list[asyncio.Task], grace: float = 1.0) -> None:
-    """Cancel leftovers and wait (bounded) until they stop touching the DB."""
+    """Cancel leftovers and wait (bounded) until they stop touching the DB.
+
+    A re-delivered cancellation (the caller cancelled more than once) must not
+    abandon the settle early: the bounded wait resumes until the grace
+    deadline, so a provider close can never race a still-unwinding task. The
+    caller's original CancelledError still propagates after this returns.
+    """
     for task in tasks:
         task.cancel()
     if not tasks:
         return
-    try:
-        await asyncio.wait(tasks, timeout=grace)
-    except asyncio.CancelledError:
-        # The caller itself is being cancelled; cleanup stays best-effort and
-        # the cancellation still propagates afterwards.
-        pass
+    deadline = time.monotonic() + grace
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        try:
+            await asyncio.wait(tasks, timeout=remaining)
+            return
+        except asyncio.CancelledError:
+            continue
 
 
 async def drain_background_tasks(timeout: float = 5.0) -> int:
@@ -104,7 +115,5 @@ async def join_agent_background_tasks(
     try:
         await asyncio.wait(tasks, timeout=timeout)
     finally:
-        await _cancel_and_settle(
-            [task for task in tasks if not task.done()], grace=settle_grace
-        )
+        await _cancel_and_settle([task for task in tasks if not task.done()], grace=settle_grace)
     return len(tasks)
