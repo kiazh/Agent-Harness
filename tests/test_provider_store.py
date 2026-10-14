@@ -64,7 +64,8 @@ def test_reserved_names_cover_every_builtin():
     from machina.core.provider.specs import PROVIDER_SPECS
 
     assert store.RESERVED_NAMES == (
-        set(PROVIDER_SPECS) | {"openrouter", "anthropic", "chatgpt", "custom", "ollama"}
+        set(PROVIDER_SPECS)
+        | {"openrouter", "anthropic", "chatgpt", "custom", "ollama", "claude", "copilot", "gemini"}
     )
 
 

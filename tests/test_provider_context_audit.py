@@ -24,6 +24,7 @@ from machina.core.usage import _estimate_tokens, usage_store
 def _stream_provider(chunks):
     provider = DirectProvider.__new__(DirectProvider)
     provider.spec = PROVIDER_SPECS["groq"]
+    provider.api_key = ""
     provider.model = provider.spec.default_model
     provider._default_effort = ""
     provider._rate_limiter = AsyncMock()
@@ -168,6 +169,7 @@ def _complete_provider(provider_class):
     provider._rate_limiter = AsyncMock()
     if provider_class is DirectProvider:
         provider.spec = PROVIDER_SPECS["openai"]
+        provider.api_key = ""
     provider.client = MagicMock()
     response = MagicMock()
     response.json.return_value = {
