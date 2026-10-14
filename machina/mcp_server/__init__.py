@@ -44,7 +44,11 @@ from mcp.types import ToolAnnotations
 
 from machina import __version__
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# Editable-checkout root. NOT the child cwd anymore (interop review N2): in a
+# wheel install this resolves to site-packages, and children used to run with
+# the wrong workspace root. It now documents the checkout layout only; the
+# `-m machina` entry runs under the server's own interpreter, so import
+# resolution comes from the installed/editable distribution, not from here.
 
 __all__ = [
     "ProcessResult",
@@ -93,8 +97,9 @@ _NOISE_LINE_PREFIXES = (
 
 # AH-AUDIT-010: children inherit only the platform variables they need to
 # start. Mirrors machina/tools/terminal.py (kept local so the MCP server does
-# not import the tool registry); extra names require an explicit
-# MACHINA_MCP_EXTRA_ENV passthrough.
+# not import the tool registry). No passthrough extension: the unused
+# MACHINA_MCP_EXTRA_ENV hook was removed by the 2026-10-14 interop review —
+# a new name needs a named host case and a test.
 _CHILD_ENV_ALLOWLIST = frozenset(
     {
         "PATH",
@@ -122,15 +127,9 @@ _CHILD_ENV_ALLOWLIST = frozenset(
 
 def _sanitized_env() -> dict[str, str]:
     """Minimal child environment without secrets (never dumps the environment)."""
-    extra = {
-        token.strip().upper()
-        for token in os.environ.get("MACHINA_MCP_EXTRA_ENV", "").split(",")
-        if token.strip()
-    }
     env: dict[str, str] = {}
     for key, value in os.environ.items():
-        upper = key.upper()
-        if upper in _CHILD_ENV_ALLOWLIST or upper in extra:
+        if key.upper() in _CHILD_ENV_ALLOWLIST:
             env[key] = value
     if os.name != "nt" and not env.get("PATH"):
         env["PATH"] = "/usr/bin:/bin"
@@ -237,15 +236,32 @@ def _kill_tree(process: subprocess.Popen[str], pgid: int | None = None) -> None:
         pass
 
 
-def _run_process(cmd: list[str], *, timeout: float, cwd: Path = REPO_ROOT) -> ProcessResult:
+def _default_child_cwd() -> Path:
+    """Directory the MCP host launched this server in, resolved per call.
+
+    N2 (interop review): ``REPO_ROOT`` defaulted children to the checkout
+    root, which is only correct for editable installs — in a wheel it is
+    site-packages, so ``machina chat`` ran with the wrong workspace root. The
+    launch directory is what a user running ``machina chat`` in the serving
+    project would get. An explicit ``workspace_root``/``machina_home`` config
+    still wins inside the child (``machina.core.execution_context`` prefers
+    them over the cwd), so the shim does not import config to second-guess it.
+    """
+    return Path(os.getcwd())
+
+
+def _run_process(cmd: list[str], *, timeout: float, cwd: Path | None = None) -> ProcessResult:
     """Run one child in its own process group with a hard kill-tree deadline.
 
-    stdout (the reply) and stderr (audit/log chatter) are read separately,
-    each capped. Prolific stdout stops the child; stderr past its cap is
-    drained and discarded so the pipe cannot deadlock. On deadline expiry the
-    whole group is killed; this function never waits past ``timeout`` plus
-    bounded teardown.
+    ``cwd=None`` (default) runs the child in the host launch directory
+    captured at call time (see ``_default_child_cwd``); pass ``cwd`` to pin a
+    different working directory. stdout (the reply) and stderr (audit/log
+    chatter) are read separately, each capped. Prolific stdout stops the
+    child; stderr past its cap is drained and discarded so the pipe cannot
+    deadlock. On deadline expiry the whole group is killed; this function
+    never waits past ``timeout`` plus bounded teardown.
     """
+    child_cwd = cwd if cwd is not None else _default_child_cwd()
     popen_kwargs: dict[str, Any] = {}
     if os.name == "nt":
         popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -260,7 +276,7 @@ def _run_process(cmd: list[str], *, timeout: float, cwd: Path = REPO_ROOT) -> Pr
         text=True,
         encoding="utf-8",
         errors="replace",
-        cwd=str(cwd),
+        cwd=str(child_cwd),
         env=_sanitized_env(),
         **popen_kwargs,
     ) as process:
@@ -383,7 +399,13 @@ async def _create_session_row(title: str | None) -> tuple[str, str | None]:
         try:
             await db.initialize_runtime_schema()
         except Exception:
-            pass  # same hygiene as `machina chat`: best effort, never fatal
+            # N5: `machina init` creates the deployment schema, but the
+            # additive feature migrations (growth/delegation/image_context/
+            # soulspec) are re-applied by every transport entry point (CLI
+            # chat, gateway, API runtime, growth CLI) so an upgraded
+            # installation gains them before use. Best effort here too, never
+            # fatal — the same hygiene as `machina chat`.
+            pass
         from machina.core.session import session_manager
 
         session = await session_manager.create(title=title)
@@ -464,11 +486,17 @@ def _validate_chat_args(prompt: str, session_id: str | None, mode: str | None) -
 
 def _chat_command(prompt: str, session_id: str | None, mode: str | None) -> list[str]:
     # Same interpreter that runs this server; `-m machina` is the CLI entry.
-    cmd = [sys.executable, "-m", "machina", "chat", prompt, "-q"]
+    # N1: `--` terminates option parsing so a dash-leading prompt ("-i",
+    # "--help") is delivered as the chat message instead of being consumed by
+    # click (`-i` opened the interactive UI; `--help` printed usage text and
+    # exited 0). Every flag stays before the terminator; the prompt is the
+    # only positional after it.
+    cmd = [sys.executable, "-m", "machina", "chat", "-q"]
     if session_id:
         cmd += ["--session", session_id.strip()]
     if mode:
         cmd += ["--mode", mode.strip().lower()]
+    cmd += ["--", prompt]
     return cmd
 
 
@@ -489,11 +517,26 @@ def _extract_reply(output: str) -> str:
     return "\n".join(kept).strip()
 
 
+# CLI pause trailers that must never appear in a paused reply: the ✗
+# diagnostic and `request <id>` lines printed by the CLI, the actionable
+# suggestion line, and the canonical paused AgentResponse content echo
+# ("Waiting for approval.", see core/agent.py) printed once when the stream
+# did not already show it. N4: the suggestion line used to leak through.
+_PAUSE_NOISE_LINES = frozenset(
+    {
+        "Resolve the request, then resume the session.",
+        "Waiting for approval.",
+    }
+)
+
+
 def _strip_pause_lines(text: str) -> str:
     kept = [
         line
         for line in text.splitlines()
-        if not line.strip().startswith("✗") and not line.strip().startswith("request ")
+        if not line.strip().startswith("✗")
+        and not line.strip().startswith("request ")
+        and line.strip() not in _PAUSE_NOISE_LINES
     ]
     return "\n".join(kept).strip()
 

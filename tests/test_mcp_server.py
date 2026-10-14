@@ -9,6 +9,7 @@ never touches a developer database.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -31,11 +32,14 @@ SAMPLE_PAUSED_OUTPUT = (
     "\n"
     "I need to run a command first.\n"
     "\n"
+    "Waiting for approval.\n"
+    "\n"
     "✗ Turn paused for approval; it did not run to completion.\n"
     "  Resolve the request, then resume the session.\n"
     f"  request {REQUEST_ID} (terminal — echo hi)\n"
     f"Session ID: {SESSION_ID}\n"
 )
+PAUSE_SUGGESTION_LINE = "Resolve the request, then resume the session."
 
 
 def _fake_runner(result: ProcessResult, capture: dict | None = None):
@@ -90,10 +94,37 @@ async def test_chat_success_roundtrip(monkeypatch):
     }
     cmd = capture["cmd"]
     assert cmd[:4] == [sys.executable, "-m", "machina", "chat"]
-    assert cmd[4] == "hello world"
+    assert cmd[4] == "-q"
+    # N1: the prompt is the only positional and travels after the `--`
+    # terminator, so click can never consume it as an option.
+    assert cmd[-2:] == ["--", "hello world"]
+    assert cmd.index("--") == len(cmd) - 2
     assert "-q" in cmd
     assert "--session" not in cmd
     assert capture["timeout"] == mcp_server.DEFAULT_CHAT_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize("dash_prompt", ["-i", "--help"])
+async def test_chat_dash_prompt_follows_double_dash_terminator(monkeypatch, dash_prompt):
+    """N1 regression: `-i` / `--help` shaped prompts must reach chat as text.
+
+    `--` must sit between every flag and the prompt; without it click parsed
+    `-i` as the interactive flag and `--help` as usage (exit 0 with help
+    text instead of a reply). Unit-level argv pin; no subprocess.
+    """
+    capture: dict = {}
+    monkeypatch.setattr(
+        mcp_server,
+        "_run_process",
+        _fake_runner(ProcessResult(0, SAMPLE_OK_OUTPUT, "", False, False), capture),
+    )
+    payload = json.loads(await mcp_server.machina_chat(dash_prompt))
+    assert payload["status"] == "completed"
+    cmd = capture["cmd"]
+    assert cmd[-2:] == ["--", dash_prompt]
+    assert cmd.index("--") == len(cmd) - 2
+    assert cmd[cmd.index("--") + 1 :] == [dash_prompt]
+    assert cmd[cmd.index("chat") + 1] == "-q"
 
 
 async def test_chat_resume_and_mode_flags(monkeypatch):
@@ -107,7 +138,13 @@ async def test_chat_resume_and_mode_flags(monkeypatch):
         await mcp_server.machina_chat("hi", session_id=SESSION_ID, mode="workspace")
     )
     assert payload["status"] == "completed"
-    assert capture["cmd"][-4:] == ["--session", SESSION_ID, "--mode", "workspace"]
+    cmd = capture["cmd"]
+    assert cmd[-2:] == ["--", "hi"]
+    assert cmd[cmd.index("--session") + 1] == SESSION_ID
+    assert cmd[cmd.index("--mode") + 1] == "workspace"
+    # Flags stay before the terminator; the prompt is after it.
+    assert cmd.index("--session") < cmd.index("--")
+    assert cmd.index("--mode") < cmd.index("--")
 
 
 async def test_chat_exit_3_maps_to_pending_approval(monkeypatch):
@@ -123,9 +160,25 @@ async def test_chat_exit_3_maps_to_pending_approval(monkeypatch):
         {"request_id": REQUEST_ID, "detail": "terminal — echo hi"}
     ]
     assert "approval" in payload["notice"].lower()
-    assert "I need to run a command first." in payload["reply"]
+    # N4: the reply is the assistant text only — the ✗ diagnostic, the
+    # `request ` line, the CLI suggestion line and the canonical
+    # "Waiting for approval." terminal echo are all stripped.
+    assert payload["reply"] == "I need to run a command first."
     assert "✗" not in payload["reply"]
     assert "request " not in payload["reply"]
+    assert PAUSE_SUGGESTION_LINE not in payload["reply"]
+    assert "Waiting for approval." not in payload["reply"]
+
+
+def test_strip_pause_lines_removes_every_pause_trailer():
+    text = (
+        "Answer before the pause.\n"
+        "Waiting for approval.\n"
+        "✗ Turn paused for approval; it did not run to completion.\n"
+        "  Resolve the request, then resume the session.\n"
+        "  request abc-123 (terminal — echo hi)\n"
+    )
+    assert mcp_server._strip_pause_lines(text) == "Answer before the pause."
 
 
 async def test_chat_reply_excludes_stderr_chatter(monkeypatch):
@@ -229,6 +282,51 @@ def test_run_process_bounds_prolific_output():
     assert len(result.output) <= mcp_server.MAX_OUTPUT_CHARS
 
 
+def test_run_process_default_cwd_is_call_time_launch_directory(monkeypatch, tmp_path):
+    """N2: the child runs in the host launch directory, never REPO_ROOT.
+
+    REPO_ROOT is site-packages in a wheel install; the default must follow
+    ``os.getcwd()`` captured at call time (pinned with a real, fast child).
+    """
+    monkeypatch.chdir(tmp_path)
+    assert mcp_server._default_child_cwd().resolve() == tmp_path.resolve()
+    result = mcp_server._run_process(
+        [sys.executable, "-c", "import os, sys; sys.stdout.write(os.getcwd())"], timeout=30.0
+    )
+    assert result.returncode == 0
+    assert Path(result.output.strip()).resolve() == tmp_path.resolve()
+
+
+def test_run_process_honors_explicit_cwd(tmp_path, monkeypatch):
+    outside = tmp_path / "outside"
+    pinned = tmp_path / "pinned"
+    outside.mkdir()
+    pinned.mkdir()
+    monkeypatch.chdir(outside)
+    result = mcp_server._run_process(
+        [sys.executable, "-c", "import os, sys; sys.stdout.write(os.getcwd())"],
+        timeout=30.0,
+        cwd=pinned,
+    )
+    assert result.returncode == 0
+    assert Path(result.output.strip()).resolve() == pinned.resolve()
+
+
+def test_child_env_carries_only_the_allowlist(monkeypatch):
+    """Interop review: the MACHINA_MCP_EXTRA_ENV passthrough is gone — a set
+    extension variable must not smuggle secrets (or itself) into the child."""
+    monkeypatch.setenv("MACHINA_MCP_EXTRA_ENV", "SECRET_TOKEN")
+    monkeypatch.setenv("SECRET_TOKEN", "do-not-passthrough")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pw@127.0.0.1:1/db")
+    env = mcp_server._sanitized_env()
+    assert "MACHINA_MCP_EXTRA_ENV" not in env
+    assert "SECRET_TOKEN" not in env
+    assert "DATABASE_URL" not in env
+    assert env["NO_COLOR"] == "1"
+    assert env["COLUMNS"] == "400"
+    assert env.get("PATH")
+
+
 # ---------------------------------------------------------------------------
 # machina_status / machina_session_create — in-process seams mocked
 # ---------------------------------------------------------------------------
@@ -286,6 +384,43 @@ async def test_session_create_returns_id(monkeypatch):
     monkeypatch.setattr(mcp_server, "_create_session_row", fake_create)
     payload = json.loads(await mcp_server.machina_session_create("mcp test"))
     assert payload == {"status": "created", "session_id": SESSION_ID, "title": "mcp test"}
+
+
+async def test_session_create_applies_runtime_schema_best_effort(monkeypatch):
+    """N5: session create re-applies the additive feature migrations first.
+
+    The upgrade is attempted before the row is created and a failure is never
+    fatal (same hygiene as `machina chat`); pinned against the current
+    config/schema behavior without touching a real database.
+    """
+    calls: list[str] = []
+
+    class FakeDb:
+        async def initialize_runtime_schema(self) -> None:
+            calls.append("upgrade")
+            raise RuntimeError("migration unavailable")
+
+    @contextlib.asynccontextmanager
+    async def fake_section():
+        yield FakeDb()
+
+    class FakeSession:
+        id = SESSION_ID
+        title = "mcp test"
+
+    class FakeManager:
+        async def create(self, title):
+            calls.append("create")
+            return FakeSession()
+
+    import machina.core.session as session_module
+
+    monkeypatch.setattr(mcp_server, "_db_section", fake_section)
+    monkeypatch.setattr(session_module, "session_manager", FakeManager())
+    session_id, title = await mcp_server._create_session_row(None)
+    assert calls == ["upgrade", "create"]
+    assert session_id == SESSION_ID
+    assert title == "mcp test"
 
 
 async def test_session_create_error_is_structured(monkeypatch):

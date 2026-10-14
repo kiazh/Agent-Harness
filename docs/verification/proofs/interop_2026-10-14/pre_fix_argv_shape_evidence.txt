@@ -1,0 +1,32 @@
+# Evidence: the CLI parses a dash-leading first positional as its own option.
+# Command (pre-fix argv shape for a '--help' prompt: prompt before -q):
+#   .venv/bin/python -m machina chat --help -q
+
+                                                                                
+ Usage: python -m machina chat [OPTIONS] [message]                              
+                                                                                
+ Send one message to the agent (or open the UI with -i).                        
+                                                                                
+ Exit statuses: 0 completed, 1 failed (including a session already busy         
+ with another live turn), 3 paused — the turn is waiting for an approval        
+ decision. Paused/failed runs point at the terminal response, never only        
+ at the session ID.                                                             
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   message      <str>  Message to send to the agent                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --continue     -c                      Continue last session                 │
+│ --session      -s               <str>  Resume specific session               │
+│ --model        -m               <str>  Model to use (e.g., openrouter/free)  │
+│ --provider     -p               <str>  LLM provider (openrouter, openai,     │
+│                                        anthropic, google, mistral, groq,     │
+│                                        together, deepseek, xai, ollama)      │
+│ --verbose      -v  --quiet  -q         Show tool calls [default: verbose]    │
+│ --interactive  -i                      Open the interactive UI               │
+│ --mode                          <str>  Execution mode:                       │
+│                                        ask|workspace|sandbox|full            │
+│ --help                                 Show this message and exit.           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+exit=0

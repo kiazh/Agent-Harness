@@ -1,0 +1,6 @@
+# New argv shape parse check (N1): flags stay before the -- terminator.
+# Command: .venv/bin/python -m machina chat -q --session not-a-uuid -- hi
+# Expected: click parses it; the run then rejects the bad session id (exit 1, no model call).
+
+✗ Invalid session ID: not-a-uuid
+exit=1

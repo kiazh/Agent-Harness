@@ -24,6 +24,18 @@ Connections do not autostart after worker restart. Reconnect through the menu. A
 
 Calls have a total deadline including concurrency wait. Waiting without dispatch is a known failure; a dispatched timeout/dropped transport is `outcome_unknown`, rendered explicitly in the TUI and retained in typed agent outcomes. No remote call is automatically retried. Connection retries remain bounded and transient-only. Cancellation never proves a remote effect was undone.
 
+## Machina as an MCP server
+
+Machina also acts as an MCP server: `python -m machina.mcp_server` serves the phase-1 shim over stdio to hosts such as OpenCode, Codex and Claude Desktop. Register it with a Python that has Machina installed (a checkout virtualenv is easiest):
+
+```bash
+opencode mcp add machina -- /path/to/machina/.venv/bin/python -m machina.mcp_server
+```
+
+Project-scope registration writes the host's own config file (`opencode.json` for OpenCode), which this repository gitignores because the interpreter path is host-specific; other hosts use their equivalent stdio configuration. The shim exposes exactly three tools: `machina_status` (read-only, same data path as `machina status`), `machina_chat` (one headless `machina chat` turn) and `machina_session_create`. Phase 1 is text-only — attachments/images are refused — and a turn that pauses for approval (CLI exit 3) returns `{"status": "paused_for_approval", ...}` with the pending request ids instead of hanging; the caller resolves the request in Machina and resumes the session. Children run in the host's launch directory with a minimal environment allowlist, their own process group and a bounded kill-tree deadline; stdout is the reply and stderr is diagnostics-only, so child secret material never enters a tool result.
+
+The `j9` gate journey proves the OpenCode → shim → Machina-session roundtrip end to end and SKIPs unless `opencode` is installed and the project has a registered `machina` server; the recorded round trip, database token check and unit + stdio-handshake coverage are in the [interop proof](verification/proofs/interop_2026-10-14/README.md).
+
 ## Scope and remaining work
 
 Only the schema subset enforced by `machina/connectors/policy.py` is accepted: typed values, properties/required, arrays, enum/const, numeric/string/item bounds and supported combinators. Unsupported constraints or malformed schemas fail closed rather than being silently ignored.

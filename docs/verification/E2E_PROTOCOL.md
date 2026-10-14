@@ -39,7 +39,7 @@ substrings and short excerpts. Standalone proofs follow
 ## 3. Running the gate
 
 ```bash
-# all journeys (j4 self-skips when the Firecrawl stack is down)
+# all journeys (j4 self-skips when Firecrawl is down; j9 without opencode + registration)
 python tools/e2e_gate.py
 
 # cheap real subset
@@ -62,6 +62,7 @@ Firecrawl on `localhost:3002`):
 | j6 | compaction triggers: real SSE turn + real stdio-gateway turn + explicit `machina compress` produce `context_archive` rows, a `compression_summary` chunk and `sessions.state.last_auto_compact_tokens`; document chunks survive compaction; an idle second turn compacts nothing (no-progress guard) |
 | j7 | cross-transport turn parity: real HTTP SSE turn → real stdio-gateway turn → SSE turn on one session; `[DONE]` / `message.complete` terminal events, durable `user_message`/`assistant_message` rows, and claim release in both directions |
 | j8 | provider facade: config-resolved `get_provider` + real `usage_store.complete_call` returns the fixture text and a durable `llm_usage` row (`status=complete`, known tokens); `machina status` exits 0 with a `Chat provider` line |
+| j9 | Machina-as-MCP-server: `opencode run` drives the `machina_chat` shim tool, the reply token round-trips in the OpenCode transcript, and a fresh Machina session's `context_chunks` rows contain the token (SKIP unless `opencode` is installed and the project has a registered `machina` MCP server) |
 
 Exit codes: `0` no failures (skips allowed), `1` at least one FAIL, `2` usage
 or missing venv. A SKIP is missing evidence, not a pass — name it in the
@@ -91,6 +92,11 @@ Notes that keep the gate honest:
 - j6/j7 own exactly one server/gateway child at a time and always kill the
   process group in `finally` (ephemeral ports only, readiness via
   `GET /ready`), so a FAIL cannot leak a process into the next journey.
+- j9 requires both the `opencode` CLI and a project-registered `machina` MCP
+  server (`opencode mcp add machina -- <venv-python> -m machina.mcp_server`;
+  this writes the gitignored project `opencode.json`). Without both it SKIPs —
+  missing evidence, not a pass; the shim's recorded round trip lives in
+  `docs/verification/proofs/interop_2026-10-14/`.
 
 ## 4. Adversarial verification before merge
 

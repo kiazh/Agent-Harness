@@ -257,6 +257,18 @@ The agent uses `mcp_list`, `mcp_describe` and `mcp_call` after connection. Catal
 
 Stdio runs on the host and is refused in sandbox mode. HTTP redirects and environment proxy inheritance are disabled; private hosts require explicit local access, and metadata addresses remain forbidden. HTTP servers support OAuth browser authorization (Authorization Code + S256 PKCE, [setup](docs/MCP_OAUTH.md)); HTTP credential-profile authentication is **not implemented** and such connectors report `auth_required`. Resources, prompts and server-initiated sampling/elicitation/roots are not exposed. These network checks do not establish complete DNS-rebinding protection. [Setup and current evidence](docs/MCP.md).
 
+### Machina as an MCP server
+
+Machina also serves its own phase-1 shim over stdio (`python -m machina.mcp_server`), so MCP hosts such as OpenCode, Codex and Claude Desktop can call it. Register it with a Python that has Machina installed — a checkout virtualenv is easiest:
+
+```bash
+opencode mcp add machina -- /path/to/machina/.venv/bin/python -m machina.mcp_server
+```
+
+Project-scope registration writes `opencode.json`, which this repository gitignores because the interpreter path is host-specific; other hosts use their equivalent stdio configuration. The shim exposes exactly three tools: `machina_status` (read-only), `machina_chat` (one headless `machina chat` turn) and `machina_session_create`. Phase 1 is **text-only** — attachments/images are refused — and a turn that pauses for approval (CLI exit 3) returns `{"status": "paused_for_approval", ...}` with the pending request ids instead of hanging; resolve the request in Machina, then resume the session. Child turns run in the host's launch directory with a minimal environment allowlist, their own process group and a bounded kill-tree deadline; stdout carries the reply and stderr is diagnostics-only.
+
+The `j9` gate journey certifies this path end to end and **skips** unless `opencode` is installed and the project has a registered `machina` server, so run the registration step above in any environment you accept the gate from. The recorded round trip and database check are in the [interop proof](docs/verification/proofs/interop_2026-10-14/README.md).
+
 ## Technology stack
 
 | Layer | Technology | Role in the harness |
@@ -391,7 +403,7 @@ behavior and context capacity can differ.
 
 Non-secret defaults live in `~/.machina/config.yaml`; environment overrides use `MACHINA_<KEY>`. Session overrides take precedence where supported. `.env` fills missing environment values. `MACHINA_ENV_FILE` selects an alternate file; [`.env.example`](.env.example) lists common settings.
 
-Important settings include `DATABASE_URL`, `MACHINA_PROVIDER`, `MACHINA_MODEL`, `MACHINA_PERSONA_DESCRIPTION`, `MACHINA_EXECUTION_MODE`, and the `MACHINA_USAGE_*` budgets (`0` means unlimited). Learning flags are `MACHINA_MEMORY_ENABLED`, `MACHINA_PERSONALITY_GROWTH_ENABLED` and `MACHINA_RSI_ENABLED`.
+Important settings include `DATABASE_URL`, `MACHINA_PROVIDER`, `MACHINA_MODEL`, `MACHINA_PERSONA_DESCRIPTION`, `MACHINA_EXECUTION_MODE`, and the `MACHINA_USAGE_*` budgets (`0` means unlimited). Learning flags are `MACHINA_MEMORY_ENABLED`, `MACHINA_PERSONALITY_GROWTH_ENABLED`, `MACHINA_RSI_ENABLED`, the learned-skill review keys (`MACHINA_LEARNING_REVIEW_AUTO_APPLY`, `MACHINA_LEARNING_REVIEW_AUTO_APPLY_PER_DAY`) and `MACHINA_LEARNED_SKILLS_DIR`.
 
 ### Configuration reference
 
@@ -415,6 +427,9 @@ Important settings include `DATABASE_URL`, `MACHINA_PROVIDER`, `MACHINA_MODEL`, 
 | `MACHINA_MEMORY_ENABLED` | Automatic memory integration | `true` |
 | `MACHINA_PERSONALITY_GROWTH_ENABLED` | Persistent personality learning | `true` |
 | `MACHINA_RSI_ENABLED` | Runtime strategy/ranking adaptation | `true` |
+| `MACHINA_LEARNING_REVIEW_AUTO_APPLY` | Publish validated post-turn learned skills automatically (creation-only, bounded, versioned and revertible; no standing approval gate) | `true`; `false` stages every proposal for manual review |
+| `MACHINA_LEARNING_REVIEW_AUTO_APPLY_PER_DAY` | Rolling 24h per-agent cap on auto-applied learned skills | `5` (0–100; `0` disables auto-apply — stage-only) |
+| `MACHINA_LEARNED_SKILLS_DIR` | Directory for agent-learned skills (runtime data, never package data) | `~/.machina/skills`; setting `MACHINA_SKILLS_DIR` keeps learned skills under that root |
 | `MACHINA_PERSONA_MEMORY_ENABLED` | Persona-aware memory ranking | `true` |
 | `MACHINA_PERSONA_DEFAULT_EMOTION` | Fallback persona-memory emotion | `trust` |
 | `MACHINA_USAGE_SESSION_TOKEN_LIMIT` / `MACHINA_USAGE_SESSION_REQUEST_LIMIT` | Optional session usage budgets | `0` = unlimited |
@@ -632,21 +647,27 @@ end state on real components (PostgreSQL rows, indexed RAG chunks, tool and
 API outcomes) and writes its proof to `docs/verification/proofs/`. Run:
 
 ```bash
-python tools/e2e_gate.py                  # j1..j8; j4 skips when Firecrawl is down
+python tools/e2e_gate.py                  # j1..j9; j4/j9 skip without Firecrawl / opencode+registration
 python tools/e2e_gate.py --journeys j1,j5 # cheap real subset
 python tools/e2e_gate.py --json /tmp/e2e.json
 ```
 
-Journeys j1–j8 cover memory consolidation roundtrip, live web research and
+Journeys j1–j9 cover memory consolidation roundtrip, live web research and
 web crawl into session RAG, the self-hosted Firecrawl MCP path, a CLI
 smoke check, compaction triggers across the SSE, gateway and CLI paths,
-cross-transport turn parity, and the provider/usage facade. Exit code is 0
+cross-transport turn parity, the provider/usage facade, and the
+OpenCode → Machina MCP-server roundtrip (j9; skips without `opencode` and a
+registered `machina` server). Exit code is 0
 only when no journey failed (skips allowed), 1 on any failure and 2 on
 usage/environment errors; every run writes
-`<UTC date>-e2e-gate.json`/`.md` under `docs/verification/proofs/`, and the
-latest recorded run (2026-10-14) passed all eight journeys (8 PASS / 0 FAIL /
-0 SKIP; [proof](docs/verification/proofs/2026-10-14-e2e-gate.md)). Policy,
-proof rules and the three adversarial pre-merge personas are in the
+`<UTC date>-e2e-gate.json`/`.md` under `docs/verification/proofs/`. The
+latest recorded full run (2026-10-14) passed all eight journeys defined at that
+time (8 PASS / 0 FAIL / 0 SKIP;
+[proof](docs/verification/proofs/2026-10-14-e2e-gate.md)); j9 landed after
+that run with its own end-to-end interop validation
+([proof](docs/verification/proofs/interop_2026-10-14/README.md)) and is
+certified only in environments that satisfy its registration requirement.
+Policy, proof rules and the three adversarial pre-merge personas are in the
 [E2E protocol](docs/verification/E2E_PROTOCOL.md).
 
 ## Project structure

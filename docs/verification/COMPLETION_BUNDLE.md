@@ -482,3 +482,58 @@ Consolidated tree: **3,531 passed, 0 failed, 1 skipped, 1 xfailed**;
   permission/authority/security-classified material never auto-applies.
 - **Local-first**: only the agent LLM API may be paid; everything else has
   a local or self-hosted path (see sections 11-13 and the interop proofs).
+
+## 15. Standing holistic review — Stage 2 (round-2 findings, 2026-10-14)
+
+MCP-server-shim lane of the round-2 fix dispatch (fixes landed on the live
+working tree; no commit from this lane per the dispatch rule). All changes
+confined to the shim, its tests, and docs; the auto-apply lane's files were
+read-only references.
+
+- **N1 — dash-leading prompts were parsed as CLI options**
+  (`machina/mcp_server/__init__.py`): `_chat_command` now emits
+  `python -m machina chat -q [--session …] [--mode …] -- <prompt>`, so click
+  can no longer consume `-i` (interactive flag) or `--help` (usage, exit 0).
+  Pins: `test_chat_dash_prompt_follows_double_dash_terminator` (`-i`,
+  `--help` argv shape) plus updated success/resume argv assertions;
+  pre-fix RED verified against `git show HEAD:…`. Live proof: a real
+  `opencode run` passed the prompt `-i` through the shim — status
+  completed, session `63ead83a-92ba-4cfa-bb05-0ee5f2c876b1`, the reply
+  treats `-i` as text, and the durable `user_message` chunk is
+  `{"content": "-i"}` (logs + DB check in
+  `docs/verification/proofs/interop_2026-10-14/dash_prompt_proof.md`).
+- **N2 — child cwd was REPO_ROOT** (wrong in wheel installs, where it is
+  site-packages): `_run_process` defaults `cwd=None` and resolves the host
+  launch directory per call (`_default_child_cwd` → `os.getcwd()`); an
+  explicit `workspace_root`/`machina_home` config still wins inside the
+  child, so the shim does not import config. Pins:
+  `test_run_process_default_cwd_is_call_time_launch_directory`,
+  `test_run_process_honors_explicit_cwd` (real fast children).
+- **N4 — pause-trailer leak**: `_strip_pause_lines` now also drops the CLI
+  suggestion line (`Resolve the request, then resume the session.`) and the
+  canonical paused-response echo (`Waiting for approval.`), on top of the
+  existing `✗` / `request <id>` filters. Pins: the paused-reply exact-equality
+  assertions and `test_strip_pause_lines_removes_every_pause_trailer`;
+  pre-fix leak reproduced from the old function.
+- **N5 — session-create schema upgrade kept (documented)**: `machina init`
+  creates the deployment schema, but the additive feature migrations
+  (growth/delegation/image_context/soulspec) are re-applied by every
+  transport entry point; the comment now says so and
+  `test_session_create_applies_runtime_schema_best_effort` pins
+  attempt-before-create plus never-fatal.
+- **Extension-point hygiene**: the unused `MACHINA_MCP_EXTRA_ENV`
+  passthrough was deleted (charter preference; no host case existed) and
+  `test_child_env_carries_only_the_allowlist` pins allowlist-only children.
+- **Docs**: j9 row + skip note in `docs/verification/E2E_PROTOCOL.md`;
+  README's suite references moved to j1–j9 (the dated 8-journey record is
+  kept as recorded, with j9's separate interop validation named);
+  new **Machina as an MCP server** sections in README and `docs/MCP.md`
+  (registration command, gitignored `opencode.json`, text-only +
+  exit-3-paused contract, j9 certification requirement); learning keys
+  (`MACHINA_LEARNING_REVIEW_AUTO_APPLY`,
+  `MACHINA_LEARNING_REVIEW_AUTO_APPLY_PER_DAY`,
+  `MACHINA_LEARNED_SKILLS_DIR`) documented in README + `.env.example` from
+  the current config.py/schema (read-only).
+- **Gates**: `pytest tests/test_mcp_server.py` — **26 passed / 0 failed**
+  (19 pre-existing + 7 new pins, stdio handshake included); `ruff check` +
+  `ruff format --check` green on all touched Python files.
