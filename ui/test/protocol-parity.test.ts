@@ -36,6 +36,8 @@ export const TS_EVENT_TYPES = [
 	"approval.resumed",
 	"turn.ownership_lost",
 	"turn.cleanup_pending",
+	"auth.chatgpt.completed",
+	"auth.chatgpt.failed",
 	"permission.required",
 	"permission.resolved",
 ] as const satisfies readonly GatewayEvent["type"][];

@@ -1,0 +1,15 @@
+# Sign-in surface: login URL generation (no exchange)
+
+$ machina auth login --no-browser --timeout 0.3
+exit code: 1 (expected 1: timeout, no browser)
+Open this URL in your browser to sign in with ChatGPT:
+https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEE
+Z73f0CkXaXp7hrann&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&s
+cope=openid+profile+email+offline_access&code_challenge=veOCFmFlzeYI-jYmjMjVbby5
+QH1dXabrjP8wKEJLj04&code_challenge_method=S256&id_token_add_organizations=true&s
+tate=UUNtUppuRevNYwfu5H-bvgqyBqhrc2jjOByegydi650
+Waiting for the callback on 127.0.0.1:1455 (up to 0.3s)...
+✗ Sign-in timed out after 0.3s without a browser callback.
+  Run `machina auth login` again.
+
+note: the printed URL contains the one-time PKCE state and challenge; the code verifier is never printed, and no token exchange was attempted.

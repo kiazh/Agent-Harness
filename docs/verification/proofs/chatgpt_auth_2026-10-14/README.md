@@ -125,3 +125,12 @@ codex login status                    # expect: Logged in using ChatGPT
   catalog windows there is a follow-up owned by that file's lane.
 - `machina auth login` is deferred (CLI lane); the spec is reported in the
   lane summary.
+
+## Sign-in surface follow-up (CLI + gateway + TUI, added 2026-10-14)
+
+The user-facing sign-in surface for the same credentials is proven separately:
+[`signin_surface.md`](signin_surface.md) covers `machina auth
+login|status|logout`, the `auth.chatgpt.*` gateway methods with the
+`auth.chatgpt.completed` / `auth.chatgpt.failed` events, and the TUI `/auth`
+command (live CLI artifacts included; the browser exchange is the noted
+manual step).

@@ -235,6 +235,10 @@ export const settingsCommands: Command[] = [
 			if (!args) {
 				const { config } = await host.request<ConfigGetResult>("config.get");
 				host.print(`Provider: ${config.provider}`, "plain");
+				host.print(
+					"ChatGPT-account models need no API key — sign in with /auth first.",
+					"plain",
+				);
 			} else {
 				const provider = args.toLowerCase();
 				await setConfig(host, "provider", provider, false);

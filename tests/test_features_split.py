@@ -8,6 +8,10 @@ def test_all_feature_methods_accessible_after_split():
     from machina.gateway.features import METHODS
 
     expected = {
+        "auth.chatgpt.status",
+        "auth.chatgpt.login",
+        "auth.chatgpt.logout",
+        "auth.chatgpt.importCodex",
         "session.fork",
         "session.delete",
         "session.rename",
@@ -94,6 +98,7 @@ def test_submodules_importable():
     """Each domain module must be importable."""
     from machina.gateway.features import (
         agents,
+        auth_chatgpt,
         config,
         interop,
         jobs,
@@ -111,6 +116,7 @@ def test_submodules_importable():
     assert hasattr(config, "config_get")
     assert hasattr(secrets, "secrets_list")
     assert hasattr(interop, "interop_status")
+    assert hasattr(auth_chatgpt, "auth_chatgpt_status")
 
 
 def test_register_still_works():

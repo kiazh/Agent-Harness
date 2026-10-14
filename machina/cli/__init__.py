@@ -24,6 +24,7 @@ import machina.tools  # noqa: F401 — registers all built-in tools
 from machina import __version__, services
 from machina import interop as interop_mod
 from machina.cli import output
+from machina.cli.auth import app as auth_app
 from machina.cli.growth import app as growth_app
 from machina.cli.interop import app as interop_app
 from machina.cli.launcher import launch_ui
@@ -41,6 +42,7 @@ app = typer.Typer(
     help="Machina — self-hosted AI agent framework. Run `machina` to open the interactive UI.",
     invoke_without_command=True,
 )
+app.add_typer(auth_app, name="auth")
 app.add_typer(growth_app, name="growth")
 app.add_typer(interop_app, name="interop")
 

@@ -177,6 +177,12 @@ export class App implements FeatureHost {
 	/** Re-entrancy guard: a Down pressed while the subagent list is still
 	 *  being fetched must not stack a second picker (review round 4, F1). */
 	private agentMenuOpening = false;
+	/**
+	 * Feature-level event subscribers (e.g. /auth waiting on
+	 * auth.chatgpt.*). They observe every frame before turn bookkeeping,
+	 * own their own filtering, and never mutate turn state.
+	 */
+	private readonly featureEventHandlers = new Set<(event: GatewayEvent) => void>();
 	private resolveExit: () => void = () => {};
 	private inputListenerDisposer: (() => void) | undefined;
     private imageDraft = new ImageDraft();
@@ -333,6 +339,13 @@ export class App implements FeatureHost {
 	}
 
     copyText(text: string): Promise<boolean> { return copyClipboardText(text); }
+
+	onGatewayEvent(handler: (event: GatewayEvent) => void): () => void {
+		this.featureEventHandlers.add(handler);
+		return () => {
+			this.featureEventHandlers.delete(handler);
+		};
+	}
 
 	printMarkdown(text: string): void {
 		this.transcript.addMarkdown(text);
@@ -1153,6 +1166,10 @@ export class App implements FeatureHost {
 	// ─── gateway ────────────────────────────────────────────────────────────
 	private onEvent(event: GatewayEvent): void {
 		if (this.exiting) return;
+		for (const handler of [...this.featureEventHandlers]) handler(event);
+		// Feature-level frames carry no session/turn: they settle command
+		// flows above and must not enter turn bookkeeping or hidden tails.
+		if (event.type === "auth.chatgpt.completed" || event.type === "auth.chatgpt.failed") return;
 		this.shell.sync();
 		if (event.type === "growth.status") {
 			// Background training lands after the turn retires (and the

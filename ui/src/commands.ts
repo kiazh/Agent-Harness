@@ -51,7 +51,7 @@ const HELP_GROUPS: Array<[group: string, names: string[]]> = [
 	["Memory", ["memory", "growth", "persona", "skills"]],
 	["Context", ["context", "compress"]],
 	["Automation", ["jobs"]],
-	["Setup", ["keys", "models", "default-model", "provider", "effort", "config", "theme", "profile", "profiles", "mode", "approvals", "interop"]],
+	["Setup", ["auth", "keys", "models", "default-model", "provider", "effort", "config", "theme", "profile", "profiles", "mode", "approvals", "interop"]],
 	["Info", ["status", "usage", "output", "mcp", "help", "exit"]],
 ];
 

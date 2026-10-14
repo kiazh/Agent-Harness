@@ -1,0 +1,48 @@
+# Sign-in surface status proof (machina auth status)
+
+$ machina auth --help
+exit code: 0
+                                                                                
+ Usage: root [OPTIONS] COMMAND [ARGS]...                                        
+                                                                                
+ temporary CLI entry (real sub-app)                                             
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --install-completion          Install completion for the current shell.      │
+│ --show-completion             Show completion for the current shell, to copy │
+│                               it or customize the installation.              │
+│ --help                        Show this message and exit.                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ auth  Sign in to your ChatGPT account for the chatgpt provider.              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+$ machina auth status        # real home (read-only)
+exit code: 0
+ChatGPT account
+  Status: signed in (Machina token store)
+  Account: fa769bce-d56d-4776-b70c-e6816fe03cc8
+  Expires: 2026-10-23 10:23 UTC
+  Last refresh: 2026-10-13T10:23:18.610461Z
+
+$ machina auth status --json # real home (read-only)
+exit code: 0
+{"account_id": "fa769bce-d56d-4776-b70c-e6816fe03cc8", "expired": false, "expires_at": 1792750998.0, "last_refresh": "2026-10-13T10:23:18.610461Z", "signed_in": true, "source": "machina"}
+
+$ machina auth status --json # sandbox: codex credentials only
+exit code: 0
+{"account_id": "fa769bce-d56d-4776-b70c-e6816fe03cc8", "expired": false, "expires_at": 1792750998.0, "last_refresh": "2026-10-13T10:23:18.610461Z", "signed_in": true, "source": "codex"}
+
+$ machina auth status --json # sandbox after import
+exit code: 0
+{"account_id": "fa769bce-d56d-4776-b70c-e6816fe03cc8", "expired": false, "expires_at": 1792750998.0, "last_refresh": "2026-10-13T10:23:18.610461Z", "signed_in": true, "source": "machina"}
+
+$ machina auth status        # sandbox after import (human card)
+exit code: 0
+ChatGPT account
+  Status: signed in (Machina token store)
+  Account: fa769bce-d56d-4776-b70c-e6816fe03cc8
+  Expires: 2026-10-23 10:23 UTC
+  Last refresh: 2026-10-13T10:23:18.610461Z
+

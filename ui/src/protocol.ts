@@ -438,3 +438,35 @@ export interface InteropActionResult {
  verify: { ok?: boolean; detail?: string };
  argv: string[][];
 }
+
+// ─── ChatGPT-account sign-in (auth.chatgpt.* control plane) ─────────────────
+
+/** Sign-in status from auth.chatgpt.status; explicit fields, never tokens. */
+export interface ChatGPTAuthStatus {
+ signedIn: boolean;
+ source: "machina" | "codex" | null;
+ expired: boolean | null;
+ /** Unix seconds; null when unknown. */
+ expiresAt: number | null;
+ accountId: string | null;
+ lastRefresh: string | null;
+}
+
+export interface ChatGPTStatusResult {
+ status: ChatGPTAuthStatus;
+}
+
+export interface ChatGPTLoginResult {
+ url: string;
+ state: string;
+}
+
+export interface ChatGPTLogoutResult {
+ removed: boolean;
+ status: ChatGPTAuthStatus;
+}
+
+export interface ChatGPTImportResult {
+ imported: boolean;
+ status: ChatGPTAuthStatus;
+}

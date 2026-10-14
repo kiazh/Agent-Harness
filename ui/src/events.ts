@@ -15,6 +15,8 @@ export type CanonicalEvent = { protocolVersion: 2; sessionId: string; turnId: st
 	| { type: "approval.resumed"; requestId: string; originTurnId: string }
 	| { type: "turn.ownership_lost"; reason?: string }
 	| { type: "turn.cleanup_pending"; reason?: string }
+	| { type: "auth.chatgpt.completed"; account_id: string|null; expiry: number|null }
+	| { type: "auth.chatgpt.failed"; reason: string }
 );
 export type LegacyGatewayEvent = { protocolVersion?: 1; sessionId: string; turnId: string } & (
 	{ type: "message.start" }
@@ -32,5 +34,7 @@ export type LegacyGatewayEvent = { protocolVersion?: 1; sessionId: string; turnI
 	| { type: "approval.resumed"; requestId: string; originTurnId: string }
 	| { type: "turn.ownership_lost"; reason?: string }
 	| { type: "turn.cleanup_pending"; reason?: string }
+	| { type: "auth.chatgpt.completed"; account_id: string|null; expiry: number|null }
+	| { type: "auth.chatgpt.failed"; reason: string }
 );
 export type GatewayEvent = CanonicalEvent | LegacyGatewayEvent;

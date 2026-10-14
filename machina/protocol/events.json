@@ -74,6 +74,13 @@
     },
     "turn.cleanup_pending": {
       "reason?": "string"
+    },
+    "auth.chatgpt.completed": {
+      "account_id": "string|null",
+      "expiry": "number|null"
+    },
+    "auth.chatgpt.failed": {
+      "reason": "string"
     }
   }
 }

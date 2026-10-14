@@ -1,7 +1,7 @@
 // Shared types and helpers for feature commands.
 
 import type { AutocompleteItem, SelectItem, SlashCommand } from "@earendil-works/pi-tui";
-import type { ConfigResult, HistoryEntry, SessionInfo } from "../protocol.ts";
+import type { ConfigResult, GatewayEvent, HistoryEntry, SessionInfo } from "../protocol.ts";
 
 export type NoticeKind = "info" | "plain" | "success" | "warning" | "error";
 
@@ -66,6 +66,13 @@ export interface FeatureHost {
 	showOAuthProgress(options: OAuthProgressOptions): OAuthProgressHandle;
 	/** Copy a transient value using the local OS clipboard, if available. */
 	copyText?(text: string): Promise<boolean>;
+	/**
+	 * Observe every gateway event frame (feature-level flows like
+	 * auth.chatgpt.* settle on their terminal event). Returns an unsubscribe
+	 * function. Optional: hosts without streaming omit it and commands fall
+	 * back to bounded polling.
+	 */
+	onGatewayEvent?(handler: (event: GatewayEvent) => void): () => void;
 	/** Inspect locally retained tool output; never re-executes tools. */
 	inspectOutput(toolId?: string): Promise<void>;
 	/** Active user profile id (preferences bucket + new-chat agent scope). */

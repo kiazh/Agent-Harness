@@ -1,0 +1,44 @@
+# Sign-in surface: import + logout scope
+
+$ machina auth login --import-codex  # sandboxed store
+exit code: 0
+✓ Signed in to ChatGPT (fa769bce-d56d-4776-b70c-e6816fe03cc8).
+  Access token expires: 2026-10-23 10:23 UTC
+Tokens live in 
+/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-signin-proof-ef7v0_lu/m
+achina-auth/chatgpt.json; the chatgpt provider uses them.
+
+$ machina auth logout        # sandboxed store only
+exit code: 0
+✓ Signed out of ChatGPT (removed 
+/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/machina-signin-proof-ef7v0_lu/m
+achina-auth/chatgpt.json).
+Codex CLI credentials (~/.codex/auth.json) were left untouched and will be 
+imported on the next call.
+
+$ machina auth status --json # sandbox after logout
+exit code: 0
+{"account_id": "fa769bce-d56d-4776-b70c-e6816fe03cc8", "expired": false, "expires_at": 1792750998.0, "last_refresh": "2026-10-13T10:23:18.610461Z", "signed_in": true, "source": "codex"}
+
+
+scope evidence (sandbox):
+  machina store perms before logout: 0o600
+  machina store exists after logout: False
+  codex auth.json sha256 before/after import: 05355a83af8722c3c10181b3e307134c79cd6d5edb097b9709eae048d91587c6 / 05355a83af8722c3c10181b3e307134c79cd6d5edb097b9709eae048d91587c6
+  codex auth.json sha256 after logout:        05355a83af8722c3c10181b3e307134c79cd6d5edb097b9709eae048d91587c6
+  codex copy untouched: True
+
+checks:
+  PASS real status signed_in is a boolean
+  PASS sandbox codex-only status signed_in
+  PASS sandbox codex-only status source
+  PASS import wrote the sandbox store
+  PASS import status source machina
+  PASS import status account id
+  PASS codex file byte-identical after import
+  PASS login printed a URL and timed out cleanly
+  PASS logout removed the sandbox store
+  PASS codex file byte-identical after logout
+  PASS status after logout falls back to codex
+
+redaction scan: 0 token values found

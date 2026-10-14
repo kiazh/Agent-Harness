@@ -20,6 +20,12 @@ from machina.gateway.features.agents import (
     agents_run,
     agents_save,
 )
+from machina.gateway.features.auth_chatgpt import (
+    auth_chatgpt_import_codex,
+    auth_chatgpt_login,
+    auth_chatgpt_logout,
+    auth_chatgpt_status,
+)
 from machina.gateway.features.config import (
     config_get,
     profile_get,
@@ -126,6 +132,10 @@ __all__ = [
 Handler = Callable[["Gateway", dict[str, Any]], Awaitable[dict[str, Any]]]
 
 METHODS: dict[str, Handler] = {
+    "auth.chatgpt.status": auth_chatgpt_status,
+    "auth.chatgpt.login": auth_chatgpt_login,
+    "auth.chatgpt.logout": auth_chatgpt_logout,
+    "auth.chatgpt.importCodex": auth_chatgpt_import_codex,
     "mcp.list": mcp_list,
     "mcp.status": mcp_status,
     "mcp.configure": mcp_configure,

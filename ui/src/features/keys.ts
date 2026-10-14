@@ -66,7 +66,7 @@ export const keysCommand: Command = {
 		}
 		if (sub === "list") {
 			const { secrets, envFile } = await host.request<SecretsListResult>("secrets.list");
-			host.print(`${statusTable(secrets)}\n\nFile: ${envFile}\nValues are never shown. Use /keys set KEY VALUE to update one.`, "plain");
+			host.print(`${statusTable(secrets)}\n\nFile: ${envFile}\nValues are never shown. Use /keys set KEY VALUE to update one.\nChatGPT-account models need no key — sign in with /auth instead.`, "plain");
 			return;
 		}
 		if (sub === "set") {
