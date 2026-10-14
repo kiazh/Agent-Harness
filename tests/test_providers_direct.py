@@ -79,6 +79,9 @@ def test_providers_tuple_lists_every_family():
         "together",
         "deepseek",
         "xai",
+        "opencode",
+        "chatgpt",
+        "custom",
         "ollama",
     }
 
@@ -109,6 +112,13 @@ def test_direct_specs_have_accurate_base_urls_and_keys():
             "https://generativelanguage.googleapis.com/v1beta/openai/",
             "GOOGLE_API_KEY",
             "gemini-2.0-flash",
+        ),
+        "opencode": (
+            # Probed live 2026-10-14; opencode.ai/zen/v1 serves an identical
+            # catalog and is available via the opencode_base_url override.
+            "https://opencode.ai/inference/v1",
+            "OPENCODE_API_KEY",
+            "big-pickle",
         ),
     }
     assert set(PROVIDER_SPECS) == set(expected)
@@ -424,7 +434,7 @@ def test_stream_usage_flag_only_where_documented():
 
     assert PROVIDER_SPECS["openai"].stream_usage is True
     assert PROVIDER_SPECS["deepseek"].stream_usage is True
-    for name in ("xai", "groq", "together", "mistral", "google"):
+    for name in ("xai", "groq", "together", "mistral", "google", "opencode"):
         assert PROVIDER_SPECS[name].stream_usage is False, name
 
 

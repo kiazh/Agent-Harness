@@ -19,6 +19,8 @@ _SECRET_CONFIG_KEYS = (
     "together_api_key",
     "deepseek_api_key",
     "xai_api_key",
+    "opencode_api_key",
+    "custom_api_key",
     "cohere_api_key",
     "database_url",
 )

@@ -1,0 +1,35 @@
+New session: c9a12d9c-540e-48c8-99a0-fff1e2cc4307
+Model: gpt-6.1-sol (chatgpt)
+Mode: ask (backend: host)
+
+2026-10-14 13:31:41,998 [AUDIT] {"timestamp": 1791999101.9982378, "event": "agent_run_stream_start", "session_id": "c9a12d9c-540e-48c8-99a0-fff1e2cc4307", "agent_id": "harness"}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 13:31:42,035 [AUDIT] {"timestamp": 1791999102.035296, "event": "rag_embed_start", "model": "BAAI/bge-small-en-v1.5", "count": 1, "provider": "onnx"}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 13:31:42,641 [AUDIT] {"timestamp": 1791999102.6410859, "event": "rag_embed_complete", "model": "BAAI/bge-small-en-v1.5", "count": 1}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 13:31:42,707 [AUDIT] {"timestamp": 1791999102.7075992, "event": "rag_search_start", "session_id": "c9a12d9c-540e-48c8-99a0-fff1e2cc4307", "top_k": 5}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 13:31:42,707 [AUDIT] {"timestamp": 1791999102.7078779, "event": "rag_embed_start", "model": "BAAI/bge-small-en-v1.5", "count": 1, "provider": "onnx"}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 13:31:42,810 [AUDIT] {"timestamp": 1791999102.810451, "event": "rag_embed_complete", "model": "BAAI/bge-small-en-v1.5", "count": 1}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 13:31:42,820 [AUDIT] {"timestamp": 1791999102.820042, "event": "rag_search_complete", "session_id": "c9a12d9c-540e-48c8-99a0-fff1e2cc4307", "dense_results": 0, "sparse_results": 0, "fused_results": 0, "top_k": 10, "degraded": false}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 13:31:42,820 [AUDIT] {"timestamp": 1791999102.8202398, "event": "rag_search_complete", "session_id": "c9a12d9c-540e-48c8-99a0-fff1e2cc4307", "results_returned": 0}
+Audit event dropped before the writer started; event was not persisted
+Skipping skill /Users/shadow/machina/skills/cost-optimization/SKILL.md: ValueError
+Skipping skill /Users/shadow/machina/skills/prompt-engineering/SKILL.md: ValueError
+2026-10-14 13:31:42,897 [AUDIT] {"timestamp": 1791999102.897002, "event": "llm_stream_start", "provider": "chatgpt", "model": "gpt-6.1-sol", "message_count": 1}
+Audit event dropped before the writer started; event was not persisted
+cli-chatgpt-proof-ok2026-10-14 13:31:47,020 [AUDIT] {"timestamp": 1791999107.0203378, "event": "llm_stream_complete", "provider": "chatgpt", "model": "gpt-6.1-sol", "tool_calls": 0}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 13:31:47,031 [AUDIT] {"timestamp": 1791999107.031057, "event": "agent_run_complete", "session_id": "c9a12d9c-540e-48c8-99a0-fff1e2cc4307", "iterations": 1, "total_tokens": 4432, "tool_calls_count": 0}
+Audit event dropped before the writer started; event was not persisted
+
+Iterations: 1 | Tool calls: 0 | Tokens: 4432
+Session ID: c9a12d9c-540e-48c8-99a0-fff1e2cc4307
+2026-10-14 13:31:47,058 [AUDIT] {"timestamp": 1791999107.058784, "event": "llm_stream_start", "provider": "chatgpt", "model": "gpt-6.1-sol", "message_count": 2}
+Audit event dropped before the writer started; event was not persisted
+2026-10-14 13:31:49,877 [AUDIT] {"timestamp": 1791999109.877223, "event": "llm_stream_complete", "provider": "chatgpt", "model": "gpt-6.1-sol", "tool_calls": 0}
+Audit event dropped before the writer started; event was not persisted

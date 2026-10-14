@@ -51,17 +51,19 @@ class DirectProvider(LLMProvider):
     ) -> None:
         self.spec = spec
         self.api_key = api_key or config.get(spec.config_key) or ""
-        if not self.api_key:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        elif spec.requires_key:
+            # Hosted vendors fail fast on a missing key. Keyless local
+            # endpoints (custom spec) simply send no Authorization header.
             raise ValidationError(f"{spec.api_key_env} not set")
         self.model = model or spec.default_model
         self._default_effort = normalize_reasoning_effort(reasoning_effort)
         self._rate_limiter = _get_rate_limiter(spec.name)
         self.client = httpx.AsyncClient(
             base_url=spec.base_url,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             timeout=120.0,
         )
 

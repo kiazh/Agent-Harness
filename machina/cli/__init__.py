@@ -170,7 +170,12 @@ def chat(
         None,
         "--provider",
         "-p",
-        help="LLM provider (openrouter, openai, anthropic, google, mistral, groq, together, deepseek, xai, ollama)",
+        help=(
+            "LLM provider (openrouter, openai, anthropic, chatgpt, google, mistral, groq, "
+            "together, deepseek, xai, opencode, custom, ollama). "
+            "opencode = OpenCode Zen gateway (OPENCODE_API_KEY); custom = any "
+            "OpenAI-compatible base URL (CUSTOM_BASE_URL, key optional)"
+        ),
     ),
     verbose: bool = typer.Option(True, "--verbose/--quiet", "-v/-q", help="Show tool calls"),
     interactive: bool = typer.Option(False, "--interactive", "-i", help="Open the interactive UI"),

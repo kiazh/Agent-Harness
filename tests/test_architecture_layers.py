@@ -157,7 +157,7 @@ _CORE_IMPORT_CEILINGS = {
 # machina/research/benchmark.py's architecture section (round-2 review N6:
 # the hand-mirrored literal drifted once already). Moves only with the delta
 # table documented inside test_deferred_import_count_ratchet.
-DEFERRED_IMPORT_CAP = 683
+DEFERRED_IMPORT_CAP = 684
 
 
 def test_module_level_core_imports_only_shrink():
@@ -223,6 +223,10 @@ def test_deferred_import_count_ratchet():
     #   helper, binding the stdlib-only leaf lazily so importing
     #   ``machina.interop`` never pulls the agent runtime (same idiom as the
     #   mcp_server shim). Census 682 -> 683, so cap 682 -> 683.
+    #   Provider wave (2026-10-14): +1 machina/core/runtime.py — the chatgpt
+    #   readiness branch binds chatgpt_auth.status lazily so a status probe
+    #   never imports the auth/provider modules unless chatgpt is selected.
+    #   Census 683 -> 684, so cap 683 -> 684.
     # Procedure: this number may only move with a delta table like the above
     # in this comment; silent growth fails the suite by design.
     total = sum(_deferred_import_count(p) for p in ROOT.rglob("*.py"))
@@ -266,13 +270,26 @@ def test_deferred_import_count_ratchet():
 #     / ``done: true``) so clean EOF without them raises ProviderError. The
 #     shared carrier key lives in core/prompt.py (not pinned here).
 #     Final observed delta after the wave draft: anthropic/package +2 (564/2915).
+#   core/provider chatgpt lane (2026-10-14): +596 lines — new
+#     core/provider/chatgpt.py (590): ChatGPT-account Codex-protocol transport
+#     (Responses SSE parsing with response.completed terminal discipline,
+#     function-call accumulation, 401 -> refresh -> retry-once, 429 ->
+#     RateLimitError, usage mapping); factory.py 39 -> 43 (chatgpt branch),
+#     __init__.py 51 -> 52 (export), specs.py 103 -> 104 (PROVIDERS entry).
+#     Package total 2915 -> 3511 by exactly this delta.
+#   free-models lane (2026-10-14): +67 provider lines — the generic "custom"
+#     OpenAI-compatible provider (factory.py 43 -> 87: dynamic spec from
+#     custom_base_url with optional key, explicit model requirement, and the
+#     opencode base-url override; specs.py 104 -> 125: ProviderSpec.requires_key
+#     + OpenCode Zen preset + "custom" PROVIDERS entry; direct.py 337 -> 339:
+#     keyless specs send no Authorization header). Package total 3511 -> 3578.
 GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
     ("core/agent.py", 2057),
     ("core/compression.py", 999),
-    ("core/provider/__init__.py", 51),
+    ("core/provider/__init__.py", 52),
     ("core/provider/_log.py", 10),
     ("core/provider/reasoning.py", 61),
-    ("core/provider/specs.py", 103),
+    ("core/provider/specs.py", 125),
     ("core/provider/audit.py", 147),
     ("core/provider/rate_limit.py", 79),
     ("core/provider/caches.py", 97),
@@ -280,9 +297,10 @@ GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
     ("core/provider/base.py", 60),
     ("core/provider/openrouter.py", 607),
     ("core/provider/ollama.py", 378),
-    ("core/provider/direct.py", 337),
+    ("core/provider/direct.py", 339),
     ("core/provider/anthropic.py", 564),
-    ("core/provider/factory.py", 39),
+    ("core/provider/chatgpt.py", 590),
+    ("core/provider/factory.py", 87),
 )
 
 
@@ -296,7 +314,9 @@ def test_god_file_ceilings_only_fall(relative_path, ceiling):
 # Provider package total (W5 split). Ratchets down, never up: keeps the split
 # from silently regrowing into one god module or sprawling into new files.
 # 2915 = 2804 at split landing + 111 for the reviewed R06/R08 delta above.
-_PROVIDER_PACKAGE_TOTAL_CEILING = 2915
+# 3511 = 2915 + 596 for the reviewed chatgpt-lane delta above.
+# 3578 = 3511 + 67 for the reviewed free-models lane delta above.
+_PROVIDER_PACKAGE_TOTAL_CEILING = 3578
 
 
 def test_provider_package_total_only_falls():

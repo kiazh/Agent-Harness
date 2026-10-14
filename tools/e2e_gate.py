@@ -768,7 +768,8 @@ async def main():
                     "facade_consistent": bool(
                         not facade_missing
                         and selected in PROVIDERS
-                        and set(PROVIDER_SPECS) | {"openrouter", "anthropic", "ollama"}
+                        and set(PROVIDER_SPECS)
+                        | {"openrouter", "anthropic", "chatgpt", "custom", "ollama"}
                         == set(PROVIDERS)
                     ),
                     "chat_provider": detection.get("chat_provider"),

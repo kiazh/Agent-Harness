@@ -1,0 +1,19 @@
+# OpenCode Zen probe — 2026-10-14T17:31:36Z
+
+## GET /models (no auth)
+$ curl -sS -m 15 -o models_inference_v1.json -w "%{http_code}" https://opencode.ai/inference/v1/models
+inference/v1 -> HTTP 200
+$ curl -sS -m 15 -o models_zen_v1.json -w "%{http_code}" https://opencode.ai/zen/v1/models
+zen/v1 -> HTTP 200
+$ diff -q models_inference_v1.json models_zen_v1.json
+bodies identical
+
+## POST /chat/completions — no auth (free-tier gate)
+$ curl -sS -m 20 -o unauth_chat_completion.json -w "%{http_code}" -X POST https://opencode.ai/inference/v1/chat/completions -H "Content-Type: application/json" -d "{\"model\":\"big-pickle\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}"
+-> HTTP 403
+body: {"type":"error","error":{"type":"FreeTierError","message":"OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."}}
+
+## POST /chat/completions — placeholder bearer (no real key; shows the auth gate)
+$ curl -sS -m 20 -o invalid_key_chat_completion.json -w "%{http_code}" -X POST https://opencode.ai/inference/v1/chat/completions -H "Authorization: Bearer probe-placeholder-key" -H "Content-Type: application/json" -d "{\"model\":\"big-pickle\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}"
+-> HTTP 403
+body: {"type":"error","error":{"type":"FreeTierError","message":"OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."}}

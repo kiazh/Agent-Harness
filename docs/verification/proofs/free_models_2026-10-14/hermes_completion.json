@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "errors": [
+    "stepfun/step-5-preview: HTTPStatusError: Client error '404 Not Found' for url 'http://127.0.0.1:8645/v1/chat/completions'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404",
+    "stepfun/step-5-preview:free: HTTPStatusError: 429 Too Many Requests (attempt 1/1)"
+  ]
+}

@@ -1,0 +1,2 @@
+{"status":404,"message":"Model 'stepfun/step-5-preview' requires available credits. Your account balance is too low to use paid models — add credits at https://portal.nousresearch.com or pick a free model.","code":"insufficient_credits_for_paid_model"}
+HTTP 404

@@ -24,6 +24,7 @@ class ProviderSpec:
         reasoning: str = "none",
         description: str = "",
         stream_usage: bool = False,
+        requires_key: bool = True,
     ) -> None:
         self.name = name
         self.base_url = base_url
@@ -35,6 +36,10 @@ class ProviderSpec:
         # Whether the vendor honors stream_options.include_usage. Only set
         # for vendors whose docs confirm it — others 400 on the param.
         self.stream_usage = stream_usage
+        # Hosted vendors fail fast when the key env is absent. The custom
+        # provider spec (built in factory.py) sets False: keyless local
+        # OpenAI-compatible servers are a supported mode.
+        self.requires_key = requires_key
 
 
 PROVIDER_SPECS: dict[str, ProviderSpec] = {
@@ -96,8 +101,25 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         reasoning="none",
         description="Google (Gemini models, OpenAI-compat endpoint)",
     ),
+    "opencode": ProviderSpec(
+        name="opencode",
+        # OpenCode Zen gateway. Both candidate bases
+        # (https://opencode.ai/inference/v1 and https://opencode.ai/zen/v1)
+        # were probed live on 2026-10-14 and served an identical model list;
+        # the V2 docs name this one. Override any time with the
+        # opencode_base_url config key / OPENCODE_BASE_URL env var.
+        base_url="https://opencode.ai/inference/v1",
+        api_key_env="OPENCODE_API_KEY",
+        default_model="big-pickle",
+        reasoning="none",
+        description="OpenCode Zen (free + paid models, OpenAI-compatible gateway)",
+    ),
 }
 
 # Every chat provider the harness can route to: OpenRouter (multi-model),
-# the direct families above, Anthropic (native API), and local Ollama.
-PROVIDERS = ("openrouter", *tuple(PROVIDER_SPECS), "anthropic", "ollama")
+# the direct families above, Anthropic (native API), local Ollama, ChatGPT
+# subscription accounts (Codex protocol; auth-file based, no API key), and
+# "custom" — any OpenAI-compatible endpoint configured via CUSTOM_BASE_URL
+# (built dynamically in factory.py, so it is deliberately absent from
+# PROVIDER_SPECS, the fixed vendor table).
+PROVIDERS = ("openrouter", *tuple(PROVIDER_SPECS), "anthropic", "chatgpt", "custom", "ollama")

@@ -314,6 +314,30 @@ def _detect_providers() -> dict[str, Any]:
         if selected == "openrouter":
             key_ok = bool(config.get("openrouter_api_key"))
             reason = "" if key_ok else "OPENROUTER_API_KEY not set"
+        elif selected == "custom":
+            # Any OpenAI-compatible endpoint: the base URL is what's required;
+            # the key is optional (keyless local servers are a supported mode).
+            if str(config.get("custom_base_url") or "").strip():
+                key_ok = True
+                if not config.get("custom_api_key"):
+                    reason = "no key (local endpoint)"
+            else:
+                reason = "custom_base_url not set"
+        elif selected == "chatgpt":
+            # ChatGPT-account usage (Codex protocol): readiness comes from the
+            # auth store (Machina's token file or an existing Codex login),
+            # never from an env key.
+            from machina.security.chatgpt_auth import status as _chatgpt_status
+
+            st = _chatgpt_status()
+            if st.get("signed_in"):
+                key_ok = True
+                if st.get("expired"):
+                    reason = "session expired; refreshes on the next call"
+                elif st.get("source") == "codex":
+                    reason = "via Codex login (run `machina auth login --import-codex` to copy it)"
+            else:
+                reason = "not signed in - run `machina auth login` (or --import-codex)"
         elif selected == "ollama":
             key_ok = _ollama_reachable()
             reason = "" if key_ok else "Ollama daemon unreachable"
