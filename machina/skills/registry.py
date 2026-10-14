@@ -309,7 +309,7 @@ class SkillParser:
             raise ValueError("skill triggers must be a list of short strings")
 
     @staticmethod
-    def _validate_content(content: str, source_path: str = "") -> str:
+    def _validate_content(content: str) -> str:
         """Validate skill content for prompt injection attempts.
 
         Returns the content if safe, raises ValueError if suspicious patterns found.
@@ -334,7 +334,7 @@ class SkillParser:
         # Extract YAML frontmatter
         frontmatter_match = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)
         if not frontmatter_match:
-            content = SkillParser._validate_content(text, str(path))
+            content = SkillParser._validate_content(text)
             SkillParser._validate_metadata(path.parent.name, "", [])
             return Skill(
                 name=path.parent.name,
@@ -346,7 +346,7 @@ class SkillParser:
             )
 
         yaml_text = frontmatter_match.group(1)
-        content = SkillParser._validate_content(frontmatter_match.group(2).strip(), str(path))
+        content = SkillParser._validate_content(frontmatter_match.group(2).strip())
 
         # Parse YAML frontmatter with PyYAML
         try:
@@ -798,7 +798,7 @@ class SkillRegistry(SkillSource):
             SkillParser._scan_injection(description)
             skill.description = description
         if content is not None:
-            skill.content = SkillParser._validate_content(content, skill.file_path)
+            skill.content = SkillParser._validate_content(content)
         if triggers is not None:
             for _t in triggers:
                 SkillParser._scan_injection(_t)

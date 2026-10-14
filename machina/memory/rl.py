@@ -107,13 +107,11 @@ class MemoryReward:
     def compute_trajectory_reward(
         self,
         task_success: bool,
-        memory_operations: list[MemoryDecision],
     ) -> float:
         """Sparse trajectory-level reward for task completion.
 
         Args:
             task_success: Whether the task was completed successfully.
-            memory_operations: List of memory decisions made during the trajectory.
 
         Returns:
             +1.0 for success, -0.1 for failure.

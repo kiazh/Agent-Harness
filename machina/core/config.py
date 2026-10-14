@@ -124,7 +124,6 @@ DEFAULTS: dict[str, Any] = {
     # cacheable prompt length plus real-turn prefix stability.
     "prompt_cache_enabled": False,
     "theme": "codex",
-    "history_size": 100,
     # API keys and service URLs
     "openrouter_api_key": "",
     "openai_api_key": "",
@@ -256,7 +255,6 @@ def _check_int_bounds(key: str, val: int) -> None:
         "usage_session_request_limit": (0, None),
         "usage_agent_token_limit": (0, None),
         "usage_agent_request_limit": (0, None),
-        "history_size": (1, 10000),
         "compression_preserve_recent": (0, 100),
         "learning_review_max_per_session": (0, 100),
         "eviction_max_tokens": (0, None),
@@ -313,7 +311,6 @@ class Config:
     streaming: bool = True
     prompt_cache_enabled: bool = False
     theme: str = "codex"
-    history_size: int = 100
     # API keys and service URLs
     openrouter_api_key: str = field(default="", repr=False)
     openai_api_key: str = field(default="", repr=False)

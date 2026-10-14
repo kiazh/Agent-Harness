@@ -381,7 +381,7 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
         # timeout, or lease loss (AH-AUDIT-023). --rm removes it on stop.
         container_name = f"machina-term-{_uuid.uuid4().hex[:12]}"
         workspace = resolved_workdir
-        image = os.environ.get("MACHINA_TERMINAL_IMAGE", "machina-tool-sandbox:latest")
+        image = config.get("terminal_image")
         # Broker-authorized project workflows may write in every mode. The
         # container root stays read-only; only /tmp and /workspace are writable.
         _mm = _call_mode()

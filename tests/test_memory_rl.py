@@ -243,41 +243,15 @@ class TestTrajectoryReward:
 
     def test_trajectory_reward_success(self, reward):
         """Verify task success gives positive reward."""
-        decisions = [
-            MemoryDecision(
-                action=MemoryAction.STORE,
-                target_id=None,
-                content="fact",
-                importance=0.5,
-            )
-        ]
-        r = reward.compute_trajectory_reward(task_success=True, memory_operations=decisions)
+        r = reward.compute_trajectory_reward(task_success=True)
         assert r > 0
         assert r == pytest.approx(1.0)
 
     def test_trajectory_reward_failure(self, reward):
         """Verify task failure gives negative reward."""
-        decisions = [
-            MemoryDecision(
-                action=MemoryAction.STORE,
-                target_id=None,
-                content="fact",
-                importance=0.5,
-            )
-        ]
-        r = reward.compute_trajectory_reward(task_success=False, memory_operations=decisions)
+        r = reward.compute_trajectory_reward(task_success=False)
         assert r < 0
         assert r == pytest.approx(-0.1)
-
-    def test_trajectory_reward_success_with_multiple_ops(self, reward):
-        """Verify trajectory reward is independent of operation count."""
-        decisions = [
-            MemoryDecision(action=MemoryAction.STORE, content="a", importance=0.5),
-            MemoryDecision(action=MemoryAction.STORE, content="b", importance=0.5),
-            MemoryDecision(action=MemoryAction.DELETE, target_id=uuid.uuid4()),
-        ]
-        r = reward.compute_trajectory_reward(task_success=True, memory_operations=decisions)
-        assert r == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------

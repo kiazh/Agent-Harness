@@ -43,7 +43,7 @@ def _is_test(path_rel: str) -> bool:
     return base.startswith("test_") or base.endswith("_test.py") or path_rel.startswith("tests/")
 
 
-def _parse(path_abs: str, source: str) -> tuple[int, list[str], bool]:
+def _parse(source: str) -> tuple[int, list[str], bool]:
     """Return (loc, raw_imports, is_entry_point). Never raises on syntax errors."""
     loc = source.count("\n") + (1 if source and not source.endswith("\n") else 0)
     try:
@@ -111,7 +111,7 @@ def build_repomap(root: str, cache: ContentHashCache | None = None) -> RepoMap:
                 except OSError:
                     continue
                 m.files_scanned += 1
-                loc, imports, entry = _parse(abs_path, source)
+                loc, imports, entry = _parse(source)
                 cache.store(abs_path, (loc, imports, entry))
             m.loc_by_file[rel] = loc
             m.total_loc += loc

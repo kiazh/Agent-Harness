@@ -18,7 +18,7 @@ from typing import Any
 
 from machina.memory.models import MemoryEntry
 from machina.memory.policy import GroupRelativeTrainer, MemoryPolicy
-from machina.memory.rl import MemoryAction, MemoryDecision, MemoryReward, MemoryState
+from machina.memory.rl import MemoryAction, MemoryReward, MemoryState
 
 
 @dataclass(frozen=True)
@@ -119,9 +119,7 @@ def train_from_file(
         outcome = by_identity[id(state)][action]
         return reward_model.aggregate_rewards(
             [reward_model.compute_step_reward(action, state, outcome)],
-            reward_model.compute_trajectory_reward(
-                outcome["task_success"], [MemoryDecision(action)]
-            ),
+            reward_model.compute_trajectory_reward(outcome["task_success"]),
             reward_model.compute_consistency_reward(outcome["persona_consistency"]),
         )
 

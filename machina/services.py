@@ -334,7 +334,7 @@ async def compress_session(
                     record_failure("services.compress_session", _boundary_error)
 
 
-async def _estimate_next_request(session_id, budget: int) -> int:
+async def _estimate_next_request(session_id) -> int:
     """Conservative approximation of the next model request (AH-AUDIT-041).
 
     This is an approximation, not a measurement of the rendered request:
@@ -454,7 +454,7 @@ async def maybe_auto_compact(session_id) -> dict | None:
             threshold = float(config.get("compression_threshold") or 0.8)
         except Exception:
             threshold = 0.8
-        if await _estimate_next_request(session_id, budget) < int(budget * threshold):
+        if await _estimate_next_request(session_id) < int(budget * threshold):
             return None
         # No-progress guard: skip when a previous run already compacted at
         # nearly this size.

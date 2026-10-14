@@ -612,7 +612,6 @@ class BaseReActAgent:
             )
         recent = await context_manager.get_recent_context(session_id, limit=10)
         retrieved_chunks: list[tuple] = []
-        self._last_retrieval_mode = "disabled"
 
         # Retrieve relevant long-term memories (optional). memory_enabled
         # gates auto-retrieval; explicit remember/recall tools stay available
@@ -649,8 +648,6 @@ class BaseReActAgent:
                 _rsi_choice.set(decision.get("rsi", {}))
                 growth_state = "active"
                 retrieve_memory = decision["action"] == "retrieve"
-                if not retrieve_memory:
-                    self._last_retrieval_mode = "policy-noop"
             except Exception as exc:
                 record_failure("agent.growth.prepare", exc)
         if include_memory and memory_enabled and retrieve_memory:
@@ -658,7 +655,6 @@ class BaseReActAgent:
                 from machina.memory.embeddings import embed_query
 
                 query_embedding = await embed_query(user_message)
-                self._last_retrieval_mode = "dense+sparse" if query_embedding else "keyword-only"
                 retrieved_memories = await self.memory_retriever.retrieve(
                     query=user_message,
                     agent_id=self.agent_id,

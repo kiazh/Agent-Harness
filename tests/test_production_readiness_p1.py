@@ -153,7 +153,7 @@ async def test_estimate_survives_session_lookup_failure(monkeypatch):
         monkeypatch.setattr(admod.agent_registry, "get", boom_reg)
     except Exception:
         pass
-    val = await svc._estimate_next_request(uuid.uuid4(), 8000)
+    val = await svc._estimate_next_request(uuid.uuid4())
     assert isinstance(val, int) and val > 0 and val != float("inf")
 
 
