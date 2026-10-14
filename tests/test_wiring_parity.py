@@ -212,11 +212,11 @@ def test_stagnation_mapping_rule():
     from machina.controller import wiring
 
     # Retrieval repeats: stable target, zero bytes (stagnation-eligible).
-    assert wiring.target_bytes("session_recall", {"query": "q"}, "echo", "completed") == ("q", 0)
+    assert wiring.target_bytes("session_recall", {"query": "q"}) == ("q", 0)
     # Execution/IO/unknown shapes: conservative progress, never a forced stop.
-    assert wiring.target_bytes("read_file", {"path": "/tmp/x"}, "Error: missing", "failed")[1] == 1
-    assert wiring.target_bytes("some_future_tool", {"a": 1}, "", "completed")[1] == 1
-    assert wiring.target_bytes("write_file", {"path": "f"}, "ok", "completed")[1] == 1
+    assert wiring.target_bytes("read_file", {"path": "/tmp/x"})[1] == 1
+    assert wiring.target_bytes("some_future_tool", {"a": 1})[1] == 1
+    assert wiring.target_bytes("write_file", {"path": "f"})[1] == 1
 
 
 def test_stagnation_targets_distinct_per_tool_arguments():
@@ -228,17 +228,17 @@ def test_stagnation_targets_distinct_per_tool_arguments():
     """
     from machina.controller import wiring
 
-    a = wiring.target_bytes("web_extract", {"url": "https://a.example"}, "", "completed")
-    b = wiring.target_bytes("web_extract", {"url": "https://b.example"}, "", "completed")
+    a = wiring.target_bytes("web_extract", {"url": "https://a.example"})
+    b = wiring.target_bytes("web_extract", {"url": "https://b.example"})
     assert a != b and a[1] == 0 and b[1] == 0
     # Identical repeat still collapses (stagnation remains detectable).
-    assert wiring.target_bytes("web_extract", {"url": "https://a.example"}, "", "completed") == a
+    assert wiring.target_bytes("web_extract", {"url": "https://a.example"}) == a
 
-    p1 = wiring.target_bytes("search_files", {"pattern": "alpha", "path": "."}, "", "completed")
-    p2 = wiring.target_bytes("search_files", {"pattern": "beta", "path": "."}, "", "completed")
+    p1 = wiring.target_bytes("search_files", {"pattern": "alpha", "path": "."})
+    p2 = wiring.target_bytes("search_files", {"pattern": "beta", "path": "."})
     assert p1 != p2
     # Same pattern in a different subtree is new coverage too.
-    p3 = wiring.target_bytes("search_files", {"pattern": "alpha", "path": "src"}, "", "completed")
+    p3 = wiring.target_bytes("search_files", {"pattern": "alpha", "path": "src"})
     assert p3 != p1
 
 

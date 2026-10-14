@@ -113,11 +113,6 @@ class GrowthStore:
                 )
         return notes
 
-    async def replace_notes(self, agent_id: str, notes: dict) -> None:
-        """Explicit human snapshot restore, atomically revisioned like teaching."""
-        async with self.db.acquire() as conn, conn.transaction():
-            await self.replace_notes_on_connection(agent_id, notes, conn)
-
     async def replace_notes_on_connection(self, agent_id: str, notes: dict, conn) -> None:
         """Caller owns the transaction shared with an identity import."""
         from machina.soulspec.runtime import validate_notes

@@ -361,6 +361,7 @@ class MemoryStore:
             memory_ids,
         )
 
+    # Tests only; kept as a direct-update test seam (review 2026-10-14).
     async def update_importance(self, memory_id: uuid.UUID, importance: float) -> None:
         """Update the importance score of a memory."""
         importance = max(0.0, min(1.0, importance))
@@ -412,6 +413,7 @@ class MemoryStore:
             result = await db.fetchval(f"SELECT COUNT(*) FROM memories {where}".strip())  # nosec B608 # Fixed SQL fragments; external values use bound parameters.
         return result or 0
 
+    # Tests only; kept as a cleanup test seam (review 2026-10-14).
     async def delete_by_session(self, session_id: uuid.UUID) -> int:
         """Delete all memories associated with a session. Returns count deleted."""
         result = await db.execute(

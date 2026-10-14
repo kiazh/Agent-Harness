@@ -213,11 +213,13 @@ class MetricsCollector:
             "p99": sorted_lat[min(int(n * 0.99), n - 1)],
         }
 
+    # Tests only; kept as a read accessor (review 2026-10-14).
     def get_counter(self, operation: str) -> int:
         """Get counter value for an operation."""
         with self._lock:
             return self._counters.get(operation, 0)
 
+    # Tests only; kept as a read accessor (review 2026-10-14).
     def get_error_count(self, operation: str) -> int:
         """Get error count for an operation."""
         with self._lock:

@@ -59,6 +59,7 @@ class ImportanceScorer:
 
         return min(1.0, max(0.0, base))
 
+    # Tests only; kept as the scoring-breakdown diagnostic (review 2026-10-14).
     def score_with_breakdown(
         self, memory: MemoryEntry, *, now: datetime | None = None
     ) -> dict[str, float]:

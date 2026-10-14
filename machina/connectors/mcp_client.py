@@ -542,6 +542,7 @@ class MCPConnection:
         ):
             self.state = ConnectionState.DISCONNECTED
 
+    # Tests only; kept as the stderr-diagnostics probe (review 2026-10-14).
     def read_stderr(self) -> str:
         """Capped server-stderr text (diagnostics only; never logged raw)."""
         return self._redact(self._stderr.read_text()) if self._stderr is not None else ""

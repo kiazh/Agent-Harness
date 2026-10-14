@@ -22,7 +22,7 @@ _null = os.open(os.devnull, os.O_RDONLY)
 os.dup2(_null, 0)
 os.close(_null)
 os.dup2(2, 1)
-sys.stdin = open(os.devnull, encoding="utf-8")  # noqa: SIM115 — lives for the process
+sys.stdin = open(os.devnull, encoding="utf-8")  # lives for the process
 sys.stdout = sys.stderr
 
 import asyncio  # noqa: E402

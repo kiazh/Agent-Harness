@@ -303,34 +303,21 @@ def _zero_pad_rows(rows: list[list[float]], width: int) -> list[list[float]]:
     return rows
 
 
-class LocalEmbedder(Embedder):
-    """Zero-API local embeddings via model2vec static models (pure NumPy).
+class _LocalEmbedderBase(Embedder):
+    """Shared orchestration for lazily loaded in-process embedding runtimes.
 
-    ``model2vec`` is imported and the model weights are loaded lazily on the
-    first embed call — never at import or construction — and the loaded
-    model is reused for every later call on the instance. ``close()``
-    unloads the weights; the next call reloads them from the local HF cache.
-
-    Storage note: machina's pgvector columns are fixed ``vector(1536)``.
-    Static potion models emit far fewer dimensions, so vectors are
-    zero-padded to ``EMBEDDING_DIMENSIONS`` (default 1536). Zero padding
-    leaves cosine similarity unchanged, so dense search works without a
-    schema migration; ``native_dimensions`` reports the model's real width.
+    ``LocalEmbedder`` (model2vec) and ``OnnxEmbedder`` (fastembed ONNX) share
+    this plumbing: constructor state, lazy native width, storage padding,
+    single/batch embedding (empty strings map to zero vectors) and audit
+    events. Subclasses set ``DEFAULT_MODEL``/``NATIVE_DIMENSIONS`` and the
+    audit labels, and provide ``_load_model``/``_encode`` plus a loaded-model
+    width hook.
     """
 
-    DEFAULT_MODEL = "minishlab/potion-base-8M"
     DEFAULT_PAD_DIMENSIONS = 1536
     DEFAULT_BATCH_SIZE = 64
-    # Known native widths: lets dimensions/native_dimensions answer without
-    # forcing a model download. Unknown ids fall back to the loaded model.
-    NATIVE_DIMENSIONS: dict[str, int] = {
-        "minishlab/potion-base-2M": 64,
-        "minishlab/potion-base-4M": 128,
-        "minishlab/potion-base-8M": 256,
-        "minishlab/potion-base-32M": 512,
-        "minishlab/potion-retrieval-32M": 512,
-        "minishlab/potion-multilingual-128M": 256,
-    }
+    _AUDIT_PROVIDER = ""
+    _LOG_LABEL = ""
 
     def __init__(
         self,
@@ -359,7 +346,7 @@ class LocalEmbedder(Embedder):
         if self._native_dimensions is None:
             known = self.NATIVE_DIMENSIONS.get(self._model_id)
             if known is None:
-                known = int(getattr(self._load_model(), "dim"))
+                known = self._native_width_from_model(self._load_model())
             self._native_dimensions = known
         return self._native_dimensions
 
@@ -370,27 +357,6 @@ class LocalEmbedder(Embedder):
             native = self.native_dimensions
             self._dimensions = self._pad_to if self._pad_to >= native else native
         return self._dimensions
-
-    def _load_model(self):
-        """Import/load model2vec and the weights once (thread-safe)."""
-        if self._model is None:
-            with self._load_lock:
-                if self._model is None:
-                    from model2vec import StaticModel
-
-                    self._model = StaticModel.from_pretrained(self._model_id, force_download=False)
-        return self._model
-
-    def _encode(self, texts: list[str]) -> list[list[float]]:
-        """Blocking encode (runs on a worker thread) with storage padding."""
-        model = self._load_model()
-        vectors = model.encode(
-            list(texts),
-            batch_size=self._batch_size,
-            show_progress_bar=False,
-            use_multiprocessing=False,
-        )
-        return _zero_pad_rows(vectors.tolist(), self.dimensions)
 
     async def embed(self, text: str) -> list[float]:
         """Embed a single text (model weights load lazily on first call)."""
@@ -413,7 +379,10 @@ class LocalEmbedder(Embedder):
                 results[index] = [0.0] * self.dimensions
         if pending:
             _core_symbol("machina.core.provider", "audit_log")(
-                "rag_embed_start", model=self._model_id, count=len(pending), provider="local"
+                "rag_embed_start",
+                model=self._model_id,
+                count=len(pending),
+                provider=self._AUDIT_PROVIDER,
             )
             try:
                 encoded = await asyncio.to_thread(self._encode, pending)
@@ -421,7 +390,7 @@ class LocalEmbedder(Embedder):
                 _core_symbol("machina.core.provider", "audit_log")(
                     "rag_embed_error", model=self._model_id, error=str(e)
                 )
-                logger.error("Local embedding call failed: %s", e)
+                logger.error("%s embedding call failed: %s", self._LOG_LABEL, e)
                 raise
             for index, vector in zip(pending_indices, encoded, strict=True):
                 results[index] = vector
@@ -430,13 +399,76 @@ class LocalEmbedder(Embedder):
             )
         return results  # type: ignore[return-value]
 
+    @abstractmethod
+    def _load_model(self): ...
+
+    @abstractmethod
+    def _encode(self, texts: list[str]) -> list[list[float]]: ...
+
+    @abstractmethod
+    def _native_width_from_model(self, model) -> int: ...
+
+
+class LocalEmbedder(_LocalEmbedderBase):
+    """Zero-API local embeddings via model2vec static models (pure NumPy).
+
+    ``model2vec`` is imported and the model weights are loaded lazily on the
+    first embed call — never at import or construction — and the loaded
+    model is reused for every later call on the instance. ``close()``
+    unloads the weights; the next call reloads them from the local HF cache.
+
+    Storage note: machina's pgvector columns are fixed ``vector(1536)``.
+    Static potion models emit far fewer dimensions, so vectors are
+    zero-padded to ``EMBEDDING_DIMENSIONS`` (default 1536). Zero padding
+    leaves cosine similarity unchanged, so dense search works without a
+    schema migration; ``native_dimensions`` reports the model's real width.
+    """
+
+    DEFAULT_MODEL = "minishlab/potion-base-8M"
+    # Known native widths: lets dimensions/native_dimensions answer without
+    # forcing a model download. Unknown ids fall back to the loaded model.
+    NATIVE_DIMENSIONS: dict[str, int] = {
+        "minishlab/potion-base-2M": 64,
+        "minishlab/potion-base-4M": 128,
+        "minishlab/potion-base-8M": 256,
+        "minishlab/potion-base-32M": 512,
+        "minishlab/potion-retrieval-32M": 512,
+        "minishlab/potion-multilingual-128M": 256,
+    }
+    _AUDIT_PROVIDER = "local"
+    _LOG_LABEL = "Local"
+
+    def _native_width_from_model(self, model) -> int:
+        return int(getattr(model, "dim"))
+
+    def _load_model(self):
+        """Import/load model2vec and the weights once (thread-safe)."""
+        if self._model is None:
+            with self._load_lock:
+                if self._model is None:
+                    from model2vec import StaticModel
+
+                    self._model = StaticModel.from_pretrained(self._model_id, force_download=False)
+        return self._model
+
+    def _encode(self, texts: list[str]) -> list[list[float]]:
+        """Blocking encode (runs on a worker thread) with storage padding."""
+        model = self._load_model()
+        vectors = model.encode(
+            list(texts),
+            batch_size=self._batch_size,
+            show_progress_bar=False,
+            use_multiprocessing=False,
+        )
+        return _zero_pad_rows(vectors.tolist(), self.dimensions)
+
     async def close(self) -> None:
         """Unload the static model; the next embed call reloads from cache."""
         with self._load_lock:
             self._model = None
 
 
-class OnnxEmbedder(Embedder):
+class OnnxEmbedder(_LocalEmbedderBase):
     """Zero-API local embeddings via fastembed ONNX models (no torch).
 
     Default model: ``BAAI/bge-small-en-v1.5`` (384-d native, MIT-licensed
@@ -452,8 +484,6 @@ class OnnxEmbedder(Embedder):
     """
 
     DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
-    DEFAULT_PAD_DIMENSIONS = 1536
-    DEFAULT_BATCH_SIZE = 64
     # Known native widths: lets dimensions/native_dimensions answer without
     # forcing a model download. Unknown ids fall back to the loaded model.
     NATIVE_DIMENSIONS: dict[str, int] = {
@@ -466,52 +496,26 @@ class OnnxEmbedder(Embedder):
         "snowflake/snowflake-arctic-embed-m": 768,
         "jinaai/jina-embeddings-v2-small-en": 512,
     }
+    _AUDIT_PROVIDER = "onnx"
+    _LOG_LABEL = "ONNX"
 
     def __init__(
         self,
         model: str | None = None,
-        batch_size: int = DEFAULT_BATCH_SIZE,
+        batch_size: int = _LocalEmbedderBase.DEFAULT_BATCH_SIZE,
         pad_to: int | None = None,
         cache_dir: str | None = None,
         threads: int | None = None,
     ) -> None:
-        self._model_id = (model or "").strip() or self.DEFAULT_MODEL
-        self._batch_size = batch_size
+        super().__init__(model, batch_size, pad_to)
         self._cache_dir = cache_dir
         self._threads = threads
-        env_pad = os.getenv("EMBEDDING_DIMENSIONS", "")
-        if pad_to is None:
-            pad_to = int(env_pad) if env_pad.isdigit() else self.DEFAULT_PAD_DIMENSIONS
-        self._pad_to = pad_to
-        self._model = None
-        self._native_dimensions: int | None = None
-        self._dimensions: int | None = None
-        self._load_lock = threading.Lock()
 
-    @property
-    def model_name(self) -> str:
-        return self._model_id
-
-    @property
-    def native_dimensions(self) -> int:
-        """The model's real output width (before storage padding)."""
-        if self._native_dimensions is None:
-            known = self.NATIVE_DIMENSIONS.get(self._model_id)
-            if known is None:
-                model = self._load_model()
-                known = int(model.embedding_size) if model.embedding_size else None
-                if not known:
-                    raise ValueError(f"cannot determine embedding width for {self._model_id!r}")
-            self._native_dimensions = known
-        return self._native_dimensions
-
-    @property
-    def dimensions(self) -> int:
-        """Effective (stored) width: padded when the schema is wider."""
-        if self._dimensions is None:
-            native = self.native_dimensions
-            self._dimensions = self._pad_to if self._pad_to >= native else native
-        return self._dimensions
+    def _native_width_from_model(self, model) -> int:
+        known = int(model.embedding_size) if model.embedding_size else None
+        if not known:
+            raise ValueError(f"cannot determine embedding width for {self._model_id!r}")
+        return known
 
     def _load_model(self):
         """Import/load fastembed and the ONNX weights once (thread-safe)."""
@@ -535,44 +539,6 @@ class OnnxEmbedder(Embedder):
             vector.tolist() for vector in model.embed(list(texts), batch_size=self._batch_size)
         ]
         return _zero_pad_rows(vectors, self.dimensions)
-
-    async def embed(self, text: str) -> list[float]:
-        """Embed a single text (model weights load lazily on first call)."""
-        if not text:
-            return [0.0] * self.dimensions
-        return (await self.embed_batch([text]))[0]
-
-    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Embed a batch; empty strings map to zero vectors, like the API backends."""
-        if not texts:
-            return []
-        results: list[list[float] | None] = [None] * len(texts)
-        pending: list[str] = []
-        pending_indices: list[int] = []
-        for index, text in enumerate(texts):
-            if text:
-                pending.append(text)
-                pending_indices.append(index)
-            else:
-                results[index] = [0.0] * self.dimensions
-        if pending:
-            _core_symbol("machina.core.provider", "audit_log")(
-                "rag_embed_start", model=self._model_id, count=len(pending), provider="onnx"
-            )
-            try:
-                encoded = await asyncio.to_thread(self._encode, pending)
-            except Exception as e:
-                _core_symbol("machina.core.provider", "audit_log")(
-                    "rag_embed_error", model=self._model_id, error=str(e)
-                )
-                logger.error("ONNX embedding call failed: %s", e)
-                raise
-            for index, vector in zip(pending_indices, encoded, strict=True):
-                results[index] = vector
-            _core_symbol("machina.core.provider", "audit_log")(
-                "rag_embed_complete", model=self._model_id, count=len(encoded)
-            )
-        return results  # type: ignore[return-value]
 
     async def close(self) -> None:
         """Unload the ONNX model; the next embed call reloads from cache."""

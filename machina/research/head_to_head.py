@@ -232,7 +232,7 @@ def git_capture(repo: Path) -> dict:
             "status_short": [line for line in status_text.splitlines() if line.strip()],
             "status_sha256_16": hashlib.sha256(status_text.encode("utf-8")).hexdigest()[:16],
         }
-    except Exception as error:  # noqa: BLE001 - provenance must never kill a run
+    except Exception as error:  # provenance must never kill a run
         return {"git_capture_error": f"{type(error).__name__}: {error}"}
 
 
@@ -574,7 +574,7 @@ def run_one(harness: str, args: argparse.Namespace, task_dir: Path, venv_python:
             )
         else:  # pragma: no cover - argparse choices prevent this
             raise ValueError(f"unknown harness {harness!r}")
-    except Exception as error:  # noqa: BLE001 - report, do not crash the run pair
+    except Exception as error:  # report, do not crash the run pair
         result["error"] = f"{type(error).__name__}: {error}"
         result.setdefault("timed_out", False)
 

@@ -187,7 +187,7 @@ def git_capture(repo: Path) -> dict:
             "status_short": [line for line in status_text.splitlines() if line.strip()],
             "status_sha256_16": hashlib.sha256(status_text.encode("utf-8")).hexdigest()[:16],
         }
-    except Exception as error:  # noqa: BLE001 - provenance must never kill a run
+    except Exception as error:  # provenance must never kill a run
         return {"git_capture_error": f"{type(error).__name__}: {error}"}
 
 
@@ -943,7 +943,7 @@ def http_json(
             return response.status, _json_or_excerpt(response.read(65536))
     except urllib.error.HTTPError as error:
         return error.code, _json_or_excerpt(error.read(65536))
-    except Exception as error:  # noqa: BLE001 - reported by the caller as a failed check
+    except Exception as error:  # reported by the caller as a failed check
         return 0, {"error": f"{type(error).__name__}: {error}"}
 
 
@@ -1000,7 +1000,7 @@ class ApiServer:
                 break
             try:
                 last_status, _ = http_json(self.base_url, "GET", "/ready", timeout=3.0)
-            except Exception:  # noqa: BLE001 - retried until the deadline
+            except Exception:  # retried until the deadline
                 last_status = 0
             if last_status == 200:
                 return {
@@ -1228,7 +1228,7 @@ class GatewayStdio:
                 raise BrokenPipeError("gateway stdin closed")
             self.proc.stdin.write(json.dumps(frame) + "\n")
             self.proc.stdin.flush()
-        except Exception as error:  # noqa: BLE001 - reported by the caller as a failed check
+        except Exception as error:  # reported by the caller as a failed check
             return {"error": {"message": f"gateway write failed: {type(error).__name__}"}}
         deadline = time.monotonic() + timeout
         while True:
@@ -1321,7 +1321,7 @@ def wait_db(
             last = db_query(ctx, queries)
             if predicate(last):
                 return last, round(time.monotonic() - start, 3), True
-        except Exception as error:  # noqa: BLE001 - reported by the caller's check
+        except Exception as error:  # reported by the caller's check
             last = {"error": f"{type(error).__name__}: {error}"}
         if time.monotonic() - start >= deadline_s:
             return last, round(time.monotonic() - start, 3), False
@@ -1350,7 +1350,7 @@ def wait_j6_state(
     while True:
         try:
             _, state = j6_state(ctx, session_id, document_id)
-        except Exception as error:  # noqa: BLE001 - reported by the caller's check
+        except Exception as error:  # reported by the caller's check
             state = {"ok": False, "error": f"{type(error).__name__}: {error}"}
         if state.get("ok") and predicate(state):
             return state, round(time.monotonic() - start, 3), True
@@ -1559,7 +1559,7 @@ def run_j2(ctx: dict) -> dict:
             f">=1 context_chunk row with document_source={JSON_PAGE}",
             chunk_count,
         )
-    except Exception as error:  # noqa: BLE001 - recorded as a failed check below
+    except Exception as error:  # recorded as a failed check below
         check(record, "chunks_query", False, "database query succeeds", str(error))
     revoke_session(ctx, session_id, record)
 
@@ -1626,7 +1626,7 @@ def run_j3(ctx: dict) -> dict:
             f">=1 context_chunk row with document_source={JSON_PAGE}",
             chunk_count,
         )
-    except Exception as error:  # noqa: BLE001
+    except Exception as error:
         check(record, "chunks_query", False, "database query succeeds", str(error))
     revoke_session(ctx, session_id, record)
 
@@ -2486,7 +2486,7 @@ def run_j8(ctx: dict) -> dict:
             "llm_usage.model records the response-reported (served) model",
             {"row_model": row.get("model"), "response_model": served_model},
         )
-    except Exception as error:  # noqa: BLE001 - recorded as a failed check below
+    except Exception as error:  # recorded as a failed check below
         check(record, "llm_usage_query", False, "database query succeeds", str(error))
 
     status_run = run_cmd(
@@ -2681,7 +2681,7 @@ def main(argv: list[str] | None = None) -> int:
         start = time.monotonic()
         try:
             record = JOURNEYS[jid](ctx)
-        except Exception as error:  # noqa: BLE001 - a crashed journey is a FAIL, not a traceback dump
+        except Exception as error:  # a crashed journey is a FAIL, not a traceback dump
             record = new_record(jid)
             record["reason"] = f"unhandled {type(error).__name__}: {error}"
             finish(record, "FAIL", record["reason"])

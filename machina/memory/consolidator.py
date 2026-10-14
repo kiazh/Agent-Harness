@@ -199,10 +199,7 @@ class MemoryConsolidator:
         proceed with only the in-process single-flight, the same degradation
         as an unavailable database.
         """
-        try:
-            dsn = getattr(db, "dsn", None)
-        except Exception:
-            dsn = None
+        dsn = getattr(db, "dsn", None)
         if not isinstance(dsn, str) or not dsn:
             yield False
             return
@@ -270,10 +267,6 @@ class MemoryConsolidator:
                 "id": str(latest.id),
                 "at": latest.created_at.isoformat() if latest.created_at else None,
             }
-
-        # Legacy mutable attribute retained for backward-compatible readers;
-        # the typed checkpoint on the result is authoritative.
-        self._last_processed_chunk = _checkpoint_for(chunks)
 
         # Step 1: Format conversation for LLM
         conversation = self._format_conversation(chunks)

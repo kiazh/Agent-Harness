@@ -1958,7 +1958,7 @@ def _remove_windows_user_path_entries(remove: list[str]) -> tuple[bool, str]:
         ctypes.windll.user32.SendMessageTimeoutW(
             HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment", 0x0002, 5000, None
         )
-    except Exception:  # noqa: BLE001 — broadcast is cosmetic
+    except Exception:  # broadcast is cosmetic
         pass
     return True, "removed from user Path (takes effect in new terminals)"
 
@@ -1979,7 +1979,7 @@ def uninstall():
 
     try:
         env_file = find_env_file()
-    except Exception:  # noqa: BLE001 — fall back to the checkout .env
+    except Exception:  # fall back to the checkout .env
         env_file = app_root / ".env"
     shim = Path.home() / ".local" / "bin" / "machina"
     local_config = Path.home() / ".machina"
@@ -2155,7 +2155,7 @@ def uninstall():
             try:
                 shutil.rmtree(app_root, ignore_errors=False)
                 output.status_line("Checkout", f"deleted {app_root}", "success")
-            except Exception as e:  # noqa: BLE001 — locked running exe on Windows
+            except Exception as e:  # locked running exe on Windows
                 output.error(f"Could not delete checkout {app_root}: {e}")
                 if os.name == "nt":
                     console.print(

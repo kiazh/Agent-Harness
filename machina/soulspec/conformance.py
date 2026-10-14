@@ -9,15 +9,18 @@ from machina.soulspec.merge import SoulSpecMerger
 from machina.soulspec.schema import SoulSpec
 
 
+# Tests only; kept as the SoulSpec conformance suite (review 2026-10-14).
 @dataclass
 class ValidationResult:
     valid: bool
     errors: list[str] = field(default_factory=list)
 
 
+# Tests only; kept as the SoulSpec conformance suite (review 2026-10-14).
 class TestSoulSpecConformance:
     """Test that a SoulSpec conforms to the standard."""
 
+    # Tests only; kept as the SoulSpec conformance suite (review 2026-10-14).
     def validate_schema(self, spec: SoulSpec) -> ValidationResult:
         """Validate SoulSpec against the schema."""
         errors: list[str] = []
@@ -48,6 +51,7 @@ class TestSoulSpecConformance:
 
         return ValidationResult(valid=len(errors) == 0, errors=errors)
 
+    # Tests only; kept as the SoulSpec conformance suite (review 2026-10-14).
     def validate_package(self, directory: str | Path) -> ValidationResult:
         """Validate the required manifest and SOUL.md in a Soul Spec package."""
         try:
@@ -56,6 +60,7 @@ class TestSoulSpecConformance:
             return ValidationResult(valid=False, errors=[str(exc)])
         return ValidationResult(valid=True)
 
+    # Tests only; kept as the SoulSpec conformance suite (review 2026-10-14).
     def test_merge_semantics(self) -> None:
         """Test that merge works correctly."""
         # Scalar override
@@ -131,6 +136,7 @@ class TestSoulSpecConformance:
         denied = set(merged.config.permissions.denied_tools)
         assert denied == {"terminal", "write_file"}
 
+    # Tests only; kept as the SoulSpec conformance suite (review 2026-10-14).
     def test_progressive_disclosure(self) -> None:
         """Test that skills load at correct disclosure level."""
         spec = SoulSpec(

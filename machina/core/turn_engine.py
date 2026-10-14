@@ -3,7 +3,7 @@
 The gateway (``machina.gateway.server.Gateway._run_turn``) and the SSE route
 (``machina.api.routes.streaming._stream_session``) currently implement the same
 turn semantics twice. This module is the single implementation both transports
-delegate to (adoption is staged; nothing imports this module yet):
+delegate to:
 
 - :meth:`TurnEngine.stream` relays ``agent.run_stream`` into transport-agnostic
   :class:`TurnEvent`s, owning the boundary-safe streaming redactor, tool
@@ -465,7 +465,7 @@ class TurnEngine:
     async def close(self, *, cancelled: bool = False, timed_out: bool = False) -> TurnClose:
         """Bounded, ordered cleanup; call exactly once after the stream.
 
-        Order (mirrors gateway 1066-1172): notification hooks ->
+        Order: notification hooks ->
         join optional background work -> close the owned provider -> stop
         renewal -> shielded bounded release -> join renewal. Ordinary failures
         (including a failed claim release) are reported and returned in

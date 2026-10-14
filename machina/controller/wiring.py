@@ -259,7 +259,7 @@ def record_approval_pause(approval: Any) -> None:
 # ─── stagnation mapping + forced-write evidence ─────────────────────────────
 
 
-def target_bytes(tool: Any, args: Any, preview: Any, outcome: Any) -> tuple[str, int]:
+def target_bytes(tool: Any, args: Any) -> tuple[str, int]:
     """Central per-tool (target, new_bytes) extraction (see module mapping rule)."""
     try:
         name = str(tool or "unknown")
@@ -286,8 +286,6 @@ def check_stagnation(history: Any, batch: Any) -> tuple[Any, str | None]:
                 t, b = target_bytes(
                     entry.get("tool"),
                     entry.get("args"),
-                    entry.get("result_preview"),
-                    entry.get("outcome"),
                 )
                 hist = record(hist, str(entry.get("tool") or "unknown"), t, b)
         return (hist, stop_reason(hist) if is_stagnant(hist) else None)

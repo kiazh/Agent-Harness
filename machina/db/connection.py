@@ -208,6 +208,7 @@ class Database:
                 with open(os.path.join(os.path.dirname(__file__), name), encoding="utf-8") as f:
                     await conn.execute(f.read())
 
+    # Tests only; kept as the growth-migration test seam (review 2026-10-14).
     async def initialize_growth_schema(self) -> None:
         """Apply only the additive growth migration on existing installations."""
         with open(

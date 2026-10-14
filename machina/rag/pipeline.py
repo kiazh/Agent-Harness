@@ -687,12 +687,6 @@ class RAGPipeline:
         # otherwise keep serving stale emptiness.
         if final_results:
             self._search_cache[cache_key] = (now, copy.deepcopy(final_results))
-            # Record embedding model/dims namespace for incompat detection.
-            try:
-                self._last_embed_model = str(embed_model)
-            except Exception as _boundary_error:
-                # Optional fallback preserves the primary outcome; report no payload.
-                record_failure("pipeline._finish_search", _boundary_error)
             # Evict oldest if cache is full (simple approach)
             if len(self._search_cache) > self._search_cache_max_size:
                 oldest_key = min(self._search_cache, key=lambda k: self._search_cache[k][0])
@@ -828,20 +822,6 @@ class RAGPipeline:
         # Indexed content changed: drop cached embedding-space verdicts too.
         for key in [k for k in self._embedding_space_cache if k[0] == session_id]:
             self._embedding_space_cache.pop(key, None)
-
-    async def delete_session_context(self, session_id: uuid.UUID) -> int:
-        """Delete indexed chunks for a session and invalidate cached searches."""
-        result = await db.execute(
-            "DELETE FROM context_chunks WHERE session_id = $1",
-            session_id,
-        )
-        self._invalidate_search_cache(session_id)
-        try:
-            from machina.db.connection import parse_command_count
-
-            return parse_command_count(result)
-        except Exception:
-            return 0
 
     def _chunk_document(
         self,

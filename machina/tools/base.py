@@ -381,10 +381,7 @@ class ToolRegistry:
         """List all registered tool names."""
         return list(self._tools.keys())
 
-    def get_tool_names(self) -> list[str]:
-        """Alias for list_tools."""
-        return self.list_tools()
-
+    # Tests only; kept as a lookup test seam (review 2026-10-14).
     def get_tool(self, name: str) -> Tool | None:
         """Get a tool by name."""
         return self._tools.get(name)

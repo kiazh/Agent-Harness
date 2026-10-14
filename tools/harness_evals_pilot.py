@@ -413,7 +413,7 @@ async def _retry(coro_factory: Any, attempts: int = 3, base_delay: float = 2.0) 
     for attempt in range(1, attempts + 1):
         try:
             return await coro_factory()
-        except Exception as exc:  # noqa: BLE001 - pilot must survive provider blips
+        except Exception as exc:  # pilot must survive provider blips
             last = exc
             if attempt < attempts:
                 await asyncio.sleep(base_delay * attempt)
@@ -463,7 +463,7 @@ async def score_question(
         try:
             with collect_token_usage() as gen_usage:
                 answer = await _retry(lambda: answer_llm.generate(prompt))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             result["error"] = f"generation failed: {type(exc).__name__}: {exc}"
             return result
 

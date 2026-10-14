@@ -29,7 +29,6 @@ class ContentHashCache:
                     self._entries = json.load(fh)
             except (OSError, ValueError):
                 self._entries = {}
-        self.hash_reads = 0  # files hashed this process (0 on perfect repeat)
 
     def lookup(self, abs_path: str) -> tuple | None:
         ent = self._entries.get(abs_path)
@@ -49,7 +48,6 @@ class ContentHashCache:
             st = os.stat(abs_path)
             with open(abs_path, "rb") as fh:
                 digest = hashlib.sha256(fh.read()).hexdigest()
-            self.hash_reads += 1
         except OSError:
             return
         self._entries[abs_path] = {

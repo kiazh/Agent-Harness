@@ -924,7 +924,7 @@ class OAuthCoordinator:
         config = await self._resolve_config(connector_id)
         # Cancel this connector's flows first.
         async with self._lock:
-            for op_id, op in list(self._operations.items()):
+            for op in list(self._operations.values()):
                 if op["connector_id"] == connector_id:
                     op["state"] = "cancelled"
                     op["reason"] = "oauth_cancelled"
@@ -1103,7 +1103,7 @@ class OAuthCoordinator:
         self, connector_id: str, *, config_revision: int | None = None
     ) -> None:
         async with self._lock:
-            for op_id, op in list(self._operations.items()):
+            for op in list(self._operations.values()):
                 if op["connector_id"] == connector_id and (
                     config_revision is None or op["snapshot"].config_revision <= config_revision
                 ):

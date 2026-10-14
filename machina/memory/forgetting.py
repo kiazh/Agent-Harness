@@ -55,6 +55,7 @@ class ForgettingModel:
 
         return decay_component + access_component
 
+    # Tests only; kept as the eviction predicate (review 2026-10-14).
     def should_forget(
         self, memory: MemoryEntry, threshold: float = DEFAULT_EVICTION_THRESHOLD
     ) -> bool:
@@ -69,6 +70,7 @@ class ForgettingModel:
         importance_factor = 1.0 - memory.importance
         return self.base_lambda * importance_factor
 
+    # Tests only; kept as a decay diagnostic (review 2026-10-14).
     def get_half_life(self, memory: MemoryEntry) -> float:
         """Get the effective half-life of a memory in days.
 

@@ -436,16 +436,6 @@ class TestToolRegistry:
         reg = ToolRegistry()
         assert reg.list_tools() == []
 
-    def test_get_tool_names(self):
-        """Test get_tool_names alias."""
-        reg = ToolRegistry()
-
-        @reg.register()
-        def tool1() -> str:
-            return "ok"
-
-        assert reg.get_tool_names() == reg.list_tools()
-
     def test_get_tool_not_found(self):
         """Test getting a non-existent tool."""
         reg = ToolRegistry()
@@ -1993,6 +1983,7 @@ class TestCLISkillCommands:
 
         # Write learned skills to a temp dir, never the repo's real skills/.
         monkeypatch.setattr(skill_registry, "skills_dir", temp_dir / "skills")
+        monkeypatch.setattr(skill_registry, "learned_dir", temp_dir / "skills")
         # Create a test file to learn from
         test_file = temp_dir / "test-skill.md"
         test_file.write_text("# Test Skill\nThis is a test skill content.", encoding="utf-8")

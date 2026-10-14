@@ -509,7 +509,7 @@ async def terminal(command: str, timeout: int = 60, workdir: str = ".") -> str:
                     container_name=container_name,
                     process_holder=holder,
                 )
-            except BaseException as e:  # noqa: BLE001 — marshalled to caller
+            except BaseException as e:  # marshalled to caller
                 outcome["error"] = e
 
         worker = threading.Thread(target=_target, daemon=True)

@@ -235,25 +235,15 @@ class ContextCompressor:
                 compressed = old_chunks
                 method = "none"
 
-        # Combine: compressed old chunks + preserved recent chunks
-        all_compressed = compressed + recent_chunks
-        if checked_checkpoint is not None and method != "llm_summarize":
-            all_compressed = [
-                _checkpoint_chunk(session_id, agent_id, checked_checkpoint)
-            ] + all_compressed
-        compressed_tokens = sum(c.token_count for c in all_compressed)
-        if compressed_tokens == 0:
-            compressed_tokens = sum(get_token_count(str(c.payload)) for c in all_compressed)
-
-        ratio = compressed_tokens / original_tokens if original_tokens > 0 else 0.0
-
-        return CompressionResult(
-            compressed_chunks=all_compressed,
-            original_count=len(old_chunks),
-            original_tokens=original_tokens,
-            compressed_tokens=compressed_tokens,
-            compression_ratio=ratio,
-            method=method,
+        return self._finalize_result(
+            compressed,
+            recent_chunks,
+            old_chunks,
+            session_id,
+            agent_id,
+            checked_checkpoint,
+            method,
+            original_tokens,
         )
 
     async def acompress(
@@ -316,6 +306,34 @@ class ContextCompressor:
                 record_failure("compression.truncate", exc)
                 compressed = old_chunks
                 method = "none"
+        return self._finalize_result(
+            compressed,
+            recent_chunks,
+            old_chunks,
+            session_id,
+            agent_id,
+            checked_checkpoint,
+            method,
+            original_tokens,
+        )
+
+    @staticmethod
+    def _finalize_result(
+        compressed: list[ContextChunk],
+        recent_chunks: list[ContextChunk],
+        old_chunks: list[ContextChunk],
+        session_id: uuid.UUID,
+        agent_id: str,
+        checked_checkpoint: dict[str, Any] | None,
+        method: str,
+        original_tokens: int,
+    ) -> CompressionResult:
+        """Combine compressed old chunks with preserved recent chunks.
+
+        Shared tail of :meth:`compress` and :meth:`acompress`: prepends the
+        validated checkpoint chunk on non-LLM paths, then computes token totals
+        and the compression ratio.
+        """
         all_compressed = compressed + recent_chunks
         if checked_checkpoint is not None and method != "llm_summarize":
             all_compressed = [

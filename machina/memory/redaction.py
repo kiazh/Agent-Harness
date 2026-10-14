@@ -45,6 +45,7 @@ class RedactionResult:
     text: str
     redactions: list[str] = field(default_factory=list)
 
+    # Tests only; kept as the redaction-result probe (review 2026-10-14).
     @property
     def was_redacted(self) -> bool:
         return len(self.redactions) > 0
@@ -310,6 +311,7 @@ class SecretRedactor:
 
         return RedactionResult(text=redacted, redactions=redactions)
 
+    # Tests only; kept as a structured-redaction test seam (review 2026-10-14).
     def redact_dict(self, data: dict) -> RedactionResult:
         """Redact secrets from all string values in a dict, recursively.
 
@@ -379,6 +381,7 @@ class SecretRedactor:
             return result.text.encode("utf-8"), result.redactions
         return value, []
 
+    # Tests only; kept as the quick-detection probe (review 2026-10-14).
     def has_secrets(self, text: str) -> bool:
         """Quick check if text contains any known secret patterns."""
         return any(rp.pattern.search(text) for rp in self._patterns)

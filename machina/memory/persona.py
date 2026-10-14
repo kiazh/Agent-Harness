@@ -366,6 +366,7 @@ class PersonaMemoryStore:
             return None
         return self._row_to_persona(row)
 
+    # Tests only; kept as a deletion test seam (review 2026-10-14).
     async def delete_persona(self, persona_id: uuid.UUID) -> bool:
         """Delete a persona memory by ID."""
         result = await db.execute(

@@ -241,16 +241,10 @@ def set_env_values(
             pass
         raise
     try:
-        try:
-            import fcntl  # type: ignore
-
-            with open(tmp, "rb") as _f:
-                try:
-                    fcntl.flock(_f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except OSError:
-                    pass
-        except ImportError:
-            pass
+        # No flock: the temp path is pid-unique and any lock would be released
+        # before the replace, so it protected nothing (review 2026-10-14).
+        # Atomicity comes from os.replace on the same filesystem; concurrent
+        # writers are last-writer-wins by design.
         os.replace(tmp, target)
         try:
             os.chmod(target, 0o600)

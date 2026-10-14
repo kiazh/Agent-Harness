@@ -21,6 +21,7 @@ class EvidenceMap:
 
     _lines: dict[str, list[str]] = field(default_factory=dict)
     _spans: dict[str, list[_Span]] = field(default_factory=dict)
+    # Tests only (read by tests; incremented internally) (review 2026-10-14).
     reads_from_disk: int = 0
 
     def read(self, path: str, start: int = 1, end: int | None = None) -> list[str]:
@@ -64,5 +65,6 @@ class EvidenceMap:
         """Merged (start, end-exclusive) spans read so far for path."""
         return [(s.start, s.end) for s in self._spans.get(path, [])]
 
+    # Tests only; kept as the coverage probe (review 2026-10-14).
     def is_covered(self, path: str, start: int, end: int) -> bool:
         return any(s.start <= start and s.end >= end for s in self._spans.get(path, []))

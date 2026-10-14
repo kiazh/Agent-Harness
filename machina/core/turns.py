@@ -30,7 +30,6 @@ import logging
 import threading as _threading
 import uuid
 from collections.abc import Callable
-from contextlib import asynccontextmanager
 
 from machina.core.metrics import metrics
 from machina.observability.diagnostics import record_failure
@@ -507,14 +506,6 @@ async def end_mutation(session_id: uuid.UUID, token: str | None) -> bool:
     return False
 
 
-@asynccontextmanager
-async def mutation_lock(session_id: uuid.UUID):
-    """Serialize same-process mutations (mutex only; ownership via begin_mutation)."""
-    lock = _mutation_session_lock(session_id)
-    async with lock:
-        yield
-
-
 async def renewal_loop(
     session_id: uuid.UUID,
     token: str | None,
@@ -566,17 +557,15 @@ async def renewal_loop(
 
 
 class TurnOwnership:
-    """Logical turn slot with approval-aware waiting (Phase 6).
+    """Logical turn slot: owner token + in-process slot for a whole turn.
 
-    Holds the owner token + in-process slot for the whole turn, including
-    permission waits. Never holds a DB transaction or pool connection across
-    the turn or across human approval waits.
+    Never holds a DB transaction or pool connection across the turn.
 
-    AH-AUDIT-013: start_renewal() keeps a long turn/approval wait alive with
-    periodic renew_claim; renewal failure or detected loss sets
-    ownership_lost so owned effects stop. stop_renewal() joins the task
-    during release. Crash expiry recovery is preserved (no renewal → the
-    claim lapses and becomes reclaimable).
+    AH-AUDIT-013: start_renewal() keeps a long turn alive with periodic
+    renew_claim; renewal failure or detected loss sets ownership_lost so
+    owned effects stop. TurnEngine.close cancels and joins the renewal task
+    itself during release. Crash expiry recovery is preserved (no renewal →
+    the claim lapses and becomes reclaimable).
     """
 
     def __init__(
@@ -589,30 +578,11 @@ class TurnOwnership:
         self.session_id = session_id
         self.turn_id = turn_id
         self.token = token
-        self._approval_event = asyncio.Event()
-        self._approval_event.set()  # no wait by default
         # Callers that already publish a per-turn loss event (gateway map, SSE
         # transport) pass it in so the primitive and their readers share ONE
         # event; standalone callers get a fresh one.
         self.ownership_lost = ownership_lost or asyncio.Event()
         self._renew_task: asyncio.Task | None = None
-
-    async def wait_for_approval(self, timeout: float) -> bool:
-        """Wait for a permission decision without consuming compute budget.
-
-        Returns True when approved, False on denial/timeout/cancel. Compute
-        timeouts must be paused by callers while awaiting this.
-        """
-        self._approval_event.clear()
-        try:
-            await asyncio.wait_for(self._approval_event.wait(), timeout=timeout)
-            return bool(getattr(self, "_approved", False))
-        except (TimeoutError, asyncio.CancelledError):
-            return False
-
-    def resolve_approval(self, approved: bool) -> None:
-        self._approved = approved
-        self._approval_event.set()
 
     def start_renewal(
         self,
@@ -652,15 +622,3 @@ class TurnOwnership:
         except (asyncio.CancelledError, Exception) as _boundary_error:
             # Optional fallback preserves the primary outcome; report no payload.
             record_failure("turns.stop_renewal", _boundary_error)
-
-    def child_token(self) -> dict:
-        """Owner-authorized internal mutation token for delegated children.
-
-        Lets a child record parent context without reacquiring the parent's
-        active turn lock (avoids parent/child deadlock).
-        """
-        return {
-            "parent_session": str(self.session_id),
-            "parent_turn": self.turn_id,
-            "authorized": True,
-        }
