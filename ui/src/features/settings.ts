@@ -218,17 +218,20 @@ export const settingsCommands: Command[] = [
 	{
 		name: "provider",
 		description: "Show or set the provider",
-		argumentHint: "[openrouter|openai|anthropic|google|mistral|groq|together|deepseek|xai|ollama]",
+		argumentHint: "[openrouter|openai|anthropic|chatgpt|google|mistral|groq|together|deepseek|xai|opencode|custom|ollama]",
 		getArgumentCompletions: options([
 			["openrouter", "OpenRouter (multi-model)"],
 			["openai", "OpenAI direct"],
 			["anthropic", "Anthropic direct"],
+			["chatgpt", "ChatGPT account (sign in with /auth)"],
 			["google", "Google direct (Gemini)"],
 			["mistral", "Mistral direct"],
 			["groq", "Groq direct"],
 			["together", "Together AI direct"],
 			["deepseek", "DeepSeek direct"],
 			["xai", "xAI direct (Grok)"],
+			["opencode", "OpenCode Zen gateway (OPENCODE_API_KEY)"],
+			["custom", "Custom OpenAI-compatible endpoint (CUSTOM_BASE_URL)"],
 			["ollama", "Ollama (local models)"],
 		]),
 		async run(args, host) {

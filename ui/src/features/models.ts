@@ -11,7 +11,7 @@ import type { Command, FeatureHost } from "./types.ts";
 
 interface ModelEntry {
 	model: string;
-	provider: "openrouter" | "openai" | "anthropic" | "google" | "mistral" | "groq" | "together" | "deepseek" | "xai" | "ollama";
+	provider: "openrouter" | "openai" | "anthropic" | "chatgpt" | "google" | "mistral" | "groq" | "together" | "deepseek" | "xai" | "opencode" | "custom" | "ollama";
 	description: string;
 }
 
@@ -19,12 +19,14 @@ export const CURATED_MODELS: ModelEntry[] = [
 	{ model: "openrouter/free", provider: "openrouter", description: "Default free tier (multi-model)" },
 	{ model: "gpt-4o-mini", provider: "openai", description: "OpenAI direct, cheap and fast" },
 	{ model: "claude-3-5-sonnet-20241022", provider: "anthropic", description: "Anthropic direct (native API)" },
+	{ model: "gpt-6.1-sol", provider: "chatgpt", description: "ChatGPT account (Codex protocol) — sign in with /auth first" },
 	{ model: "gemini-2.0-flash", provider: "google", description: "Google direct, long context" },
 	{ model: "mistral-small-latest", provider: "mistral", description: "Mistral direct" },
 	{ model: "llama-3.3-70b-versatile", provider: "groq", description: "Groq direct, fast inference" },
 	{ model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", provider: "together", description: "Together AI direct, open weights" },
 	{ model: "deepseek-chat", provider: "deepseek", description: "DeepSeek direct (use deepseek-reasoner to think)" },
 	{ model: "grok-4", provider: "xai", description: "xAI direct (Grok)" },
+	{ model: "big-pickle", provider: "opencode", description: "OpenCode Zen gateway (set OPENCODE_API_KEY)" },
 	{ model: "llama3.1", provider: "ollama", description: "Local via Ollama" },
 	{ model: "mistral", provider: "ollama", description: "Local via Ollama" },
 	{ model: "codellama", provider: "ollama", description: "Local code model" },

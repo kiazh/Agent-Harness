@@ -180,6 +180,7 @@ test("/auth sign-in prints the URL and settles on the completed event", async ()
 	await pending;
 	assert.match(host.text(), /Signed in to ChatGPT \(acct-ui\)/);
 	assert.match(host.text(), /expires 2027-01-15T08:00:00Z/);
+	assert.match(host.text(), /Run \/provider chatgpt \(optionally with a model\) to use the account/);
 	assert.equal(host.handlers.size, 0, "the settle subscription must be released");
 });
 

@@ -140,7 +140,7 @@ async function signIn(host: FeatureHost): Promise<void> {
 	const expiry =
 		outcome.expiry === null ? "" : ` Access token expires ${formatAuthExpiry(outcome.expiry)}.`;
 	host.print(
-		`Signed in to ChatGPT${account}.${expiry} The chatgpt provider can now run turns.`,
+		`Signed in to ChatGPT${account}.${expiry} Run /provider chatgpt (optionally with a model) to use the account.`,
 		"success",
 	);
 }

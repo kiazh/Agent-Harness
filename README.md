@@ -261,7 +261,14 @@ MCP is included in the default Python installation. `/mcp` opens Add and server 
 
 Configuration persists in `~/.machina/mcp.json`, with installation-local locking, atomic replacement and revisions. Connections remain worker-local and do not automatically restart. To share this inventory across workers, use the same administrator-controlled home directory. Values belong in the existing secret backend; use `secret_refs` to pass named environment secrets to stdio servers, never literal tokens in arguments.
 
-The agent uses `mcp_list`, `mcp_describe` and `mcp_call` after connection. Catalogs are paged and schemas loaded individually. Remote calls require exact approval in every mode unless you explicitly configure `trusted_read` **and** an allowlist of verified read tools. Server descriptions and annotations never grant consent. Schema/configuration/argument changes invalidate approval; uncertain calls are not retried.
+The agent uses `mcp_list`, `mcp_describe` and `mcp_call` after connection, and
+manages the inventory through approval-gated `mcp_connect` / `mcp_disconnect`
+(you can say "connect to this MCP server" in chat). Catalogs are paged and
+schemas loaded individually. Remote calls require exact approval in every mode
+unless you explicitly configure `trusted_read` **and** an allowlist of verified
+read tools. Server descriptions and annotations never grant consent.
+Schema/configuration/argument changes invalidate approval; uncertain calls are
+not retried.
 
 Stdio runs on the host and is refused in sandbox mode. HTTP redirects and environment proxy inheritance are disabled; private hosts require explicit local access, and metadata addresses remain forbidden. HTTP servers support OAuth browser authorization (Authorization Code + S256 PKCE, [setup](docs/MCP_OAUTH.md)); HTTP credential-profile authentication is **not implemented** and such connectors report `auth_required`. Resources, prompts and server-initiated sampling/elicitation/roots are not exposed. These network checks do not establish complete DNS-rebinding protection. [Setup and current evidence](docs/MCP.md).
 
@@ -274,6 +281,8 @@ opencode mcp add machina -- /path/to/machina/.venv/bin/python -m machina.mcp_ser
 ```
 
 Project-scope registration writes `opencode.json`, which this repository gitignores because the interpreter path is host-specific; other hosts use their equivalent stdio configuration. The shim exposes exactly three tools: `machina_status` (read-only), `machina_chat` (one headless `machina chat` turn) and `machina_session_create`. Phase 1 is **text-only** — attachments/images are refused — and a turn that pauses for approval (CLI exit 3) returns `{"status": "paused_for_approval", ...}` with the pending request ids instead of hanging; resolve the request in Machina, then resume the session. Child turns run in the host's launch directory with a minimal environment allowlist, their own process group and a bounded kill-tree deadline; stdout carries the reply and stderr is diagnostics-only.
+
+**Interop.** The same registration is scriptable: `machina interop status` reports which harnesses (OpenCode, Codex, Hermes) are installed, running and registered; `machina interop enable <platform>` registers this server idempotently through the platform CLI and verifies the result (`--scope project|global`; Codex and Hermes register user-level only, so a `project` scope clamps to `global`; `--dry-run` prints the exact command and runs nothing); `machina interop disable <platform>` removes the registration where the CLI supports it — OpenCode has no remove subcommand and reports the manual step instead. Project-scope OpenCode registration writes `opencode.json` (gitignored; see above). The installer's `--interop auto|all|none` picks the setup sweep: `auto` (default) prompts on a TTY and otherwise only prints the detection summary — a non-interactive install writes nothing unless you pass `all`, which registers every detected harness without prompting; `none` skips.
 
 The `j9` gate journey certifies this path end to end and **skips** unless `opencode` is installed and the project has a registered `machina` server, so run the registration step above in any environment you accept the gate from. The recorded round trip and database check are in the [interop proof](docs/verification/proofs/interop_2026-10-14/README.md).
 
@@ -385,6 +394,9 @@ relevant configuration through the [operations guide](OPERATIONS.md).
 | Together | `TOGETHER_API_KEY` | Direct Together API |
 | DeepSeek | `DEEPSEEK_API_KEY` | Direct DeepSeek API |
 | xAI | `XAI_API_KEY` | Direct xAI API |
+| ChatGPT account | `machina auth login` (no API key) | ChatGPT subscription through the Codex protocol |
+| OpenCode Zen | `OPENCODE_API_KEY` | OpenCode Zen gateway (free + paid models) |
+| Custom | `CUSTOM_BASE_URL` and optional `CUSTOM_API_KEY` | Any OpenAI-compatible endpoint; keyless local servers supported |
 | Ollama | Running Ollama service and an installed model | Local service; no cloud key required |
 
 In the TUI, `/keys` manages masked credentials, `/provider` chooses the adapter,
@@ -392,6 +404,28 @@ In the TUI, `/keys` manages masked credentials, `/provider` chooses the adapter,
 `/effort` sets reasoning effort where the selected provider supports it. Direct
 adapters use their vendor's key and endpoint. Cohere's key is for the optional
 Cohere reranker, not a chat provider; local ONNX reranking needs no key.
+
+**ChatGPT account.** The `chatgpt` provider runs turns on your ChatGPT
+subscription instead of a metered API key. Sign in with `machina auth login`
+(browser PKCE flow) or the TUI's `/auth`; `machina auth status` and
+`machina auth logout` round out the surface, and
+`machina auth login --import-codex` copies an existing Codex CLI login. Requests
+are served by your ChatGPT plan, not the metered API. Tokens live in
+`~/.machina/auth/chatgpt.json` — Machina's own store; logout never touches
+`~/.codex/auth.json`. The transport follows the open-source Codex protocol: the
+backend is undocumented and can drift, so protocol mismatches surface as typed
+errors rather than silent wrong answers.
+
+**Custom endpoints.** The `custom` provider reaches any OpenAI-compatible
+endpoint (LM Studio, vLLM, llama.cpp, a Hermes loopback proxy, …) through
+`custom_base_url` / `CUSTOM_BASE_URL` and optional `custom_api_key` /
+`CUSTOM_API_KEY`; keyless local servers are supported. A model id is required.
+
+**OpenCode Zen.** The `opencode` provider presets the OpenCode Zen gateway
+(`OPENCODE_API_KEY`; the base URL is overridable with `opencode_base_url` /
+`OPENCODE_BASE_URL`). Zen lists free and paid models, but the free tier is gated
+to the OpenCode client: keyless or placeholder-key requests answer HTTP 403
+(`FreeTierError`), so use a genuine console key.
 
 Example non-secret defaults for an Ollama installation:
 
@@ -421,6 +455,10 @@ Important settings include `DATABASE_URL`, `MACHINA_PROVIDER`, `MACHINA_MODEL`, 
 | `MACHINA_PROVIDER` | Chat provider adapter | `openrouter` |
 | `MACHINA_MODEL` | Model identifier | `openrouter/free`; availability is provider-dependent |
 | `MACHINA_REASONING_EFFORT` | Requested reasoning depth | Blank uses provider default |
+| `OPENCODE_API_KEY` | OpenCode Zen gateway key (`opencode` provider) | Blank; the Zen free tier is gated to the OpenCode client, so keyless requests answer HTTP 403 |
+| `OPENCODE_BASE_URL` | Optional base-URL override for the OpenCode Zen preset | Blank uses `https://opencode.ai/inference/v1` |
+| `CUSTOM_BASE_URL` | OpenAI-compatible endpoint for the `custom` provider (LM Studio, vLLM, llama.cpp) | Blank; required by `custom` |
+| `CUSTOM_API_KEY` | Optional key for the `custom` provider | Blank; keyless local servers are supported |
 | `MACHINA_EMBEDDING_BACKEND` | Dense-retrieval embedding backend | `off` (keyword-only default; LoCoMo showed static and bge-small dense hybrids below keyword-only at k=5). `auto` = endpoint → local ONNX → local model2vec → OpenAI/OpenRouter keys → keyword-only; `onnx`, `local`, `openai` force a choice |
 | `MACHINA_EMBEDDING_MODEL` | Embedding model id for the selected backend | Blank uses the backend default (`text-embedding-3-small`, `BAAI/bge-small-en-v1.5` or `minishlab/potion-base-8M`) |
 | `MACHINA_EMBEDDING_BASE_URL` | Explicit OpenAI-compatible embedding endpoint (llama.cpp, Ollama, LM Studio) | Blank; keyless local servers are supported |

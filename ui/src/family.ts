@@ -1,5 +1,5 @@
-// Session family (agent tabs): the root rule, the one family predicate, the
-// bounded family listings, and the tab actions App delegates to.
+// Session family (subagents): the root rule, the one family predicate, the
+// bounded family listings, and the switch actions App delegates to.
 //
 // Family rule (documented, single level): the root is
 // `current.parentSessionId ?? current.id`; members are the root plus every
@@ -67,12 +67,12 @@ export interface FamilyHost {
 	switchTo(session: SessionInfo, history: HistoryEntry[]): void;
 	/** Members settled: prune tails and re-render the chrome. */
 	changed(): void;
-	/** A tab switch failed; report it in the visible transcript. */
+	/** A subagent switch failed; report it in the visible transcript. */
 	report(error: unknown): void;
 }
 
 /**
- * Family store: members, root rule, bounded refresh, and the tab switch
+ * Family store: members, root rule, bounded refresh, and the subagent switch
  * actions. App keeps rendering and key dispatch and delegates here.
  */
 export class FamilyStore {
@@ -86,7 +86,7 @@ export class FamilyStore {
 	private readonly foreign = new Map<string, number>();
 	private pending = false;
 	private queued = false;
-	/** One tab switch at a time (rapid key repeats must not interleave). */
+	/** One subagent switch at a time (rapid key repeats must not interleave). */
 	private opening = false;
 	private readonly host: FamilyHost;
 
@@ -193,7 +193,7 @@ export class FamilyStore {
 
 	/**
 	 * Refresh kick for turn-start frames from ids that are not yet known
-	 * family tabs. Scans are throttled, and an id already scanned and found
+	 * family subagents. Scans are throttled, and an id already scanned and found
 	 * outside the family is negatively cached: later frames never rescan it.
 	 */
 	noteUnknown(sessionId: string): void {
@@ -206,7 +206,7 @@ export class FamilyStore {
 		void this.refresh();
 	}
 
-	/** Switch to a family tab through session.resume; one switch at a time. */
+	/** Switch to a family subagent through session.resume; one switch at a time. */
 	async open(sessionId: string): Promise<void> {
 		if (this.opening || sessionId === this.host.current()?.id) return;
 		this.opening = true;

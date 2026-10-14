@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { stripTerminalSequences, type SelectItem } from "@earendil-works/pi-tui";
 import { parseCommand } from "../src/commands.ts";
 import { type AskTextOptions, type FeatureHost, type NoticeKind, runCommand, SLASH_COMMANDS } from "../src/features/index.ts";
+import { CURATED_MODELS, filterCuratedModels } from "../src/features/models.ts";
 import { resolvePrefix, table } from "../src/format.ts";
 import { listAllSessions, type SessionListHost } from "../src/features/sessions.ts";
 import type { ConfigResult, HistoryEntry, SessionInfo } from "../src/protocol.ts";
@@ -711,6 +712,17 @@ test("/provider re-pins the current session", async () => {
 	]);
 });
 
+test("/provider completions and hint cover the sign-in and gateway providers", async () => {
+	const provider = SLASH_COMMANDS.find((c) => c.name === "provider")!;
+	const values = (await provider.getArgumentCompletions!(""))?.map((item) => item.value) ?? [];
+	for (const name of ["chatgpt", "opencode", "custom"]) {
+		assert.ok(values.includes(name), `missing completion ${name}`);
+		assert.match(provider.argumentHint ?? "", new RegExp(`\\b${name}\\b`), `missing hint ${name}`);
+	}
+	const filtered = (await provider.getArgumentCompletions!("chat"))?.map((item) => item.value) ?? [];
+	assert.deepEqual(filtered, ["chatgpt"]);
+});
+
 test("commands that need a session say so", async () => {
 	const host = new FakeHost();
 	host.current = undefined;
@@ -1032,6 +1044,17 @@ test("/models filters by query and warns when nothing matches", async () => {
 	await run("/models zekefake", host);
 	assert.equal(host.last().kind, "warning");
 	assert.equal(host.calls.length, 0);
+});
+
+test("/models curated list includes the ChatGPT account and OpenCode Zen defaults", () => {
+	const chatgpt = CURATED_MODELS.find((e) => e.provider === "chatgpt");
+	assert.equal(chatgpt?.model, "gpt-6.1-sol");
+	assert.match(chatgpt?.description ?? "", /\/auth/);
+	const opencode = CURATED_MODELS.find((e) => e.provider === "opencode");
+	assert.equal(opencode?.model, "big-pickle");
+	assert.match(opencode?.description ?? "", /OPENCODE_API_KEY/);
+	assert.deepEqual(filterCuratedModels("chatgpt").map((e) => e.provider), ["chatgpt"]);
+	assert.deepEqual(filterCuratedModels("opencode").map((e) => e.provider), ["opencode"]);
 });
 
 test("/compact is an alias for /compress", () => {
