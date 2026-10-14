@@ -193,15 +193,16 @@ async def approvals_resolve(gw: Gateway, params: dict[str, Any]) -> dict[str, An
     if resolved is None:
         raise RpcError(INVALID_PARAMS, "approval already consumed or not permitted")
     if verdict == "approved" and grant == "session":
-        # Explicit reusable authority (LP-03): bound operation + scope, with
-        # the exact digest so changed content re-approves.
+        # Explicit reusable authority (LP-03): exact reviewed capability set
+        # (declared + policy-derived sensitive identities + operation) bound
+        # to scope, with the exact digest so changed content re-approves.
         targets = [t for t in str(rec.get("target", "")).split("|") if t]
         await _store.save_grant(
             {
                 "session_id": rec.get("session_id", ""),
                 "agent_id": rec.get("agent_id", ""),
                 "mode": "ask",
-                "capability": rec.get("operation", ""),
+                "capability": _store.grant_capability(rec),
                 "scope_path": targets[0] if targets else None,
                 "scope_type": "file",
                 "grant_kind": "session",

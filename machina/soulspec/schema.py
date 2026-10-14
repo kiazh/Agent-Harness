@@ -53,6 +53,23 @@ def _package_file(root: Path, relative: str) -> Path:
     return result
 
 
+def _previous_package_files(root: Path) -> set[str]:
+    """Relative paths declared by the destination's existing soul.json manifest.
+
+    Returns an empty set when there is no readable manifest: without it,
+    ownership of destination files cannot be established, so nothing may be
+    removed.
+    """
+    try:
+        manifest = json.loads((root / "soul.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    if not isinstance(files, dict):
+        return set()
+    return {value for value in files.values() if isinstance(value, str)}
+
+
 def _read_package_file(path: Path, *, label: str) -> bytes:
     """Read one package file under the size cap with UTF-8 validation."""
     try:
@@ -403,13 +420,20 @@ class SoulSpec:
             if relative not in output_files:
                 raise ValueError(f"missing package file: {relative}")
         root.mkdir(parents=True, exist_ok=True)
-        # Remove stale files: any file in the output directory that is not in
-        # the new manifest (and is not soul.json itself) should be deleted.
+        # Remove stale files owned by the PREVIOUS export manifest (soul.json)
+        # and only those. Unrelated files in the destination directory are
+        # never touched, and without a readable previous manifest no ownership
+        # exists, so nothing is removed.
         new_files = {_package_file(root, relative) for relative in references.values()}
         new_files.add(_package_file(root, "soul.json"))
-        for existing in root.iterdir():
-            if existing.is_file() and existing not in new_files:
-                existing.unlink()
+        for owned in _previous_package_files(root):
+            try:
+                owned_path = _package_file(root, owned)
+            except ValueError:
+                # Invalid traversal/symlink entry: not proof of ownership.
+                continue
+            if owned_path not in new_files and owned_path.is_file():
+                owned_path.unlink()
         for relative in references.values():
             destination = _package_file(root, relative)
             destination.parent.mkdir(parents=True, exist_ok=True)

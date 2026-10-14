@@ -70,6 +70,12 @@ def test_security_documentation_is_not_credential_access(workspace, path):
         "npm install",
         "npm run deploy",
         "find . -delete",
+        # GNU find output-writing primaries write attacker-directed files and
+        # must require file-write review, not routine classification.
+        "find . -fprint captured.txt",
+        "find . -fprint0 captured.bin",
+        "find . -fprintf report.txt %p",
+        "find . -fls listing.txt",
         "git -c alias.status=whoami status",
         "curl https://example.com",
         "bash script.sh",

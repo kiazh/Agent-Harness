@@ -338,27 +338,72 @@ async def revoke_all_grants() -> int:
 # ─── approvals ─────────────────────────────────────────────────────────────
 
 
+def _redact_public_text(value: object) -> str:
+    """Redact secret-looking material from a persisted/public value.
+
+    Fail-closed: stored proposals, displays, and listings are review artifacts,
+    so when the redactor is unavailable the value is masked rather than
+    exposed raw. Execution identity is separately bound by the canonical
+    digest over the raw values, never by this review copy.
+    """
+    text = str(value)
+    if not text:
+        return text
+    try:
+        from machina.memory.redaction import redact_secrets
+
+        return redact_secrets(text).text
+    except Exception:
+        logger.warning("approval redaction unavailable; masking public value")
+        return "[REDACTED]"
+
+
+def _reviewed_capabilities(req: Any) -> list[str]:
+    """Exact capability identities the reviewed action required.
+
+    Declared capabilities plus the policy-derived sensitive identities (for
+    example ``credential_access`` for a sensitive path or ``destructive_system``
+    for ``find -delete``). Session grants persist this exact set so the grant
+    covers what the review actually authorized; policy matches each element
+    exactly, never by substring.
+    """
+    reviewed = {
+        str(c).strip() for c in (getattr(req, "capabilities", None) or []) if str(c).strip()
+    }
+    try:
+        from machina.permissions.policy import _sensitive_capabilities
+
+        reviewed.update(str(c) for c in _sensitive_capabilities(req))
+    except Exception as error:
+        from machina.observability.diagnostics import record_failure
+
+        record_failure("permissions.store.reviewed_capabilities", error)
+    return sorted(reviewed)
+
+
 def proposal_of(req: Any) -> dict:
     """Versioned canonical action proposal (AH-AUDIT-005).
 
     Durable and reviewable: exact executable/arguments, cwd, backend,
     timeout, network destinations, content identity, capabilities, and tool
-    identity. Secret-bearing values never enter here — content travels as a
-    digest plus a separately redacted display preview.
+    identity. Secret-bearing display values (argv/shell/targets/network) are
+    redacted here — this record is persisted and listed. Exact execution
+    identity stays bound by the versioned ``digest`` computed over the raw
+    values, which is never redacted or exposed as raw material.
     """
     return {
         "version": 2,
         "workspace_root": getattr(req, "workspace_root", ""),
         "operation": getattr(req, "operation", ""),
         "tool": getattr(req, "tool", ""),
-        "argv": list(getattr(req, "argv", None) or []),
-        "shell": getattr(req, "shell", ""),
+        "argv": [_redact_public_text(a) for a in (getattr(req, "argv", None) or [])],
+        "shell": _redact_public_text(getattr(req, "shell", "")),
         "cwd": getattr(req, "cwd", ""),
         "backend": getattr(req, "backend", ""),
         "mode": getattr(req, "mode", ""),
-        "targets": list(getattr(req, "targets", None) or []),
-        "capabilities": sorted(getattr(req, "capabilities", None) or []),
-        "network": list(getattr(req, "network", None) or []),
+        "targets": [_redact_public_text(t) for t in (getattr(req, "targets", None) or [])],
+        "capabilities": _reviewed_capabilities(req),
+        "network": [_redact_public_text(n) for n in (getattr(req, "network", None) or [])],
         "opaque_network": bool(getattr(req, "opaque_network", False)),
         "timeout": getattr(req, "timeout", 60),
         "content_digest": getattr(req, "content_digest", ""),
@@ -371,10 +416,58 @@ def display_of(req: Any) -> str:
     """Sanitized human-review representation (redacted preview, no secrets)."""
     import json as _json
 
-    preview = str(getattr(req, "content_preview", "") or "")
+    preview = _redact_public_text(str(getattr(req, "content_preview", "") or ""))[:4000]
     proposal = proposal_of(req)
     # Keep the display compact: full proposal fields plus truncated preview.
-    return _json.dumps({**proposal, "content_preview": preview[:4000]}, ensure_ascii=False)[:8000]
+    return _json.dumps({**proposal, "content_preview": preview}, ensure_ascii=False)[:8000]
+
+
+def public_view(rec: dict | None) -> dict | None:
+    """Redacted public view of a stored approval record (listings/transports).
+
+    Redaction is applied on read as well as on write so legacy rows persisted
+    before this boundary never leak raw material through the REST or gateway
+    listings.
+    """
+    if rec is None:
+        return None
+    out = dict(rec)
+    proposal = out.get("proposal")
+    if isinstance(proposal, str):
+        out["proposal"] = _redact_public_text(proposal)
+    elif isinstance(proposal, dict):
+        redacted = dict(proposal)
+        for key in ("argv", "targets", "network"):
+            values = redacted.get(key)
+            if isinstance(values, list):
+                redacted[key] = [_redact_public_text(v) for v in values]
+        for key in ("shell",):
+            if isinstance(redacted.get(key), str):
+                redacted[key] = _redact_public_text(redacted[key])
+        out["proposal"] = redacted
+    for key in ("display", "content_preview"):
+        if isinstance(out.get(key), str):
+            out[key] = _redact_public_text(out[key])
+    return out
+
+
+def grant_capability(rec: dict) -> str:
+    """Exact capability identity set persisted for a session grant (LP-03).
+
+    The reviewed set is the approval proposal's capability identities
+    (declared plus policy-derived sensitive capabilities such as
+    ``credential_access``) together with the operation identity, so both the
+    sensitive-capability coverage check and the operation-equality branch in
+    policy see an exact match. Comma-joined: policy splits and matches each
+    element exactly, never by substring. Legacy records without a proposal
+    fall back to the recorded operation.
+    """
+    proposal = rec.get("proposal") or {}
+    reviewed = {str(c).strip() for c in (proposal.get("capabilities") or []) if str(c).strip()}
+    operation = str(proposal.get("operation") or rec.get("operation") or "").strip()
+    if operation:
+        reviewed.add(operation)
+    return ",".join(sorted(reviewed))
 
 
 async def create_approval(req: Any, principal: str) -> dict:
@@ -394,10 +487,13 @@ async def create_approval(req: Any, principal: str) -> dict:
         "status": "pending",
         "consumed": False,
         "created_at": time.time(),
+        # Origin marker: durable rows are authoritatively decided/claimed only
+        # through the DB; the memory mirror is never an authority for them.
+        "durable": False,
         # In-memory reviewable proposal (full preview while live).
         "proposal": proposal,
         "display": display,
-        "content_preview": getattr(req, "content_preview", ""),
+        "content_preview": _redact_public_text(getattr(req, "content_preview", "") or ""),
     }
     async with _mem.lock:
         _mem.approvals[req.request_id] = rec
@@ -425,6 +521,8 @@ async def create_approval(req: Any, principal: str) -> dict:
         except Exception:
             logger.exception("durable approval create failed")
             raise
+        async with _mem.lock:
+            rec["durable"] = True
         _last_durable = True
     else:
         _last_durable = False
@@ -453,11 +551,19 @@ async def resolve_decision(request_id: str, verdict: str, principal: str) -> dic
     db = await _db()
     if db is None:
         # Memory backend is the only authority: apply the same conditional
-        # transition under the lock.
+        # transition under the lock. Durable-origin records are refused: with
+        # the DB disconnected their mirror may already be stale (another
+        # worker may have decided/claimed the durable row), so a local verdict
+        # must never authorize them (fail closed).
         rec = None
         async with _mem.lock:
             rec = _mem.approvals.get(request_id)
-            if rec is None or rec.get("status") != "pending" or rec.get("consumed"):
+            if (
+                rec is None
+                or rec.get("durable")
+                or rec.get("status") != "pending"
+                or rec.get("consumed")
+            ):
                 return None
             if principal == rec.get("agent_id"):
                 return None
@@ -538,6 +644,10 @@ async def claim_execution(request_id: str, *, digest: str, session_id: str) -> b
             rec = _mem.approvals.get(request_id)
             mem_ok = (
                 rec is not None
+                # Durable-origin approval: the DB is the only authority, and
+                # with it disconnected this mirror may already be stale
+                # (another worker may have claimed the durable row). Fail closed.
+                and not rec.get("durable")
                 and rec.get("status") == "approved"
                 and not rec.get("consumed")
                 and rec.get("digest") == digest
@@ -715,6 +825,9 @@ async def find_approved_unclaimed(session_id: str, digest: str) -> dict | None:
                 and rec.get("digest") == digest
                 and rec.get("status") == "approved"
                 and not rec.get("consumed")
+                # Durable-origin approvals are DB-authoritative only; without
+                # the DB they must never resume from a possibly stale mirror.
+                and not rec.get("durable")
                 and rec.get("proposal")
             ):
                 return _with_completeness(rec)
@@ -731,13 +844,13 @@ async def list_pending(session_id: str) -> list[dict]:
                    ORDER BY created_at DESC LIMIT 50""",
                 uuid.UUID(session_id),
             )
-            return [_with_completeness(dict(row)) for row in rows]
+            return [public_view(_with_completeness(dict(row))) for row in rows]
         except Exception as error:
             logger.error("durable approval read failed (%s)", type(error).__name__)
             raise
     async with _mem.lock:
         return [
-            dict(rec)
+            public_view(dict(rec))
             for rec in _mem.approvals.values()
             if rec.get("session_id") == str(session_id) and rec.get("status") == "pending"
         ]

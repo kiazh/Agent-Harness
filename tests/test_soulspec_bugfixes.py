@@ -167,3 +167,66 @@ class TestWritePackageStaleFiles:
         assert not (tmp_path / "a.md").exists()
         assert not (tmp_path / "b.md").exists()
         assert not (tmp_path / "c.md").exists()
+
+    def test_write_package_preserves_unrelated_files(self, tmp_path: Path) -> None:
+        """Audit: a nonempty destination without an owning manifest is not clobbered."""
+        important = tmp_path / "important.txt"
+        important.write_text("unrelated user data", encoding="utf-8")
+
+        spec = SoulSpec(
+            name="audit-export",
+            version="1.0.0",
+            persona=SoulSpec.Persona(
+                name="Audit", description="audit", system_prompt="Audit prompt"
+            ),
+            package_files={"SOUL.md": b"Audit prompt"},
+            package_manifest={
+                "specVersion": "0.5",
+                "name": "audit-export",
+                "displayName": "Audit",
+                "version": "1.0.0",
+                "description": "Audit",
+                "author": {"name": "Audit"},
+                "license": "MIT",
+                "tags": [],
+                "category": "general",
+                "files": {"soul": "SOUL.md"},
+            },
+        )
+        spec.write_package(tmp_path)
+
+        assert important.read_text(encoding="utf-8") == "unrelated user data"
+        assert (tmp_path / "SOUL.md").exists()
+        assert (tmp_path / "soul.json").exists()
+
+    def test_write_package_removes_only_manifest_owned_stale_files(self, tmp_path: Path) -> None:
+        """Audit: unrelated files survive re-export over an existing package."""
+        spec = SoulSpec(
+            name="audit-keep",
+            version="1.0.0",
+            persona=SoulSpec.Persona(
+                name="Audit", description="audit", system_prompt="Audit prompt"
+            ),
+            package_files={"SOUL.md": b"Audit prompt"},
+            package_manifest={
+                "specVersion": "0.5",
+                "name": "audit-keep",
+                "displayName": "Audit",
+                "version": "1.0.0",
+                "description": "Audit",
+                "author": {"name": "Audit"},
+                "license": "MIT",
+                "tags": [],
+                "category": "general",
+                "files": {"soul": "SOUL.md"},
+            },
+        )
+        spec.write_package(tmp_path)
+        keep = tmp_path / "keep.txt"
+        keep.write_text("keep me", encoding="utf-8")
+
+        # Re-export over the existing package: only manifest-owned stale files
+        # may be replaced/removed; unrelated destination files are untouched.
+        spec.write_package(tmp_path)
+        assert keep.read_text(encoding="utf-8") == "keep me"
+        assert (tmp_path / "SOUL.md").exists()

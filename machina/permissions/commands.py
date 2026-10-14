@@ -62,6 +62,12 @@ _ESCAPE_ARGS = frozenset(
         "-ok",
         "-okdir",
         "-delete",
+        # GNU find output-writing primaries consume a file operand and write
+        # attacker-directed content; they require file-write review.
+        "-fprint",
+        "-fprint0",
+        "-fprintf",
+        "-fls",
         "-c",
         "-C",
         "--config",

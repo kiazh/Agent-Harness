@@ -54,7 +54,9 @@ async def resolve_approval(request_id: str, req: ResolveApprovalRequest) -> dict
                 "session_id": rec.get("session_id", ""),
                 "agent_id": rec.get("agent_id", ""),
                 "mode": "ask",
-                "capability": rec.get("operation", ""),
+                # Exact reviewed capability set (declared + policy-derived
+                # sensitive identities + operation), never the bare operation.
+                "capability": _store.grant_capability(rec),
                 "scope_path": targets[0] if targets else None,
                 "scope_type": "file",
                 "grant_kind": "session",
