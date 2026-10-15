@@ -9,7 +9,7 @@ Sources (all evidence under this directory):
    `line_rag_tools_skills.md`, `line_gateway_obs_cli.md`, `line_ui.md`,
    `line_infra_docs.md`.
 
-Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
+Status legend: `FIXED <commit>` · `DEFERRED`
 (documented, with reason) · `REFUTED` · `DOC` (wording/documentation-only).
 
 ## A. Follow-up review (F01–F14)
@@ -102,7 +102,7 @@ Status legend: `FIXED <commit>` · `LANE` (fix lane in flight) · `DEFERRED`
 
 | ID | Sev | Finding | Status |
 |---|---|---|---|
-| R1 | P2 | (see F08) | LANE (rag) |
+| R1 | P2 | (see F08) | FIXED bdea3a3 |
 | R2 | P3 | Chunker recursion can drop a leading separator (coverage) | FIXED bdea3a3 |
 | R3 | P2 | head_to_head `success` ignores harness exit/error | FIXED fa13f27 |
 | R4 | P3 | identity_eval reports 0.0 with no injected transitions | FIXED fa13f27 |

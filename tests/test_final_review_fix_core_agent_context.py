@@ -295,6 +295,7 @@ async def test_repeated_cancel_during_recording_finishes_entire_batch(monkeypatc
         entered.set()
         await release.wait()
         outcomes.append((approval_id, outcome))
+        return True
 
     monkeypatch.setattr(permission_broker, "complete", complete)
     agent = _StubAgent()
@@ -401,3 +402,90 @@ async def test_repeated_cancel_joins_final_flush_and_marker(monkeypatch, pause_a
         await task
     assert completed == ["batch", "marker"]
     assert pending == []
+
+
+@pytest.mark.parametrize("exit_kind", ["close", "error"])
+async def test_premature_tool_stream_exit_records_completed_effect(sleep_tool, exit_kind):
+    agent = _StubAgent()
+    response = LLMResponse(content="", model="test", tool_calls=[
+        _tool_call("sleep_probe", {"delay": 0, "tag": "finished"}, 0)
+    ])
+    pending, made = [], []
+    stream = agent._execute_tool_calls_stream(response, [], made, uuid.uuid4(), pending)
+    async for event in stream:
+        if event.type == "tool_result":
+            break
+    if exit_kind == "close":
+        await stream.aclose()
+    else:
+        with pytest.raises(RuntimeError, match="consumer failed"):
+            await stream.athrow(RuntimeError("consumer failed"))
+    assert len(made) == len(pending) == 1
+    assert pending[0]["payload"]["result"] == "done-finished"
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_failed_approval_retirement_can_retry_without_duplicate_records(monkeypatch, cancelled):
+    from machina.permissions.broker import permission_broker
+    from unittest.mock import AsyncMock
+
+    complete = AsyncMock(side_effect=[False, True])
+    monkeypatch.setattr(permission_broker, "complete", complete)
+    item = {"name": "probe", "args": {}, "result": "saved", "elapsed_ms": 1,
+            "_approval_id": "approval"}
+    agent = _StubAgent()
+    pending, made = [], []
+    sid = uuid.uuid4()
+    if cancelled:
+        item.pop("elapsed_ms")
+        item["_cancelled"] = True
+    await agent._finalize_completed_tools([item], sid, pending, made)
+    assert not item.get("_approval_done")
+    await agent._finalize_completed_tools([item], sid, pending, made)
+    assert item["_approval_done"]
+    assert complete.await_count == 2
+    assert len(pending) == len(made) == (0 if cancelled else 1)
+    assert complete.await_args.args == ("approval", "cancelled" if cancelled else "completed")
+
+
+async def test_closing_run_stream_flushes_completed_tool_before_return(sleep_tool, monkeypatch):
+    from types import SimpleNamespace
+    from machina.core import agent as agent_module
+    from machina.core.models import StreamEvent
+
+    agent = _StubAgent()
+    agent.provider = SimpleNamespace()
+    response = LLMResponse(content="", model="test", tool_calls=[
+        _tool_call("sleep_probe", {"delay": 0, "tag": "persisted"}, 0)
+    ])
+    persisted = []
+
+    async def prepare(*args, **kwargs):
+        return SimpleNamespace(), []
+
+    async def provider_stream(**kwargs):
+        yield StreamEvent(type="done", response=response)
+
+    async def batch(chunks):
+        persisted.extend(chunks)
+
+    async def marker(**kwargs):
+        persisted.append(kwargs)
+
+    monkeypatch.setattr(agent, "_prepare_context", prepare)
+    monkeypatch.setattr(agent, "_stream_llm_with_retry", provider_stream)
+    monkeypatch.setattr(agent, "_condense_history", lambda messages: None)
+    monkeypatch.setattr(agent, "_tool_defs", lambda: [])
+    monkeypatch.setattr(agent_module, "_effective_turn_budget", lambda *args: 1000)
+    monkeypatch.setattr(agent_module, "_request_context_tokens", lambda *args: 1)
+    monkeypatch.setattr(agent_module.context_manager, "add_chunks_batch", batch)
+    monkeypatch.setattr(agent_module.context_manager, "add_chunk", marker)
+    stream = agent.run_stream(uuid.uuid4(), "run", verbose=False)
+    async for event in stream:
+        if event.type == "tool_result":
+            break
+    await stream.aclose()
+    records = [chunk for chunk in persisted if chunk["chunk_type"] == "tool_call"]
+    assert len(records) == 1
+    assert records[0]["payload"]["result"] == "done-persisted"
+    assert any("interrupted" in chunk["payload"].get("content", "") for chunk in persisted)

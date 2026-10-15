@@ -9,7 +9,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator, Callable
-from contextlib import nullcontext
+from contextlib import aclosing, nullcontext
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from functools import wraps
@@ -129,15 +129,16 @@ def instrument_stream(func):
         # tasks are created: a contextvar/span entered inside this generator
         # would neither survive across steps nor detach in its own context.
         try:
-            async for event in func(self, session_id, user_message, verbose, **kwargs):
-                if event.type == "done":
-                    if event.response is not None and not event.response.needs_approval:
-                        await self._complete_growth(event.response, session_id=session_id)
-                    metrics.record_latency("agent.run", (time.monotonic() - start) * 1000)
-                    metrics.increment_counter("agent.run.calls")
-                    session = await session_manager.get(session_id)
-                    await plugin_registry.dispatch("post_agent_run", session, event.response)
-                yield event
+            async with aclosing(func(self, session_id, user_message, verbose, **kwargs)) as events:
+                async for event in events:
+                    if event.type == "done":
+                        if event.response is not None and not event.response.needs_approval:
+                            await self._complete_growth(event.response, session_id=session_id)
+                        metrics.record_latency("agent.run", (time.monotonic() - start) * 1000)
+                        metrics.increment_counter("agent.run.calls")
+                        session = await session_manager.get(session_id)
+                        await plugin_registry.dispatch("post_agent_run", session, event.response)
+                    yield event
         except Exception:
             metrics.record_error("agent.run")
             raise
@@ -767,17 +768,18 @@ class BaseReActAgent:
         Thin wrapper over :meth:`_execute_tool_calls_stream` (the single
         implementation) that prints progress when *verbose* is set.
         """
-        async for event in self._execute_tool_calls_stream(
+        async with aclosing(self._execute_tool_calls_stream(
             response, messages, tool_calls_made, session_id, pending_chunks
-        ):
-            if not verbose:
-                continue
-            if event.type == "tool_call":
-                args_preview = json.dumps(event.tool_args, default=str)[:80]
-                console.print(f"[yellow]  → {event.tool_name}({args_preview})[/yellow]")
-            elif event.type == "tool_result":
-                preview = event.tool_result[:200].replace("\n", " ")
-                console.print(f"[green]  ← {preview}[/green]")
+        )) as events:
+            async for event in events:
+                if not verbose:
+                    continue
+                if event.type == "tool_call":
+                    args_preview = json.dumps(event.tool_args, default=str)[:80]
+                    console.print(f"[yellow]  → {event.tool_name}({args_preview})[/yellow]")
+                elif event.type == "tool_result":
+                    preview = event.tool_result[:200].replace("\n", " ")
+                    console.print(f"[green]  ← {preview}[/green]")
 
     async def _execute_tool_calls_stream(
         self,
@@ -1069,8 +1071,8 @@ class BaseReActAgent:
                                 if "elapsed_ms" not in item:
                                     _aid = item.get("_approval_id", "")
                                     if _aid:
-                                        await _broker.complete(_aid, "cancelled")
-                                        item["_approval_done"] = True
+                                        item["_cancelled"] = True
+                                        await self._retire_tool_approval(item, "cancelled")
 
                             await await_joined(finish_execution())
                             raise
@@ -1151,7 +1153,6 @@ class BaseReActAgent:
                 return item
 
             tasks = [asyncio.create_task(_bounded(item)) for item in runnable]
-            cancelled = False
             try:
                 for coro in asyncio.as_completed(tasks):
                     try:
@@ -1201,11 +1202,6 @@ class BaseReActAgent:
                             },
                             tool_call_id=finished["call_id"],
                         )
-            except asyncio.CancelledError:
-                # F02: record already-finished effects in the `finally` below
-                # before unwinding; a bare cancel would otherwise skip Phase D.
-                cancelled = True
-                raise
             finally:
                 # Ensure no task leaks on cancellation.
                 for t in tasks:
@@ -1217,18 +1213,11 @@ class BaseReActAgent:
 
                 async def finish_batch():
                     await asyncio.gather(*tasks, return_exceptions=True)
-                    if cancelled:
-                        await self._finalize_completed_tools(
-                            planned, session_id, pending_chunks, tool_calls_made
-                        )
-
-                try:
-                    await await_joined(finish_batch())
-                except asyncio.CancelledError:
                     await self._finalize_completed_tools(
                         planned, session_id, pending_chunks, tool_calls_made
                     )
-                    raise
+
+                await await_joined(finish_batch())
 
         # ── Phase D: metrics for denied + persistence in provider order ───
         # Provider message order must follow the original tool_calls order
@@ -1306,11 +1295,10 @@ class BaseReActAgent:
                 # Preserve continuation offsets and complete JSON beyond the preview cap.
                 message_limit = tool_message_limit(tool_name)
                 self._append_tool_messages(messages, response, tc, result_str[:message_limit])
-        except asyncio.CancelledError:
+        finally:
             await self._finalize_completed_tools(
                 planned, session_id, pending_chunks, tool_calls_made
             )
-            raise
 
     def _tool_entry(self, item: dict[str, Any]) -> dict[str, Any]:
         """Build the ``tool_calls_made`` entry for one finished tool action."""
@@ -1357,25 +1345,11 @@ class BaseReActAgent:
     async def _record_tool_action_joined(
         self, item, session_id, pending_chunks, tool_calls_made
     ) -> None:
+        result_str = item["result"]
+        outcome = "failed" if item.get("_failed") or result_str.startswith("Error:") else "completed"
+        await self._retire_tool_approval(item, outcome)
         if item.get("_recorded"):
             return
-        result_str = item["result"]
-        # LP-01 lifecycle: claimed → completed/failed exactly once.
-        _aid = item.get("_approval_id", "")
-        if _aid and not item.get("_approval_done"):
-            try:
-                from machina.permissions.broker import permission_broker as _broker2
-
-                outcome = (
-                    "failed"
-                    if item.get("_failed") or result_str.startswith("Error:")
-                    else "completed"
-                )
-                await _broker2.complete(_aid, outcome)
-                item["_approval_done"] = True
-            except Exception as _boundary_error:
-                # Optional fallback preserves the primary outcome; report no payload.
-                record_failure("agent._record_tool_action", _boundary_error)
         payload = {
             "tool": item["name"],
             "args": item["args"],
@@ -1404,6 +1378,20 @@ class BaseReActAgent:
         tool_calls_made.append(self._tool_entry(item))
         item["_recorded"] = True
 
+    async def _retire_tool_approval(self, item, outcome: str) -> None:
+        approval_id = item.get("_approval_id", "")
+        if not approval_id or item.get("_approval_done"):
+            return
+        try:
+            from machina.permissions.broker import permission_broker
+
+            if await permission_broker.complete(approval_id, outcome):
+                item["_approval_done"] = True
+            else:
+                logger.warning("Tool approval retirement was not confirmed")
+        except Exception as error:
+            record_failure("agent._retire_tool_approval", error)
+
     async def _finalize_completed_tools(
         self,
         planned: list[dict[str, Any]],
@@ -1411,15 +1399,7 @@ class BaseReActAgent:
         pending_chunks: list[dict[str, Any]] | None,
         tool_calls_made: list[dict[str, Any]],
     ) -> None:
-        """Record completed-but-unrecorded actions when a batch is cancelled (F02).
-
-        Phase D records completions only after the whole batch returns; a
-        cancellation in between would otherwise drop an already-finished
-        effect from the conversation record and leave its approval claimed.
-        Runs in provider order, shielded so the recording survives the in-flight
-        cancellation, and is idempotent per item. Provider-message ordering is
-        deliberately untouched (the aborted turn discards those messages).
-        """
+        """Record completed actions and retry unfinished approval retirements."""
         from machina.core.background_tasks import await_joined
 
         await await_joined(
@@ -1430,12 +1410,17 @@ class BaseReActAgent:
         self, planned, session_id, pending_chunks, tool_calls_made
     ) -> None:
         for item in planned:
-            if item["name"] is None or item.get("_denied") or item.get("_recorded"):
+            if item["name"] is None or item.get("_denied"):
                 continue
-            if "elapsed_ms" not in item:
+            if item.get("_recorded") and (
+                not item.get("_approval_id") or item.get("_approval_done")
+            ):
                 continue
             try:
-                await self._record_tool_action(item, session_id, pending_chunks, tool_calls_made)
+                if item.get("_cancelled"):
+                    await self._retire_tool_approval(item, "cancelled")
+                elif "elapsed_ms" in item:
+                    await self._record_tool_action(item, session_id, pending_chunks, tool_calls_made)
             except Exception as exc:
                 logger.warning("cancellation finalize failed for %s: %s", item["name"], exc)
 
@@ -1937,15 +1922,8 @@ class ReActAgent(BaseReActAgent):
                 await self._execute_tool_calls(
                     response, messages, tool_calls_made, session_id, verbose, pending_chunks
                 )
-            except asyncio.CancelledError:
-                # AH-015: preserve user/tool records accumulated so far;
-                # do not misrepresent partial effects as complete.
+            except BaseException:
                 await self._flush_pending_cancellation_safe(pending_chunks, session_id)
-                raise
-            except DelegationAccountingError:
-                await self._flush_pending_cancellation_safe(
-                    pending_chunks, session_id, note="delegation accounting unavailable"
-                )
                 raise
             # AH-015: incremental persistence — flush each batch so a later
             # cancellation loses at most the in-flight batch, not all history.
@@ -2205,18 +2183,13 @@ class ReActAgent(BaseReActAgent):
             # and, on cancellation, persist what completed with an explicit
             # interruption marker.
             try:
-                async for event in self._execute_tool_calls_stream(
+                async with aclosing(self._execute_tool_calls_stream(
                     response, messages, tool_calls_made, session_id, pending_chunks
-                ):
-                    yield event
-            except asyncio.CancelledError:
+                )) as events:
+                    async for event in events:
+                        yield event
+            except BaseException:
                 await self._flush_pending_cancellation_safe(pending_chunks, session_id)
-                raise
-
-            except DelegationAccountingError:
-                await self._flush_pending_cancellation_safe(
-                    pending_chunks, session_id, note="delegation accounting unavailable"
-                )
                 raise
 
             # Persist completed child/tool records before yielding a pause.
