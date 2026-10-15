@@ -22,7 +22,6 @@ from machina.research.locomo import (
     load_locomo,
 )
 from machina.research.train_memory_policy import load_scored_states, train_from_file
-from machina.soulspec.conformance import TestSoulSpecConformance
 from machina.soulspec.schema import SoulSpec
 
 
@@ -360,7 +359,8 @@ def test_soulspec_v05_package_preserves_manifest_and_declared_files(tmp_path):
     (source / "IDENTITY.md").write_bytes(b"Identity\r\n")
     (source / "examples").mkdir()
     (source / "examples/good.md").write_bytes(b"Example\r\n")
-    assert TestSoulSpecConformance().validate_package(source).valid
+    # ``SoulSpec.from_package`` is the real validation seam (R4-106): it raises
+    # on an invalid manifest, which the very next call exercises.
     spec = SoulSpec.from_package(source)
     destination = tmp_path / "destination"
     spec.write_package(destination)
@@ -395,7 +395,8 @@ def test_soulspec_rejects_invalid_manifest_fields(tmp_path, field, value):
     manifest = json.loads(path.read_text(encoding="utf-8"))
     manifest[field] = value
     path.write_text(json.dumps(manifest), encoding="utf-8")
-    assert not TestSoulSpecConformance().validate_package(tmp_path).valid
+    with pytest.raises(ValueError):
+        SoulSpec.from_package(tmp_path)
 
 
 def test_soulspec_rejects_optional_file_escape(tmp_path):
@@ -408,4 +409,5 @@ def test_soulspec_rejects_optional_file_escape(tmp_path):
     manifest = json.loads(path.read_text(encoding="utf-8"))
     manifest["files"]["identity"] = "../private.txt"
     path.write_text(json.dumps(manifest), encoding="utf-8")
-    assert not TestSoulSpecConformance().validate_package(tmp_path).valid
+    with pytest.raises(ValueError):
+        SoulSpec.from_package(tmp_path)

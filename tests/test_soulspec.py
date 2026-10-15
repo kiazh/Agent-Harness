@@ -14,7 +14,6 @@ from machina.soulspec import (
     MachinaAdapter,
     SoulSpec,
     SoulSpecMerger,
-    TestSoulSpecConformance,
 )
 
 # ─── Fixtures ───────────────────────────────────────────────────────────────
@@ -318,27 +317,16 @@ class TestMergeSemantics:
 
 
 class TestConformance:
-    def test_conformance_schema_validation(self, sample_spec: SoulSpec) -> None:
-        """Schema validation works for valid and invalid specs."""
-        conf = TestSoulSpecConformance()
-        result = conf.validate_schema(sample_spec)
-        assert result.valid
-        assert result.errors == []
+    def test_conformance_schema_validation(self) -> None:
+        """The live schema seam accepts a valid spec and rejects a nameless one.
 
-        invalid = SoulSpec(name="")
-        result = conf.validate_schema(invalid)
-        assert not result.valid
-        assert len(result.errors) > 0
-
-    def test_conformance_merge_semantics(self) -> None:
-        """Merge semantics are correct per the conformance suite."""
-        conf = TestSoulSpecConformance()
-        conf.test_merge_semantics()  # should not raise
-
-    def test_conformance_progressive_disclosure(self) -> None:
-        """Skills load at correct disclosure level."""
-        conf = TestSoulSpecConformance()
-        conf.test_progressive_disclosure()  # should not raise
+        Replaces the removed ``TestSoulSpecConformance.validate_schema`` helper
+        (R4-106): ``SoulSpec.from_dict`` is the real production validation seam.
+        """
+        valid = SoulSpec.from_dict(yaml.safe_load(SAMPLE_YAML))
+        assert valid.name == "Harness Agent"
+        with pytest.raises(ValueError):
+            SoulSpec.from_dict({"name": ""})
 
     def test_conformance_progressive_disclosure_levels(self) -> None:
         """Progressive disclosure levels are correctly assigned."""

@@ -345,7 +345,9 @@ async def test_rag_cold_restart_and_keyword_fallback():
         broken = RAGPipeline(embedder=_DeadEmbedder())
         kw = await broken.search("platypus rendezvous protocol", session_id=s.id, top_k=3)
         assert any("platypus" in (h.chunk.payload.get("text", "")) for h in kw)
-        assert broken._last_search_mode == "keyword-only"
+        # The fallback mode is reported on the results themselves (the write-only
+        # ``_last_search_mode`` field was removed in R4-106).
+        assert kw and all(h.retrieval_mode == "keyword-only" for h in kw)
     finally:
         try:
             await session_manager.delete(s.id)

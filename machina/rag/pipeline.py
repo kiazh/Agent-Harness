@@ -466,7 +466,6 @@ class RAGPipeline:
         # Embed query, or fall back to keyword-only search when no embedding
         # provider is available (LP-10: basic operation needs no second paid
         # key). The fallback mode is recorded for honest status reporting.
-        self._last_search_mode = "hybrid"
         query_embedding = None
         embedding_failed = False
         if self._embedder is None:
@@ -488,7 +487,6 @@ class RAGPipeline:
             )
             for result in results:
                 result.retrieval_degraded = embedding_failed
-            self._last_search_mode = "keyword-only"
             return await self._finish_search(
                 results, query, session_id, k, rerank, cache_key, now, embed_model, "keyword-only"
             )
