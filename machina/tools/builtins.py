@@ -229,7 +229,27 @@ def _is_safe_url(url: str, *, allow_loopback: bool = False) -> bool:
     return True
 
 
-@registry.register(description="Search the web for information")
+@registry.register(
+    name="web_search",
+    description="Search the web for information",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query, e.g. 'python asyncio timeout pattern'",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10,
+                "default": 5,
+                "description": "Maximum number of results to return (1–10, default 5)",
+            },
+        },
+        "required": ["query"],
+    },
+)
 async def web_search(query: str, limit: int = 5) -> str:
     """Search the web using SearXNG (self-hosted) or DuckDuckGo."""
     if not query or not query.strip():
@@ -271,7 +291,20 @@ class _ExtractedText(HTMLParser):
             self.parts.append(data)
 
 
-@registry.register(description="Extract content from a URL")
+@registry.register(
+    name="web_extract",
+    description="Extract content from a URL",
+    parameters={
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "Public http(s) URL to fetch and convert to plain text",
+            },
+        },
+        "required": ["url"],
+    },
+)
 async def web_extract(url: str) -> str:
     """Extract text through a direct, validated-IP connection (no proxy).
 
@@ -462,7 +495,30 @@ async def _match_files_bounded(pattern: str, files: list[str]) -> list[str]:
     return [str(match) for match in matches]
 
 
-@registry.register(description="Search file contents with regex")
+@registry.register(
+    name="search_files",
+    description="Search file contents with regex",
+    parameters={
+        "type": "object",
+        "properties": {
+            "pattern": {
+                "type": "string",
+                "description": "Regular expression to search for (max 200 characters)",
+            },
+            "path": {
+                "type": "string",
+                "default": ".",
+                "description": "Directory to search, relative to the workspace (default '.')",
+            },
+            "file_glob": {
+                "type": "string",
+                "default": "*",
+                "description": "Glob filter for file names, e.g. '*.py' (default '*' = all files)",
+            },
+        },
+        "required": ["pattern"],
+    },
+)
 async def search_files(pattern: str, path: str = ".", file_glob: str | None = None) -> str:
     """Search file contents using regex pattern."""
     from machina.tools.file import resolve_path

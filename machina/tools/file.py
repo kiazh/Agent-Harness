@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import stat
+import tempfile
 from pathlib import Path
 
 from machina.core.config import config
@@ -235,21 +237,145 @@ def _secure_mkdir_parents(file_path: Path, *, inside_base: bool) -> None:
             raise ValueError(f"Cannot access '{cur}': {e}") from e
 
 
+def _fsync_dir_best_effort(directory: Path) -> None:
+    """Persist a rename on POSIX; unavailable directory fsync is not fatal."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        dir_fd = os.open(directory, flags)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        try:
+            os.close(dir_fd)
+        except OSError:
+            pass
+
+
+def _atomic_write_file(file_path: Path, content: str, *, mode: int | None = None) -> None:
+    """Write *content* to *file_path* through temp + fsync + replace.
+
+    A mid-write failure (ENOSPC, crash, cancellation) cannot destroy the
+    original: the complete content is written and fsynced on a random-name
+    temp file in the same directory (mkstemp, O_EXCL) and only renamed over
+    the target once it is whole. The caller's mode bits are preserved.
+    """
+    directory = file_path.parent
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{file_path.name}.", suffix=".tmp", dir=str(directory)
+    )
+    try:
+        if mode is not None:
+            os.fchmod(fd, mode)
+        handle = os.fdopen(fd, "w", encoding="utf-8")
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
+    try:
+        with handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, file_path)
+    except BaseException:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
+    _fsync_dir_best_effort(directory)
+
+
+# read_file paging bounds: the byte gate applies to the selected lines (not
+# the whole file) so large files can be read a page at a time. Lines are
+# consumed in bounded pieces so a pathological single-line file is never
+# buffered whole.
+_READ_LINE_CHUNK = 1 << 16
+_READ_MAX_PAGE_BYTES = 5_242_880
+
+
+def _read_page(
+    stream, *, offset: int, limit: int, max_bytes: int, path: str
+) -> tuple[str, int, int]:
+    """Apply offset/limit to *stream* under per-line and per-page byte caps.
+
+    Returns ``(page_text, shown_lines, total_lines)``. Lines outside the
+    requested window are consumed piece by piece and discarded; a window
+    whose encoded size exceeds *max_bytes* is rejected (fail closed) instead
+    of returned.
+    """
+    page: list[str] = []
+    page_bytes = 0
+    total_lines = 0
+    while True:
+        piece = stream.readline(_READ_LINE_CHUNK)
+        if piece == "":
+            break
+        total_lines += 1
+        parts: list[str] | None = [piece] if offset <= total_lines < offset + limit else None
+        size = len(piece)
+        while not piece.endswith("\n"):
+            piece = stream.readline(_READ_LINE_CHUNK)
+            if piece == "":
+                break
+            size += len(piece)
+            if parts is None:
+                continue
+            if size > max_bytes:
+                raise ValueError(f"File '{path}' exceeds max size during read")
+            parts.append(piece)
+        if parts is None:
+            continue
+        text = "".join(parts)
+        page_bytes += len(text.encode("utf-8", errors="replace"))
+        if page_bytes > max_bytes:
+            raise ValueError(f"File '{path}' exceeds max size during read")
+        page.append(text)
+    return "".join(page), len(page), total_lines
+
+
 @registry.register(
     name="read_file",
-    description="Read the contents of a file. Returns the file content as text.",
+    description=(
+        "Read the contents of a file. Returns the file content as text. Large files "
+        "can be paged with offset/limit; a result truncated at limit ends with a "
+        "marker reporting the total line count and the next offset."
+    ),
     parameters={
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "Path to the file to read"},
             "offset": {
                 "type": "integer",
-                "description": "Line number to start reading from (1-indexed)",
+                "minimum": 1,
+                "description": "Line number to start reading from (1-indexed, default 1)",
             },
-            "limit": {"type": "integer", "description": "Maximum number of lines to read"},
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "Maximum number of lines to return (default 2000); when more "
+                    "lines follow, the result ends with a truncation marker"
+                ),
+            },
             "max_size": {
                 "type": "integer",
-                "description": "Maximum file size in bytes (default: 1048576 = 1 MB)",
+                "minimum": 1,
+                "description": (
+                    "Maximum bytes for the returned page (default: 1048576 = 1 MB, "
+                    "hard cap 5242880 = 5 MB); applies to the selected lines, so "
+                    "larger files can still be paged"
+                ),
             },
         },
         "required": ["path"],
@@ -260,11 +386,16 @@ async def read_file(
 ) -> str:
     """Read a file with optional offset and limit.
 
+    Offset/limit are applied before the size gate: only the selected page
+    counts against ``max_size``, so an oversized file can be paged instead of
+    rejected. When the page is cut off at ``limit`` and more lines follow, a
+    final marker reports the total line count and the next offset.
+
     Args:
         path: Path to the file to read.
         offset: Line number to start reading from (1-indexed).
         limit: Maximum number of lines to read.
-        max_size: Maximum file size in bytes. Files larger than this are rejected.
+        max_size: Maximum number of bytes in the returned page.
     """
     if offset < 1:
         raise ToolError(f"offset must be >= 1, got {offset}")
@@ -272,7 +403,7 @@ async def read_file(
         raise ToolError(f"limit must be >= 1, got {limit}")
     if max_size < 1:
         raise ToolError(f"max_size must be >= 1, got {max_size}")
-    effective_max = min(max_size, 5_242_880)
+    effective_max = min(max_size, _READ_MAX_PAGE_BYTES)
     try:
         # Full mode: broker-authorized absolute host paths permitted.
         file_path = resolve_path(path, allow_outside=True)
@@ -284,37 +415,33 @@ async def read_file(
     if not file_path.is_file():
         raise ToolError(f"Not a file: {path}")
 
-    # Check file size before reading
-    file_size = file_path.stat().st_size
-    if file_size > effective_max:
-        raise ToolError(
-            f"File '{path}' is too large ({file_size} bytes, max {effective_max} bytes)"
-        )
-
     try:
 
-        def _read():
+        def _read() -> str:
             # Secure open via descriptor (AH-003): do not reopen the
             # pathname after validation — read from the verified fd.
             outside = not file_path.is_relative_to(_base_dir())
             fd = _open_secure_read(file_path, check_base=not outside)
             try:
                 with os.fdopen(fd, encoding="utf-8", errors="replace") as f:
-                    data = f.read(effective_max + 1)
+                    page, shown, total = _read_page(
+                        f, offset=offset, limit=limit, max_bytes=effective_max, path=path
+                    )
             except BaseException:
                 try:
                     os.close(fd)
                 except OSError:
                     pass
                 raise
-            if len(data.encode("utf-8", errors="replace")) > effective_max:
-                # Re-check by bytes to avoid over-read on multi-byte chars.
-                raw = data.encode("utf-8", errors="replace")[: effective_max + 1]
-                if len(raw) > effective_max:
-                    raise ValueError(f"File '{path}' exceeds max size during read")
-            lines = data.splitlines(keepends=True)
-            end = offset + limit - 1
-            return "".join(lines[offset - 1 : end])
+            if not page:
+                return ""
+            if total > offset + shown - 1:
+                next_offset = offset + shown
+                return page + (
+                    f"\n[read_file: showing lines {offset}-{next_offset - 1} of "
+                    f"{total}; use offset={next_offset} to continue]"
+                )
+            return page
 
         return await asyncio.to_thread(_read)
     except ToolError:
@@ -355,9 +482,11 @@ async def write_file(path: str, content: str) -> str:
                 # Re-check after mkdir (a component could have been swapped).
                 _reject_symlink_components(file_path)
             nofollow = getattr(os, "O_NOFOLLOW", 0)
-            # NO O_TRUNC here: open first, validate the object, truncate only
-            # after the descriptor is proven to be the authorized target
-            # (5.2 — a rejected action must have no effects).
+            # Open first WITHOUT O_TRUNC: the descriptor is validated before
+            # any content changes, and the content itself is written to a
+            # same-directory temp file that only replaces the target once it
+            # is complete and fsynced (5.2 — rejected actions have no effects;
+            # ENOSPC mid-write cannot destroy the original).
             flags = os.O_WRONLY | os.O_CREAT
             if nofollow:
                 # If the target exists as a symlink, fail closed instead of
@@ -380,16 +509,24 @@ async def write_file(path: str, content: str) -> str:
                 _verify_fd_matches_path(fd, file_path, check_base=inside)
                 # Hard-link escape: an inside name with nlink > 1 may point at
                 # outside content via another name; refuse agent writes.
+                mode = None
                 try:
-                    if os.fstat(fd).st_nlink > 1:
+                    target_info = os.fstat(fd)
+                    if target_info.st_nlink > 1:
                         raise ValueError(f"Path '{path}' has multiple hard links; refusing write")
+                    if existed_before:
+                        mode = stat.S_IMODE(target_info.st_mode)
                 except ValueError:
                     raise
                 except OSError:
                     pass
-                os.ftruncate(fd, 0)
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(content)
+                # Close the probe descriptor before the rename: Windows cannot
+                # replace a file that is still open.
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                _atomic_write_file(file_path, content, mode=mode)
             except BaseException:
                 try:
                     os.close(fd)

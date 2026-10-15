@@ -219,17 +219,38 @@ class ToolRegistry:
 
         Tool definitions are immutable during a run, so we cache the result
         after the first call to avoid rebuilding the list on every LLM request.
+
+        Every schema sent to the model declares ``additionalProperties``
+        explicitly: ``_validate_tool_args`` rejects undeclared arguments
+        (fail closed), so the model must not be shown JSON Schema's implicit
+        default of allowing extras. An explicit ``true`` is preserved for
+        tools that deliberately opt in.
         """
         if self._definitions_cache is None:
             self._definitions_cache = [
                 _core_symbol("machina.core.models", "ToolDefinition")(
                     name=t.name,
                     description=t.description,
-                    parameters=t.parameters,
+                    parameters=self._declared_parameters(t.parameters),
                 )
                 for t in self._tools.values()
             ]
         return self._definitions_cache
+
+    @staticmethod
+    def _declared_parameters(parameters: dict) -> dict:
+        """Return a copy of *parameters* with an explicit additionalProperties.
+
+        Only booleans can be honored by ``_validate_tool_args``: a property
+        pattern schema (dict) is normalized to ``false`` because the runtime
+        validator cannot enforce it.
+        """
+        if not isinstance(parameters, dict):
+            return parameters
+        declared = dict(parameters)
+        if not isinstance(declared.get("additionalProperties"), bool):
+            declared["additionalProperties"] = False
+        return declared
 
     def _validate_tool_args(self, tool: Tool, kwargs: dict[str, Any]) -> None:
         """Validate tool arguments against the tool's JSON Schema.
@@ -237,7 +258,9 @@ class ToolRegistry:
         Checks:
         - Required parameters are present
         - Parameter types match the schema
-        - No extra parameters are passed (unless additionalProperties is true)
+        - No extra parameters are passed unless the schema declares
+          ``additionalProperties: true`` (absent means fail closed, matching
+          the declaration ``get_tool_definitions`` sends to the model)
         """
         schema = tool.parameters
         properties = schema.get("properties", {})
@@ -250,15 +273,16 @@ class ToolRegistry:
                     f"Tool '{tool.name}' missing required parameter: '{req_param}'"
                 )
 
-        # Check for unknown parameters
-        allowed_params = set(properties.keys())
-        provided_params = set(kwargs.keys())
-        unknown_params = provided_params - allowed_params
-        if unknown_params:
-            raise _core_symbol("machina.core.exceptions", "ValidationError")(
-                f"Tool '{tool.name}' received unknown parameters: {unknown_params}. "
-                f"Allowed: {allowed_params}"
-            )
+        # Check for unknown parameters (honor an explicit opt-in)
+        if schema.get("additionalProperties") is not True:
+            allowed_params = set(properties.keys())
+            provided_params = set(kwargs.keys())
+            unknown_params = provided_params - allowed_params
+            if unknown_params:
+                raise _core_symbol("machina.core.exceptions", "ValidationError")(
+                    f"Tool '{tool.name}' received unknown parameters: {unknown_params}. "
+                    f"Allowed: {allowed_params}"
+                )
 
         # Type checking
         type_map = {

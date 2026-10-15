@@ -11,6 +11,26 @@ from machina.tools.base import registry
 @registry.register(
     name="skill_list",
     description="Search and rank skills for a task by query (4 per page). Use a specific query; page with offset only while results stay relevant. Never enumerate the whole catalog; empty query browses.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "default": "",
+                "description": (
+                    "Case-insensitive term matched against skill names, descriptions, "
+                    "and triggers; leave empty to browse (4 skills per page)"
+                ),
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0,
+                "description": "Number of matching skills to skip when paging (default 0)",
+            },
+        },
+        "required": [],
+    },
 )
 def skill_list(query: str = "", offset: int = 0) -> str:
     skills = skills_module.skill_registry
@@ -48,6 +68,37 @@ def skill_list(query: str = "", offset: int = 0) -> str:
 @registry.register(
     name="skill_read",
     description="Read skill instructions. query jumps to a relevant heading or passage; offset continues an excerpt. limit defaults to 800, up to 8000 characters. Read relevant workflow steps before using them.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "skill_name": {
+                "type": "string",
+                "description": "Skill name to read, e.g. 'python-patterns'",
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0,
+                "description": "Character offset into the skill text to start from (default 0)",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8000,
+                "default": 800,
+                "description": "Maximum characters to return (1–8000, default 800)",
+            },
+            "query": {
+                "type": "string",
+                "default": "",
+                "description": (
+                    "Optional keyword; jumps to the first matching heading or passage "
+                    "instead of the offset"
+                ),
+            },
+        },
+        "required": ["skill_name"],
+    },
 )
 def skill_read(skill_name: str, offset: int = 0, limit: int = 800, query: str = "") -> str:
     skills = skills_module.skill_registry

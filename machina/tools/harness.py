@@ -11,6 +11,7 @@ from machina.core.self_knowledge import FEATURES, configuration
 from machina.core.session import session_manager
 from machina.memory.growth import growth_store
 from machina.memory.redaction import redact_value
+from machina.observability.diagnostics import record_failure
 from machina.tools.agents import active_agent_scope
 from machina.tools.base import registry
 
@@ -163,7 +164,12 @@ def _provenance_of(registry, skill) -> str:
 
 
 async def _persona_summary(agent_id: str, notes: dict) -> dict:
-    """Bounded, owned identity status; failure is never mistaken for no persona."""
+    """Bounded, owned identity status.
+
+    "No agent definition" and "resolution failed" are distinct typed states
+    (``reason`` is machine-readable, never the exception text), so an
+    unreadable persona is never reported as an absent one.
+    """
     try:
         from machina.core.agent_def import agent_registry
         from machina.core.config import config
@@ -172,7 +178,7 @@ async def _persona_summary(agent_id: str, notes: dict) -> dict:
 
         definition = await agent_registry.get(agent_id)
         if definition is None:
-            return {"available": False}
+            return {"available": False, "reason": "no_agent_definition"}
         spec = MachinaAdapter.to_soulspec(definition)
         effective = resolve_persona(
             spec,
@@ -199,5 +205,8 @@ async def _persona_summary(agent_id: str, notes: dict) -> dict:
             "active_learned_notes": len(p.learned_notes),
             "learning_enabled": effective.learning_enabled,
         }
-    except Exception:
-        return {"available": False}
+    except Exception as error:
+        # Resolution failure is a distinct typed state; the exception text is
+        # never echoed (driver errors can carry credential-bearing details).
+        record_failure("tools.harness.persona", error)
+        return {"available": False, "reason": "persona_resolution_failed"}
