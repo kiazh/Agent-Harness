@@ -128,6 +128,78 @@ class CompletedOnCancellation(asyncio.CancelledError):
         self.result = result
 
 
+# Strong references so a quarantined join is never GC'd mid-flight and its
+# eventual failure is observed instead of silently lost.
+_quarantined_joins: set[asyncio.Task] = set()
+
+
+def _quarantine_join(task: asyncio.Task, label: str) -> None:
+    """Cancel an unsettled join, keep it referenced, observe its outcome."""
+    _quarantined_joins.add(task)
+    task.cancel()
+
+    def retired(done: asyncio.Task) -> None:
+        _quarantined_joins.discard(done)
+        if not done.cancelled():
+            error = done.exception()
+            if error is not None:
+                logger.warning(
+                    "Quarantined join failed label=%s error_type=%s",
+                    label,
+                    type(error).__name__,
+                )
+
+    task.add_done_callback(retired)
+
+
+async def await_joined_bounded(operation, *, timeout: float, label: str) -> bool:
+    """Join *operation* before propagating caller cancellation, with a deadline.
+
+    Owned variant of :func:`await_joined` for shutdown paths whose operation
+    can be cancellation-resistant (H01): the join can never outlive
+    ``timeout``. A cancellation delivered while joining is consumed once and
+    the same operation gets the bound again (mirrors the claim-release
+    contract); when the bound expires the operation is quarantined — cancelled,
+    strongly referenced, and its eventual failure observed — and ``False`` is
+    returned so the caller can continue bounded cleanup; ownership release must
+    never wait on resistant work. ``True`` means the operation settled; a
+    settled failure is raised (or logged when the caller's cancellation is
+    already propagating).
+    """
+    task = asyncio.ensure_future(operation)
+    caller_cancelled: asyncio.CancelledError | None = None
+    for attempt in range(2):
+        try:
+            await asyncio.wait({task}, timeout=timeout)
+            break
+        except asyncio.CancelledError as exc:
+            if attempt:
+                # A second cancellation is uncertainty too, like the claim
+                # release: bound the wait by quarantining and let it through.
+                _quarantine_join(task, label)
+                raise
+            caller_cancelled = exc
+    if not task.done():
+        _quarantine_join(task, label)
+        logger.warning("join deadline exceeded label=%s; work quarantined", label)
+        if caller_cancelled is not None:
+            raise caller_cancelled
+        return False
+    if task.cancelled():
+        if caller_cancelled is not None:
+            raise caller_cancelled
+        return True
+    error = task.exception()
+    if error is not None:
+        if caller_cancelled is not None:
+            logger.warning("Joined operation failed during cancellation: %s", error)
+            raise caller_cancelled
+        raise error
+    if caller_cancelled is not None:
+        raise caller_cancelled
+    return True
+
+
 async def await_joined(operation, *, capture_result: bool = False):
     """Finish an operation before propagating caller cancellation."""
     task = asyncio.ensure_future(operation)

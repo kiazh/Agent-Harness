@@ -16,8 +16,10 @@ delegate to:
   exactly-once withheld-tail contract (AH-AUDIT-027) and the canonical terminal
   payload (text/tokens/iterations/toolCalls/needsApproval).
 - :meth:`TurnEngine.close` owns the ordered, bounded cleanup copied from the
-  gateway's audited finally pyramids: join optional background work, close the
-  owned provider, stop renewal, shielded bounded claim release, join renewal.
+  gateway's audited finally pyramids: bounded source shutdown (cancellation-
+  resistant work is quarantined, never awaited past its deadline), join
+  optional background work, close the owned provider, stop renewal, shielded
+  bounded claim release, join renewal.
 
 What deliberately stays in the transports: claim *begin* (timing and error
 surfaces differ), frame serialization (JSON-RPC notifications vs SSE data
@@ -52,7 +54,7 @@ from typing import Any, Protocol
 
 from machina.core import agent_factory as _agent_factory
 from machina.core import turns as _turns
-from machina.core.background_tasks import join_agent_background_tasks
+from machina.core.background_tasks import await_joined_bounded, join_agent_background_tasks
 from machina.core.runtime import runtime_services
 from machina.memory.redaction import StreamingSecretRedactor, redact_secrets, redact_value
 from machina.observability.diagnostics import record_failure
@@ -170,6 +172,7 @@ class TurnEngine:
         settle_grace: float = 0.35,
         release_timeout_s: float = 5.0,
         renewal_join_timeout_s: float = 5.0,
+        source_close_timeout_s: float = 5.0,
         max_tool_result_chars: int = MAX_TOOL_RESULT_CHARS,
     ) -> None:
         self.spec = spec
@@ -180,6 +183,7 @@ class TurnEngine:
         self._settle_grace = settle_grace
         self._release_timeout_s = release_timeout_s
         self._renewal_join_timeout_s = renewal_join_timeout_s
+        self._source_close_timeout_s = source_close_timeout_s
         self._max_tool_result_chars = max_tool_result_chars
         self._agent: Any | None = None
         self._source: Any | None = None
@@ -336,18 +340,55 @@ class TurnEngine:
             await self._close_source()
 
     async def _close_source(self) -> None:
-        from machina.core.background_tasks import await_joined
+        """Bounded source shutdown; resistant work is quarantined, never awaited.
 
+        The active driver is cancelled and joined within
+        ``source_close_timeout_s``; the source is then closed within the same
+        bound. H01: cleanup can never hang on a cancellation-resistant driver
+        or finalizer — their unsettled work is cancelled, strongly referenced,
+        and observed by :func:`await_joined_bounded`, and these bounded waits
+        return so claim release can proceed (the previous unbounded
+        ``await_joined`` left the session claim held and renewed forever).
+        Idempotent: whoever reads the source reference first owns its single
+        ``aclose``.
+        """
         driver = self._source_task
         if driver is not None and driver is not asyncio.current_task() and not driver.done():
             driver.cancel()
-            await await_joined(asyncio.gather(driver, return_exceptions=True))
-        source = self._source
-        if source is not None:
             try:
-                await await_joined(source.aclose())
-            finally:
-                self._source = None
+                settled = await await_joined_bounded(
+                    asyncio.gather(driver, return_exceptions=True),
+                    timeout=self._source_close_timeout_s,
+                    label=f"{self._boundary}.source_driver",
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._record("source_driver", exc)
+                settled = True
+            if not settled:
+                # The quarantined driver still owns the source generator; its
+                # own unwind closes the source (an ``aclose`` here would race
+                # the actively-executing generator).
+                logger.warning(
+                    "turn source driver did not settle within %.2fs; source close deferred",
+                    self._source_close_timeout_s,
+                )
+                return
+        source = self._source
+        if source is None:
+            return
+        self._source = None
+        try:
+            await await_joined_bounded(
+                source.aclose(),
+                timeout=self._source_close_timeout_s,
+                label=f"{self._boundary}.source_close",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._record("source_close", exc)
 
     def _translate(self, event: Any) -> TurnEvent | None:
         """Map one agent ``StreamEvent`` to its semantic counterpart."""
@@ -492,20 +533,28 @@ class TurnEngine:
     async def close(self, *, cancelled: bool = False, timed_out: bool = False) -> TurnClose:
         """Bounded, ordered cleanup; call exactly once after the stream.
 
-        Order: notification hooks ->
-        join optional background work -> close the owned provider -> stop
-        renewal -> shielded bounded release -> join renewal. Ordinary failures
-        (including a failed claim release) are reported and returned in
-        :class:`TurnClose`, never raised. A cancellation delivered during the
-        optional-work join still runs provider close + release before it
-        propagates; one delivered during the release itself is consumed
-        (RF4-C1); one delivered while joining a still-running renewal task
-        propagates (W7).
+        Order: source shutdown (bounded; resistant work is quarantined) ->
+        notification hooks -> join optional background work -> close the owned
+        provider -> stop renewal -> shielded bounded release -> join renewal.
+        Ordinary failures (including a failed claim release) are reported and
+        returned in :class:`TurnClose`, never raised. A cancellation delivered
+        during the optional-work join still runs provider close + release
+        before it propagates; one delivered during the release itself is
+        consumed (RF4-C1); one delivered while joining a still-running renewal
+        task propagates (W7). Source shutdown is bounded by
+        ``source_close_timeout_s`` so a resistant source can never block the
+        release (H01).
         """
         self._stage("cleanup_started")
         agent = self._agent
         try:
-            await self._close_source()
+            try:
+                await self._close_source()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # Ordinary source failures are reported, never mask the release.
+                self._record("source_shutdown", exc)
             if agent is not None:
                 self._stage("joining_optional_work")
                 try:

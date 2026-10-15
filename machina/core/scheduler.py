@@ -992,6 +992,9 @@ class JobRunner:
                 # Check ownership loss before the (potentially long) agent run.
                 if ownership_lost is not None and ownership_lost.is_set():
                     raise RuntimeError("job ownership lost")
+                # H03: persist the job's selected identity before the run so
+                # the agent's durable ownership check accepts it.
+                await self._reconcile_session_owner(job)
                 response = await agent.run(job.session_id, prompt, verbose=False)
                 # Headless jobs never hang on hidden prompts (Phase E):
                 # AH-AUDIT-022: pause detection uses the typed
@@ -1078,7 +1081,9 @@ class JobRunner:
         restriction stays intact (``delegation_authority`` caps are still
         intersected inside the factory; unknown specialists still fail
         closed). When the job already names the session's agent the session
-        is passed unchanged.
+        is passed unchanged. The durable owner is reconciled with the job's
+        identity by :meth:`_reconcile_session_owner` before the run (H03), so
+        the agent's own ownership check and the in-memory view agree.
         """
         if self._agent_factory is not None:
             return self._agent_factory(agent_name)
@@ -1123,4 +1128,56 @@ class JobRunner:
             session,
             provider_override=provider,
             model_override=model,
+        )
+
+    async def _reconcile_session_owner(self, job: Job) -> None:
+        """Reconcile the durable session owner with the executed job identity (H03).
+
+        R5-C: the JOB's identity governs the run. ``ReActAgent.run`` reloads the
+        durable session and enforces ``session.agent_id == running agent``, so
+        honoring an ``agent_name`` override requires the durable owner to match
+        the executed identity before the run — the in-memory session copy alone
+        failed validation with ``PermissionError``. Persisting the override
+        here is the smallest change that preserves the job session (its
+        context, the claim/pause binding, and approval resume); forking a child
+        session per run would move the transcript, weaken the context handoff,
+        and break the session-keyed approval revalidation. Job creation already
+        audits the override (gateway ``jobs_create`` emits
+        ``job_agent_override``); this logs the run-time reconciliation.
+
+        No-op when the identity already matches, when the database is
+        unavailable, or for injected test factories (they own their session
+        identity and never go through the durable ownership check).
+        """
+        if (
+            self._agent_factory is not None
+            or not job.session_id
+            or not job.agent_name
+            or getattr(job, "no_agent", False)
+        ):
+            return
+        from machina.core.provider import audit_log
+        from machina.core.session import session_manager
+        from machina.db.connection import db
+
+        if not db.connected:
+            return
+        session = await session_manager.get_fresh(job.session_id)
+        if session is None or session.agent_id == job.agent_name:
+            return
+        previous = session.agent_id
+        await db.execute(
+            "UPDATE sessions SET agent_id = $2 WHERE id = $1",
+            job.session_id,
+            job.agent_name,
+        )
+        # Refresh the presentation cache so the run's cached session read
+        # (agent._prepare_context -> session_manager.get) sees the new owner.
+        await session_manager.get_fresh(job.session_id)
+        audit_log(
+            "job_agent_owner_reconciled",
+            session_id=str(job.session_id),
+            previous_agent=previous,
+            agent=job.agent_name,
+            job_id=str(job.id),
         )

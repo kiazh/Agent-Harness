@@ -382,6 +382,7 @@ class BaseReActAgent:
                     messages,
                     tools=tools,
                     max_tokens=int(config.get("max_tokens")),
+                    temperature=float(config.get("temperature")),
                 )
             except (UsageBudgetExceededError, DatabaseError):
                 raise
@@ -443,6 +444,7 @@ class BaseReActAgent:
                         messages=messages,
                         tools=tools,
                         max_tokens=int(config.get("max_tokens")),
+                        temperature=float(config.get("temperature")),
                     ),
                     cleanup=lambda: self._finish_usage(
                         reservation, usage, failed=not completed, model=actual_model
