@@ -42,8 +42,10 @@ async def test_factory_wires_provider_into_memory_consolidator(monkeypatch):
 async def test_cancelled_rag_acquisition_closes_created_provider(monkeypatch):
     import asyncio
     from unittest.mock import AsyncMock
-    from machina.core import agent_factory
+
     import pytest
+
+    from machina.core import agent_factory
     from machina.core.agent_def import agent_registry
 
     llm = SimpleNamespace(close=AsyncMock())

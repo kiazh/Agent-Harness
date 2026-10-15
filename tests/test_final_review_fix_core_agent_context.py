@@ -321,6 +321,7 @@ async def test_repeated_cancel_during_recording_finishes_entire_batch(monkeypatc
 
 async def test_cancelled_worker_write_keeps_completed_effect(sleep_tool, tmp_path, monkeypatch):
     import threading
+
     import machina.tools.file as files
     from machina.permissions.broker import permission_broker
 
@@ -429,8 +430,9 @@ async def test_premature_tool_stream_exit_records_completed_effect(sleep_tool, e
 async def test_failed_approval_retirement_can_retry_without_duplicate_records(
     monkeypatch, cancelled
 ):
-    from machina.permissions.broker import permission_broker
     from unittest.mock import AsyncMock
+
+    from machina.permissions.broker import permission_broker
 
     complete = AsyncMock(side_effect=[False, True])
     monkeypatch.setattr(permission_broker, "complete", complete)
@@ -458,10 +460,10 @@ async def test_failed_approval_retirement_can_retry_without_duplicate_records(
 
 async def test_closing_run_stream_flushes_completed_tool_before_return(sleep_tool, monkeypatch):
     from types import SimpleNamespace
-    from machina.core import agent as agent_module
-    from machina.core.models import StreamEvent
 
+    from machina.core import agent as agent_module
     from machina.core.agent import ReActAgent
+    from machina.core.models import StreamEvent
 
     agent = ReActAgent.__new__(ReActAgent)
     agent.agent_id = "test-agent"
@@ -508,6 +510,7 @@ async def test_closing_run_stream_flushes_completed_tool_before_return(sleep_too
 async def test_run_joins_post_tool_flush_during_repeated_cancellation(sleep_tool, monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
+
     from machina.core import agent as agent_module
     from machina.core.agent import ReActAgent
 
@@ -563,6 +566,7 @@ async def test_closing_text_stream_joins_provider_and_usage_finalization(
 ):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
+
     from machina.core import agent as agent_module
     from machina.core.agent import ReActAgent
     from machina.core.models import StreamEvent

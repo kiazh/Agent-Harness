@@ -362,7 +362,7 @@ async def test_config_lock_not_held_during_auth_cache_refresh(tmp_path):
 
 @pytest.mark.parametrize("remove", [False, True])
 def test_store_rejects_superseded_compensation(tmp_path, remove):
-    from machina.connectors.store import ConnectorStore, ConnectorRevisionChanged
+    from machina.connectors.store import ConnectorRevisionChanged, ConnectorStore
 
     store = ConnectorStore(tmp_path / "connectors.json")
     fields = {"id": "demo", "transport": "stdio", "command": "echo"}

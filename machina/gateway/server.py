@@ -11,7 +11,6 @@ The full method and event list is in ``communications/ui-gateway-protocol.md``.
 from __future__ import annotations
 
 import asyncio
-from contextlib import aclosing
 import json
 import logging
 import os
@@ -20,6 +19,7 @@ import subprocess
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import aclosing
 from typing import Any, Protocol
 
 from machina import __version__

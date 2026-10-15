@@ -18,8 +18,8 @@ from typing import Any
 from rich.console import Console
 
 from machina.core.assembler import PromptAssembler
-from machina.core.background_tasks import joined_teardown
 from machina.core.background_tasks import consolidation_inflight as _consolidation_inflight
+from machina.core.background_tasks import joined_teardown
 from machina.core.background_tasks import pending_learning_reviews as _pending_learning_reviews
 from machina.core.config import config
 from machina.core.context import context_manager

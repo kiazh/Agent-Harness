@@ -855,6 +855,7 @@ def test_provenance_reports_repo_source(tmp_path, monkeypatch):
 async def test_cancelled_stage_cleans_clone_acquired_by_worker(tmp_path, monkeypatch):
     import asyncio
     import threading
+
     from machina.tools import repo as repo_tools
 
     entered, release = threading.Event(), threading.Event()
@@ -885,8 +886,9 @@ async def test_cancelled_stage_cleans_clone_acquired_by_worker(tmp_path, monkeyp
 async def test_cancelled_repo_mutation_preserves_public_result(tmp_path, monkeypatch, activate):
     import asyncio
     import threading
-    from machina.tools import repo as repo_tools
+
     from machina.core.background_tasks import CompletedOnCancellation
+    from machina.tools import repo as repo_tools
 
     root = tmp_path / "cloneparent" / "repo"
     root.mkdir(parents=True)
