@@ -1414,6 +1414,61 @@ class BaseReActAgent:
 
         task.add_done_callback(_drop)
 
+    def _parse_consolidation_cursor(self, cursor: dict | None) -> tuple | None:
+        """Parse a stored ``mem_consolidated_up_to`` dict into a cursor tuple.
+
+        Returns ``(created_at, id)`` or ``None``; an unparseable cursor is
+        diagnosed (W7) and falls back to a full cursorless scan rather than
+        raising into the consolidation turn.
+        """
+        if not (cursor and cursor.get("id")):
+            return None
+        try:
+            since_time = cursor.get("at")
+            if isinstance(since_time, str):
+                text = since_time[:-1] + "+00:00" if since_time.endswith("Z") else since_time
+                since_time = datetime.fromisoformat(text)
+                if since_time.tzinfo is None:
+                    since_time = since_time.replace(tzinfo=UTC)
+            return (since_time, uuid.UUID(str(cursor["id"])))
+        except Exception as exc:
+            record_failure("agent.consolidation_cursor", exc)
+            return None
+
+    async def _read_consolidation_cursor(self, session_id: uuid.UUID) -> tuple | None:
+        """Resolve the durable watermark as a ``(created_at, id)`` cursor.
+
+        Prefers ``get_fresh`` (AH-AUDIT-019) so a worker's up-to-60s cached
+        session snapshot cannot pin a stale cursor; the built-in consolidator
+        invokes this while holding its cross-process advisory lock, making the
+        read the authoritative lower bound of the extraction window.
+        """
+        getter = getattr(session_manager, "get_fresh", None) or session_manager.get
+        session = await getter(session_id)
+        cursor = (session.state or {}).get("mem_consolidated_up_to") if session else None
+        return self._parse_consolidation_cursor(cursor)
+
+    async def _persist_consolidation_cursor(self, session_id: uuid.UUID, checkpoint: dict) -> None:
+        """Durably advance the watermark from a fully-processed checkpoint.
+
+        Called by the built-in consolidator while its advisory lock is held, so
+        the advance cannot interleave with another worker's read/advance.
+        Merged transactionally so concurrent state writes survive; a persist
+        failure is logged and leaves the range retryable.
+        """
+        try:
+            await session_manager.update_state_fields(
+                session_id,
+                {
+                    "mem_consolidated_up_to": {
+                        "id": str(checkpoint["id"]),
+                        "at": checkpoint["at"],
+                    }
+                },
+            )
+        except Exception as e:
+            logger.debug("consolidation cursor persist failed: %s", e)
+
     async def _consolidate_memories(self, session_id: uuid.UUID) -> None:
         """Consolidate new session context into long-term memories.
 
@@ -1421,73 +1476,64 @@ class BaseReActAgent:
         ``mem_consolidated_up_to`` are extracted; the cursor advances past a
         range only after its writes succeed, so failed ranges retry instead
         of being skipped or duplicated.
+
+        Cursor scope (R5-F1): with the built-in ``MemoryConsolidator`` the
+        cursor read and the checkpoint advance both happen inside its
+        cross-process advisory lock — one serialized read+extract+commit — so
+        two workers cannot read a shared stale cursor and then publish
+        out-of-order checkpoints. Duck-typed consolidators (test doubles or
+        embedders) keep the caller-managed cursor contract.
         """
         try:
-            session = await session_manager.get(session_id)
-            cursor = (session.state or {}).get("mem_consolidated_up_to") if session else None
-            since = None
-            if cursor and cursor.get("id"):
+            if isinstance(self.memory_consolidator, MemoryConsolidator):
+                result = await self.memory_consolidator.consolidate_session(
+                    session_id=session_id,
+                    agent_id=self.agent_id,
+                    cursor_reader=lambda: self._read_consolidation_cursor(session_id),
+                    checkpoint_writer=lambda checkpoint: self._persist_consolidation_cursor(
+                        session_id, checkpoint
+                    ),
+                )
+            else:
+                session = await session_manager.get(session_id)
+                cursor = (session.state or {}).get("mem_consolidated_up_to") if session else None
+                since = self._parse_consolidation_cursor(cursor)
                 try:
-                    since_time = cursor.get("at")
-                    if isinstance(since_time, str):
-                        text = (
-                            since_time[:-1] + "+00:00" if since_time.endswith("Z") else since_time
-                        )
-                        since_time = datetime.fromisoformat(text)
-                        if since_time.tzinfo is None:
-                            since_time = since_time.replace(tzinfo=UTC)
-                    since = (since_time, uuid.UUID(str(cursor["id"])))
+                    newest = await context_manager.get_chunks(session_id, limit=1)
                 except Exception as exc:
                     record_failure("agent.consolidation_cursor", exc)
-                    since = None
-            try:
-                newest = await context_manager.get_chunks(session_id, limit=1)
-            except Exception as exc:
-                record_failure("agent.consolidation_cursor", exc)
-                newest = []
-            if since is not None:
-                try:
-                    pending = await context_manager.get_chunks_since(
-                        session_id,
-                        since_time=since[0],
-                        since_id=since[1],
-                        limit=1,
-                    )
-                    if not pending:
-                        logger.debug("consolidation cursor unchanged, skipping")
-                        return
-                except Exception as _boundary_error:
-                    # Optional fallback preserves the primary outcome; report no payload.
-                    record_failure("agent._consolidate_memories", _boundary_error)
-            elif cursor and newest and str(newest[0].id) == str(cursor.get("id")):
-                logger.debug("consolidation cursor unchanged, skipping")
-                return
-            result = await self.memory_consolidator.consolidate_session(
-                session_id=session_id,
-                agent_id=self.agent_id,
-                since=since,
-            )
-            # AH-AUDIT-037: the durable watermark advances ONLY from the
-            # typed checkpoint (fully processed contiguous input). Failed
-            # extraction and partial persistence leave failed ranges
-            # retryable; successful empty extraction advances (nothing was
-            # skipped). Merged transactionally so concurrent state writes
-            # survive.
+                    newest = []
+                if since is not None:
+                    try:
+                        pending = await context_manager.get_chunks_since(
+                            session_id,
+                            since_time=since[0],
+                            since_id=since[1],
+                            limit=1,
+                        )
+                        if not pending:
+                            logger.debug("consolidation cursor unchanged, skipping")
+                            return
+                    except Exception as _boundary_error:
+                        # Optional fallback preserves the primary outcome; report no payload.
+                        record_failure("agent._consolidate_memories", _boundary_error)
+                elif cursor and newest and str(newest[0].id) == str(cursor.get("id")):
+                    logger.debug("consolidation cursor unchanged, skipping")
+                    return
+                result = await self.memory_consolidator.consolidate_session(
+                    session_id=session_id,
+                    agent_id=self.agent_id,
+                    since=since,
+                )
+                # AH-AUDIT-037: the durable watermark advances ONLY from the
+                # typed checkpoint (fully processed contiguous input). Failed
+                # extraction and partial persistence leave failed ranges
+                # retryable; successful empty extraction advances (nothing was
+                # skipped).
+                checkpoint = getattr(result, "checkpoint", None)
+                if checkpoint:
+                    await self._persist_consolidation_cursor(session_id, checkpoint)
             new_memories = result.entries if hasattr(result, "entries") else (result or [])
-            checkpoint = getattr(result, "checkpoint", None)
-            if checkpoint and session is not None:
-                try:
-                    await session_manager.update_state_fields(
-                        session_id,
-                        {
-                            "mem_consolidated_up_to": {
-                                "id": str(checkpoint["id"]),
-                                "at": checkpoint["at"],
-                            }
-                        },
-                    )
-                except Exception as e:
-                    logger.debug("consolidation cursor persist failed: %s", e)
             if new_memories:
                 logger.info(
                     "Consolidated %d new memories for session %s",

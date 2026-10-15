@@ -9,7 +9,7 @@ import inspect
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 import asyncpg
@@ -141,6 +141,9 @@ class MemoryConsolidator:
         session_id: uuid.UUID,
         agent_id: str,
         since: tuple | None = None,
+        *,
+        cursor_reader: Callable[[], Awaitable[tuple | None]] | None = None,
+        checkpoint_writer: Callable[[dict], Awaitable[None]] | None = None,
     ) -> ConsolidationResult:
         """Consolidate a session's context chunks into long-term memories.
 
@@ -161,9 +164,22 @@ class MemoryConsolidator:
         established (database unavailable, no DSN) the lock is skipped
         (the caller's in-process single-flight still applies) and
         consolidation proceeds.
+
+        Cursor serialization (R5-F1): when *cursor_reader* is supplied the
+        cursor is resolved INSIDE the advisory lock (overriding *since*), and
+        when *checkpoint_writer* is supplied the fully-processed checkpoint is
+        committed inside the same lock. Caller-managed cursor reads/persists
+        (the pre-R5-F1 contract) run OUTSIDE the lock, letting two workers read
+        one stale cursor and republish an older checkpoint after a newer one
+        lands; routing both through this call makes read+extract+commit one
+        serialized operation so the watermark can only move forward.
         """
         if not getattr(db, "connected", False):
-            return await self._consolidate_session_impl(session_id, agent_id, since)
+            result = await self._consolidate_session_impl(
+                session_id, agent_id, since, cursor_reader=cursor_reader
+            )
+            await self._commit_checkpoint(result, checkpoint_writer)
+            return result
 
         entered_impl = False
 
@@ -178,12 +194,37 @@ class MemoryConsolidator:
                 # Any exception from here on comes from the consolidation
                 # body: never re-run it (double extraction/writes).
                 entered_impl = True
-                return await self._consolidate_session_impl(session_id, agent_id, since)
+                result = await self._consolidate_session_impl(
+                    session_id, agent_id, since, cursor_reader=cursor_reader
+                )
+                await self._commit_checkpoint(result, checkpoint_writer)
+                return result
         except Exception as e:
             if entered_impl:
                 raise
             record_failure("consolidator.consolidate_session.lock", e)
-            return await self._consolidate_session_impl(session_id, agent_id, since)
+            result = await self._consolidate_session_impl(
+                session_id, agent_id, since, cursor_reader=cursor_reader
+            )
+            await self._commit_checkpoint(result, checkpoint_writer)
+            return result
+
+    @staticmethod
+    async def _commit_checkpoint(
+        result: ConsolidationResult,
+        checkpoint_writer: Callable[[dict], Awaitable[None]] | None,
+    ) -> None:
+        """Advance the durable watermark while the serialization lock is held.
+
+        Called from inside the advisory-lock scope so the checkpoint write is
+        ordered against every other worker's cursor read/advance for this
+        session. No-op without a writer or a fully-processed checkpoint.
+        """
+        if checkpoint_writer is None:
+            return
+        checkpoint = getattr(result, "checkpoint", None)
+        if checkpoint:
+            await checkpoint_writer(checkpoint)
 
     @asynccontextmanager
     async def _advisory_lock(self, session_id: uuid.UUID) -> AsyncGenerator[bool, None]:
@@ -220,8 +261,18 @@ class MemoryConsolidator:
         session_id: uuid.UUID,
         agent_id: str,
         since: tuple | None = None,
+        *,
+        cursor_reader: Callable[[], Awaitable[tuple | None]] | None = None,
     ) -> ConsolidationResult:
-        """Consolidation body; the caller owns any serialization lock."""
+        """Consolidation body; the caller owns any serialization lock.
+
+        When *cursor_reader* is supplied it is evaluated here — i.e. under the
+        caller's lock — so the extraction window is resolved from the current
+        durable cursor rather than a value the caller read before locking.
+        """
+        if cursor_reader is not None:
+            since = await cursor_reader()
+
         # Step 0: Get context chunks (cursor-filtered when resuming).
         if since is not None:
             since_time, since_id = since
