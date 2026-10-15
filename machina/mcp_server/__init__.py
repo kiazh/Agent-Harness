@@ -560,6 +560,8 @@ async def machina_chat(prompt: str, session_id: str | None = None, mode: str | N
     try:
         # R4-081: resolve the parent's own DSN; the child must never guess.
         child_env = _child_database_env()
+        child_env["MACHINA_EXECUTION_MODE"] = requested or ceiling
+        child_env["MACHINA_MCP_MODE_CEILING"] = ceiling
     except Exception as exc:
         # Fail closed with the class name only (resolution errors never echo
         # values) instead of spawning a child that would pick its own database.
@@ -638,6 +640,8 @@ async def machina_chat(prompt: str, session_id: str | None = None, mode: str | N
                 ),
             }
         )
+    if "mode_ceiling_exceeded" in result.output or "mode_ceiling_exceeded" in result.stderr:
+        return _json_text({"status": "invalid_request", "code": "mode_ceiling_exceeded", "ceiling": ceiling})
     diagnostic = _redacted_tail(result.output, MAX_ERROR_CHARS)
     if not diagnostic.strip():
         diagnostic = _redacted_tail(result.stderr, MAX_ERROR_CHARS)

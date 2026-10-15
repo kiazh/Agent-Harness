@@ -135,7 +135,7 @@ class ConnectorService:
         await self._refresh_auth_cache()
         return result
 
-    async def _configure_locked(self, fields: dict[str, Any]) -> dict[str, Any]:
+    async def _configure_locked(self, fields: dict[str, Any], *, expected_revision: int | None = None) -> dict[str, Any]:
         """Configure under the caller-held configuration lock.
 
         Composite management flows (agent mcp_connect add+launch, rollback)
@@ -170,10 +170,9 @@ class ConnectorService:
         config = self.store.validate_input(fields)
         if self.registry.get(config.id) is not None:
             await self.manager.disconnect(config.id)
-        await self.store.configure_async(fields)
+        written = await self.store.configure_async(fields, expected_revision=expected_revision)
         await self._refresh_locked()
-        current = self._config(config.id)
-        return {**current.public_view(), **_state_only(self.manager.status(config.id))}
+        return {**written.public_view(), **_state_only(self.manager.status(config.id))}
 
     async def remove(self, connector_id: str) -> bool:
         if self.store is None:
@@ -184,7 +183,7 @@ class ConnectorService:
         await self._refresh_auth_cache()
         return removed
 
-    async def _remove_locked(self, connector_id: str) -> bool:
+    async def _remove_locked(self, connector_id: str, *, expected_revision: int | None = None) -> bool:
         """Remove under the caller-held configuration lock (see _configure_locked)."""
         await self._refresh_locked()
         if self.registry.get(connector_id) is not None:
@@ -195,7 +194,7 @@ class ConnectorService:
                 except Exception as _boundary_error:
                     # Optional fallback preserves the primary outcome; report no payload.
                     record_failure("connector_service.invalidate_oauth", _boundary_error)
-        removed = await self.store.remove_async(connector_id)
+        removed = await self.store.remove_async(connector_id, expected_revision=expected_revision)
         await self._refresh_locked()
         return removed
 

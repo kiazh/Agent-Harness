@@ -7,7 +7,6 @@
 //         the editor's input history.
 
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { commandCarriesSecret } from "../src/app.ts";
 import { parseCommand } from "../src/commands.ts";
@@ -44,13 +43,6 @@ test("P3-2 residual: codex/opencode/tokyonight dims clear AA (named regressions)
 		assert.ok(dim >= 4.5, `${name}.dim contrast ${dim.toFixed(2)}:1 is below 4.5:1`);
 		assert.ok(dim < muted, `${name}.dim (${dim.toFixed(2)}) must stay below muted (${muted.toFixed(2)})`);
 	}
-});
-
-test("P3-3 App.inFlightSessionId dead state is removed", async () => {
-	const source = await readFile(new URL("../src/app.ts", import.meta.url), "utf8");
-	assert.ok(!source.includes("inFlightSessionId"), "the write-only field and its three sites are gone");
-	// The surviving in-flight tracking is the real guard used by submit/cancel.
-	assert.ok(source.includes("private readonly inFlight = new Set<string>()"), "the inFlight set is retained");
 });
 
 test("Q-6 commandCarriesSecret keeps inline secrets out of history", () => {

@@ -179,6 +179,8 @@ def _screen_pattern_node_budget(pattern: str) -> None:
             index += 1
             continue
         if char == ")":
+            if pending_body is not None:
+                frame_sizes[-1] += pending_body
             body = frame_sizes.pop() if len(frame_sizes) > 1 else 0
             pending_body = body
             index += 1

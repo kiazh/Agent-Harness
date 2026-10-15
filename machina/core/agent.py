@@ -1315,14 +1315,21 @@ class BaseReActAgent:
         batch is cancelled. Provider-message assembly stays with the caller
         (order-sensitive). Idempotent via ``item['_recorded']``.
         """
+        from machina.core.background_tasks import await_joined
+
+        await await_joined(
+            self._record_tool_action_joined(item, session_id, pending_chunks, tool_calls_made)
+        )
+
+    async def _record_tool_action_joined(
+        self, item, session_id, pending_chunks, tool_calls_made
+    ) -> None:
         if item.get("_recorded"):
             return
-        item["_recorded"] = True
         result_str = item["result"]
         # LP-01 lifecycle: claimed → completed/failed exactly once.
         _aid = item.get("_approval_id", "")
         if _aid and not item.get("_approval_done"):
-            item["_approval_done"] = True
             try:
                 from machina.permissions.broker import permission_broker as _broker2
 
@@ -1332,6 +1339,7 @@ class BaseReActAgent:
                     else "completed"
                 )
                 await _broker2.complete(_aid, outcome)
+                item["_approval_done"] = True
             except Exception as _boundary_error:
                 # Optional fallback preserves the primary outcome; report no payload.
                 record_failure("agent._record_tool_action", _boundary_error)
@@ -1361,6 +1369,7 @@ class BaseReActAgent:
                 token_count=len(result_str) // 4,
             )
         tool_calls_made.append(self._tool_entry(item))
+        item["_recorded"] = True
 
     async def _finalize_completed_tools(
         self,
@@ -1384,9 +1393,7 @@ class BaseReActAgent:
             if "elapsed_ms" not in item:
                 continue
             try:
-                await asyncio.shield(
-                    self._record_tool_action(item, session_id, pending_chunks, tool_calls_made)
-                )
+                await self._record_tool_action(item, session_id, pending_chunks, tool_calls_made)
             except Exception as exc:
                 logger.warning("cancellation finalize failed for %s: %s", item["name"], exc)
 

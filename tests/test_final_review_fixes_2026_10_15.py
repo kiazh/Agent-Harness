@@ -43,6 +43,7 @@ def _capture_runner(capture: dict):
 
     def run(cmd, *, timeout, env_extra=None, cancel_event=None):
         capture["cmd"] = cmd
+        capture["env"] = env_extra
         return ProcessResult(0, _OK_OUTPUT, "", False, False)
 
     return run
@@ -61,6 +62,8 @@ async def test_mcp_none_mode_clamped_to_tightened_ceiling(monkeypatch):
     cmd = capture["cmd"]
     assert "--mode" in cmd
     assert cmd[cmd.index("--mode") + 1] == "ask"
+    assert capture["env"]["MACHINA_EXECUTION_MODE"] == "ask"
+    assert capture["env"]["MACHINA_MCP_MODE_CEILING"] == "ask"
 
 
 async def test_mcp_none_mode_without_tightening_inherits_operator_default(monkeypatch):

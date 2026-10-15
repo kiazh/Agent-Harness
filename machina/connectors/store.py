@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from machina.connectors.models import ConfigError, ConnectorConfig
+from machina.core.background_tasks import await_joined
 
 _WINDOWS = os.name == "nt"
 if _WINDOWS:
@@ -37,6 +38,10 @@ else:
 STORE_LOCK_TIMEOUT_SECONDS = 10.0
 #: Delay between nonblocking acquisition attempts while a peer holds the lock.
 _STORE_LOCK_POLL_SECONDS = 0.05
+
+
+class ConnectorRevisionChanged(ConfigError):
+    """A conditional mutation was superseded by another writer."""
 
 
 class ConnectorStoreBusy(ConfigError):
@@ -99,13 +104,13 @@ class ConnectorStore:
             finally:
                 os.close(fd)
 
-    async def configure_async(self, fields: dict[str, Any]) -> ConnectorConfig:
+    async def configure_async(self, fields: dict[str, Any], *, expected_revision: int | None = None) -> ConnectorConfig:
         """Persist a configuration without parking the event loop on the lock."""
-        return await asyncio.to_thread(self.configure, fields)
+        return await await_joined(asyncio.to_thread(self.configure, fields, expected_revision=expected_revision))
 
-    async def remove_async(self, connector_id: str) -> bool:
+    async def remove_async(self, connector_id: str, *, expected_revision: int | None = None) -> bool:
         """Remove a configuration without parking the event loop on the lock."""
-        return await asyncio.to_thread(self.remove, connector_id)
+        return await await_joined(asyncio.to_thread(self.remove, connector_id, expected_revision=expected_revision))
 
     def load(self) -> tuple[int, list[ConnectorConfig]]:
         # Atomic replacement makes read-only loading safe without creating files.
@@ -152,10 +157,14 @@ class ConnectorStore:
         except TypeError:
             raise ConfigError("invalid connector configuration") from None
 
-    def configure(self, fields: dict[str, Any]) -> ConnectorConfig:
+    def configure(self, fields: dict[str, Any], *, expected_revision: int | None = None) -> ConnectorConfig:
         config = self.validate_input(fields)
         with self._locked():
             generation, configs = self.load()
+            if expected_revision is not None and not any(
+                c.id == config.id and c.revision == expected_revision for c in configs
+            ):
+                raise ConnectorRevisionChanged("connector revision changed")
             revisions = self._revisions(configs)
             config.revision = revisions.get(config.id, 0) + 1
             revisions[config.id] = config.revision
@@ -163,9 +172,13 @@ class ConnectorStore:
             self._write(generation + 1, configs, revisions)
         return config
 
-    def remove(self, connector_id: str) -> bool:
+    def remove(self, connector_id: str, *, expected_revision: int | None = None) -> bool:
         with self._locked():
             generation, configs = self.load()
+            if expected_revision is not None and not any(
+                c.id == connector_id and c.revision == expected_revision for c in configs
+            ):
+                raise ConnectorRevisionChanged("connector revision changed")
             if not any(c.id == connector_id for c in configs):
                 return False
             revisions = self._revisions(configs)

@@ -65,6 +65,7 @@ def main(
             output.error("Invalid --mode. Use ask|workspace|sandbox|full.")
             raise typer.Exit(1)
         config.set("execution_mode", normalized)
+        os.environ["MACHINA_EXECUTION_MODE"] = normalized
     if ctx.invoked_subcommand is None:
         raise typer.Exit(launch_ui(mode=mode))
 
@@ -295,6 +296,13 @@ def chat(
                 except Exception as grant_error:
                     record_failure("cli.chat.grant_full_default", grant_error)
                     logger.warning("full-mode grant activation failed: %s", grant_error)
+
+            ceiling = os.environ.get("MACHINA_MCP_MODE_CEILING")
+            if ceiling is not None:
+                ranks = {"ask": 0, "workspace": 1, "sandbox": 2, "full": 3}
+                if ranks.get(session.execution_mode, 4) > ranks.get(ceiling, 0):
+                    output.error("mode_ceiling_exceeded")
+                    raise typer.Exit(1)
 
             # R04: headless chat is a first-class transport — claim the shared
             # session turn before building or streaming anything, so a live

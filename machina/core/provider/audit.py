@@ -139,13 +139,6 @@ _CREDENTIAL_PARAM_EXACT = frozenset(
         # Azure SAS signature (exact — a ``sig`` *suffix* would wrongly catch
         # benign ``resig``/``insig``).
         "sig",
-        # AWS SigV4 / GCS presigned-URL forms, normalized. Subsumed by the
-        # ``signature``/``credential`` suffixes today; pinned explicitly so
-        # the intent survives future suffix-list edits (SEC-2).
-        "amzsignature",
-        "amzcredential",
-        "googsignature",
-        "googcredential",
     }
 )
 

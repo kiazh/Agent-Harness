@@ -86,6 +86,7 @@ class _Client:
 @pytest.mark.parametrize(
     "body",
     [
+        "(" + "ab?cd?" * 25 + ")",
         "x" * 180,  # plain long body
         "|".join(f"{c}?" for c in "abcdefghijklmnopqrstuvwxyz"),  # alternation-heavy
     ],
@@ -357,3 +358,19 @@ async def test_config_lock_not_held_during_auth_cache_refresh(tmp_path):
     seen.clear()
     await service.remove("other")
     assert seen and not any(seen), "remove must not hold the config lock during auth refresh"
+
+
+@pytest.mark.parametrize("remove", [False, True])
+def test_store_rejects_superseded_compensation(tmp_path, remove):
+    from machina.connectors.store import ConnectorStore, ConnectorRevisionChanged
+
+    store = ConnectorStore(tmp_path / "connectors.json")
+    fields = {"id": "demo", "transport": "stdio", "command": "echo"}
+    first = store.configure(fields)
+    newer = store.configure({**fields, "args": ["new"]})
+    with pytest.raises(ConnectorRevisionChanged):
+        if remove:
+            store.remove("demo", expected_revision=first.revision)
+        else:
+            store.configure(fields, expected_revision=first.revision)
+    assert store.load()[1][0] == newer

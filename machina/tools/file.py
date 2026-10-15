@@ -519,23 +519,9 @@ async def _run_worker_joined(operation: Callable[[], str]) -> str:
     ``CancelledError`` propagates. Each join is itself shielded, so a repeated
     cancellation cannot orphan the running thread mid-write.
     """
-    worker: asyncio.Future[str] = asyncio.ensure_future(asyncio.to_thread(operation))
-    try:
-        return await asyncio.shield(worker)
-    except asyncio.CancelledError:
-        while not worker.done():
-            try:
-                await asyncio.shield(worker)
-            except asyncio.CancelledError:
-                # Repeated cancel: keep joining so the write always finishes
-                # its effects before ownership is released.
-                continue
-            except Exception as exc:
-                # The worker's own failure is secondary to the cancellation;
-                # surface it in logs rather than losing it silently.
-                logger.warning("File write worker failed during cancellation: %s", exc)
-                break
-        raise
+    from machina.core.background_tasks import await_joined
+
+    return await await_joined(asyncio.to_thread(operation))
 
 
 # read_file paging bounds: the byte gate applies to the selected lines (not

@@ -30,7 +30,7 @@ from machina.connectors.models import (
     validate_connector_id,
 )
 from machina.connectors.service import ConnectorService, _state_only, refuse_sandbox_stdio
-from machina.connectors.store import ConnectorStore
+from machina.connectors.store import ConnectorRevisionChanged, ConnectorStore
 from machina.observability.diagnostics import record_failure
 from machina.permissions.broker import get_execution_context
 from machina.permissions.policy import build_request
@@ -231,10 +231,12 @@ async def _compensate(
         if current is None or current.revision != written_revision:
             return "compensation skipped: configuration changed during connect"
         if prior is None:
-            await service._remove_locked(connector_id)
+            await service._remove_locked(connector_id, expected_revision=written_revision)
             return "configuration removed"
-        await service._configure_locked(prior)
+        await service._configure_locked(prior, expected_revision=written_revision)
         return "previous configuration restored"
+    except ConnectorRevisionChanged:
+        return "compensation skipped: configuration changed during connect"
     except Exception as exc:
         record_failure("connector_management.compensate", exc)
         return "compensation failed; inspect with mcp_list"
