@@ -415,6 +415,13 @@ def test_deferred_import_count_ratchet():
 #      +3 core/provider/anthropic.py, +2 chatgpt.py, +2 copilot.py,
 #          +1 direct.py, +1 openrouter.py (R5-GH shared-parser wiring).
 #     Package total 4780 -> 4958 by exactly this delta.
+#   Final-review redaction wave (2026-10-15): +44 provider lines —
+#     +35 core/provider/audit.py (219 -> 254): URL/presigned-credential
+#     redaction (Azure sig / AWS X-Amz-Signature / X-Goog forms), the DB
+#     password group consumes to the last @, password-only userinfo, and
+#     reserved event/timestamp kwargs. +9 core/provider/sse.py (46 -> 55):
+#     one leading UTF-8 BOM is stripped in the shared field parser.
+#     Package total 4958 -> 5002 by exactly this delta.
 GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
     ("core/agent.py", 2213),
     ("core/compression.py", 999),
@@ -422,12 +429,12 @@ GOD_FILE_CEILINGS: tuple[tuple[str, int], ...] = (
     ("core/provider/_log.py", 10),
     ("core/provider/reasoning.py", 61),
     ("core/provider/specs.py", 188),
-    ("core/provider/audit.py", 219),
+    ("core/provider/audit.py", 254),
     ("core/provider/rate_limit.py", 120),
     ("core/provider/caches.py", 97),
     ("core/provider/transport.py", 382),
     ("core/provider/base.py", 60),
-    ("core/provider/sse.py", 46),
+    ("core/provider/sse.py", 55),
     ("core/provider/openrouter.py", 608),
     ("core/provider/ollama.py", 388),
     ("core/provider/direct.py", 348),
@@ -460,7 +467,7 @@ def test_god_file_ceilings_only_fall(relative_path, ceiling):
 # 4780 = 5501 - 720 for the vendor-compliance removal (claude.py + gemini.py
 #        deleted) - 8 (factory.py branches/imports) - 2 (__init__.py exports)
 #        + 9 (specs.py: the Kimi Code spec + registry comment, same wave).
-_PROVIDER_PACKAGE_TOTAL_CEILING = 4958
+_PROVIDER_PACKAGE_TOTAL_CEILING = 5002
 
 
 def test_provider_package_total_only_falls():
