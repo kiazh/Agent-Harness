@@ -87,7 +87,7 @@ Requirements: Python **3.11+**, Node.js **22.19+** for the TUI, and PostgreSQL *
 
 ```bash
 git clone https://github.com/kiazh/Machina-Harness.git
-cd Machina
+cd Machina-Harness
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
@@ -270,7 +270,7 @@ read tools. Server descriptions and annotations never grant consent.
 Schema/configuration/argument changes invalidate approval; uncertain calls are
 not retried.
 
-Stdio runs on the host and is refused in sandbox mode. HTTP redirects and environment proxy inheritance are disabled; private hosts require explicit local access, and metadata addresses remain forbidden. HTTP servers support OAuth browser authorization (Authorization Code + S256 PKCE, [setup](docs/MCP_OAUTH.md)); HTTP credential-profile authentication is **not implemented** and such connectors report `auth_required`. Resources, prompts and server-initiated sampling/elicitation/roots are not exposed. These network checks do not establish complete DNS-rebinding protection. [Setup and current evidence](docs/MCP.md).
+Stdio runs on the host and is refused in sandbox mode. HTTP redirects and environment proxy inheritance are disabled; private hosts require explicit local access, and metadata addresses remain forbidden. HTTP servers support OAuth browser authorization (Authorization Code + S256 PKCE, [setup](docs/MCP_OAUTH.md)); HTTP credential-profile authentication is **not implemented** and such connectors report `auth_required`. Resources, prompts and server-initiated sampling/elicitation/roots are not exposed. OAuth and MCP HTTP requests dial through a pinned transport that resolves and validates the hostname once and connects only to approved numeric IPs (`machina/connectors/http_transport.py`), so DNS-rebinding defenses are active; as with any layered defense it is not an exhaustive guarantee. [Setup and current evidence](docs/MCP.md).
 
 ### Machina as an MCP server
 
@@ -280,7 +280,7 @@ Machina also serves its own phase-1 shim over stdio (`python -m machina.mcp_serv
 opencode mcp add machina -- /path/to/machina/.venv/bin/python -m machina.mcp_server
 ```
 
-Project-scope registration writes `opencode.json`, which this repository gitignores because the interpreter path is host-specific; other hosts use their equivalent stdio configuration. The shim exposes exactly three tools: `machina_status` (read-only), `machina_chat` (one headless `machina chat` turn) and `machina_session_create`. Phase 1 is **text-only** — attachments/images are refused — and a turn that pauses for approval (CLI exit 3) returns `{"status": "paused_for_approval", ...}` with the pending request ids instead of hanging; resolve the request in Machina, then resume the session. Child turns run in the host's launch directory with a minimal environment allowlist, their own process group and a bounded kill-tree deadline; stdout carries the reply and stderr is diagnostics-only.
+Project-scope registration writes `opencode.json`, which this repository gitignores because the interpreter path is host-specific; other hosts use their equivalent stdio configuration. The shim exposes exactly three tools: `machina_status` (read-only), `machina_chat` (one headless `machina chat` turn) and `machina_session_create`. Phase 1 is **text-only** — attachments/images are refused — and a turn that pauses for approval (CLI exit 3) returns `{"status": "paused_for_approval", ...}` with the pending request ids instead of hanging; resolve the request in Machina, then resume the session. Child turns run in the host's launch directory with a minimal environment allowlist, their own process group and a bounded kill-tree deadline; stdout carries the reply and stderr is diagnostics-only. Tool-supplied execution modes are clamped to the operator's ceiling: `MCP_MAX_MODE` can only tighten below the configured `execution_mode` (an invalid value fails closed to `ask`), above-ceiling requests are refused before any spawn with a typed `mode_ceiling_exceeded` error, and cancelling the tool retires the child process tree instead of leaving it running.
 
 **Interop.** The same registration is scriptable: `machina interop status` reports which harnesses (OpenCode, Codex, Hermes) are installed, running and registered; `machina interop enable <platform>` registers this server idempotently through the platform CLI and verifies the result (`--scope project|global`; Codex and Hermes register user-level only, so a `project` scope clamps to `global`; `--dry-run` prints the exact command and runs nothing); `machina interop disable <platform>` removes the registration where the CLI supports it — OpenCode has no remove subcommand and reports the manual step instead. Project-scope OpenCode registration writes `opencode.json` (gitignored; see above). The installer's `--interop auto|all|none` picks the setup sweep: `auto` (default) prompts on a TTY and otherwise only prints the detection summary — a non-interactive install writes nothing unless you pass `all`, which registers every detected harness without prompting; `none` skips.
 
@@ -409,9 +409,14 @@ first: search matches provider names and model ids (`deepseek`, `gpt`), and
 picking a model from another provider asks a one-line confirm - never a silent
 switch. `/default-model` saves a future default; `/effort` sets reasoning
 effort where the selected provider supports it, and an unset alias such as
-`off` clears it. Direct adapters use their vendor's key and endpoint. Cohere's
-key is for the optional Cohere reranker, not a chat provider; local ONNX
-reranking needs no key.
+`off` clears it. Accepted values are `low`, `medium` and `high`, plus the
+unset aliases (`none`, `off`, `default`, `auto`; blank uses the provider
+default); catalog-backed models may additionally accept `minimal`, `xhigh` or
+`max`, validated per model. An unsupported value in `config.yaml` is ignored
+with a log line (the provider default applies), while interactive `/effort`
+and `config set` reject unsupported tiers with a typed error. Direct adapters
+use their vendor's key and endpoint. Cohere's key is for the optional Cohere
+reranker, not a chat provider; local ONNX reranking needs no key.
 
 **ChatGPT account.** The `chatgpt` provider runs turns on your ChatGPT
 subscription instead of a metered API key. Sign in with `machina auth login`
@@ -544,13 +549,18 @@ Important settings include `DATABASE_URL`, `MACHINA_PROVIDER`, `MACHINA_MODEL`, 
 | `MACHINA_CONTEXT_BUDGET` | Legacy compatibility setting | Does not impose a cumulative turn-token cap |
 | `MACHINA_MAX_TOKENS` | Requested provider response length | `4096`; separate from prompt capacity |
 | `MACHINA_PROMPT_CACHE_ENABLED` | Prompt-cache breakpoints pilot (Anthropic / OpenRouter-anthropic only; payloads are byte-identical when off) | `false`; awaiting live-provider validation |
-| `MACHINA_MAX_ITERATIONS` | Deprecated; the agent loop is unbounded (no iteration cap) | Ignored |
 | `MACHINA_TURN_TIMEOUT` | Turn deadline in seconds | `300` |
 | `SEARXNG_URL` | SearXNG search endpoint, preferred when set (loopback self-hosts allowed, e.g. `http://localhost:8088`); blank or failing falls back to DuckDuckGo | blank |
 | `MACHINA_TERMINAL_SANDBOX` | Terminal backend setting | `disabled`; configure `local` or `docker` as appropriate |
 | `MACHINA_ENV_FILE` | Alternate secret/environment file | Default resolver uses the project environment file |
 | `MACHINA_UI_DIR` | TUI source directory override | Useful for backend wheel installs |
 | `MACHINA_UI_REDUCED_MOTION` | Disable working/learning animation | Set `1` |
+
+**Removed surface (2026-10-14).** The `max_iterations` agent-definition
+field, configuration key and database column were deleted entirely. The agent
+loop is unbounded by design, bounded instead by the turn timeout and the
+optional usage budgets above; a stale `MACHINA_MAX_ITERATIONS` in an
+environment file is inert.
 
 For example, persist a non-secret persona through `/persona` or YAML:
 
@@ -741,6 +751,17 @@ Fixture-replay metrics, before/after token measurements and the full
 artifact/commit record are in the completion bundle; remaining uncertainties and
 operator-level deferrals are listed there as well.
 
+The 2026-10-15 review-remediation wave (round-4 and round-5 review fixes,
+vendor-compliance removal of the Claude/Gemini subscription flows with Kimi
+Code added, the multi-agent final review and its follow-up findings) closes out
+at **4,950 backend tests passed, 1 skipped, 9 deselected** and a standalone UI
+check of **480 tests / 474 passed / 0 failed / 6 environment-gated skips**,
+with Ruff, Bandit and the architecture ratchets green (deferred-import census
+713 with a documented delta table). Logs, per-finding ledgers and the
+deliberately deferred residuals are in the
+[final-review proofs](docs/verification/proofs/final_review_2026-10-15/) and
+the [consolidated ledger](docs/verification/proofs/final_review_2026-10-15/FINAL_REVIEW_2026-10-15.md).
+
 The earlier 2026-10-12 candidate review (starting checkout `54d79d5`) recorded
 **2,237 backend tests passed, 5 skipped, 0 failed** with **82.26% coverage**, and a
 standalone UI check of **290 passed, 5 environment-gated skips** (the real-gateway
@@ -791,7 +812,7 @@ Policy, proof rules and the three adversarial pre-merge personas are in the
 ## Project structure
 
 ```text
-Machina/
+Machina-Harness/
 ├── machina/
 │   ├── core/             # agent loop, providers, context, runtime, sessions, jobs, usage
 │   ├── db/               # asyncpg pool and PostgreSQL schema
