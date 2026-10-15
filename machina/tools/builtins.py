@@ -7,6 +7,7 @@ import concurrent.futures
 import ipaddress
 import json
 import logging
+import os
 import re
 import socket
 import sys
@@ -402,12 +403,14 @@ _SEARCH_MAX_LINE_CHARS = 4096
 _SEARCH_MAX_MATCHES = 500
 _SEARCH_DEADLINE_SECONDS = 3.0
 
-# stdlib-only worker; the pattern and validated file paths arrive as JSON on
-# stdin and match lines are returned as JSON on stdout, preserving the report
-# lines the tool has always produced (`path:line: text`).
+# stdlib-only worker; the pattern and validated file identities arrive as
+# JSON on stdin and match lines are returned as JSON on stdout, preserving the
+# report lines the tool has always produced (`path:line: text`).
 _SEARCH_WORKER_SOURCE = """
 import json
+import os
 import re
+import stat
 import sys
 
 
@@ -417,9 +420,24 @@ def main():
     max_line_chars = payload["max_line_chars"]
     max_matches = payload["max_matches"]
     matches = []
-    for path in payload["files"]:
+    for entry in payload["files"]:
+        path = entry["path"]
+        fd = -1
         try:
-            with open(path, encoding="utf-8", errors="replace") as handle:
+            # H18: this process re-opens by pathname, so the opened descriptor
+            # must still be the file the parent validated (dev/ino identity);
+            # a pathname swapped to another file after validation — e.g. a
+            # symlink retargeted outside the workspace — is skipped, never
+            # followed. O_NONBLOCK + S_ISREG keep a swapped FIFO from
+            # blocking the matcher.
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                continue
+            if (info.st_dev, info.st_ino) != (entry["dev"], entry["ino"]):
+                continue
+            with os.fdopen(fd, encoding="utf-8", errors="replace") as handle:
+                fd = -1  # fdopen now owns the descriptor
                 for number, line in enumerate(handle, 1):
                     if len(line) > max_line_chars:
                         continue
@@ -430,6 +448,12 @@ def main():
                             return
         except OSError:
             continue
+        finally:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
     print(json.dumps(matches))
 
 
@@ -437,12 +461,13 @@ main()
 """
 
 
-async def _match_files_bounded(pattern: str, files: list[str]) -> list[str]:
+async def _match_files_bounded(pattern: str, files: list[dict[str, object]]) -> list[str]:
     """Match *pattern* against *files*, enforcing the deadline by process kill.
 
     Returns report lines in ``path:line: text`` form. Raises ToolError when the
     matcher exceeds ``_SEARCH_DEADLINE_SECONDS`` (terminated, not abandoned) or
-    fails; the child never outlives the call.
+    fails; the child never outlives the call. Each entry carries the validated
+    file identity (path + dev/ino) the matcher verifies before reading (H18).
     """
     if not files:
         return []
@@ -521,7 +546,7 @@ async def _match_files_bounded(pattern: str, files: list[str]) -> list[str]:
 )
 async def search_files(pattern: str, path: str = ".", file_glob: str | None = None) -> str:
     """Search file contents using regex pattern."""
-    from machina.tools.file import resolve_path
+    from machina.tools.file import _open_secure_read, resolve_path
 
     if not isinstance(pattern, str) or not pattern:
         raise ToolError("Invalid search pattern")
@@ -552,8 +577,8 @@ async def search_files(pattern: str, path: str = ".", file_glob: str | None = No
     ):
         raise ToolError(f"Invalid glob pattern: {glob_pattern}")
 
-    def _collect_files() -> list[str]:
-        files: list[str] = []
+    def _collect_files() -> list[dict[str, object]]:
+        files: list[dict[str, object]] = []
         for f in dir_path.glob(glob_pattern):
             if len(files) >= _SEARCH_MAX_FILES:
                 break
@@ -566,14 +591,23 @@ async def search_files(pattern: str, path: str = ".", file_glob: str | None = No
             # alone let `credentials`/`production.env` leak into results.
             if sensitive_path(str(resolved)):
                 continue
-            if not f.is_file():
+            # H18: capture the validated file's identity through the same
+            # protected descriptor traversal the ordinary file tools use
+            # (no-follow open + dev/ino + realpath containment). The isolated
+            # matcher re-opens the pathname later and verifies the opened
+            # descriptor still matches this identity, so a concurrent
+            # symlink swap cannot redirect the read outside the workspace.
+            try:
+                fd = _open_secure_read(resolved)
+            except (OSError, ValueError):
                 continue
             try:
-                if f.stat().st_size > _SEARCH_MAX_FILE_BYTES:
-                    continue
-            except OSError:
+                info = os.fstat(fd)
+            finally:
+                os.close(fd)
+            if info.st_size > _SEARCH_MAX_FILE_BYTES:
                 continue
-            files.append(str(f))
+            files.append({"path": str(f), "dev": info.st_dev, "ino": info.st_ino})
         return files
 
     try:

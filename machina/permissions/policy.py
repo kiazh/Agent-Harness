@@ -533,57 +533,96 @@ def _recursive_traversal(argv: list[str], cwd: str) -> bool:
 _PROTECTED_COMPONENTS = frozenset({".git", ".machina"})
 
 
-def _tree_contains_component(
-    root: Path,
-    names: frozenset[str],
-    *,
-    max_entries: int = 4096,
-    follow_symlinks: bool = False,
-) -> bool:
-    """Scan for protected path components reachable by a copy (R02).
+@dataclass(frozen=True)
+class _CopyReach:
+    """What a recursive copy would actually write (R02 + H14)."""
 
-    Descendant symlinks are traversed only when the effective copy
-    dereferences them (``cp -L``); a copied link alone writes no descendants.
-    A truncated scan (inspection cap) cannot prove the absence of protected
-    components, so it reports True (fail closed) and forces review instead of
-    allowing the copy. R4-062: an unreadable directory (listing or entry stat
-    failure) cannot be proven clear either; it reports True as well. Symlink
-    cycles are guarded by a visited-target set.
+    protected: bool = False  # reachable .git/.machina component
+    external: bool = False  # dereferenced descendant outside the workspace
+    sensitive: bool = False  # dereferenced descendant is credential material
+
+
+def _recursive_copy_reach(
+    source: Path,
+    *,
+    follow_symlinks: bool,
+    workspace: Path,
+    max_entries: int = 4096,
+) -> _CopyReach:
+    """Classify the tree a recursive ``cp``/``mv`` will actually write.
+
+    R02: the operands of a recursive directory write name only the roots;
+    ``cp -R source/. target`` overwrites ``target/.git/config`` although the
+    destination operand is just ``target``. Every reachable ``.git``/``.machina``
+    component therefore forces review.
+
+    H14: dereferencing copies (``cp -L``) additionally reach symlink targets,
+    so every descendant reached through a link is classified against workspace
+    containment and the shared sensitive-path definition. Without this, a link
+    to an outside private file is materialized as a regular workspace file
+    that later reads expose, and a link to credential material reads it under
+    an innocuous name. Descendant symlinks are traversed only when the
+    effective copy dereferences them (``cp -L``); a copied link alone writes
+    no descendants. A truncated scan (inspection cap) or an unreadable
+    directory cannot prove the absence of protected components (R4-062), so it
+    fails closed and reports ``protected``; symlink cycles are guarded by a
+    visited set keyed on target identity *and* reach mode, so a tree already
+    walked literally is still classified once more through a link.
     """
-    if not root.is_dir():
-        return False
+    protected = False
+    external = False
+    sensitive = False
+    if not source.is_dir():
+        return _CopyReach()
     seen = 0
-    stack = [root]
-    visited: set[str] = set()
+    stack: list[tuple[Path, bool]] = [(source, follow_symlinks and source.is_symlink())]
+    visited: set[tuple[str, bool]] = set()
     while stack:
-        current = stack.pop()
+        current, via_link = stack.pop()
         try:
             identity = str(current.resolve())
-        except OSError:
+        except (OSError, RuntimeError):
             identity = str(current)
-        if identity in visited:
+        if (identity, via_link) in visited:
             continue
-        visited.add(identity)
+        visited.add((identity, via_link))
         try:
             entries = list(current.iterdir())
         except OSError:
             # Cannot prove absence without listing: fail closed.
-            return True
+            return _CopyReach(protected=True, external=external, sensitive=sensitive)
         for entry in entries:
             seen += 1
             if seen > max_entries:
                 # Cannot prove absence beyond the cap: fail closed.
-                return True
-            if entry.name.lower() in names:
-                return True
+                return _CopyReach(protected=True, external=external, sensitive=sensitive)
+            if entry.name.lower() in _PROTECTED_COMPONENTS:
+                protected = True
+                continue
             try:
-                if entry.is_dir() and (follow_symlinks or not entry.is_symlink()):
-                    stack.append(entry)
+                # ``is_dir``/``is_symlink`` swallow OSError; the guard keeps
+                # the R4-062 fail-closed doctrine if that ever changes.
+                is_link = entry.is_symlink()
+                is_dir = entry.is_dir()
             except OSError:
-                # A failed stat hides whether this entry is a directory to
-                # descend into: fail closed.
-                return True
-    return False
+                # A failed stat hides whether this entry would be
+                # dereferenced or descended into: fail closed.
+                return _CopyReach(protected=True, external=external, sensitive=sensitive)
+            reached_via_link = follow_symlinks and (via_link or is_link)
+            if reached_via_link:
+                try:
+                    resolved = entry.resolve()
+                except (OSError, RuntimeError):
+                    # Cannot classify the dereferenced target: fail closed.
+                    external = True
+                    continue
+                if not resolved.is_relative_to(workspace):
+                    external = True
+                if sensitive_path(str(resolved), workspace):
+                    sensitive = True
+            if is_dir and (follow_symlinks or not is_link):
+                stack.append((entry, reached_via_link))
+    return _CopyReach(protected=protected, external=external, sensitive=sensitive)
 
 
 def _recursive_copy_sources(argv: list[str], cwd: str) -> list[tuple[Path, bool]]:
@@ -724,12 +763,18 @@ def _sensitive_capabilities(req: ActionRequest) -> list[str]:
         # R02: a recursive directory write changes descendants that the
         # operands never name; classify the protected ones the copy will
         # actually reach (e.g. source/.git/config -> target/.git/config).
-        # Under `cp -L` the reachable set includes symlink targets.
-        if any(
-            _tree_contains_component(source, _PROTECTED_COMPONENTS, follow_symlinks=follow_symlinks)
-            for source, follow_symlinks in _recursive_copy_sources(req.argv, req.cwd)
-        ):
-            found.append("security_settings")
+        # H14: `cp -L` additionally dereferences descendant symlinks, so the
+        # dereferenced tree is classified for workspace containment and
+        # credential material before a copy can materialize outside bytes as
+        # a regular workspace file that later reads expose.
+        for source, follow_symlinks in _recursive_copy_sources(req.argv, req.cwd):
+            reach = _recursive_copy_reach(source, follow_symlinks=follow_symlinks, workspace=root)
+            if reach.protected:
+                found.append("security_settings")
+            if reach.sensitive:
+                found.append("credential_access")
+            if reach.external:
+                found.append("opaque_execution_review")
     if (
         first
         in {
