@@ -297,6 +297,47 @@ def write_grading_config(run_dir: Path) -> Path:
     return config_path
 
 
+def escaping_symlinks(root: Path) -> list[str]:
+    """Fixture-relative paths of symlinks whose target escapes ``root``.
+
+    Run copies are made with ``shutil.copytree(..., symlinks=True)``, so a
+    link that resolves outside its tree stays a link after the copy: a
+    harness edit through the run-copy link lands on the original target
+    while the integrity hash (which excludes the editable link path)
+    overlooks the change. ``os.walk`` with ``followlinks=False`` surfaces
+    both file links and directory links without descending into them;
+    ``os.path.realpath`` resolves the full chain (absolute links, ``..``,
+    nested links) and also covers dangling links, whose write-through
+    target is only contained when it resolves inside the root.
+    """
+    escaping: list[str] = []
+    root_real = os.path.realpath(root)
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for name in (*dirnames, *filenames):
+            link = Path(dirpath) / name
+            if not os.path.islink(link):
+                continue
+            target_real = os.path.realpath(link)
+            if target_real != root_real and not target_real.startswith(root_real + os.sep):
+                escaping.append(link.relative_to(root).as_posix())
+    return sorted(escaping)
+
+
+def assert_no_escaping_symlinks(root: Path, *, label: str) -> None:
+    """Fail closed when ``root`` contains a symlink escaping its tree.
+
+    Rejecting (rather than materializing content) keeps a hostile or
+    mis-authored fixture from ever reaching a harness: the pristine
+    original is never aliased into a run copy, so no harness write can
+    contaminate later runs. Internal links that resolve inside the tree
+    (use relative targets) are unaffected.
+    """
+    escaping = escaping_symlinks(root)
+    if escaping:
+        joined = ", ".join(escaping)
+        raise RuntimeError(f"{label} contains symlink(s) escaping the fixture tree: {joined}")
+
+
 def git_capture(repo: Path) -> dict:
     """Per-run provenance: short HEAD plus sha256 of ``git status --short``.
 
@@ -566,6 +607,9 @@ def run_one(harness: str, args: argparse.Namespace, task_dir: Path, venv_python:
         Path(args.runs_dir).expanduser().resolve() if args.runs_dir else (task_dir.parent / "runs")
     )
     run_dir = runs_dir / task_dir.name / harness
+    # Fail closed before anything is copied: an escaping fixture link would
+    # alias the pristine original (or any outside path) into the run copy.
+    assert_no_escaping_symlinks(task_dir, label="task fixture")
     if run_dir.exists():
         shutil.rmtree(run_dir)
     run_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -575,6 +619,14 @@ def run_one(harness: str, args: argparse.Namespace, task_dir: Path, venv_python:
         symlinks=True,
         ignore=shutil.ignore_patterns(*_IGNORED_PARTS),
     )
+    # Defense in depth: an absolute link that resolved inside the fixture
+    # points at the pristine original once copied, so re-check the run copy
+    # itself and discard it rather than handing it to a harness.
+    try:
+        assert_no_escaping_symlinks(run_dir, label="run copy")
+    except RuntimeError:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise
 
     edit_surface = editable_paths(task_dir, args.test_path)
     write_grading_config(run_dir)
