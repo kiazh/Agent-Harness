@@ -1,0 +1,5 @@
+# ruff after fix (2026-10-15T04:58:57Z)
+$ ruff check machina/tools/file.py tests/test_final_review_file.py
+All checks passed!
+$ ruff format --check machina/tools/file.py tests/test_final_review_file.py
+2 files already formatted

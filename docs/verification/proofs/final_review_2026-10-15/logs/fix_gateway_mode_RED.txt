@@ -1,0 +1,131 @@
+FFFFF                                                                    [100%]
+=================================== FAILURES ===================================
+______________ test_global_mode_set_beats_preexisting_env_shadow _______________
+
+isolated_mode_env = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2212/test_global_mode_set_beats_pre0')
+
+    async def test_global_mode_set_beats_preexisting_env_shadow(isolated_mode_env):
+        """RED (F1): returns the request but ``config.get`` stayed the old shadow."""
+        gw = _Gw()
+        result = await modefeat.mode_set(gw, {"mode": "ask", "scope": "global"})
+    
+        assert result["mode"] == "ask"
+        # The effective value is what grant_full_default / every reader sees.
+>       assert config.get("execution_mode") == "ask"
+E       AssertionError: assert 'full' == 'ask'
+E         
+E         - ask
+E         + full
+
+tests/test_final_review_2026_10_15_gateway_mode.py:70: AssertionError
+________________ test_global_mode_set_persist_writes_env_shadow ________________
+
+isolated_mode_env = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2212/test_global_mode_set_persist_w0')
+
+    async def test_global_mode_set_persist_writes_env_shadow(isolated_mode_env):
+        """RED (F1, durable): persist mirrors the shadow into the isolated .env."""
+        from machina.security.env_file import read_env_values
+    
+        gw = _Gw()
+        await modefeat.mode_set(gw, {"mode": "ask", "scope": "global", "persist": True})
+    
+>       assert config.get("execution_mode") == "ask"
+E       AssertionError: assert 'full' == 'ask'
+E         
+E         - ask
+E         + full
+
+tests/test_final_review_2026_10_15_gateway_mode.py:81: AssertionError
+------------------------------ Captured log call -------------------------------
+DEBUG    machina.core.config:config.py:583 Config saved to /private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2212/test_global_mode_set_persist_w0/config.yaml
+___________ test_generic_config_set_execution_mode_beats_env_shadow ____________
+
+isolated_mode_env = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2212/test_generic_config_set_execut0')
+
+    async def test_generic_config_set_execution_mode_beats_env_shadow(isolated_mode_env):
+        """RED (F1): the generic ``config.set`` bridge had the same shadow bug."""
+        from machina.gateway.server import Gateway
+    
+        gw = Gateway(lambda _frame: None, owns_db=False)
+        await gw._config_set({"key": "execution_mode", "value": "ask"})
+    
+>       assert config.get("execution_mode") == "ask"
+E       AssertionError: assert 'full' == 'ask'
+E         
+E         - ask
+E         + full
+
+tests/test_final_review_2026_10_15_gateway_mode.py:92: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 00:59:00,290 [WARNING] MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+------------------------------ Captured log call -------------------------------
+WARNING  machina.gateway.server:server.py:230 MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+____________________ test_initialize_mode_beats_env_shadow _____________________
+
+isolated_mode_env = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2212/test_initialize_mode_beats_env0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a21f250>
+
+    async def test_initialize_mode_beats_env_shadow(isolated_mode_env, monkeypatch):
+        """RED (F1): ``_initialize --mode`` is process-scoped but must take effect.
+    
+        No ``.env`` write here: the launcher's ``--mode`` is documented as applied
+        to this gateway process only (never persisted).
+        """
+        from machina.gateway.server import Gateway
+    
+        monkeypatch.delenv("MACHINA_GATEWAY_TOKEN", raising=False)
+        monkeypatch.setattr("machina.plugins.loader.load_plugins", lambda: None, raising=False)
+        gw = Gateway(lambda _frame: None, owns_db=False)
+        gw._db_ready = True
+    
+        await gw._initialize({"mode": "ask"})
+    
+>       assert config.get("execution_mode") == "ask"
+E       AssertionError: assert 'full' == 'ask'
+E         
+E         - ask
+E         + full
+
+tests/test_final_review_2026_10_15_gateway_mode.py:111: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 00:59:00,296 [WARNING] MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+------------------------------ Captured log call -------------------------------
+WARNING  machina.gateway.server:server.py:230 MACHINA_GATEWAY_TOKEN not set — gateway accepts unauthenticated requests
+INFO     machina.gateway.server:server.py:486 Gateway initialize: model=openrouter/free provider=openrouter
+______________________ test_global_mode_revoke_is_durable ______________________
+
+isolated_mode_env = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2212/test_global_mode_revoke_is_dur0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ad7b2f0>
+
+    async def test_global_mode_revoke_is_durable(isolated_mode_env, monkeypatch):
+        """RED (F6): global revoke reset in memory only; restart resurrected full."""
+        from machina.permissions.broker import permission_broker
+        from machina.security.env_file import read_env_values
+    
+        # Force the DB-free branch (this suite runs without a database).
+        monkeypatch.setattr("machina.db.connection.db", SimpleNamespace(connected=False))
+    
+        async def fake_revoke(_session_id):
+            return 3
+    
+        monkeypatch.setattr(permission_broker, "revoke", fake_revoke)
+    
+        gw = _Gw()
+        sid = str(uuid.uuid4())
+        result = await modefeat.mode_revoke(gw, {"sessionId": sid, "scope": "global"})
+    
+        assert result == {"revoked": 3, "mode": "ask", "scope": "global"}
+>       assert config.get("execution_mode") == "ask"
+E       AssertionError: assert 'full' == 'ask'
+E         
+E         - ask
+E         + full
+
+tests/test_final_review_2026_10_15_gateway_mode.py:138: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_final_review_2026_10_15_gateway_mode.py::test_global_mode_set_beats_preexisting_env_shadow
+FAILED tests/test_final_review_2026_10_15_gateway_mode.py::test_global_mode_set_persist_writes_env_shadow
+FAILED tests/test_final_review_2026_10_15_gateway_mode.py::test_generic_config_set_execution_mode_beats_env_shadow
+FAILED tests/test_final_review_2026_10_15_gateway_mode.py::test_initialize_mode_beats_env_shadow
+FAILED tests/test_final_review_2026_10_15_gateway_mode.py::test_global_mode_revoke_is_durable
+5 failed in 1.39s

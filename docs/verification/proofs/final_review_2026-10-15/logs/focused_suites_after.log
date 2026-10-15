@@ -1,0 +1,6 @@
+# Focused suites after fix (2026-10-15T04:58:57Z)
+$ pytest tests/test_r4_090_tools.py tests/test_r5_003_atomic_escape.py tests/test_r5_004_write_cancel.py tests/test_handoff_regressions.py tests/test_final_review_file.py tests/test_fm4_orchestrator.py tests/test_security.py tests/test_code_quality.py tests/test_tool_timeouts.py tests/test_basic.py tests/test_execution_context_boundary.py tests/test_audit_regressions.py tests/test_bug_fixes.py tests/test_v1_repomap_tool.py tests/test_bugfixes_tool_cache_redos.py
+........................................................................ [ 39%]
+........................................................................ [ 78%]
+.......................................                                  [100%]
+183 passed in 12.00s

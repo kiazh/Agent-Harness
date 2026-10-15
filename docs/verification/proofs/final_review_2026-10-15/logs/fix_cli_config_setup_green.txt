@@ -1,0 +1,17 @@
+== F09/F10 new tests (GREEN) ==
+......                                                                   [100%]
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED tests/test_final_review_cli_config_setup.py::test_config_set_model_persist_overrides_stale_env
+PASSED tests/test_final_review_cli_config_setup.py::test_config_set_provider_persist_overrides_stale_env
+PASSED tests/test_final_review_cli_config_setup.py::test_config_set_model_persist_without_env_still_syncs
+PASSED tests/test_final_review_cli_config_setup.py::test_setup_force_noninteractive_replaces_env
+PASSED tests/test_final_review_cli_config_setup.py::test_setup_force_interactive_blank_answers_remove_secrets
+PASSED tests/test_final_review_cli_config_setup.py::test_setup_without_force_still_merges
+6 passed in 0.43s
+
+== focused suites ==
+........................................................................ [ 45%]
+........................................................................ [ 90%]
+................                                                         [100%]
+160 passed in 13.32s

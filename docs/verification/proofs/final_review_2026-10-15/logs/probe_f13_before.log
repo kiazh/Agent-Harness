@@ -1,0 +1,2 @@
+resolve: HANG (>3s, blocked in open) — event loop would freeze
+read: HANG (>3s, blocked in open) — event loop would freeze

@@ -1,0 +1,2 @@
+file lines=100000 page_limit=10 -> readline calls=100001 total_reported=100000
+FULL-SCAN

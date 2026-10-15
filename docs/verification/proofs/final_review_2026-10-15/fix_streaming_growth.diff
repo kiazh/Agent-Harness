@@ -1,0 +1,74 @@
+diff --git a/machina/api/routes/streaming.py b/machina/api/routes/streaming.py
+index d2c852d..cd07e82 100644
+--- a/machina/api/routes/streaming.py
++++ b/machina/api/routes/streaming.py
+@@ -8,6 +8,7 @@ Shared by the sessions router (prompt/chat) and the approvals router
+ from __future__ import annotations
+ 
+ import asyncio
++import contextvars
+ import json
+ import logging
+ import sys
+@@ -63,6 +64,16 @@ async def _stream_session(
+     # first iteration so an unconsumed stream never renews forever;
+     # stopped when the generator exits; crash expiry recovery preserved.
+     _renew_state: dict[str, Any] = {}
++    # F07: one shared execution Context for the whole turn's step tasks. The
++    # agent sets growth-episode / RSI ContextVars while preparing the turn
++    # (inside the first step's task); because asyncio Tasks copy the creator's
++    # context, a fresh task+context per `__anext__` hid those writes from later
++    # steps and from the done handler that runs `_complete_growth` — growth
++    # episodes never completed. Driving every step task in one shared Context
++    # keeps the writes visible for the rest of the turn. Same principle as
++    # R4-010: the driver that creates the step tasks owns the ContextVar
++    # lifetime. Armed per-turn (empty until the drive loop starts).
++    _step_context: dict[str, contextvars.Context] = {}
+     _ownership_lost = asyncio.Event()
+     # The renewal interval is owned by machina.api.app (kept there as a
+     # patch target). Read it off the loaded app module instead of
+@@ -74,7 +85,15 @@ async def _stream_session(
+     _renew_interval = getattr(_app_module, "CLAIM_RENEW_INTERVAL_SECONDS", 30.0)
+ 
+     async def _owned_step(awaitable, timeout: float):
+-        task = asyncio.ensure_future(awaitable)
++        # F07: run steps in the turn's shared Context once armed so ContextVars
++        # the agent writes during preparation survive across steps. Before the
++        # drive loop arms it (the agent build step) keeps the default per-task
++        # context copy.
++        context = _step_context.get("ctx")
++        if context is None:
++            task = asyncio.ensure_future(awaitable)
++        else:
++            task = asyncio.get_running_loop().create_task(awaitable, context=context)
+         task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+         _renew_state["active"] = task
+         lost = asyncio.create_task(_ownership_lost.wait())
+@@ -147,9 +166,11 @@ async def _stream_session(
+             renew_interval_s=_renew_interval,
+         )
+         engine.start_renewal(ownership_lost=_ownership_lost)
+-        # R4-010: driver-owned turn scope — every `_owned_step` task copies
+-        # this context, so the scope is visible to all steps and the reset
+-        # stays in the context that created the token.
++        # R4-010: driver-owned turn scope — every `_owned_step` task runs in a
++        # context that carries this scope (the stream steps share the armed
++        # context below; the agent-build step copies this one), so the scope is
++        # visible to all steps and the reset stays in the context that created
++        # the token.
+         #
+         # R4-064 follow-up (stopped here, deliberately): no OTel span around
+         # this drive loop. An async generator can be resumed by one task and
+@@ -188,6 +209,12 @@ async def _stream_session(
+ 
+                 resume_token = resume_approval_var.set(str(resume[0].get("request_id", "")))
+             engine.attach(agent)
++            # F07: arm the shared step Context after the transport-owned resume
++            # ContextVar is set, so every agent step (and the done handler) sees
++            # it together with the growth/RSI state the agent writes while
++            # preparing. Copied from THIS driver context, which already owns the
++            # turn scope entered above.
++            _step_context["ctx"] = contextvars.copy_context()
+             stream = engine.stream()
+             while True:
+                 remaining = deadline - asyncio.get_running_loop().time()

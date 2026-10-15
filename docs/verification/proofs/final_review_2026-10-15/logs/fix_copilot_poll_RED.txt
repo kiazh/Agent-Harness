@@ -1,0 +1,46 @@
+RED-first: pre-fix run of the new F3 evidence suite (before the clamp landed).
+Captured from `./.venv/bin/python -m pytest tests/test_copilot_poll_deadline.py -q`
+against the original `device_flow_poll` (server `slow_down` interval used as
+`wait` with no deadline clip and no cap).
+
+$ ./.venv/bin/python -m pytest tests/test_copilot_poll_deadline.py -p no:cacheprovider -q
+        with pytest.raises(CopilotAuthError) as excinfo:
+            copilot_auth.device_flow_poll(
+                "dev-1", interval=0.01, timeout=2.0, client=client, sleep=fake_sleep
+            )
+        # Existing typed timeout is preserved; we did not sleep past the deadline.
+        assert excinfo.value.code == "copilot_device_timeout"
+        assert HUGE_INTERVAL not in sleeps
+        assert sleeps, "expected at least one sleep before the deadline"
+>       assert sum(sleeps) <= 2.0 + 1e-9
+E       assert 4.0 <= (2.0 + 1e-09)
+E        +  where 4.0 = sum([4.0])
+
+tests/test_copilot_poll_deadline.py:72: AssertionError
+______________________ test_slow_down_interval_is_capped _______________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b713100>
+
+    def test_slow_down_interval_is_capped(monkeypatch):
+        clock = _FakeClock()
+        monkeypatch.setattr(copilot_auth, "time", clock)
+        sleeps: list[float] = []
+
+        def fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            clock.now += seconds
+
+        client = _slow_down_client()
+        with pytest.raises(CopilotAuthError) as excinfo:
+            copilot_auth.device_flow_poll(
+                "dev-1", interval=0.01, timeout=300.0, client=client, sleep=fake_sleep
+            )
+        assert excinfo.value.code == "copilot_device_timeout"
+>       assert HUGE_INTERVAL not in sleeps
+E       assert 1000000000.0 not in [4.0, 1000000000.0]
+
+tests/test_copilot_poll_deadline.py:91: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_copilot_poll_deadline.py::test_slow_down_interval_is_clamped_to_remaining_deadline
+FAILED tests/test_copilot_poll_deadline.py::test_slow_down_interval_is_capped
+2 failed in 0.34s

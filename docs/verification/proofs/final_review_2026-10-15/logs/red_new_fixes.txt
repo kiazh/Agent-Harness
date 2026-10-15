@@ -1,0 +1,197 @@
+F.F.FFFF.FF                                                              [100%]
+=================================== FAILURES ===================================
+_______________ test_mcp_none_mode_clamped_to_tightened_ceiling ________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108b0df30>
+
+    async def test_mcp_none_mode_clamped_to_tightened_ceiling(monkeypatch):
+        """full operator + MCP_MAX_MODE=ask: an omitted mode must spawn --mode ask."""
+        from machina import mcp_server
+    
+        monkeypatch.setenv("MACHINA_EXECUTION_MODE", "full")
+        monkeypatch.setenv("MCP_MAX_MODE", "ask")
+        capture: dict = {}
+        monkeypatch.setattr(mcp_server, "_run_process", _capture_runner(capture))
+        payload = json.loads(await mcp_server.machina_chat("hi", mode=None))
+        assert payload["status"] == "completed"
+        cmd = capture["cmd"]
+>       assert "--mode" in cmd
+E       AssertionError: assert '--mode' in ['/Users/shadow/machina/.venv/bin/python', '-m', 'machina', 'chat', '-q', '--', ...]
+
+tests/test_final_review_fixes_2026_10_15.py:62: AssertionError
+__________________ test_e2e_gate_blank_db_url_is_not_consent ___________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2167/test_e2e_gate_blank_db_url_is_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10af14d10>
+capsys = <_pytest.capture.CaptureFixture object at 0x109818440>
+
+    def test_e2e_gate_blank_db_url_is_not_consent(tmp_path, monkeypatch, capsys):
+        import tools.e2e_gate as gate
+    
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/prod")
+        monkeypatch.delenv("MACHINA_DATABASE_URL", raising=False)
+        code = gate.main(["--db-url=", "--venv", str(tmp_path / "nope"), "--journeys", "j1"])
+        err = capsys.readouterr().err
+        assert code == 2
+>       assert "refusing to run against non-test database" in err
+E       AssertionError: assert 'refusing to run against non-test database' in '[e2e-gate] database: postgresql://localhost:5432/prod (source: env:DATABASE_URL, non-test explicitly allowed by --db-...ers/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2167/test_e2e_gate_blank_db_url_is_0/nope/bin/python\n'
+
+tests/test_final_review_fixes_2026_10_15.py:92: AssertionError
+_____________ test_write_skill_file_ignores_a_planted_symlink_temp _____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2167/test_write_skill_file_ignores_0')
+
+    def test_write_skill_file_ignores_a_planted_symlink_temp(tmp_path):
+        from machina.skills.registry import SkillRegistry
+    
+        registry = SkillRegistry(tmp_path)
+        registry.create_skill("deploy", "Deploy steps", "Steps to deploy safely")
+        skill_file = Path(registry.get("deploy").file_path)
+        outside = tmp_path / "outside.txt"
+        outside.write_text("ORIGINAL", encoding="utf-8")
+        # The pre-fix temp name was predictable: <SKILL.md>.<pid>.tmp.
+        planted = skill_file.with_name(f"{skill_file.name}.{os.getpid()}.tmp")
+        planted.symlink_to(outside)
+    
+        registry.update_skill("deploy", content="NEW BODY")
+    
+>       assert outside.read_text(encoding="utf-8") == "ORIGINAL"
+E       AssertionError: assert '---\ncreated...-\nNEW BODY\n' == 'ORIGINAL'
+E         
+E         - ORIGINAL
+E         + ---
+E         + created_at: '2026-10-15T04:51:21.335400+00:00'
+E         + description: Deploy steps
+E         + enabled: true
+E         + name: deploy...
+E         
+E         ...Full output truncated (6 lines hidden), use '-vv' to show
+
+tests/test_final_review_fixes_2026_10_15.py:126: AssertionError
+______________ test_provider_store_lock_delegates_to_store_fence _______________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2167/test_provider_store_lock_deleg0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10af99e50>
+
+    def test_provider_store_lock_delegates_to_store_fence(tmp_path, monkeypatch):
+        from machina.security import providers as store
+        from machina.security import store_fence
+    
+        monkeypatch.setenv("MACHINA_PROVIDERS_FILE", str(tmp_path / "providers.json"))
+        calls: list[str] = []
+        real_lock = store_fence.store_lock
+    
+        def spy(target):
+            calls.append(str(target))
+            return real_lock(target)
+    
+        monkeypatch.setattr(store_fence, "store_lock", spy)
+        store.add_provider("acme", "http://127.0.0.1:9000/v1")
+>       assert calls and calls[0].endswith("providers.json")
+E       assert ([])
+
+tests/test_final_review_fixes_2026_10_15.py:149: AssertionError
+___________ test_provider_store_lock_translates_store_fence_timeout ____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2167/test_provider_store_lock_trans0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10afe0410>
+
+    def test_provider_store_lock_translates_store_fence_timeout(tmp_path, monkeypatch):
+        from machina.security import providers as store
+        from machina.security import store_fence
+    
+        monkeypatch.setenv("MACHINA_PROVIDERS_FILE", str(tmp_path / "providers.json"))
+    
+        @contextmanager
+        def contended(target):
+            raise store_fence.StoreLockTimeout("lock held by a peer")
+            yield  # pragma: no cover - unreachable
+    
+        monkeypatch.setattr(store_fence, "store_lock", contended)
+>       with pytest.raises(store.ProviderStoreLockTimeout):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ProviderStoreLockTimeout
+
+tests/test_final_review_fixes_2026_10_15.py:164: Failed
+____________ test_run_bounded_large_stdin_is_killed_at_the_deadline ____________
+
+    def test_run_bounded_large_stdin_is_killed_at_the_deadline():
+        """A child that never reads stdin must still be bounded by the deadline."""
+        from machina.core.child_process import run_bounded
+    
+        started = time.monotonic()
+        result = run_bounded(
+            [sys.executable, "-c", "import time; time.sleep(5)"],
+            timeout=1.0,
+            stdin_text="x" * 1_000_000,
+        )
+        elapsed = time.monotonic() - started
+>       assert result.timed_out is True
+E       AssertionError: assert False is True
+E        +  where False = BoundedResult(returncode=0, stdout='', stderr='', timed_out=False, truncated=False, spawn_error=None).timed_out
+
+tests/test_final_review_fixes_2026_10_15.py:184: AssertionError
+___________________ test_registry_lookup_is_case_insensitive ___________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2167/test_registry_lookup_is_case_i0')
+
+    def test_registry_lookup_is_case_insensitive(tmp_path):
+        from machina.skills.registry import SkillRegistry
+    
+        registry = SkillRegistry(tmp_path)
+        registry.create_skill("Deploy", "Deploy steps", "Steps to deploy safely")
+>       assert registry.get("DEPLOY") is not None
+E       AssertionError: assert None is not None
+E        +  where None = get('DEPLOY')
+E        +    where get = <machina.skills.registry.SkillRegistry object at 0x10af8d6d0>.get
+
+tests/test_final_review_fixes_2026_10_15.py:211: AssertionError
+____________ test_uppercase_local_skill_cannot_duplicate_a_builtin _____________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2167/test_uppercase_local_skill_can0')
+
+    def test_uppercase_local_skill_cannot_duplicate_a_builtin(tmp_path):
+        from machina.skills.registry import Skill, SkillRegistry
+    
+        class FakeBundle:
+            def skills(self):
+                return [
+                    Skill(
+                        name="Foo",
+                        description="builtin",
+                        triggers=[],
+                        content="",
+                        file_path="builtin",
+                        source_type="builtin-ecc",
+                    )
+                ]
+    
+        registry = SkillRegistry(tmp_path / "skills")
+        registry._include_ecc = True
+        registry._ecc_bundle = FakeBundle()
+        skill_dir = registry.skills_dir / "FOO"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: FOO\ndescription: local\n---\nlocal body", encoding="utf-8"
+        )
+    
+        registry.load_all(refresh=True)
+    
+>       assert sorted(skill.name for skill in registry.list_skills()) == ["Foo"]
+E       AssertionError: assert ['FOO', 'Foo'] == ['Foo']
+E         
+E         At index 0 diff: 'FOO' != 'Foo'
+E         Left contains one more item: 'Foo'
+E         Use -v to get more diff
+
+tests/test_final_review_fixes_2026_10_15.py:243: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_final_review_fixes_2026_10_15.py::test_mcp_none_mode_clamped_to_tightened_ceiling
+FAILED tests/test_final_review_fixes_2026_10_15.py::test_e2e_gate_blank_db_url_is_not_consent
+FAILED tests/test_final_review_fixes_2026_10_15.py::test_write_skill_file_ignores_a_planted_symlink_temp
+FAILED tests/test_final_review_fixes_2026_10_15.py::test_provider_store_lock_delegates_to_store_fence
+FAILED tests/test_final_review_fixes_2026_10_15.py::test_provider_store_lock_translates_store_fence_timeout
+FAILED tests/test_final_review_fixes_2026_10_15.py::test_run_bounded_large_stdin_is_killed_at_the_deadline
+FAILED tests/test_final_review_fixes_2026_10_15.py::test_registry_lookup_is_case_insensitive
+FAILED tests/test_final_review_fixes_2026_10_15.py::test_uppercase_local_skill_cannot_duplicate_a_builtin
+8 failed, 3 passed in 5.67s

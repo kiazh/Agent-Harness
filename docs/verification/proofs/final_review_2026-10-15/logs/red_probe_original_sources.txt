@@ -1,0 +1,7 @@
+connector local circuit open for 60s
+RED probe against ORIGINAL sources:
+  F1: REPRODUCED — literal-body-180: admitted, compile=0.006s; alternation-body: admitted, compile=0.241s
+  F3: REPRODUCED — newer config clobbered -> ['--original'] (store=previous configuration restored)
+  F4: REPRODUCED — sandbox stdio launch path reached without a typed refusal
+  F5: REPRODUCED — ConnectorStoreBusy=False nonblocking_flock=False
+  F6: REPRODUCED — config lock held during auth refresh: seen=[True]

@@ -1,0 +1,285 @@
+FF...F.FFFF...FFF.                                                       [100%]
+=================================== FAILURES ===================================
+_______________ test_embedded_at_db_password_tail_does_not_leak ________________
+
+    def test_embedded_at_db_password_tail_does_not_leak():
+        """The whole password (including embedded ``@``) redacts to one marker."""
+        from machina.core.provider.audit import _sanitize_value
+    
+        out = _sanitize_value("postgres://alice:p@ss@db.example.com:5432/mydb")
+        assert "p@ss" not in out
+>       assert "@ss@" not in out
+E       AssertionError: assert '@ss@' not in 'postgres://...om:5432/mydb'
+E         
+E         '@ss@' is contained here:
+E           postgres://alice:[REDACTED_DB_PASSWORD]@ss@db.example.com:5432/mydb
+E         ?                                        ++++
+
+tests/test_final_review_2026_10_15_providers.py:46: AssertionError
+_________________ test_multi_at_db_password_tail_does_not_leak _________________
+
+    def test_multi_at_db_password_tail_does_not_leak():
+        """``postgresql://u:se@cr@et@host/db`` redacts ``se@cr@et`` in full."""
+        from machina.core.provider.audit import _sanitize_value
+    
+        out = _sanitize_value("postgresql://u:se@cr@et@host/db")
+        assert "se@cr@et" not in out
+>       assert "cr@et" not in out
+E       AssertionError: assert 'cr@et' not in 'postgresql:...r@et@host/db'
+E         
+E         'cr@et' is contained here:
+E           postgresql://u:[REDACTED_DB_PASSWORD]@cr@et@host/db
+E         ?                                       +++++
+
+tests/test_final_review_2026_10_15_providers.py:57: AssertionError
+_____________ test_audit_log_tolerates_non_string_nested_dict_keys _____________
+
+captured_audit = []
+
+    def test_audit_log_tolerates_non_string_nested_dict_keys(captured_audit):
+        """A structured payload with an int key must not crash ``audit_log``."""
+        from machina.core.provider.audit import audit_log
+    
+>       audit_log("non_str_keys", data={1: "y", (2, 3): "z", None: "w"})
+
+tests/test_final_review_2026_10_15_providers.py:107: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/core/provider/audit.py:210: in audit_log
+    sanitized_kwargs = _sanitize_value(metadata(kwargs))
+                                       ^^^^^^^^^^^^^^^^
+machina/core/provider/audit.py:201: in metadata
+    key: metadata(item)
+         ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {1: 'y', (2, 3): 'z', None: 'w'}
+
+    def metadata(value):
+        if isinstance(value, dict):
+            return {
+                key: metadata(item)
+                for key, item in value.items()
+>               if key.lower() not in protected
+                   ^^^^^^^^^
+                and not key.lower().endswith(("_content", "_preview", "_payload"))
+            }
+E           AttributeError: 'int' object has no attribute 'lower'
+
+machina/core/provider/audit.py:203: AttributeError
+________________ test_audit_log_reserved_keys_cannot_be_spoofed ________________
+
+captured_audit = [{'timestamp': 0.0, 'event': 'spoofed_event', 'detail': 'kept'}]
+caplog = <_pytest.logging.LogCaptureFixture object at 0x109a69fd0>
+
+    def test_audit_log_reserved_keys_cannot_be_spoofed(captured_audit, caplog):
+        """A caller-supplied ``event``/``timestamp`` cannot rewrite the record."""
+        import logging
+    
+        from machina.core.provider.audit import audit_log
+    
+        before = time.time()
+        with caplog.at_level(logging.INFO, logger="machina.audit"):
+            audit_log("real_event", event="spoofed_event", timestamp=0.0, detail="kept")
+        after = time.time()
+    
+        entry = captured_audit[-1]
+>       assert entry["event"] == "real_event"
+E       AssertionError: assert 'spoofed_event' == 'real_event'
+E         
+E         - real_event
+E         + spoofed_event
+
+tests/test_final_review_2026_10_15_providers.py:139: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 00:46:26,208 [AUDIT] {"timestamp": 0.0, "event": "spoofed_event", "detail": "kept"}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:216 {"timestamp": 0.0, "event": "spoofed_event", "detail": "kept"}
+______________________ test_sse_field_strips_leading_bom _______________________
+
+    def test_sse_field_strips_leading_bom():
+        from machina.core.provider.sse import sse_data, sse_event, sse_field
+    
+>       assert sse_data(f"{_BOM}data: {{}}") == "{}"
+E       AssertionError: assert None == '{}'
+E        +  where None = <function sse_data at 0x10936b320>('\ufeffdata: {}')
+
+tests/test_final_review_2026_10_15_providers.py:161: AssertionError
+_____________ test_first_sse_frame_with_leading_bom_is_not_dropped _____________
+
+    async def test_first_sse_frame_with_leading_bom_is_not_dropped():
+        """A BOM on the first frame must not drop its content (RED pre-fix)."""
+        chunk = {"model": "m", "choices": [{"delta": {"content": "Hello"}}]}
+        stop = {"model": "m", "choices": [{"delta": {}, "finish_reason": "stop"}]}
+        body = (
+            f"{_BOM}data: {json.dumps(chunk)}\n"
+            f"data: {json.dumps(stop)}\n"
+            "data: [DONE]\n"
+        ).encode()
+        provider = _direct_provider(_streaming_client(body))
+    
+        events = [
+            event async for event in provider.stream_complete([{"role": "user", "content": "hi"}])
+        ]
+        texts = [event.content for event in events if event.type == "text"]
+>       assert texts == ["Hello"], texts
+E       AssertionError: []
+E       assert [] == ['Hello']
+E         
+E         Right contains one more item: 'Hello'
+E         Use -v to get more diff
+
+tests/test_final_review_2026_10_15_providers.py:235: AssertionError
+----------------------------- Captured stderr call -----------------------------
+2026-10-15 00:46:26,215 [AUDIT] {"timestamp": 1792039586.215641, "event": "llm_stream_start", "provider": "f4-bom", "model": "m", "message_count": 1}
+2026-10-15 00:46:26,225 [AUDIT] {"timestamp": 1792039586.2259579, "event": "llm_stream_complete", "provider": "f4-bom", "model": "m", "tool_calls": 0}
+------------------------------ Captured log call -------------------------------
+INFO     machina.audit:audit.py:216 {"timestamp": 1792039586.215641, "event": "llm_stream_start", "provider": "f4-bom", "model": "m", "message_count": 1}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+INFO     machina.audit:audit.py:216 {"timestamp": 1792039586.2259579, "event": "llm_stream_complete", "provider": "f4-bom", "model": "m", "tool_calls": 0}
+ERROR    machina.observability.audit:audit.py:42 Audit event dropped before the writer started; event was not persisted
+__________________ test_rate_limit_zero_is_accepted_by_config __________________
+
+    def test_rate_limit_zero_is_accepted_by_config():
+        from machina.core.config import validate_value
+    
+>       assert validate_value("rate_limit_calls_per_minute", 0) == 0
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_final_review_2026_10_15_providers.py:248: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/core/config.py:333: in validate_value
+    _check_int_bounds(key, coerced)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+key = 'rate_limit_calls_per_minute', val = 0
+
+    def _check_int_bounds(key: str, val: int) -> None:
+        bounds: dict[str, tuple[int, int | None]] = {
+            "turn_timeout": (1, 3600),
+            "approval_timeout": (1, 3600),
+            "context_budget": (100, None),
+            "max_tokens": (1, None),
+            "rate_limit_calls_per_minute": (1, None),
+            "usage_session_token_limit": (0, None),
+            "usage_session_request_limit": (0, None),
+            "usage_agent_token_limit": (0, None),
+            "usage_agent_request_limit": (0, None),
+            "compression_preserve_recent": (0, 100),
+            "learning_review_max_per_session": (0, 100),
+            "learning_review_auto_apply_per_day": (0, 100),
+            "eviction_max_tokens": (0, None),
+        }
+        if key in bounds:
+            lo, hi = bounds[key]
+            if val < lo or (hi is not None and val > hi):
+                hi_text = f"..{hi}" if hi is not None else "+"
+>               raise ValueError(f"{key} must be in range {lo}{hi_text}, got {val}")
+E               ValueError: rate_limit_calls_per_minute must be in range 1+, got 0
+
+machina/core/config.py:372: ValueError
+_______________ test_config_zero_rate_limit_reaches_the_registry _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109be94f0>
+
+    def test_config_zero_rate_limit_reaches_the_registry(monkeypatch):
+        """config.get → reload_rate_limiters → a disabled live bucket."""
+        from machina.core.config import config
+        from machina.core.provider import rate_limit as rl
+    
+        monkeypatch.setattr(config, "_session_overrides", {"rate_limit_calls_per_minute": 0})
+>       assert config.get("rate_limit_calls_per_minute") == 0
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_final_review_2026_10_15_providers.py:280: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+machina/core/config.py:495: in get
+    return validate_value(key, self._session_overrides[key])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+machina/core/config.py:333: in validate_value
+    _check_int_bounds(key, coerced)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+key = 'rate_limit_calls_per_minute', val = 0
+
+    def _check_int_bounds(key: str, val: int) -> None:
+        bounds: dict[str, tuple[int, int | None]] = {
+            "turn_timeout": (1, 3600),
+            "approval_timeout": (1, 3600),
+            "context_budget": (100, None),
+            "max_tokens": (1, None),
+            "rate_limit_calls_per_minute": (1, None),
+            "usage_session_token_limit": (0, None),
+            "usage_session_request_limit": (0, None),
+            "usage_agent_token_limit": (0, None),
+            "usage_agent_request_limit": (0, None),
+            "compression_preserve_recent": (0, 100),
+            "learning_review_max_per_session": (0, 100),
+            "learning_review_auto_apply_per_day": (0, 100),
+            "eviction_max_tokens": (0, None),
+        }
+        if key in bounds:
+            lo, hi = bounds[key]
+            if val < lo or (hi is not None and val > hi):
+                hi_text = f"..{hi}" if hi is not None else "+"
+>               raise ValueError(f"{key} must be in range {lo}{hi_text}, got {val}")
+E               ValueError: rate_limit_calls_per_minute must be in range 1+, got 0
+
+machina/core/config.py:372: ValueError
+________________ test_runtime_reports_anthropic_ready_with_key _________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109be8f50>
+
+    def test_runtime_reports_anthropic_ready_with_key(monkeypatch):
+        from machina.core.config import config
+        from machina.core import runtime
+    
+        monkeypatch.setattr(
+            config,
+            "_session_overrides",
+            {"provider": "anthropic", "anthropic_api_key": "synthetic-anthropic-key"},
+        )
+        report = runtime._detect_providers()
+        assert report["chat_provider_selected"] == "anthropic"
+>       assert report["chat_provider"] == "ready", report
+E       AssertionError: {'chat_provider': 'unavailable', 'chat_provider_reason': "unknown provider 'anthropic'", 'chat_provider_selected': 'anthropic', 'embedding': 'keyword-only', ...}
+E       assert 'unavailable' == 'ready'
+E         
+E         - ready
+E         + unavailable
+
+tests/test_final_review_2026_10_15_providers.py:308: AssertionError
+__________________ test_runtime_reports_anthropic_missing_key __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109be7140>
+
+    def test_runtime_reports_anthropic_missing_key(monkeypatch):
+        from machina.core.config import config
+        from machina.core import runtime
+    
+        monkeypatch.setattr(
+            config,
+            "_session_overrides",
+            {"provider": "anthropic", "anthropic_api_key": ""},
+        )
+        report = runtime._detect_providers()
+        assert report["chat_provider_selected"] == "anthropic"
+        assert report["chat_provider"] == "unavailable", report
+>       assert report["chat_provider_reason"] == "ANTHROPIC_API_KEY not set"
+E       assert "unknown provider 'anthropic'" == 'ANTHROPIC_API_KEY not set'
+E         
+E         - ANTHROPIC_API_KEY not set
+E         + unknown provider 'anthropic'
+
+tests/test_final_review_2026_10_15_providers.py:324: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_final_review_2026_10_15_providers.py::test_embedded_at_db_password_tail_does_not_leak
+FAILED tests/test_final_review_2026_10_15_providers.py::test_multi_at_db_password_tail_does_not_leak
+FAILED tests/test_final_review_2026_10_15_providers.py::test_audit_log_tolerates_non_string_nested_dict_keys
+FAILED tests/test_final_review_2026_10_15_providers.py::test_audit_log_reserved_keys_cannot_be_spoofed
+FAILED tests/test_final_review_2026_10_15_providers.py::test_sse_field_strips_leading_bom
+FAILED tests/test_final_review_2026_10_15_providers.py::test_first_sse_frame_with_leading_bom_is_not_dropped
+FAILED tests/test_final_review_2026_10_15_providers.py::test_rate_limit_zero_is_accepted_by_config
+FAILED tests/test_final_review_2026_10_15_providers.py::test_config_zero_rate_limit_reaches_the_registry
+FAILED tests/test_final_review_2026_10_15_providers.py::test_runtime_reports_anthropic_ready_with_key
+FAILED tests/test_final_review_2026_10_15_providers.py::test_runtime_reports_anthropic_missing_key
+10 failed, 8 passed in 0.37s

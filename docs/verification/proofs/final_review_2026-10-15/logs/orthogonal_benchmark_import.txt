@@ -1,0 +1,6 @@
+    from machina.core.progress import should_write_first
+ImportError: cannot import name 'should_write_first' from 'machina.core.progress' (/Users/shadow/machina/machina/core/progress.py)
+# NOTE: machina/core/progress.py is mid-edit by a concurrent lane (it is
+# modified in the shared worktree and no longer defines should_write_first);
+# machina/research/benchmark.py imports it, so tests/test_benchmark_tool.py
+# fails for reasons unrelated to the locomo/head_to_head/identity_eval fixes.

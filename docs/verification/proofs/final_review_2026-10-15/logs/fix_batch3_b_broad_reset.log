@@ -1,0 +1,39 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.5, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/shadow/machina
+configfile: pyproject.toml
+plugins: cov-7.1.0, hypothesis-6.169.0, asyncio-1.4.0, anyio-4.15.1, langsmith-0.14.8
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 451 items
+
+tests/test_r5_011_013_provider_transport.py ...........                  [  2%]
+tests/test_final_review_2026_10_15_fix_batch3.py .......                 [  3%]
+tests/test_repo_install.py ..................................            [ 11%]
+tests/test_fm6_repo_install.py ...                                       [ 12%]
+tests/test_fm6_skill_read.py ........................................... [ 21%]
+........................................................................ [ 37%]
+..................................                                       [ 45%]
+tests/test_audit_lifecycle.py ....                                       [ 46%]
+tests/test_audit_shutdown.py .                                           [ 46%]
+tests/test_fm6_audit.py ...                                              [ 47%]
+tests/test_r5_018_audit_redaction.py ..........                          [ 49%]
+tests/test_r5_nb_source_redaction.py .......                             [ 50%]
+tests/test_observability_payload_boundary.py ........                    [ 52%]
+tests/test_final_review_2026_10_15_providers.py ........................ [ 57%]
+....                                                                     [ 58%]
+tests/test_deep_runtime_shutdown.py .......                              [ 60%]
+tests/test_deep_runtime_cleanup.py ...                                   [ 60%]
+tests/test_gateway_providers.py .......................                  [ 66%]
+tests/test_r4_082_gateway_providers.py ........................          [ 71%]
+tests/test_provider_close_visibility.py .....                            [ 72%]
+tests/test_provider_context_audit.py ............                        [ 75%]
+tests/test_metrics.py .......                                            [ 76%]
+tests/test_sse_stream_adversarial.py ........                            [ 78%]
+tests/test_r5_019_skill_atomicity.py .....                               [ 79%]
+tests/test_skill_runtime.py .......                                      [ 81%]
+tests/test_skill_registry_cache.py .........                             [ 83%]
+tests/test_uninstall.py ....................                             [ 87%]
+tests/test_installer_env.py ..........................................   [ 96%]
+tests/test_installer_quoting.py ..............                           [100%]
+
+============================= 451 passed in 31.54s =============================

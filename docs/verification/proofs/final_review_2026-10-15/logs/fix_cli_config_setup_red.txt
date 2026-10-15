@@ -1,0 +1,125 @@
+FF.FF.                                                                   [100%]
+=================================== FAILURES ===================================
+______________ test_config_set_model_persist_overrides_stale_env _______________
+
+isolated_cli = <module 'machina.cli' from '/Users/shadow/machina/machina/cli/__init__.py'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b791220>
+
+    def test_config_set_model_persist_overrides_stale_env(
+        isolated_cli, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """RED (F09): with MACHINA_MODEL=old in the environment, `config-set model
+        new --persist` saved YAML ``new`` then wrote ``old`` into .env and the live
+        process environment, because the shadow read ``config.get`` (env wins)."""
+        from machina.security.env_file import read_env_values
+    
+        cli = isolated_cli
+        monkeypatch.setenv("MACHINA_MODEL", "old-model")
+        assert cli.config.get("model") == "old-model", "precondition: env shadows the file"
+    
+        result = runner.invoke(cli.app, ["config-set", "model", "new-model", "--persist"])
+    
+        assert result.exit_code == 0, result.output
+>       assert os.environ.get("MACHINA_MODEL") == "new-model", "live env carries the new value"
+E       AssertionError: live env carries the new value
+E       assert 'old-model' == 'new-model'
+E         
+E         - new-model
+E         + old-model
+
+tests/test_final_review_cli_config_setup.py:79: AssertionError
+_____________ test_config_set_provider_persist_overrides_stale_env _____________
+
+isolated_cli = <module 'machina.cli' from '/Users/shadow/machina/machina/cli/__init__.py'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b791350>
+
+    def test_config_set_provider_persist_overrides_stale_env(
+        isolated_cli, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """RED (F09): the same stale-shadow bug for MACHINA_PROVIDER."""
+        from machina.security.env_file import read_env_values
+    
+        cli = isolated_cli
+        monkeypatch.setenv("MACHINA_PROVIDER", "old-provider")
+    
+        result = runner.invoke(cli.app, ["config-set", "provider", "groq", "--persist"])
+    
+        assert result.exit_code == 0, result.output
+>       assert os.environ.get("MACHINA_PROVIDER") == "groq"
+E       AssertionError: assert 'old-provider' == 'groq'
+E         
+E         - groq
+E         + old-provider
+
+tests/test_final_review_cli_config_setup.py:96: AssertionError
+_________________ test_setup_force_noninteractive_replaces_env _________________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2152/test_setup_force_noninteractiv0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d088d10>
+
+    def test_setup_force_noninteractive_replaces_env(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """RED (F10): forced non-interactive setup must drop every old key."""
+        import machina.cli as cli
+        from machina.security.env_file import read_env_values
+    
+        env_file = tmp_path / ".env"
+        monkeypatch.setenv("MACHINA_ENV_FILE", str(env_file))
+        _stub_interop(monkeypatch)
+        env_file.write_text(
+            "OPENROUTER_API_KEY=sk-or-old\n"
+            "MACHINA_MODEL=old-model\n"
+            "MACHINA_PROVIDER=old-provider\n"
+            "DATABASE_URL=postgresql://u:p@db.internal:5432/prod\n",
+            encoding="utf-8",
+        )
+    
+        result = runner.invoke(cli.app, ["setup", "--force", "--non-interactive", "--interop", "none"])
+    
+        assert result.exit_code == 0, result.output
+        values = read_env_values(env_file)
+>       assert "OPENROUTER_API_KEY" not in values, "old secret must not survive --force"
+E       AssertionError: old secret must not survive --force
+E       assert 'OPENROUTER_API_KEY' not in {'OPENROUTER_API_KEY': 'sk-or-old', 'MACHINA_MODEL': 'old-model', 'MACHINA_PROVIDER': 'old-provider', 'DATABASE_URL': 'postgresql://postgres:postgres@localhost:5432/machina'}
+
+tests/test_final_review_cli_config_setup.py:139: AssertionError
+__________ test_setup_force_interactive_blank_answers_remove_secrets ___________
+
+tmp_path = PosixPath('/private/var/folders/sk/y8w9dwmd4lnc2yvygqqxd4xw0000gn/T/pytest-of-shadow/pytest-2152/test_setup_force_interactive_b0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10d089150>
+
+    def test_setup_force_interactive_blank_answers_remove_secrets(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """RED (F10): blank interactive answers under --force must remove old
+        secrets instead of silently keeping them (existing map was non-empty)."""
+        import machina.cli as cli
+        from machina.security.env_file import read_env_values
+    
+        env_file = tmp_path / ".env"
+        monkeypatch.setenv("MACHINA_ENV_FILE", str(env_file))
+        _stub_interop(monkeypatch)
+        env_file.write_text(
+            "OPENROUTER_API_KEY=sk-or-old\nMACHINA_MODEL=old-model\n", encoding="utf-8"
+        )
+    
+        # Accept every prompt default / skip every hidden prompt.
+        result = runner.invoke(cli.app, ["setup", "--force", "--interop", "none"], input="\n" * 25)
+    
+        assert result.exit_code == 0, result.output
+        values = read_env_values(env_file)
+>       assert "OPENROUTER_API_KEY" not in values, "blank answer must remove the old secret"
+E       AssertionError: blank answer must remove the old secret
+E       assert 'OPENROUTER_API_KEY' not in {'OPENROUTER_API_KEY': 'sk-or-old', 'MACHINA_MODEL': 'openrouter/free', 'MACHINA_PROVIDER': 'openrouter', 'DATABASE_URL': 'postgresql://postgres:postgres@localhost:5432/machina', ...}
+
+tests/test_final_review_cli_config_setup.py:166: AssertionError
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED tests/test_final_review_cli_config_setup.py::test_config_set_model_persist_without_env_still_syncs
+PASSED tests/test_final_review_cli_config_setup.py::test_setup_without_force_still_merges
+FAILED tests/test_final_review_cli_config_setup.py::test_config_set_model_persist_overrides_stale_env
+FAILED tests/test_final_review_cli_config_setup.py::test_config_set_provider_persist_overrides_stale_env
+FAILED tests/test_final_review_cli_config_setup.py::test_setup_force_noninteractive_replaces_env
+FAILED tests/test_final_review_cli_config_setup.py::test_setup_force_interactive_blank_answers_remove_secrets
+4 failed, 2 passed in 0.43s

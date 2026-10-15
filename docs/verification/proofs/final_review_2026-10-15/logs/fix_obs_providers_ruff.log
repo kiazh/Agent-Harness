@@ -1,0 +1,91 @@
+I001 [*] Import block is un-sorted or un-formatted
+   --> tests/test_final_review_2026_10_15_providers.py:303:5
+    |
+302 |   def test_runtime_reports_anthropic_ready_with_key(monkeypatch):
+303 | /     from machina.core.config import config
+304 | |     from machina.core import runtime
+    | |____________________________________^
+305 |
+306 |       monkeypatch.setattr(
+    |
+help: Organize imports
+    |
+302 | def test_runtime_reports_anthropic_ready_with_key(monkeypatch):
+303 +     from machina.core import runtime
+304 |     from machina.core.config import config
+    -     from machina.core import runtime
+305 |
+    |
+
+I001 [*] Import block is un-sorted or un-formatted
+   --> tests/test_final_review_2026_10_15_providers.py:318:5
+    |
+317 |   def test_runtime_reports_anthropic_missing_key(monkeypatch):
+318 | /     from machina.core.config import config
+319 | |     from machina.core import runtime
+    | |____________________________________^
+320 |
+321 |       monkeypatch.setattr(
+    |
+help: Organize imports
+    |
+317 | def test_runtime_reports_anthropic_missing_key(monkeypatch):
+318 +     from machina.core import runtime
+319 |     from machina.core.config import config
+    -     from machina.core import runtime
+320 |
+    |
+
+I001 [*] Import block is un-sorted or un-formatted
+   --> tests/test_final_review_2026_10_15_providers.py:334:5
+    |
+332 |   def test_runtime_still_reports_unknown_for_removed_providers(monkeypatch):
+333 |       """Control: the anthropic arm must not swallow other unknown providers."""
+334 | /     from machina.core.config import config
+335 | |     from machina.core import runtime
+    | |____________________________________^
+336 |
+337 |       monkeypatch.setattr(
+    |
+help: Organize imports
+    |
+333 |     """Control: the anthropic arm must not swallow other unknown providers."""
+334 +     from machina.core import runtime
+335 |     from machina.core.config import config
+    -     from machina.core import runtime
+336 |
+    |
+
+Found 3 errors.
+[*] 3 fixable with the `--fix` option.
+unformatted: File would be reformatted
+   --> tests/test_final_review_2026_10_15_providers.py:229:13
+    |
+228 |     stop = {"model": "m", "choices": [{"delta": {}, "finish_reason": "stop"}]}
+    -     body = (
+    -         f"{_BOM}data: {json.dumps(chunk)}\n"
+    -         f"data: {json.dumps(stop)}\n"
+    -         "data: [DONE]\n"
+    -     ).encode()
+229 +     body = (f"{_BOM}data: {json.dumps(chunk)}\ndata: {json.dumps(stop)}\ndata: [DONE]\n").encode()
+230 |     provider = _direct_provider(_streaming_client(body))
+--------------------------------------------------------------------------------
+332 |
+    -     monkeypatch.setattr(
+    -         config, "_session_overrides", {"provider": "definitely-not-a-provider"}
+    -     )
+333 +     monkeypatch.setattr(config, "_session_overrides", {"provider": "definitely-not-a-provider"})
+334 |     report = runtime._detect_providers()
+    |
+
+1 file would be reformatted, 4 files already formatted
+
+=== FINAL (post-format) ruff ===
+All checks passed!
+--- ruff format --check ---
+5 files already formatted
+
+=== SEC-2/SEC-3 ruff ===
+All checks passed!
+--- ruff format --check ---
+2 files already formatted

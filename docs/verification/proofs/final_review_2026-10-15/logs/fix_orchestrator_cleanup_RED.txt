@@ -1,0 +1,103 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+________ test_record_start_db_error_closes_provider_and_archives_child _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b334c30>
+_stub_registry_and_session = (<module 'machina.core.orchestrator' from '/Users/shadow/machina/machina/core/orchestrator.py'>, UUID('80e844e1-a23a-4ea8-9304-939db04c2c1c'), [])
+
+    async def test_record_start_db_error_closes_provider_and_archives_child(
+        monkeypatch, _stub_registry_and_session
+    ):
+        """A DB failure recording the start row must not orphan the child/provider."""
+        module, child_id, archived = _stub_registry_and_session
+    
+        orch = module.Orchestrator()  # default factory => owns the provider
+        agent = _OwnedAgent()
+    
+        async def fake_default_agent(*_args, **_kwargs):
+            return agent
+    
+        monkeypatch.setattr(orch, "_default_agent", fake_default_agent)
+        orch._record_start = AsyncMock(side_effect=RuntimeError("db down"))
+    
+        with pytest.raises(RuntimeError, match="db down"):
+            await orch.delegate("coder", "work")
+    
+        # F12: the owned provider is closed...
+>       assert agent.provider.closed == 1
+E       assert 0 == 1
+E        +  where 0 = <tests.test_final_review_2026_10_15_cleanup._RecordingProvider object at 0x10b322a50>.closed
+E        +    where <tests.test_final_review_2026_10_15_cleanup._RecordingProvider object at 0x10b322a50> = <tests.test_final_review_2026_10_15_cleanup._OwnedAgent object at 0x10b322900>.provider
+
+tests/test_final_review_2026_10_15_cleanup.py:88: AssertionError
+______ test_record_start_cancellation_closes_provider_and_archives_child _______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10c34f890>
+_stub_registry_and_session = (<module 'machina.core.orchestrator' from '/Users/shadow/machina/machina/core/orchestrator.py'>, UUID('85f7f3f0-4095-472f-9de6-bd263523a3c1'), [])
+
+    async def test_record_start_cancellation_closes_provider_and_archives_child(
+        monkeypatch, _stub_registry_and_session
+    ):
+        """Cancellation during the start-row insert must run the same cleanup."""
+        module, child_id, archived = _stub_registry_and_session
+    
+        orch = module.Orchestrator()
+        agent = _OwnedAgent()
+    
+        async def fake_default_agent(*_args, **_kwargs):
+            return agent
+    
+        monkeypatch.setattr(orch, "_default_agent", fake_default_agent)
+        orch._record_start = AsyncMock(side_effect=asyncio.CancelledError())
+    
+        with pytest.raises(asyncio.CancelledError):
+            await orch.delegate("coder", "work")
+    
+>       assert agent.provider.closed == 1
+E       assert 0 == 1
+E        +  where 0 = <tests.test_final_review_2026_10_15_cleanup._RecordingProvider object at 0x10c3bd090>.closed
+E        +    where <tests.test_final_review_2026_10_15_cleanup._RecordingProvider object at 0x10c3bd090> = <tests.test_final_review_2026_10_15_cleanup._OwnedAgent object at 0x10c3bcf50>.provider
+
+tests/test_final_review_2026_10_15_cleanup.py:111: AssertionError
+____________ test_factory_closes_provider_when_soulspec_step_raises ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b31f570>
+
+    async def test_factory_closes_provider_when_soulspec_step_raises(monkeypatch):
+        """agent_factory F4: a raise after ``get_provider`` must close the provider."""
+        from machina.core import agent_factory
+        from machina.soulspec.adapters import MachinaAdapter
+    
+        provider = _RecordingProvider()
+        monkeypatch.setattr("machina.core.provider.get_provider", lambda **_kwargs: provider)
+        monkeypatch.setattr(agent_factory, "_memory_enabled", lambda: False)
+        monkeypatch.setattr(agent_factory, "_rag_enabled", lambda: False)
+        monkeypatch.setattr(agent_factory, "_shared_rag_pipeline", AsyncMock(return_value=None))
+        monkeypatch.setattr(agent_registry, "get", AsyncMock(return_value=AgentDef(name="coder")))
+    
+        def boom(_definition):
+            raise RuntimeError("soulspec boom")
+    
+        monkeypatch.setattr(MachinaAdapter, "to_soulspec", staticmethod(boom))
+    
+        session = SimpleNamespace(
+            id=uuid.uuid4(),
+            agent_id="coder",
+            provider="deepseek",
+            model="deepseek-chat",
+            delegation_authority={},
+        )
+    
+        with pytest.raises(RuntimeError, match="soulspec boom"):
+            await agent_factory.build_agent_for_session(session)
+    
+>       assert provider.closed == 1
+E       assert 0 == 1
+E        +  where 0 = <tests.test_final_review_2026_10_15_cleanup._RecordingProvider object at 0x10c3be710>.closed
+
+tests/test_final_review_2026_10_15_cleanup.py:143: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_final_review_2026_10_15_cleanup.py::test_record_start_db_error_closes_provider_and_archives_child
+FAILED tests/test_final_review_2026_10_15_cleanup.py::test_record_start_cancellation_closes_provider_and_archives_child
+FAILED tests/test_final_review_2026_10_15_cleanup.py::test_factory_closes_provider_when_soulspec_step_raises
+3 failed in 0.46s

@@ -1,0 +1,48 @@
+..........F....F........F.                                               [100%]
+=================================== FAILURES ===================================
+_________ test_god_file_ceilings_only_fall[core/provider/audit.py-219] _________
+
+relative_path = 'core/provider/audit.py', ceiling = 219
+
+    @pytest.mark.parametrize("relative_path,ceiling", GOD_FILE_CEILINGS)
+    def test_god_file_ceilings_only_fall(relative_path, ceiling):
+>       assert _line_count(ROOT / relative_path) <= ceiling, (
+            f"{relative_path} grew past its ceiling of {ceiling} lines"
+        )
+E       AssertionError: core/provider/audit.py grew past its ceiling of 219 lines
+E       assert 254 <= 219
+E        +  where 254 = _line_count((PosixPath('/Users/shadow/machina/machina') / 'core/provider/audit.py'))
+
+tests/test_architecture_layers.py:444: AssertionError
+__________ test_god_file_ceilings_only_fall[core/provider/sse.py-46] ___________
+
+relative_path = 'core/provider/sse.py', ceiling = 46
+
+    @pytest.mark.parametrize("relative_path,ceiling", GOD_FILE_CEILINGS)
+    def test_god_file_ceilings_only_fall(relative_path, ceiling):
+>       assert _line_count(ROOT / relative_path) <= ceiling, (
+            f"{relative_path} grew past its ceiling of {ceiling} lines"
+        )
+E       AssertionError: core/provider/sse.py grew past its ceiling of 46 lines
+E       assert 55 <= 46
+E        +  where 55 = _line_count((PosixPath('/Users/shadow/machina/machina') / 'core/provider/sse.py'))
+
+tests/test_architecture_layers.py:444: AssertionError
+____________________ test_provider_package_total_only_falls ____________________
+
+    def test_provider_package_total_only_falls():
+        package = ROOT / "core" / "provider"
+        total = sum(_line_count(p) for p in sorted(package.rglob("*.py")))
+>       assert total <= _PROVIDER_PACKAGE_TOTAL_CEILING, (
+            f"core/provider package grew past its ceiling of "
+            f"{_PROVIDER_PACKAGE_TOTAL_CEILING} lines: {total}"
+        )
+E       AssertionError: core/provider package grew past its ceiling of 4958 lines: 5002
+E       assert 5002 <= 4958
+
+tests/test_architecture_layers.py:469: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_architecture_layers.py::test_god_file_ceilings_only_fall[core/provider/audit.py-219]
+FAILED tests/test_architecture_layers.py::test_god_file_ceilings_only_fall[core/provider/sse.py-46]
+FAILED tests/test_architecture_layers.py::test_provider_package_total_only_falls
+3 failed, 23 passed in 1.10s
