@@ -1,0 +1,50 @@
+...........................F..................                           [100%]
+=================================== FAILURES ===================================
+______________ test_imports_with_core_blocked[machina.tools.repo] ______________
+
+dotted = 'machina.tools.repo'
+
+    @pytest.mark.parametrize("dotted", CONVERTED + ALREADY_CLEAN)
+    def test_imports_with_core_blocked(dotted):
+>       mod = _import_with_core_blocked(dotted)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_leaf_independence.py:137: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_leaf_independence.py:121: in _import_with_core_blocked
+    return importlib.import_module(dotted)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1406: in _gcd_import
+    ???
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+<frozen importlib._bootstrap_external>:759: in exec_module
+    ???
+<frozen importlib._bootstrap>:491: in _call_with_frames_removed
+    ???
+machina/tools/repo.py:19: in <module>
+    from machina.tools.file import _run_worker_joined
+machina/tools/file.py:14: in <module>
+    from machina.core.config import config
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <tests.test_leaf_independence._BlockCore object at 0x1093ec3d0>
+fullname = 'machina.core', path = ['/Users/shadow/machina/machina']
+target = None
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "machina.core" or fullname.startswith("machina.core."):
+>           raise ImportError(f"leaf-independence: blocked {fullname}")
+E           ImportError: leaf-independence: blocked machina.core
+
+tests/test_leaf_independence.py:97: ImportError
+=========================== short test summary info ============================
+FAILED tests/test_leaf_independence.py::test_imports_with_core_blocked[machina.tools.repo]
+1 failed, 45 passed in 0.44s

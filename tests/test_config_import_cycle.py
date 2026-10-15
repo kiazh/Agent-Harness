@@ -118,3 +118,57 @@ def test_lazy_db_delegates_to_live_singleton():
     assert connmod.db._lazy_probe_attr_xyz == 1
     del connmod.db._lazy_probe_attr_xyz
     assert not hasattr(connmod.db, "_lazy_probe_attr_xyz")
+
+
+def test_provider_first_import_order_keeps_file_config(tmp_path):
+    """Provider-first order must keep persona_description.
+
+    The provider package triggers ``Config.load`` while still initializing
+    (``provider/__init__`` line 26 imports ``.anthropic``, whose module-level
+    ``from machina.core.config import config`` resolves the lazy attribute).
+    Validating ``persona_description`` used to import the eagerly-initialized
+    ``machina.memory`` package, whose ``approval`` module does ``from
+    machina.core.provider import audit_log`` — an attribute the provider
+    package only binds two __init__ lines later — so the ImportError silently
+    discarded the configured persona.
+    """
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "model: probe-model-xyz\npersona_description: hello\n",
+        encoding="utf-8",
+    )
+    code = (
+        "from machina.core.provider.copilot import CopilotProvider;"  # poison order
+        "from machina.core.config import Config;"
+        f"c = Config.load(r'{cfg_file}');"
+        "assert c.model == 'probe-model-xyz', repr(c.model);"
+        "assert c.persona_description == 'hello', repr(c.persona_description);"
+        "print('ORDER-OK')"
+    )
+    proc = _run_child(code)
+    assert "ORDER-OK" in proc.stdout, proc.stderr[-3000:]
+    assert "Ignoring unreadable config" not in proc.stderr
+
+
+def test_config_load_pulls_no_provider_stack(tmp_path):
+    """Loading config must not import the provider stack or the memory body.
+
+    ``Config.load`` only needs ``machina.memory.redaction`` (a stdlib-only
+    leaf) for persona validation; the eager memory re-exports used to drag
+    in the whole provider tree on every load.
+    """
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "model: probe-model-xyz\npersona_description: hello\n",
+        encoding="utf-8",
+    )
+    code = (
+        "import sys;"
+        "from machina.core.config import Config;"
+        f"Config.load(r'{cfg_file}');"
+        "assert 'machina.core.provider' not in sys.modules, 'provider stack pulled';"
+        "assert 'machina.memory.approval' not in sys.modules, 'memory body pulled';"
+        "print('NO-STACK-OK')"
+    )
+    proc = _run_child(code)
+    assert "NO-STACK-OK" in proc.stdout, proc.stderr[-3000:]
