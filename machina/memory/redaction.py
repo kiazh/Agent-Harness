@@ -64,10 +64,32 @@ def _luhn_valid(digits: str) -> bool:
     return total % 10 == 0
 
 
+#: Replacement markers produced by the patterns (and the configured-secret
+#: path). The R4-016 re-scan must never rewrite text already carrying one.
+_MARKER_RE = re.compile(r"\[REDACTED[A-Z_]*\]")
+
+#: Patterns whose matches must not be glued to a preceding alphanumeric
+#: character (R4-016: `sk-` inside identifiers like `task-…` must survive).
+#: The check runs in the substitution callback instead of a regex lookbehind:
+#: a lookbehind defeats the literal-prefix scan optimization and costs
+#: ~12 ms/MB per pattern, while the callback pays per match only.
+_LEFT_BOUNDED = frozenset(
+    {
+        "openai_api_key",
+        "openai_project_key",
+        "anthropic_api_key",
+        "openrouter_api_key",
+        "stripe_live_key",
+    }
+)
+
+
 # ─── Regex patterns for common secret formats ───────────────────────────────
 
 _PATTERNS: list[RedactionPattern] = [
-    # API keys — various providers
+    # API keys — various providers. `sk-` must not follow an alphanumeric
+    # character, so identifiers such as `task-0123…` survive (R4-016); the
+    # left-boundary check lives in ``_apply_patterns`` (see _LEFT_BOUNDED).
     RedactionPattern(
         name="openai_api_key",
         pattern=re.compile(r"sk-[a-zA-Z0-9]{20,}"),
@@ -109,10 +131,12 @@ _PATTERNS: list[RedactionPattern] = [
         pattern=re.compile(r"sk_live_[A-Za-z0-9]{20,}"),
         replacement="[REDACTED_STRIPE_KEY]",
     ),
-    # Bearer tokens
+    # Bearer tokens: the value must be token-shaped and >= 16 chars, so
+    # ordinary prose ("bearer of bad news", "the bearer token is …") is
+    # left alone (R4-016).
     RedactionPattern(
         name="bearer_token",
-        pattern=re.compile(r"(Bearer\s+)[a-zA-Z0-9\-._~+/]+=*", re.IGNORECASE),
+        pattern=re.compile(r"(Bearer\s+)[A-Za-z0-9\-._~+/]{16,}=*", re.IGNORECASE),
         replacement=r"\1[REDACTED_TOKEN]",
     ),
     # Password assignments
@@ -196,42 +220,41 @@ _PATTERNS: list[RedactionPattern] = [
         ),
         replacement="[REDACTED_PRIVATE_KEY]",
     ),
-    # Credit card numbers (basic Luhn-checkable patterns)
+    # Credit card numbers (basic Luhn-checkable patterns). Quantifier covers
+    # 13-19 digits; the Luhn gate in ``redact()`` still filters false
+    # positives such as order IDs (R4-016).
     RedactionPattern(
         name="credit_card",
-        pattern=re.compile(r"\b(?:\d[ -]*?){13,16}\b"),
+        pattern=re.compile(r"\b(?:\d[ -]*?){13,19}\b"),
         replacement="[REDACTED_CC]",
     ),
-    # SSN patterns
+    # SSN patterns with explicit separators
     RedactionPattern(
         name="ssn",
         pattern=re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
         replacement="[REDACTED_SSN]",
     ),
-    # Contiguous 9-digit SSN (word boundaries to avoid matching longer numbers)
+    # Contiguous 9-digit SSN: only with an explicit label context — a bare
+    # 9-digit number (e.g. 387420489 = 9**9) must survive (R4-016).
     RedactionPattern(
         name="ssn_contiguous",
-        pattern=re.compile(r"\b\d{9}\b"),
-        replacement="[REDACTED_SSN]",
-    ),
-    # JWT tokens
-    RedactionPattern(
-        name="jwt_token",
-        pattern=re.compile(r"eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*"),
-        replacement="[REDACTED_JWT]",
-    ),
-    # Generic secret assignments
-    RedactionPattern(
-        name="generic_secret",
         pattern=re.compile(
-            r"(secret|token|api_key|apikey|access_key)\s*[=:]\s*['\"]?([a-zA-Z0-9\-_]{16,})['\"]?",
+            r"\b(ssn|social\s+security)\s*(?:number)?\s*[=:]?\s*(\d{9})\b",
             re.IGNORECASE,
         ),
-        replacement=r"\1=[REDACTED_SECRET]",
+        replacement=r"\1=[REDACTED_SSN]",
+    ),
+    # JWT tokens (all segments may carry base64 '=' padding)
+    RedactionPattern(
+        name="jwt_token",
+        pattern=re.compile(r"eyJ[A-Za-z0-9_=-]*\.eyJ[A-Za-z0-9_=-]*\.[A-Za-z0-9_=-]*"),
+        replacement="[REDACTED_JWT]",
     ),
     # Quoted key: value assignments whose identifier ends in "key"
-    # (api_key, openai_key, access-key, "service_key": ...). The unquoted
-    # pattern above misses quoted values containing non-alphanumerics.
+    # (api_key, openai_key, access-key, "service_key": ...). Runs before the
+    # unquoted rules so the quoted value is captured whole (any charset,
+    # min 8); the unquoted pattern would otherwise eat a leading run first
+    # and leave the tail behind.
     RedactionPattern(
         name="generic_quoted_key",
         pattern=re.compile(
@@ -239,6 +262,27 @@ _PATTERNS: list[RedactionPattern] = [
             re.IGNORECASE,
         ),
         replacement=r"\1=[REDACTED_KEY]",
+    ),
+    # Quoted values under the generic secret-style names; same whole-value
+    # capture, min length 8 (R4-016).
+    RedactionPattern(
+        name="generic_quoted_secret",
+        pattern=re.compile(
+            r"(secret|token|api_key|apikey|access_key)['\"]?\s*[=:]\s*(['\"])([^'\"\n]{8,})\2",
+            re.IGNORECASE,
+        ),
+        replacement=r"\1=[REDACTED_SECRET]",
+    ),
+    # Generic secret assignments (unquoted). Value class includes URL-safe
+    # base64 and dotted/`~` payloads: `+ / = . ~` (R4-016).
+    RedactionPattern(
+        name="generic_secret",
+        pattern=re.compile(
+            r"(secret|token|api_key|apikey|access_key)\s*[=:]\s*['\"]?"
+            r"([a-zA-Z0-9_\-+/=.~]{16,})['\"]?",
+            re.IGNORECASE,
+        ),
+        replacement=r"\1=[REDACTED_SECRET]",
     ),
 ]
 
@@ -272,26 +316,63 @@ class SecretRedactor:
                 redacted = redacted.replace(value, "[REDACTED_SECRET]")
                 redactions.append("configured_secret")
 
+        # R4-016: ordered substitution (quoted-key rules first in _PATTERNS)
+        # plus one re-scan of the output by the patterns that actually
+        # replaced text, so a partial replacement can never leave a tail of
+        # the value behind. The re-scan never rewrites text that already
+        # contains a replacement marker.
+        redacted, names = self._apply_patterns(redacted)
+        redactions.extend(names)
+        if names:
+            redacted, extra = self._apply_patterns(redacted, guard_markers=True, only=set(names))
+            redactions.extend(extra)
+
+        return RedactionResult(text=redacted, redactions=redactions)
+
+    def _apply_patterns(
+        self,
+        text: str,
+        *,
+        guard_markers: bool = False,
+        only: set[str] | None = None,
+    ) -> tuple[str, list[str]]:
+        """Apply every pattern once, in order.
+
+        Returns ``(redacted_text, matched_names)`` where *matched_names* lists
+        the patterns that changed the text (empty when it was unchanged).
+
+        * ``only`` restricts the run to the named patterns (R4-016 re-scan:
+          only a pattern that replaced text can have left a tail).
+        * ``guard_markers`` leaves matches alone whose text already contains a
+          ``[REDACTED_…]`` marker: markers are outputs, not secrets, and
+          re-redacting them can otherwise swallow surrounding characters
+          (e.g. ``password=[REDACTED_PASSWORD]}``).
+        """
+        redacted = text
+        matched: list[str] = []
+
         for rp in self._patterns:
+            if only is not None and rp.name not in only:
+                continue
             if rp.name == "credit_card":
                 # Only redact digit runs that pass the Luhn checksum to reduce FPs.
                 def _cc_repl(m: re.Match[str]) -> str:
+                    if guard_markers and _MARKER_RE.search(m.group(0)):
+                        return m.group(0)
                     digits = re.sub(r"\D", "", m.group(0))
                     if 13 <= len(digits) <= 19 and _luhn_valid(digits):
                         return rp.replacement
                     return m.group(0)
 
                 new_text = rp.pattern.sub(_cc_repl, redacted)
-                if new_text != redacted:
-                    redactions.append(rp.name)
-                    redacted = new_text
-                continue
-            if rp.name == "aws_secret_key_bare":
+            elif rp.name == "aws_secret_key_bare":
                 # Tightened heuristic (RF7-F1): a bare 40-char token must
                 # look like a generated AWS-style secret — mixed lower,
                 # upper, and digits. Plain 40-char hex digests (commit
                 # hashes) and single-case runs are left alone.
                 def _aws_repl(m: re.Match[str]) -> str:
+                    if guard_markers and _MARKER_RE.search(m.group(0)):
+                        return m.group(0)
                     token = m.group(0)
                     classes = (
                         any(c.islower() for c in token),
@@ -301,15 +382,30 @@ class SecretRedactor:
                     return rp.replacement if all(classes) else token
 
                 new_text = rp.pattern.sub(_aws_repl, redacted)
-                if new_text != redacted:
-                    redactions.append(rp.name)
-                    redacted = new_text
-                continue
-            if rp.pattern.search(redacted):
-                redacted = rp.pattern.sub(rp.replacement, redacted)
-                redactions.append(rp.name)
+            elif rp.pattern.search(redacted):
+                if rp.name in _LEFT_BOUNDED or guard_markers:
 
-        return RedactionResult(text=redacted, redactions=redactions)
+                    def _filtered(m: re.Match[str], _rp: RedactionPattern = rp) -> str:
+                        if (
+                            _rp.name in _LEFT_BOUNDED
+                            and m.start() > 0
+                            and m.string[m.start() - 1].isalnum()
+                        ):
+                            return m.group(0)
+                        if guard_markers and _MARKER_RE.search(m.group(0)):
+                            return m.group(0)
+                        return m.expand(_rp.replacement)
+
+                    new_text = rp.pattern.sub(_filtered, redacted)
+                else:
+                    new_text = rp.pattern.sub(rp.replacement, redacted)
+            else:
+                continue
+            if new_text != redacted:
+                redacted = new_text
+                matched.append(rp.name)
+
+        return redacted, matched
 
     # Tests only; kept as a structured-redaction test seam (review 2026-10-14).
     def redact_dict(self, data: dict) -> RedactionResult:
@@ -426,16 +522,19 @@ _PEM_RESUME_WINDOW = STREAM_TAIL_CHARS
 
 # End-anchored partial patterns: each matches a PREFIX of a valid secret that
 # reaches the buffer end. Leftmost start across all patterns = frontier.
-# LP-09: recognition here must align with COMPLETE patterns (which have no
-# preceding-character assumptions), so partials carry no lookbehinds either:
-# a secret glued to preceding text ("Xsk-...") withholds and redacts exactly
-# like whole-string recognition does.
+# LP-09: recognition here must align with COMPLETE patterns. For the sk-
+# family the R4-016 left-boundary rule holds in both worlds: the complete
+# patterns filter glued matches in ``_apply_patterns``, and the partials
+# below carry the equivalent lookbehind — a glued `sk-` (e.g. in `task-…`)
+# never withholds, so batch and stream agree.
 _PARTIAL_RES: tuple[re.Pattern[str], ...] = (
-    re.compile(r"sk-[A-Za-z0-9]{0,200}$"),
-    re.compile(r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{0,200}$"),
-    re.compile(r"sk-ant-[A-Za-z0-9\-_]{0,200}$"),
-    re.compile(r"sk-or-[A-Za-z0-9\-_]{0,200}$"),
-    re.compile(r"sk_live_[A-Za-z0-9]{0,200}$"),
+    # The sk- family carries the same non-alphanumeric boundary as the
+    # complete patterns, so `task-…` text streams through untouched (R4-016).
+    re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9]{0,200}$"),
+    re.compile(r"(?<![A-Za-z0-9])sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{0,200}$"),
+    re.compile(r"(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9\-_]{0,200}$"),
+    re.compile(r"(?<![A-Za-z0-9])sk-or-[A-Za-z0-9\-_]{0,200}$"),
+    re.compile(r"(?<![A-Za-z0-9])sk_live_[A-Za-z0-9]{0,200}$"),
     re.compile(r"AIza[0-9A-Za-z_-]{0,200}$"),
     re.compile(r"ghp_[A-Za-z0-9]{0,36}$"),
     re.compile(r"gho_[A-Za-z0-9]{0,36}$"),
@@ -446,9 +545,12 @@ _PARTIAL_RES: tuple[re.Pattern[str], ...] = (
     re.compile(r"xox[baprs]-[A-Za-z0-9\-]{0,200}$"),
     re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]{0,500}$", re.IGNORECASE),
     re.compile(r"(?:password|passwd|pwd)\s*[=:]\s*['\"]?[^\s'\"]{0,200}$", re.IGNORECASE),
+    # Generic assignments: the value may be quoted (any charset) or an
+    # unquoted URL-safe/dotted payload; mirrors the widened value class in
+    # the complete pattern (R4-016).
     re.compile(
         r"(?:secret|token|api_key|apikey|access_key|cohere_api_key|aws_secret_access_key|aws_secret_key)"
-        r"\s*[=:]\s*['\"]?[A-Za-z0-9\-_/+=]{0,300}$",
+        r"\s*[=:]\s*(?:['\"][^'\"\n]{0,300}|[A-Za-z0-9\-_/+=.~]{0,300})$",
         re.IGNORECASE,
     ),
     # Quoted key: value assignments (RF7-F1): hold from the identifier so a
@@ -471,6 +573,16 @@ _PARTIAL_RES: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"(?:password|passwd|pwd|secret|token|api_key|apikey|access_key|cohere_api_key"
         r"|aws_secret_access_key|aws_secret_key)\s{1,10}$",
+        re.IGNORECASE,
+    ),
+    # Labeled contiguous SSN (R4-016): hold from the label so the digit run
+    # is never emitted separately from the context that identifies it. The
+    # nested optionals enumerate every prefix of "ssn"/"social security",
+    # so mid-word deltas keep the hold.
+    re.compile(
+        r"\bs(?:s(?:n)?|o(?:c(?:i(?:a(?:l)?)?)?)"
+        r"(?:\s+s(?:e(?:c(?:u(?:r(?:i(?:t(?:y)?)?)?)?)?)?)?)?)"
+        r"(?:\s+n(?:u(?:m(?:b(?:e(?:r)?)?)?)?)?)?\s*[=:]?\s*\d{0,9}$",
         re.IGNORECASE,
     ),
     re.compile(r"eyJ[A-Za-z0-9_.\-/+=]{0,1200}$"),
