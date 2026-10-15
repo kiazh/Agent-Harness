@@ -185,6 +185,21 @@ def _read_response(
     return status, headers, bytes(body)
 
 
+def _host_authority(hostname: str, scheme: str, explicit_port: int | None) -> str:
+    """Format the HTTP Host header value (RFC 9110 §7.2 authority).
+
+    IPv6 literals (which :urlparse: strips of brackets) are re-bracketed;
+    a port is appended unless it is absent or the scheme default
+    (:80 http / :443 https), which is elided. Userinfo never reaches here
+    (callers pass ``parsed.hostname``).
+    """
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    default = 443 if scheme == "https" else 80
+    if explicit_port is None or explicit_port == default:
+        return host
+    return f"{host}:{explicit_port}"
+
+
 def pinned_fetch(url: str, *, max_bytes: int = MAX_BYTES, timeout: float = CONNECT_TIMEOUT) -> str:
     """GET *url* over a pinned connection. Returns decoded text.
 
@@ -212,6 +227,7 @@ def pinned_fetch(url: str, *, max_bytes: int = MAX_BYTES, timeout: float = CONNE
         if not hostname or hostname.lower() in ("localhost", "localhost.localdomain"):
             raise FetchError(f"rejected host {hostname!r}")
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        authority = _host_authority(hostname, parsed.scheme, parsed.port)
         ips = _bounded_resolve(hostname, timeout=min(5.0, _remaining()))
         for ip in ips:
             _check_ip_public(ip)
@@ -232,7 +248,7 @@ def pinned_fetch(url: str, *, max_bytes: int = MAX_BYTES, timeout: float = CONNE
                 sock = ctx.wrap_socket(raw, server_hostname=hostname)
             sock.settimeout(_remaining())
             req = (
-                f"GET {path} HTTP/1.1\r\nHost: {hostname}\r\n"
+                f"GET {path} HTTP/1.1\r\nHost: {authority}\r\n"
                 f"Connection: close\r\nUser-Agent: Machina/1.0\r\n"
                 f"Accept: text/markdown,text/plain\r\n\r\n"
             )
