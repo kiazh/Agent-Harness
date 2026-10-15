@@ -114,7 +114,6 @@ test("protocol-parity: AgentInfo mirrors AgentDef.to_dict", () => {
 		tools: ["read"],
 		model: null,
 		provider: null,
-		maxIterations: 25,
 		source: "builtin",
 	} satisfies AgentInfo;
 	const consumed: AgentInfo = backend;

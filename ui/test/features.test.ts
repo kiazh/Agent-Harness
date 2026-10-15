@@ -644,11 +644,11 @@ test("/export writes Markdown to a default file name", async () => {
 
 test("/config sets a value and --save persists it", async () => {
 	const host = new FakeHost();
-	host.responses["config.get"] = { config: { max_iterations: 10, model: "m", openrouter_api_key: true }, secrets: ["openrouter_api_key"] };
+	host.responses["config.get"] = { config: { turn_timeout: 60, model: "m", openrouter_api_key: true }, secrets: ["openrouter_api_key"] };
 	host.responses["config.set"] = (p: Record<string, unknown>) => ({ model: "m", provider: "openrouter", key: p.key, value: 7 });
-	await run("/config max_iterations 7 --save", host);
-	assert.deepEqual(host.calls.at(-1)!.params, { key: "max_iterations", value: "7", persist: true });
-	assert.match(host.last().text, /max_iterations = 7 \(saved\)/);
+	await run("/config turn_timeout 7 --save", host);
+	assert.deepEqual(host.calls.at(-1)!.params, { key: "turn_timeout", value: "7", persist: true });
+	assert.match(host.last().text, /turn_timeout = 7 \(saved\)/);
 
 	await run("/config", host);
 	assert.match(host.last().text, /openrouter_api_key\s+set \(in \.env\)/);
@@ -745,8 +745,8 @@ test("/agents list and show render agent definitions", async () => {
 	const host = new FakeHost();
 	host.responses["agents.list"] = {
 		agents: [
-			{ name: "harness", description: "general", systemPrompt: "", tools: [], model: null, provider: null, maxIterations: 10, source: "builtin" },
-			{ name: "coder", description: "edits code", systemPrompt: "be careful", tools: ["read_file", "write_file"], model: null, provider: null, maxIterations: 10, source: "builtin" },
+			{ name: "harness", description: "general", systemPrompt: "", tools: [], model: null, provider: null, source: "builtin" },
+			{ name: "coder", description: "edits code", systemPrompt: "be careful", tools: ["read_file", "write_file"], model: null, provider: null, source: "builtin" },
 		],
 	};
 	await run("/agents", host);

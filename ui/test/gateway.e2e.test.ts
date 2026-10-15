@@ -197,7 +197,7 @@ test("slash commands work against the real gateway and database", { skip, timeou
 		assert.match(await run("/context"), /Tokens/);
 		assert.match(await run("/compress"), /Nothing to compress/);
 		assert.match(await run("/status"), /PostgreSQL/);
-		assert.match(await run("/config"), /max_iterations/);
+		assert.match(await run("/config"), /turn_timeout/);
 		assert.match(await run("/theme dracula"), /Skin: dracula/);
 		assert.match(await run("/config theme"), /dracula/);
 		assert.match(await run("/skills"), /Name|No skills/);
