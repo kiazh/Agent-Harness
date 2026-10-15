@@ -172,20 +172,32 @@ async def build_agent_for_session(
         else:
             allowed_tools = [t for t in allowed_tools if t in parent_tools]
 
-    from machina.soulspec.adapters import MachinaAdapter
+    # F4 (2026-10-15 review): ``llm`` owns an HTTP client. Exporting the
+    # definition and constructing the agent are the remaining steps that can
+    # raise after the provider exists; any failure must close it rather than
+    # leak the connection pool. (The memory/RAG steps above already swallow
+    # their own optional-dependency failures.)
+    try:
+        from machina.soulspec.adapters import MachinaAdapter
 
-    agent = ReActAgent(
-        provider=llm,
-        agent_id=agent_id,
-        system_prompt=system_prompt,
-        memory_retriever=memory_retriever,
-        memory_consolidator=memory_consolidator,
-        rag_pipeline=rag_pipeline,
-        allowed_tools=allowed_tools,
-        soul_spec=MachinaAdapter.to_soulspec(definition).to_storage_dict()
-        if definition is not None
-        else None,
-    )
+        soul_spec = (
+            MachinaAdapter.to_soulspec(definition).to_storage_dict()
+            if definition is not None
+            else None
+        )
+        agent = ReActAgent(
+            provider=llm,
+            agent_id=agent_id,
+            system_prompt=system_prompt,
+            memory_retriever=memory_retriever,
+            memory_consolidator=memory_consolidator,
+            rag_pipeline=rag_pipeline,
+            allowed_tools=allowed_tools,
+            soul_spec=soul_spec,
+        )
+    except BaseException:
+        await _close_orphaned_provider(llm)
+        raise
     # Mark ownership so callers close only providers they created (AH-023).
     agent._owns_provider = True  # type: ignore[attr-defined]
     agent._authority = authority or {}  # type: ignore[attr-defined]
@@ -328,3 +340,19 @@ async def close_agent_provider(agent, timeout: float = 5.0) -> None:
         # are secondary to the turn and must be reported here.
         if "result" not in locals() or not inspect.isawaitable(result):
             report("failed", error)
+
+
+async def _close_orphaned_provider(provider, timeout: float = 5.0) -> None:
+    """Close a provider whose agent construction failed (F4, 2026-10-15 review).
+
+    ``get_provider`` returns an HTTP-client-owning transport before the
+    definition export / ``ReActAgent`` construction that adopts it can fail.
+    Reuses the audited owner-aware close contract through a minimal owner shim
+    so the pool is released with the same bounded, sanitized reporting. A close
+    failure is reported, never masks the construction error being raised.
+    """
+    from types import SimpleNamespace
+
+    if provider is None:
+        return
+    await close_agent_provider(SimpleNamespace(provider=provider, _owns_provider=True), timeout)

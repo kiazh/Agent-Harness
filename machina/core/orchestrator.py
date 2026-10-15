@@ -304,29 +304,31 @@ class Orchestrator:
         # as normal turns. Child authority = definition ∩ parent caps, and the
         # broker enforces it at execution (not just on the stored agent).
         # Build the agent BEFORE recording the start row (m3): a construction
-        # failure cannot leave a pending agent_messages row, and the fresh
-        # child session is archived best-effort so it is not orphaned.
+        # failure cannot leave a pending agent_messages row.
+        # F12 (2026-10-15 review): the ownership cleanup scope opens the moment
+        # the child session + owned provider exist — it also covers recording
+        # the start row. A build failure, a DB error in ``_record_start``, or
+        # cancellation during that insert closes the owned provider and
+        # archives the fresh child instead of leaking/orphaning them.
+        # ``message_id`` stays None until the child actually ran; only then is
+        # the (now durable) child session kept.
         agent = None
+        message_id: uuid.UUID | None = None
+        depth_token = None
+        deadline_token = None
+        authority_token = None
         try:
             if self._agent_factory is not None:
                 agent = self._agent_factory(definition)
             else:
                 agent = await self._default_agent(definition, authority=child_authority)
-        except BaseException:
-            try:
-                await session_manager.archive(child.id)
-            except Exception as _cleanup_error:
-                # Optional fallback preserves the primary outcome; report no payload.
-                record_failure("orchestrator.delegate.build", _cleanup_error)
-            raise
-        message_id = await self._record_start(parent_session_id, from_agent, agent_name, task)
-        depth_token = delegation_depth.set(_hop_count)
-        loop = asyncio.get_running_loop()
-        deadline_token = delegation_deadline.set(
-            delegation_deadline.get() or loop.time() + self.DELEGATION_TIMEOUT_SECONDS
-        )
-        authority_token = parent_authority_var.set(child_authority)
-        try:
+            message_id = await self._record_start(parent_session_id, from_agent, agent_name, task)
+            depth_token = delegation_depth.set(_hop_count)
+            loop = asyncio.get_running_loop()
+            deadline_token = delegation_deadline.set(
+                delegation_deadline.get() or loop.time() + self.DELEGATION_TIMEOUT_SECONDS
+            )
+            authority_token = parent_authority_var.set(child_authority)
             child_task = self._build_delegation_prompt(agent_name, task, handoff)
             if expected_output:
                 child_task += f"\n\n## Expected Output\n{expected_output}"
@@ -337,23 +339,28 @@ class Orchestrator:
                 timeout=max(0, delegation_deadline.get() - loop.time()),
             )
         except asyncio.CancelledError:
-            try:
-                tokens = await self._charged_child_tokens(child.id, agent_name)
-                await self._record_end(
-                    message_id, status="cancelled", response="cancelled", tokens=tokens
-                )
-            except DelegationAccountingError as accounting_error:
-                # R4-029: spend unknown — close the row with NULL tokens rather
-                # than strand it; the cancellation itself still propagates.
-                await self._close_row_with_unknown_spend(
-                    message_id, status="cancelled", response="cancelled"
-                )
-                record_failure("orchestrator.delegate", accounting_error)
-            except Exception as accounting_error:
-                # Accounting failures must not swallow the parent's cancellation.
-                record_failure("orchestrator.delegate", accounting_error)
+            if message_id is not None:
+                try:
+                    tokens = await self._charged_child_tokens(child.id, agent_name)
+                    await self._record_end(
+                        message_id, status="cancelled", response="cancelled", tokens=tokens
+                    )
+                except DelegationAccountingError as accounting_error:
+                    # R4-029: spend unknown — close the row with NULL tokens rather
+                    # than strand it; the cancellation itself still propagates.
+                    await self._close_row_with_unknown_spend(
+                        message_id, status="cancelled", response="cancelled"
+                    )
+                    record_failure("orchestrator.delegate", accounting_error)
+                except Exception as accounting_error:
+                    # Accounting failures must not swallow the parent's cancellation.
+                    record_failure("orchestrator.delegate", accounting_error)
             raise
         except Exception as e:
+            if message_id is None:
+                # Build or start-row failure: no row was recorded and the child
+                # never ran; re-raise so the finally archives/closes cleanly.
+                raise
             logger.exception("Delegation to %s failed", agent_name)
             detail = "delegation timed out" if isinstance(e, TimeoutError) else str(e)
             try:
@@ -372,15 +379,18 @@ class Orchestrator:
                 agent_name, task, f"Error: {detail}", child.id, tokens, 0, "error"
             )
         finally:
-            delegation_depth.reset(depth_token)
-            delegation_deadline.reset(deadline_token)
-            try:
-                from machina.core.agent_factory import parent_authority_var as _pav
+            if depth_token is not None:
+                delegation_depth.reset(depth_token)
+            if deadline_token is not None:
+                delegation_deadline.reset(deadline_token)
+            if authority_token is not None:
+                try:
+                    from machina.core.agent_factory import parent_authority_var as _pav
 
-                _pav.reset(authority_token)
-            except Exception as _boundary_error:
-                # Optional fallback preserves the primary outcome; report no payload.
-                record_failure("orchestrator.delegate", _boundary_error)
+                    _pav.reset(authority_token)
+                except Exception as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("orchestrator.delegate", _boundary_error)
             # Consolidation shares the agent provider; join it (bounded)
             # before any close so extraction never calls a closed client.
             if agent is not None:
@@ -399,6 +409,14 @@ class Orchestrator:
                 except Exception as _boundary_error:
                     # Optional fallback preserves the primary outcome; report no payload.
                     record_failure("orchestrator.delegate", _boundary_error)
+            # F12: the child never ran (build or start-recording failed); the
+            # fresh session is archived so it is not orphaned active.
+            if message_id is None:
+                try:
+                    await session_manager.archive(child.id)
+                except Exception as _cleanup_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("orchestrator.delegate.build", _cleanup_error)
 
         try:
             tokens = await self._charged_child_tokens(child.id, agent_name, response.tokens_used)
