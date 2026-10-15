@@ -159,13 +159,20 @@ export interface SecretFormOptions {
 	title: string;
 	description?: string;
 	placeholder?: string;
+	/**
+	 * Allow an explicit empty submission (the keyless path). Blank Enter or
+	 * Ctrl+S submits "" via onSubmit; Escape still cancels via onCancel.
+	 * Defaults to false: blank submissions are rejected with an error.
+	 */
+	allowEmpty?: boolean;
 }
 
 /**
  * Masked single-line secret editor. The raw value is never rendered: every
  * frame paints one mask dot per UTF-16 unit (keeping the inherited cursor,
  * paste, undo and navigation math exact). Blank values are rejected in the
- * form; Esc cancels. References are dropped after submit/cancel as hygiene
+ * form unless allowEmpty is set (explicit keyless path: blank submits "");
+ * Esc always cancels. References are dropped after submit/cancel as hygiene
  * (no guaranteed memory erasure is claimed).
  */
 export class SecretInput extends Input {
@@ -195,6 +202,7 @@ export class SecretForm implements Component {
 
 	private readonly title: string;
 	private readonly description?: string;
+	private readonly allowEmpty: boolean;
 	private readonly tui: TUI;
 	private error = "";
 	private saveLocked = false;
@@ -203,6 +211,7 @@ export class SecretForm implements Component {
 		this.tui = tui;
 		this.title = options.title;
 		this.description = options.description;
+		this.allowEmpty = options.allowEmpty === true;
 		this.input = new SecretInput({ prompt: "> ", placeholder: options.placeholder ?? "" });
 		this.input.onSubmit = (value) => this.attempt(value);
 		this.input.onEscape = () => this.cancel();
@@ -221,6 +230,14 @@ export class SecretForm implements Component {
 	private attempt(value: string): void {
 		if (this.saveLocked) return;
 		if (!value.trim()) {
+			// Explicit keyless path: blank submits "" so the caller can
+			// proceed without a secret. Escape still cancels (cancel()).
+			if (this.allowEmpty) {
+				this.saveLocked = true;
+				this.input.clearSecret();
+				this.onSubmit?.(value);
+				return;
+			}
 			this.setError("Value is required.");
 			return;
 		}
@@ -254,7 +271,13 @@ export class SecretForm implements Component {
 		this.input.focused = this.focused;
 		out.push(...this.input.render(content));
 		if (this.error) out.push(truncateToWidth(theme.error(`✗ ${this.error}`), content));
-		out.push(truncateToWidth(theme.dim("enter save · ctrl+s save · esc cancel"), content));
+		const hints =
+			content >= 56
+				? this.allowEmpty
+					? "enter save · blank for no key · esc cancel"
+					: "enter save · ctrl+s save · esc cancel"
+				: "enter save · ctrl+s save · esc cancel";
+		out.push(truncateToWidth(theme.dim(hints), content));
 		return out;
 	}
 

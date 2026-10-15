@@ -4,6 +4,7 @@ import { keyValues, resolvePrefix, shortId, table } from "../format.ts";
 import type { LearningReviewInfo, SkillInfo } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
 import { confirm, options, requireArgs, requireSession, type Command } from "./types.ts";
+import { isFullUuid, scopedMiss } from "./memory.ts";
 
 export const skillsCommand: Command = {
 	name: "skills",
@@ -81,13 +82,25 @@ export const skillsCommand: Command = {
 			case "revert": {
 				const target = requireArgs(rest, `/skills ${sub} <id>`);
 				const session = requireSession(host);
-				const { reviews } = await host.request<{ reviews: LearningReviewInfo[] }>("learning.list", {
-					sessionId: session.id, limit: 100,
-				});
-				const candidates = sub === "revert"
-					? reviews.filter((review) => review.status === "approved")
-					: reviews.filter((review) => review.status === "pending");
-				const id = resolvePrefix(target, candidates.map((review) => review.id), "learning proposal");
+				// Complete IDs bypass the latest-100 window: learning.approve/
+				// reject/revert ownership-check against the session's agent and
+				// report NOT_FOUND for foreign or missing IDs.
+				let id: string;
+				if (isFullUuid(target)) {
+					id = target.trim();
+				} else {
+					const { reviews } = await host.request<{ reviews: LearningReviewInfo[] }>("learning.list", {
+						sessionId: session.id, limit: 100,
+					});
+					const candidates = sub === "revert"
+						? reviews.filter((review) => review.status === "approved")
+						: reviews.filter((review) => review.status === "pending");
+					try {
+						id = resolvePrefix(target, candidates.map((review) => review.id), "learning proposal");
+					} catch (error) {
+						throw scopedMiss(error, "latest 100 learning proposals");
+					}
+				}
 				const { review } = await host.request<{ review: LearningReviewInfo }>(`learning.${sub}`, { sessionId: session.id, id });
 				host.print(`Learning proposal ${shortId(id)} ${review.status}.`, "success");
 				return;

@@ -19,6 +19,12 @@ export interface AskTextOptions {
 	 * prefilled, and never echoed. Ordinary options keep multiline behavior.
 	 */
 	secret?: boolean;
+	/**
+	 * Only meaningful with secret: true. Blank submits "" (explicit keyless
+	 * path) instead of being rejected; undefined (Escape) still means
+	 * cancelled. Defaults to false.
+	 */
+	allowEmpty?: boolean;
 }
 
 export type AskTextResult = string | undefined;

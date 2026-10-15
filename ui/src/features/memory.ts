@@ -7,6 +7,27 @@ import { options, requireArgs, requireSession, type Command, type FeatureHost } 
 
 const MEMORY_CATEGORIES = ["preference", "decision", "fact", "event", "transient"];
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * True for a complete UUID (canonical, braced, or URN form — the same shapes
+ * the gateway's `_uuid` parser accepts). Complete IDs bypass the bounded
+ * newest-N lookup window and go straight to the ownership-checked backend
+ * call; anything shorter stays a bounded prefix lookup.
+ */
+export function isFullUuid(target: string): boolean {
+	let value = target.trim().toLowerCase();
+	if (value.startsWith("urn:uuid:")) value = value.slice("urn:uuid:".length);
+	if (value.startsWith("{") && value.endsWith("}")) value = value.slice(1, -1);
+	return UUID_RE.test(value);
+}
+
+/** Scope disclosure appended to bounded-lookup misses. */
+export function scopedMiss(error: unknown, window: string): Error {
+	const reason = error instanceof Error ? error.message : String(error);
+	return new Error(`${reason} Abbreviated IDs are matched against the ${window} — paste the full ID to reach older ones.`);
+}
+
 function memoryTable(memories: MemoryInfo[], withScore = false): string {
 	const headers = withScore ? ["ID", "Category", "Score", "Content"] : ["ID", "Category", "Imp.", "Content"];
 	return table(
@@ -22,8 +43,15 @@ function memoryTable(memories: MemoryInfo[], withScore = false): string {
 }
 
 async function resolvePending(host: FeatureHost, idOrPrefix: string): Promise<string> {
+	// Complete IDs bypass the bounded pending window: memory.approve/reject
+	// resolve ownership/existence themselves and report NOT_FOUND otherwise.
+	if (isFullUuid(idOrPrefix)) return idOrPrefix.trim();
 	const { pending } = await host.request<{ pending: PendingMemoryInfo[] }>("memory.pending", { limit: 500 });
-	return resolvePrefix(idOrPrefix, pending.map((p) => p.id), "pending memory");
+	try {
+		return resolvePrefix(idOrPrefix, pending.map((p) => p.id), "pending memory");
+	} catch (error) {
+		throw scopedMiss(error, "newest 500 pending memories");
+	}
 }
 
 export const memoryCommand: Command = {
@@ -79,8 +107,22 @@ export const memoryCommand: Command = {
 			}
 			case "forget": {
 				const target = requireArgs(rest, "/memory forget <id>");
+				// Complete IDs bypass the newest-500 window: memory.forget
+				// ownership-checks against the session's agent and reports
+				// NOT_FOUND for foreign or missing IDs.
+				if (isFullUuid(target)) {
+					const id = target.trim();
+					await host.request("memory.forget", { sessionId: host.session()?.id, id });
+					host.print(`Forgot memory ${shortId(id)}.`, "success");
+					return;
+				}
 				const { memories } = await host.request<{ memories: MemoryInfo[] }>("memory.list", { sessionId: host.session()?.id, limit: 500 });
-				const id = resolvePrefix(target, memories.map((m) => m.id), "memory");
+				let id: string;
+				try {
+					id = resolvePrefix(target, memories.map((m) => m.id), "memory");
+				} catch (error) {
+					throw scopedMiss(error, "newest 500 memories");
+				}
 				await host.request("memory.forget", { sessionId: host.session()?.id, id });
 				host.print(`Forgot memory ${shortId(id)}.`, "success");
 				return;
@@ -91,11 +133,23 @@ export const memoryCommand: Command = {
 					throw new Error("Usage: /memory share <id> <agent>");
 				}
 				const session = requireSession(host);
-				const { memories } = await host.request<{ memories: MemoryInfo[] }>("memory.list", {
-					sessionId: session.id,
-					limit: 500,
-				});
-				const id = resolvePrefix(parts[0], memories.map((memory) => memory.id), "memory");
+				// Complete IDs bypass the newest-500 window: memory.share
+				// delivers through the recipient's identity gate and reports
+				// NOT_FOUND for foreign or missing IDs.
+				let id: string;
+				if (isFullUuid(parts[0]!)) {
+					id = parts[0]!.trim();
+				} else {
+					const { memories } = await host.request<{ memories: MemoryInfo[] }>("memory.list", {
+						sessionId: session.id,
+						limit: 500,
+					});
+					try {
+						id = resolvePrefix(parts[0]!, memories.map((memory) => memory.id), "memory");
+					} catch (error) {
+						throw scopedMiss(error, "newest 500 memories");
+					}
+				}
 				const { status } = await host.request<{ status: string }>("memory.share", {
 					sessionId: session.id,
 					id,

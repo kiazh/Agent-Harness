@@ -149,22 +149,25 @@ async function addProvider(host: FeatureHost, rest: string): Promise<void> {
 			}))?.trim() ?? "";
 		if (!baseUrl) return;
 	}
-	const key =
-		(await host.askText({
-			title: `API key for ${name} (optional)`,
-			description: "Leave empty for keyless local endpoints. Stored in .env like /keys — masked, never shown again.",
-			placeholder: "leave empty for no key",
-			secret: true,
-		}))?.trim() ?? "";
+	const key = await host.askText({
+		title: `API key for ${name} (optional)`,
+		description: "Leave empty for keyless local endpoints. Stored in .env like /keys — masked, never shown again.",
+		placeholder: "leave empty for no key",
+		secret: true,
+		allowEmpty: true,
+	});
+	// Escape cancels the whole flow; blank submits "" as the keyless path.
+	if (key === undefined) return;
+	const trimmed = key.trim();
 	const confirmed = await confirm(host, `Add provider "${name}" at ${baseUrl}?`, "Add");
 	if (!confirmed) return;
 	let result: ProviderAddResult;
 	try {
-		result = await host.request<ProviderAddResult>("providers.add", { name, baseUrl, apiKey: key || undefined });
+		result = await host.request<ProviderAddResult>("providers.add", { name, baseUrl, apiKey: trimmed || undefined });
 	} catch (error) {
 		// The submitted key must never echo in an error string (redactSecret
 		// is empty-safe: a keyless endpoint submits "" and the message stays intact).
-		const message = redactSecret(key, error instanceof Error ? error.message : String(error));
+		const message = redactSecret(trimmed, error instanceof Error ? error.message : String(error));
 		host.print(`Could not add ${name}: ${message}`, "error");
 		return;
 	}
