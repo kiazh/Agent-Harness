@@ -16,11 +16,19 @@ Writes are atomic (mkstemp + fsync + os.replace) and always land 0600, the
 same discipline as the ChatGPT token store; the parent directory is created
 0700. Names are validated lowercase so they compose into env keys, and
 built-in provider names are reserved (see :data:`RESERVED_NAMES`).
+
+Plaintext ``http://`` base URLs are a loopback-only default: a non-loopback
+http endpoint would carry bearer keys in cleartext, so it is refused unless
+the operator explicitly opts in with ``MACHINA_ALLOW_PLAINTEXT_HTTP=1``
+(logged as a warning), both when storing and when fetching models. Store
+mutations are serialized by a bounded per-store ``flock`` that raises
+:class:`ProviderStoreLockTimeout` instead of blocking forever.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import tempfile
@@ -46,6 +54,7 @@ from machina.security.secrets import get_secret, invalidate_secret_cache
 __all__ = [
     "RESERVED_NAMES",
     "ProviderStoreError",
+    "ProviderStoreLockTimeout",
     "add_provider",
     "api_key_env",
     "fetch_models",
@@ -62,6 +71,16 @@ __all__ = [
     "validate_name",
 ]
 
+logger = logging.getLogger(__name__)
+
+#: Explicit operator opt-in that permits non-loopback plaintext http
+#: endpoints (bearer keys then travel in cleartext).
+_PLAINTEXT_HTTP_ENV = "MACHINA_ALLOW_PLAINTEXT_HTTP"
+
+#: Bound for acquiring the store lock. The lock is only ever held across
+#: local file I/O, so a peer holding it longer is wedged or crashed.
+_STORE_LOCK_TIMEOUT_SECONDS = 5.0
+
 _WINDOWS = os.name == "nt"
 if _WINDOWS:  # pragma: no cover - platform branch
     import msvcrt
@@ -76,20 +95,20 @@ def _store_lock() -> Iterator[None]:
     Serializes whole load -> mutate -> atomic-replace sections across threads
     and processes, so concurrent store writers cannot drop one side's update
     (review round 6, R6-2). The lock file holds no state and the atomic
-    replace keeps the store itself always readable.
+    replace keeps the store itself always readable. Acquisition is bounded
+    (``_STORE_LOCK_TIMEOUT_SECONDS``): a wedged peer fails the operation with
+    :class:`ProviderStoreLockTimeout` instead of blocking the caller forever.
     """
     target = providers_path()
     target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(str(target) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     acquired = False
     try:
-        if _WINDOWS:  # pragma: no cover - platform branch
-            if os.fstat(fd).st_size == 0:
-                os.write(fd, b"\0")
-            os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
-        else:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+        if not _acquire_lock(fd, timeout=_STORE_LOCK_TIMEOUT_SECONDS):
+            raise ProviderStoreLockTimeout(
+                "provider store lock timed out after "
+                f"{_STORE_LOCK_TIMEOUT_SECONDS:g}s; another process holds it"
+            )
         acquired = True
         yield
     finally:
@@ -102,6 +121,29 @@ def _store_lock() -> Iterator[None]:
                     fcntl.flock(fd, fcntl.LOCK_UN)
         finally:
             os.close(fd)
+
+
+def _acquire_lock(fd: int, *, timeout: float) -> bool:
+    """Bounded non-blocking exclusive flock; True once held, False on timeout.
+
+    Same deadline-and-retry idiom as ``connectors/oauth_store`` so a wedged
+    holder surfaces as a typed error rather than an unbounded wait.
+    """
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        try:
+            if _WINDOWS:  # pragma: no cover - platform branch
+                if os.fstat(fd).st_size == 0:
+                    os.write(fd, b"\0")
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except (OSError, BlockingIOError):
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
 
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
@@ -125,10 +167,9 @@ RESERVED_NAMES: frozenset[str] = frozenset(
         "deepseek",
         "xai",
         "opencode",
+        "kimi",
         "chatgpt",
-        "claude",
         "copilot",
-        "gemini",
         "custom",
         "ollama",
     }
@@ -137,6 +178,10 @@ RESERVED_NAMES: frozenset[str] = frozenset(
 
 class ProviderStoreError(ValueError):
     """Invalid provider entry, name, or store content."""
+
+
+class ProviderStoreLockTimeout(ProviderStoreError):
+    """The provider-store lock could not be acquired within its bound."""
 
 
 def providers_path() -> Path:
@@ -165,6 +210,37 @@ def validate_name(name: str) -> str:
     return normalized
 
 
+def _require_plaintext_allowed(raw: str) -> None:
+    """Refuse non-loopback plaintext ``http://`` unless explicitly opted in.
+
+    A bearer key sent over plaintext http is readable by any network peer;
+    loopback endpoints are the only exempt targets. Applied both when a base
+    URL is stored (:func:`_validate_base_url`) and when a bearer is about to
+    leave the process (:func:`fetch_models`), so a hand-edited or pre-fix
+    store entry cannot leak its key either. ``MACHINA_ALLOW_PLAINTEXT_HTTP=1``
+    is the explicit operator opt-in and logs a visible warning each time it
+    applies.
+    """
+    try:
+        parsed = urlparse(str(raw or ""))
+    except ValueError:
+        return  # malformed shapes are handled by the caller's own checks
+    if parsed.scheme != "http" or is_loopback_base_url(raw):
+        return
+    if os.environ.get(_PLAINTEXT_HTTP_ENV) == "1":
+        logger.warning(
+            "plaintext http to non-loopback host %s: bearer API keys travel in cleartext (%s=1)",
+            parsed.hostname or "",
+            _PLAINTEXT_HTTP_ENV,
+        )
+        return
+    raise ProviderStoreError(
+        f"plaintext http:// to {parsed.hostname or 'the host'} is only allowed for loopback "
+        f"endpoints (127.0.0.1, localhost, ::1); use https:// or set {_PLAINTEXT_HTTP_ENV}=1 "
+        "to send bearer keys in cleartext"
+    )
+
+
 def _validate_base_url(base_url: str) -> str:
     raw = str(base_url or "").strip().rstrip("/")
     if not raw or len(raw) > _BASE_URL_MAX:
@@ -174,6 +250,7 @@ def _validate_base_url(base_url: str) -> str:
         raise ProviderStoreError("base URL must be an http(s) URL with a host")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ProviderStoreError("base URL must not contain credentials, a query, or a fragment")
+    _require_plaintext_allowed(raw)
     return raw
 
 
@@ -419,8 +496,12 @@ def fetch_models(
 
     Honest failure: non-200 and transport errors raise ``ProviderStoreError``
     with a reason suitable for the UI; the key is never included in any
-    message. Keyless endpoints simply get no Authorization header.
+    message. Keyless endpoints simply get no Authorization header. Plaintext
+    ``http://`` to a non-loopback host is refused unless
+    ``MACHINA_ALLOW_PLAINTEXT_HTTP=1`` is set (see
+    :func:`_require_plaintext_allowed`).
     """
+    _require_plaintext_allowed(str(base_url or ""))
     url = str(base_url or "").strip().rstrip("/") + "/models"
     headers = {"Accept": "application/json"}
     if api_key:

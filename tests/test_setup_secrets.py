@@ -45,6 +45,35 @@ def test_env_quotes_values_needing_it(env_file: Path) -> None:
     assert values["TEST_MENU_KEY"] == "hello world #x"
 
 
+async def test_secrets_set_roundtrips_quotes_and_backslashes(env_file: Path) -> None:
+    """E2E (R4-043): gateway-set values with quotes/backslashes read back intact."""
+    from dotenv import dotenv_values
+
+    from machina.gateway.features.secrets import secrets_set
+    from machina.security.env_file import read_env_values
+
+    value = 'he said "hi" and C:\\tmp'
+    result = await secrets_set(  # type: ignore[arg-type]
+        FakeGW(), {"key": "OPENROUTER_API_KEY", "value": value, "persist": True}
+    )
+    assert result["persisted"] is True
+    assert os.environ["OPENROUTER_API_KEY"] == value
+    assert read_env_values(env_file)["OPENROUTER_API_KEY"] == value
+    # python-dotenv (the live loader) must agree with the app's reader.
+    assert dotenv_values(env_file)["OPENROUTER_API_KEY"] == value
+
+
+async def test_secrets_set_updates_lowercase_line_in_place(env_file: Path) -> None:
+    """E2E (R4-046): a pre-existing lowercase line is updated, never duplicated."""
+    from machina.gateway.features.secrets import secrets_set
+
+    env_file.write_text("openrouter_api_key=stale\n", encoding="utf-8")
+    await secrets_set(  # type: ignore[arg-type]
+        FakeGW(), {"key": "OPENROUTER_API_KEY", "value": "sk-fresh", "persist": True}
+    )
+    assert env_file.read_text(encoding="utf-8").splitlines() == ["OPENROUTER_API_KEY=sk-fresh"]
+
+
 def test_env_rejects_bad_keys(env_file: Path) -> None:
     from machina.security.env_file import set_env_values
 

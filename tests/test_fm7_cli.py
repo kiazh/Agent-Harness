@@ -1,13 +1,9 @@
 """FM7 regression tests: CLI secret guarding, uninstall checkout guard,
-Rich-markup safety on user text, friendly growth errors, and honest serve
-readiness wording.
+Rich-markup safety on user text, friendly growth errors, honest serve
+readiness wording, and ``.env`` escape round-trips (R4-043).
 
-Env-file note (documented, not fixed here): ``read_env_values`` strips the
-surrounding quotes but does not undo ``_quote``'s backslash/quote escapes, so a
-value containing ``\\`` or ``"`` round-trips corrupted. The fix belongs in
-``machina/security/env_file.py`` (outside this change's owned files); the
-strict-xfail test below pins the correct behavior so the gap cannot be
-forgotten.
+``read_env_values`` undoes ``_quote``'s backslash/quote escapes for
+double-quoted values, so ``\\`` and ``"`` survive a write/read/write cycle.
 """
 
 from __future__ import annotations
@@ -319,22 +315,36 @@ def test_serve_does_not_claim_ready_before_uvicorn_runs(monkeypatch: pytest.Monk
     assert "Starting" in result.output
 
 
-# ─── W6: env-file escape roundtrip (documented gap, strict xfail) ───────────
+# ─── W6: env-file escape round-trip (fixed in R4-043) ───────────────────────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "read_env_values strips quotes but never unescapes _quote's backslash escapes; "
-        "fix belongs in machina/security/env_file.py (not owned by this change)"
-    ),
+@pytest.mark.parametrize(
+    "value",
+    [
+        'he said "hi" and C:\\tmp',  # the original strict-xfail value
+        "C:\\Users\\me\\file.txt",  # backslash only
+        'say "hello"',  # quote only
+        "trailing spaces   ",  # trailing whitespace must survive
+        "  leading spaces",  # leading whitespace must survive
+        "unicode: ключ-密钥-🔑",  # non-ASCII passthrough
+        'backslash before quote: \\"',  # adjacent escape forms
+    ],
 )
-def test_env_roundtrip_escaped_values_documents_gap(env_file: Path) -> None:
+def test_env_roundtrip_escaped_values(env_file: Path, value: str) -> None:
+    from machina.security.env_file import read_env_values, set_env_values
+
+    set_env_values({"TEST_MENU_KEY": value}, env_file)
+    assert read_env_values(env_file)["TEST_MENU_KEY"] == value
+
+
+def test_env_roundtrip_stable_across_rewrites(env_file: Path) -> None:
     from machina.security.env_file import read_env_values, set_env_values
 
     value = 'he said "hi" and C:\\tmp'
     set_env_values({"TEST_MENU_KEY": value}, env_file)
-    assert read_env_values(env_file)["TEST_MENU_KEY"] == value
+    first = env_file.read_text(encoding="utf-8")
+    set_env_values({"TEST_MENU_KEY": read_env_values(env_file)["TEST_MENU_KEY"]}, env_file)
+    assert env_file.read_text(encoding="utf-8") == first, "escapes must not compound"
 
 
 def test_env_roundtrip_plain_values_still_works(env_file: Path) -> None:

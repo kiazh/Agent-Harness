@@ -1,7 +1,12 @@
 """OAuth master-key source: operator secret first, OS keyring second.
 
-Never falls back to plaintext JSON/.env keys. Fake providers are injected
-in tests; no live keyring access happens in automated verification.
+Never falls back to plaintext JSON/.env keys. The OS keyring is consulted
+only through a backend allowlist: ``_ALLOWED_BACKENDS`` (or keyring-package
+backends) by default, plus the explicit development escape hatch
+``MACHINA_OAUTH_ALLOW_PLAINTEXT_KEYRING=1``, which permits a plaintext
+backend without widening the allowlist to unknown backends. Fake providers
+are injected in tests; no live keyring access happens in automated
+verification.
 """
 
 from __future__ import annotations
@@ -64,10 +69,10 @@ def _keyring_backend_usable(keyring_mod) -> bool:
     lowered = name.lower()
     if "fail" in lowered or "null" in lowered:
         return False
-    if os.environ.get("MACHINA_OAUTH_ALLOW_PLAINTEXT_KEYRING") == "1":
-        return "plaintext" not in lowered
     if "plaintext" in lowered or "plain" in lowered:
-        return False
+        # Escape hatch only: the documented flag permits this one backend
+        # class and must not widen the allowlist below to unknown backends.
+        return os.environ.get("MACHINA_OAUTH_ALLOW_PLAINTEXT_KEYRING") == "1"
     return (
         any(token in lowered for token in _ALLOWED_BACKENDS)
         or "keyring" in lowered
