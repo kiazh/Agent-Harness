@@ -52,8 +52,11 @@ omit `protocolVersion` retain v1. See [the wire contract](communications/ui-gate
 Before upgrade: stop accepting work; drain or stop active workers; capture a
 consistent backup and record artifact/config versions. Run `machina init` using an
 operator migration role. Schema application is an atomic transaction and can be
-repeated. The gateway does not self-migrate on startup: deploying code that
-references new columns without running `machina init` first fails at turn time
+repeated. The gateway, CLI, and runtime apply additive runtime migrations at
+startup (`initialize_runtime_schema`: growth, delegation, image-context, and
+soulspec tables, under an advisory lock); a failed upgrade fails closed instead
+of serving traffic. The base schema still requires `machina init`: deploying code that
+references new base-schema columns without running `machina init` first fails at turn time
 (`UndefinedColumnError` on first write), not at boot — always migrate before
 starting new workers. Legacy modes migrate to `ask`; execution claims remain separate from
 session business status. Version-1 action approvals require fresh review after

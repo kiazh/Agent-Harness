@@ -6,7 +6,7 @@ Date: 2026-10-12. Starting checkout: `main`, HEAD `54d79d5`. This document descr
 
 Source checkout: CLI, terminal UI, gateway/HTTP, persistence, tools, runtime learning, curated skills, default ECC subagents and broker-integrated MCP tools. Python wheels contain the backend and bundled resources; TUI sources and Node dependencies require a checkout/`MACHINA_UI_DIR`. Docker is the HTTP backend.
 
-MCP now includes installation-local saved configuration, human-reviewed launch, discovery and native broker-bound calls. OAuth/HTTP credential profiles, resources/prompts, server callbacks and complete DNS-rebinding protections remain outside the release scope. See [MCP setup](../MCP.md).
+MCP now includes installation-local saved configuration, human-reviewed launch, discovery and native broker-bound calls. OAuth/HTTP credential profiles, resources/prompts, and server callbacks remain outside the release scope. DNS-rebinding protections are implemented and in use: OAuth and MCP dial through a pinned transport that resolves and validates the hostname once and connects only to approved numeric IPs while preserving the hostname for Host/TLS SNI (`machina/connectors/http_transport.py`, wired in `connectors/oauth_network.py` and `connectors/mcp_client.py`). See [MCP setup](../MCP.md).
 
 ## Repository preparation
 

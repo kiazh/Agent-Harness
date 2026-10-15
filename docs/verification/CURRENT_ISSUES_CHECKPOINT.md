@@ -85,3 +85,31 @@ The operator has not specified a production server, staging environment, provide
 - Do not access live credentials, operator keyring, shell startup files, or operator clipboard.
 - Do not commit, push, tag, publish, or deploy until the full checks pass and the production destination/release action is clear.
 - Update this checkpoint with verified outcomes as work continues; do not replace pending evidence with assumptions.
+
+## R4-120 docs-truth annotation (2026-10-14)
+
+Append-only; the dated rows above are preserved as written. Verified against the
+current tree (committed HEAD unless noted):
+
+- DNS/pinned transport (OAuth and MCP security table, rows 1–3): implemented and
+  in use. `machina/connectors/http_transport.py:75-144` resolves and validates
+  each hostname once and dials only approved numeric IPs while preserving the
+  hostname for Host/TLS SNI; MCP wires it in `connectors/mcp_client.py:400,431`
+  and OAuth in `connectors/oauth_network.py:309,314`. `RELEASE_READINESS.md:9`
+  ("protections remain outside the release scope") was stale and has been
+  corrected. No claim is made here about rerunning the focused/full suites.
+- Lockfile ("Verification evidence" / item 7): `uv.lock` now declares the
+  `embeddings-local`, `embeddings-onnx`, and `rerank` extras (`uv.lock:1289-1296`,
+  `provides-extras` at `:1339`) and `uv lock --check --offline` resolves
+  130 packages cleanly (run 2026-10-14). The round-2 R16 claim
+  ("lock omits embedding/reranking extras") is annotated fixed in its doc.
+- Self-migration: the gateway, CLI, and runtime apply additive runtime
+  migrations at startup and fail closed (`gateway/server.py`, `db/connection.py`
+  `initialize_runtime_schema`, `core/runtime.py:112,162`, `cli/__init__.py:235`);
+  the base schema still requires `machina init`. `OPERATIONS.md:54-57`
+  ("does not self-migrate") has been corrected accordingly.
+- Execution-result counts above (273 focused, 2478 backend, 326 UI, Bandit,
+  hosted CI) remain dated historical evidence for checkout `566cf63` plus its
+  then-uncommitted changes — not re-verified, not re-asserted for this tree.
+
+Proof bundle: `docs/verification/proofs/codebase_review_round4_2026-10-14/R4-120_docs.md`.
