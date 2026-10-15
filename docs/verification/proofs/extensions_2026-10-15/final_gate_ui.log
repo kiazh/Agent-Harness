@@ -1,0 +1,10 @@
+ℹ pass 490
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 6
+ℹ todo 0
+ℹ duration_ms 2730.935334
+
+> machina-ui@0.1.0 lint
+> eslint src/ test/ --ext .ts
+
