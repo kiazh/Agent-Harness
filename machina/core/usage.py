@@ -24,6 +24,14 @@ logger = logging.getLogger(__name__)
 db = LazyDb()
 
 
+def provider_identity(provider: Any) -> str:
+    """Attribute shared transports to their configured provider family."""
+    name = getattr(getattr(provider, "spec", None), "name", None)
+    if isinstance(name, str) and name.strip():
+        return name.strip().lower()
+    return type(provider).__name__.removesuffix("Provider").lower()
+
+
 def _limits() -> dict[str, int]:
     names = (
         "usage_session_token_limit",
@@ -82,7 +90,7 @@ class UsageStore:
         reservation = None
         if session_id is not None:
             model = str(getattr(provider, "model", "unknown"))
-            provider_name = type(provider).__name__.removesuffix("Provider").lower()
+            provider_name = provider_identity(provider)
             reservation_max_tokens = max_tokens
             reservation_limit = getattr(type(provider), "reservation_max_tokens", None)
             if callable(reservation_limit):

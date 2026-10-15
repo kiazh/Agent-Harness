@@ -154,6 +154,14 @@ async def _effective_session_route(
     )
 
 
+async def session_context_window(session: Session) -> int:
+    """Capacity for the same effective provider/model route as a session turn."""
+    from machina.core.context_windows import context_window_for
+
+    provider, model = await _effective_session_route(session)
+    return context_window_for(model, provider)
+
+
 async def compress_session_with_status(
     session: Session,
     *,
@@ -436,9 +444,7 @@ async def maybe_auto_compact(session_id) -> dict | None:
         session = await _sessions.get(session_id)
         if session is None:
             return None
-        from machina.core.context_windows import context_window_for
-
-        budget = context_window_for(session.model or config.get("model"))
+        budget = await session_context_window(session)
         try:
             threshold = float(config.get("compression_threshold") or 0.8)
         except Exception:

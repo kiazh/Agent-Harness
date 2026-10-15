@@ -322,14 +322,15 @@ else
 fi
 
 # Ensure DATABASE_URL exists.
-if [ -z "$(env_get DATABASE_URL "$ENV_FILE")" ]; then
+DB_ENV_VALUE="$(env_get DATABASE_URL "$ENV_FILE")" || die "Cannot read $ENV_FILE"
+if [ -z "$DB_ENV_VALUE" ]; then
   env_set DATABASE_URL "$INSTALLER_DEFAULT_DB_URL" "$ENV_FILE" \
     || die "Cannot write $ENV_FILE"
 fi
 
 # Replace placeholder secrets with real random values (mirrors `machina setup` autogenerate).
 for KEY in MACHINA_API_KEY MACHINA_PROVENANCE_KEY; do
-  VAL="$(env_get "$KEY" "$ENV_FILE")"
+  VAL="$(env_get "$KEY" "$ENV_FILE")" || die "Cannot read $ENV_FILE"
   case "$VAL" in
     ""|"replace-with-a-long-random-key"|"replace-with-a-separate-long-random-key"|"sk-or-..."|"sk-...")
       NEW_VAL="$(rand_hex)"
@@ -345,7 +346,7 @@ done
 # unless hidden input is fully established — there is no visible-typing
 # fallback; a failure skips with secure instructions instead.
 if [ "$ASSUME_YES" = "0" ] && { [ -t 0 ] || [ "$INTERACTIVE" = "1" ]; } && [ -e /dev/tty ]; then
-  CUR="$(env_get OPENROUTER_API_KEY "$ENV_FILE")"
+  CUR="$(env_get OPENROUTER_API_KEY "$ENV_FILE")" || die "Cannot read $ENV_FILE"
   case "$CUR" in
     ""|"sk-or-...")
       if ANSWER="$(prompt_secret_hidden 'OPENROUTER_API_KEY (Enter to skip, set later via machina setup): ')"; then
@@ -362,7 +363,8 @@ if [ "$ASSUME_YES" = "0" ] && { [ -t 0 ] || [ "$INTERACTIVE" = "1" ]; } && [ -e 
       ;;
   esac
 else
-  case "$(env_get OPENROUTER_API_KEY "$ENV_FILE")" in
+  CUR="$(env_get OPENROUTER_API_KEY "$ENV_FILE")" || die "Cannot read $ENV_FILE"
+  case "$CUR" in
     ""|"sk-or-...")
       warn "No OPENROUTER_API_KEY yet; install continues. Add one later with: machina setup"
       ;;

@@ -5,9 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from machina import services
-from machina.core.config import config
 from machina.core.context import context_manager
-from machina.core.context_windows import context_window_for
 from machina.core.provider import PROVIDERS
 from machina.core.session import session_manager
 from machina.core.session_recall import SessionRecall
@@ -176,7 +174,7 @@ async def context_get(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
             for c in chunks
         ],
         "totalTokens": await context_manager.get_token_usage(session.id),
-        "budget": context_window_for(session.model or config.get("model")),
+        "budget": await services.session_context_window(session),
         "goal": session.goal,
     }
 

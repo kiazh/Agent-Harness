@@ -14,12 +14,12 @@ from machina.api.routes.shared import _redact_value
 from machina.api.routes.streaming import _stream_session
 from machina.core.config import config
 from machina.core.context import context_manager
-from machina.core.context_windows import context_window_for
 from machina.core.session import session_manager
 from machina.gateway.serializers import chunk_preview, history_from_chunks, session_to_dict
 from machina.gateway.server import PROVIDERS
 from machina.memory.redaction import redact_secrets
 from machina.observability.diagnostics import record_failure
+from machina.services import session_context_window
 
 router = APIRouter()
 
@@ -170,6 +170,6 @@ async def get_context(session_id: str, limit: int = Query(50, ge=1, le=500)) -> 
             for c in chunks
         ],
         "totalTokens": await context_manager.get_token_usage(sid),
-        "budget": context_window_for(session.model or config.get("model")),
+        "budget": await session_context_window(session),
         "goal": session.goal,
     }

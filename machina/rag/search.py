@@ -260,40 +260,31 @@ class HybridSearch:
     ) -> list[tuple[ContextChunk, float]]:
         """PostgreSQL FTS search using PostgreSQL full-text search (tsvector + GIN).
 
-        Returns empty results if search_text column is not available.
+        Schema failures propagate so callers can report unavailable retrieval.
         Document-only scope by default (AH-AUDIT-033).
         """
         # Cap query terms via shared helper (max 16 OR terms) to bound FTS cost.
         tsquery = build_or_tsquery(query_text)
         if not tsquery:
             return []
-        # Try FTS first
-        try:
-            rows = await db.fetch(
-                """
-                SELECT id, session_id, agent_id, chunk_type, payload_msgpack,
-                       token_count, embedding, created_at, accessed_at,
-                       ts_rank(to_tsvector('english', search_text), to_tsquery('english', $2)) AS rank
-                FROM context_chunks
-                WHERE session_id = $1
-                  AND search_text IS NOT NULL
-                  AND chunk_type = ANY($4::text[])
-                  AND to_tsvector('english', search_text) @@ to_tsquery('english', $2)
-                ORDER BY rank DESC
-                LIMIT $3
-                """,
-                session_id,
-                tsquery,
-                top_k,
-                list(chunk_types),
-            )
-        except asyncpg.UndefinedColumnError:
-            # search_text column doesn't exist — no fallback possible
-            # (casting bytea to text produces hex, not readable text)
-            logger.warning(
-                "search_text column not found, skipping PostgreSQL FTS search — returning empty results"
-            )
-            rows = []
+        rows = await db.fetch(
+            """
+            SELECT id, session_id, agent_id, chunk_type, payload_msgpack,
+                   token_count, embedding, created_at, accessed_at,
+                   ts_rank(to_tsvector('english', search_text), to_tsquery('english', $2)) AS rank
+            FROM context_chunks
+            WHERE session_id = $1
+              AND search_text IS NOT NULL
+              AND chunk_type = ANY($4::text[])
+              AND to_tsvector('english', search_text) @@ to_tsquery('english', $2)
+            ORDER BY rank DESC
+            LIMIT $3
+            """,
+            session_id,
+            tsquery,
+            top_k,
+            list(chunk_types),
+        )
 
         results = []
         for row in rows:

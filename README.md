@@ -271,9 +271,12 @@ Configuration persists in `~/.machina/mcp.json`, with installation-local locking
 The agent uses `mcp_list`, `mcp_describe` and `mcp_call` after connection, and
 manages the inventory through approval-gated `mcp_connect` / `mcp_disconnect`
 (you can say "connect to this MCP server" in chat). Catalogs are paged and
-schemas loaded individually. Remote calls require exact approval in every mode
-unless you explicitly configure `trusted_read` **and** an allowlist of verified
-read tools. Server descriptions and annotations never grant consent.
+schemas loaded individually. Remote calls require exact approval unless you
+explicitly configure `trusted_read` **and** an allowlist of verified read tools,
+or activate a live session-scoped `full` grant. That full grant authorizes
+untrusted remote tool calls without additional per-call approval; selecting
+full mode without a grant does not. Server descriptions and annotations never
+grant consent.
 Schema/configuration/argument changes invalidate approval; uncertain calls are
 not retried.
 
@@ -482,7 +485,7 @@ maps to a tier: `k3` (up to 1M context for higher tiers, 256K below), `k3-256k`
 (256K), `kimi-for-coding` (default; up to 1M) and `kimi-for-coding-highspeed`
 (256K, faster output). The wire documents a top-level `reasoning_effort`
 (`low`/`high`/`max`); the harness sends it only when explicitly set, so use
-`low`/`high` for this provider (its wire does not accept `medium`). Docs:
+`low`/`high`/`max` for this provider (`medium` is rejected by Machina). Docs:
 <https://www.kimi.com/code/docs/en/>.
 
 **Your own providers.** `machina providers add <name> <base_url>` (or the
@@ -883,7 +886,7 @@ Machina-Harness/
 | MCP tools are unavailable after restart | Saved config persists, live connections do not; explicitly connect again |
 | MCP reports `auth_required` | HTTP credential profiles are deferred; OAuth HTTP servers can authorize via `/mcp` ([setup](docs/MCP_OAUTH.md)) |
 | MCP stdio refuses sandbox mode | Host stdio is outside that execution boundary; choose a supported transport/backend configuration |
-| MCP asks for approval in full mode | Untrusted remote calls still need exact consent; trusted reads require an explicit verified allowlist |
+| MCP asks for approval in full mode | Full mode needs a live session-scoped grant; without it, untrusted calls still require exact approval. A live full grant permits those calls without per-call approval |
 | Persona appears unchanged in a conversation | Saved defaults apply through the profile/context; inspect `/persona` and `/growth`, and distinguish requested persona from trial revisions |
 | Semantic retrieval is absent | Install a local runtime (`pip install 'Machina[embeddings-onnx]'` or `'Machina[embeddings-local]'`) and enable it (`MACHINA_EMBEDDING_BACKEND=onnx` or `local`), configure `MACHINA_EMBEDDING_BASE_URL`, or set `OPENAI_API_KEY`; lexical retrieval remains available |
 | Reranking has no effect | It is off by default (`reranker_backend=none`): enable `MACHINA_RERANKER_BACKEND=local` (extra `'Machina[rerank]'`), `cohere` (Cohere key) or `http` (llama.cpp `/v1/rerank` URL) |

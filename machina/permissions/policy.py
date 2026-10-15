@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import os
 import re
 import uuid
 from dataclasses import dataclass, field
+from itertools import islice
 from pathlib import Path
 
 from machina.observability.diagnostics import record_failure
@@ -587,7 +589,9 @@ def _recursive_copy_reach(
             continue
         visited.add((identity, via_link))
         try:
-            entries = list(current.iterdir())
+            with os.scandir(current) as iterator:
+                entries = [Path(entry.path) for entry in
+                           islice(iterator, max(0, max_entries - seen) + 1)]
         except OSError:
             # Cannot prove absence without listing: fail closed.
             return _CopyReach(protected=True, external=external, sensitive=sensitive)

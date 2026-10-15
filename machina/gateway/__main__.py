@@ -52,6 +52,7 @@ _CONTROL_METHODS = frozenset({"prompt.cancel", "approvals.resolve", "mode.revoke
 # Grace given to requests already read when the loop exits (shutdown/EOF)
 # before their handlers are cancelled and joined.
 REQUEST_DRAIN_TIMEOUT_SECONDS = 10.0
+REQUEST_CANCEL_GRACE_SECONDS = 0.35
 
 
 def _write(frame: dict[str, Any]) -> None:
@@ -101,8 +102,9 @@ async def _dispatch_requests(gateway: Any, queue: asyncio.Queue[str | None]) -> 
 
     On exit (shutdown or EOF) every request already read gets up to
     ``REQUEST_DRAIN_TIMEOUT_SECONDS`` to run to completion and answer; a
-    handler that outlasts the drain is cancelled and joined (tracked tasks)
-    so a wedged request cannot hold the process open. ``Gateway.close()``
+    handler that outlasts the drain is cancelled and given a bounded grace.
+    Resistant handlers remain tracked for resource shutdown; they cannot
+    prevent Gateway.close() from being reached. ``Gateway.close()``
     still owns turn and resource teardown.
     """
     requests: set[asyncio.Task[None]] = set()
@@ -148,7 +150,14 @@ async def _dispatch_requests(gateway: Any, queue: asyncio.Queue[str | None]) -> 
     for task in pending:
         task.cancel()
     if pending:
-        await asyncio.wait(pending)
+        _done, pending = await asyncio.wait(pending, timeout=REQUEST_CANCEL_GRACE_SECONDS)
+        if pending:
+            from machina.core.runtime import runtime_services
+
+            runtime = getattr(gateway, "runtime", runtime_services)
+            for task in pending:
+                runtime.track(task)
+            logger.warning("%d gateway request(s) resisted cancellation; resource shutdown continues", len(pending))
 
 
 async def _serve() -> None:
@@ -182,10 +191,44 @@ def main() -> None:
     logging.basicConfig(
         level=logging.WARNING, stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s"
     )
+    # asyncio.run() ends with an unbounded gather of every cancelled task.
+    # A management handler that consumes cancellation would defeat the bounded
+    # dispatcher/resource shutdown even after _serve() returned (F-25).
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    serving = loop.create_task(_serve())
     try:
-        asyncio.run(_serve())
+        loop.run_until_complete(serving)
     except KeyboardInterrupt:
-        pass
+        serving.cancel()
+        # Let _serve's finally reach resource teardown on an interactive stop.
+        try:
+            loop.run_until_complete(asyncio.wait({serving}, timeout=REQUEST_DRAIN_TIMEOUT_SECONDS))
+        except KeyboardInterrupt:
+            pass
+    finally:
+        async def retire_loop_tasks() -> None:
+            tasks = {task for task in asyncio.all_tasks(loop) if task is not asyncio.current_task()}
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                _done, pending = await asyncio.wait(tasks, timeout=REQUEST_CANCEL_GRACE_SECONDS)
+                if pending:
+                    logger.warning("closing gateway loop with %d cancellation-resistant task(s)", len(pending))
+                    return
+            finalizers = loop.create_task(loop.shutdown_asyncgens())
+            _done, pending = await asyncio.wait({finalizers}, timeout=REQUEST_CANCEL_GRACE_SECONDS)
+            if pending:
+                finalizers.cancel()
+                logger.warning("gateway async-generator finalization exceeded shutdown grace")
+            elif not finalizers.cancelled():
+                finalizers.exception()
+
+        try:
+            loop.run_until_complete(retire_loop_tasks())
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
 
 
 if __name__ == "__main__":

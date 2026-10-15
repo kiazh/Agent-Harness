@@ -111,6 +111,7 @@ export class GatewayClient {
 	private channel: JsonRpcChannel | undefined;
 	private readonly stderrTail: string[] = [];
 	private stopping = false;
+	private stopPromise: Promise<void> | undefined;
 	private stdoutInterface: ReturnType<typeof createInterface> | undefined;
 	private stderrInterface: ReturnType<typeof createInterface> | undefined;
 
@@ -166,21 +167,45 @@ export class GatewayClient {
 		return [...this.stderrTail];
 	}
 
-	/** Ask the gateway to shut down, then make sure the process is gone. */
-	async stop(): Promise<void> {
+	/** Repeated callers observe the same confirmed shutdown outcome. */
+	stop(): Promise<void> {
+		this.stopPromise ??= this.stopProcess();
+		return this.stopPromise;
+	}
+
+	private async stopProcess(): Promise<void> {
 		const proc = this.proc;
-		if (!proc || proc.exitCode !== null || this.stopping) return;
+		if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
 		this.stopping = true;
-		const exited = new Promise<void>((resolve) => proc.once("exit", () => resolve()));
+		let hasExited = false;
+		const exited = new Promise<void>((resolve) => proc.once("exit", () => { hasExited = true; resolve(); }));
+		const waitForExit = async (milliseconds: number): Promise<boolean> => {
+			if (hasExited) return true;
+			let timer: NodeJS.Timeout | undefined;
+			try {
+				return await Promise.race([
+					exited.then(() => true),
+					new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), milliseconds); }),
+				]);
+			} finally {
+				if (timer) clearTimeout(timer);
+			}
+		};
 		try {
-			await this.request("shutdown", {}, 2_000);
-		} catch {
-			// already gone or unresponsive; fall through to kill
+			try { await this.request("shutdown", {}, 2_000); }
+			catch { /* unresponsive: escalate below */ }
+			proc.stdin?.end();
+			if (!(await waitForExit(3_000))) {
+				proc.kill("SIGTERM");
+				if (!(await waitForExit(3_000))) {
+					proc.kill("SIGKILL");
+					if (!(await waitForExit(3_000))) throw new Error("gateway termination could not be confirmed");
+				}
+			}
+			this.proc = undefined;
+		} finally {
+			this.stdoutInterface?.close();
+			this.stderrInterface?.close();
 		}
-		proc.stdin?.end();
-		const timeout = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 3_000).unref());
-		if ((await Promise.race([exited, timeout])) === "timeout") proc.kill();
-		this.stdoutInterface?.close();
-		this.stderrInterface?.close();
 	}
 }

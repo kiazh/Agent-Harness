@@ -173,7 +173,7 @@ def add_provider(
         resolved = store.resolve_provider_key(entry)
         try:
             pulled = store.fetch_models(str(entry["base_url"]), api_key=resolved)
-            models = store.save_models(name, pulled) if pulled else []
+            models = store.save_models(name, pulled)
             summary["models"] = [row["id"] for row in models]
         except Exception as error:  # ProviderStoreError + transport, reported honestly
             summary["fetchError"] = str(error) or type(error).__name__
@@ -376,7 +376,6 @@ def _named_models_cmd(provider: str, *, refresh: bool, json_output: bool) -> Non
     stale = age is None or age >= MODELS_TTL_SECONDS
     fetch_error = None
     models = list(entry.get("models") or [])
-    kept_cache = False
     if refresh or stale:
         try:
             key = store.resolve_provider_key(entry)
@@ -384,12 +383,7 @@ def _named_models_cmd(provider: str, *, refresh: bool, json_output: bool) -> Non
         except Exception as error:
             fetch_error = str(error) or type(error).__name__
         else:
-            if pulled:
-                models = store.save_models(provider, pulled)
-            elif models:
-                # A successful fetch with an empty catalog must not wipe a
-                # good cache: keep showing the cached list and say so.
-                kept_cache = True
+            models = store.save_models(provider, pulled)
     if json_output:
         typer.echo(
             json_lib.dumps(
@@ -415,8 +409,6 @@ def _named_models_cmd(provider: str, *, refresh: bool, json_output: bool) -> Non
     for row in models:
         table.add_row(escape(str(row.get("id"))), _fmt_context(row.get("contextWindow")))
     console.print(table)
-    if kept_cache:
-        console.print("[yellow]Live refresh returned no models; showing the cached list.[/yellow]")
     if fetch_error:
         console.print(
             f"[yellow]Live refresh failed, showing the cached list: {escape(fetch_error)}[/yellow]"

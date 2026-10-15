@@ -95,7 +95,14 @@ export interface ApprovalsListResult {
 	approvals: ApprovalInfo[];
 }
 
-export interface SecretInfo {
+export interface EffectiveCredentialState {
+	effectiveSet?: boolean | null;
+	effectiveSource?: string;
+	effectiveUpdated?: boolean;
+	message?: string;
+}
+
+export interface SecretInfo extends EffectiveCredentialState {
 	key: string;
 	description: string;
 	set: boolean;
@@ -107,7 +114,7 @@ export interface SecretsListResult {
 	envFile: string;
 }
 
-export interface SecretsSetResult {
+export interface SecretsSetResult extends EffectiveCredentialState {
 	key: string;
 	set: boolean;
 	persisted: boolean;

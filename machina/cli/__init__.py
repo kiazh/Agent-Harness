@@ -875,9 +875,9 @@ def context(
                 console.print(f"[bold]Title:[/bold] {escape(session.title or '(untitled)')}")
                 console.print(f"[bold]Status:[/bold] {escape(str(session.status))}")
                 console.print(f"[bold]Goal:[/bold] {escape(session.goal or '(none)')}")
-                from machina.core.context_windows import context_window_for
+                from machina.services import session_context_window
 
-                window = context_window_for(session.model or config.get("model"))
+                window = await session_context_window(session)
                 console.print(f"[bold]Context window:[/bold] {window} tokens")
                 console.print()
 

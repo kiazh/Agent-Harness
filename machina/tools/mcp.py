@@ -70,7 +70,7 @@ def _management():
             "trust": {
                 "type": "string",
                 "description": (
-                    "'untrusted' (default: every remote call needs exact approval) or "
+                    "'untrusted' (default: exact approval unless a live session full grant authorizes the call) or "
                     "'trusted_read' (only remote names in tool_allowlist skip approval)."
                 ),
             },
@@ -250,7 +250,7 @@ async def mcp_describe(name: str) -> str:
 
 
 @registry.register(
-    description="Call a connected MCP tool by its namespaced name with complete JSON arguments. Requires its validated schema and exact approval unless explicitly trusted-read. Never retries uncertain outcomes.",
+    description="Call a connected MCP tool by its namespaced name with complete JSON arguments. Requires its validated schema and exact approval unless explicitly trusted-read or authorized by a live session full grant. Never retries uncertain outcomes.",
     parameters={
         "type": "object",
         "properties": {"name": {"type": "string"}, "arguments": {"type": "object"}},

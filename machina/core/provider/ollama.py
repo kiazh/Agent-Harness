@@ -294,6 +294,8 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
         content_parts: list[str] = []
         tool_calls: list[dict] = []
         saw_terminal = False
+        resolved_model = model or self.model
+        usage: dict[str, int] = {}
 
         try:
             async with _stream_with_retry(self.client, "/api/chat", payload) as resp:
@@ -340,6 +342,17 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
 
                     if data.get("done"):
                         saw_terminal = True
+                        if isinstance(data.get("model"), str) and data["model"]:
+                            resolved_model = data["model"]
+                        for source, target in (
+                            ("prompt_eval_count", "prompt_tokens"),
+                            ("eval_count", "completion_tokens"),
+                        ):
+                            value = data.get(source)
+                            if type(value) is int and value >= 0:
+                                usage[target] = value
+                        if "prompt_tokens" in usage and "completion_tokens" in usage:
+                            usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
                         break
             if not saw_terminal:
                 # A clean EOF without a ``done: true`` frame is a truncation:
@@ -362,14 +375,14 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
         if reservation_id is not None:
             await usage_store.finish(
                 reservation_id,
-                {},
-                model=model or self.model,
+                usage,
+                model=resolved_model,
             )
 
         audit_log(
             "llm_stream_complete",
             provider="ollama",
-            model=model or self.model,
+            model=resolved_model,
             tool_calls=len(tool_calls),
         )
 
@@ -377,8 +390,8 @@ class OllamaProvider(LLMProvider, RateLimitBinding):
             type="done",
             response=LLMResponse(
                 content=full_content,
-                model=model or self.model,
-                usage={},
+                model=resolved_model,
+                usage=usage,
                 tool_calls=tool_calls,
             ),
         )

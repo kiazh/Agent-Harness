@@ -479,6 +479,8 @@ class LearningReviewer:
                         json.dumps(triggers),
                         content,
                     )
+                    if applied is None:
+                        raise RuntimeError("learning review update returned no row")
         except BaseException as exc:
             # The review did not commit (or the skill write failed): drop this
             # review's artifact so it cannot outlive a non-approved review.

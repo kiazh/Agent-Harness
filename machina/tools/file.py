@@ -9,6 +9,8 @@ import secrets
 import stat
 import tempfile
 from collections.abc import Callable
+from fnmatch import fnmatch
+from itertools import islice
 from pathlib import Path
 
 from machina.core.config import config
@@ -443,7 +445,12 @@ def _atomic_write_file_at(
         raise ValueError(f"Cannot write '{display}': temp file unavailable")
     try:
         if mode is not None:
-            os.fchmod(tmp_fd, mode)
+            if hasattr(os, "fchmod"):
+                os.fchmod(tmp_fd, mode)
+            elif dir_fd is None:
+                os.chmod(tmp_name, mode)
+            else:
+                os.chmod(tmp_name, mode, dir_fd=dir_fd)
         # os.fdopen takes ownership (same seam the legacy path uses, so the
         # established ENOSPC fault-injection tests keep exercising this code).
         handle = os.fdopen(tmp_fd, "w", encoding="utf-8")
@@ -889,6 +896,53 @@ async def write_file(path: str, content: str) -> str:
         raise ToolError(f"Error writing file: {e}") from e
 
 
+def _bounded_glob(directory: Path, pattern: str):
+    """Match glob components while bounding entries inspected across the tree."""
+    if not pattern:
+        raise ValueError("empty glob pattern")
+    parts = tuple(part for part in Path(pattern).parts if part and part != ".")
+    if not parts:
+        yield directory
+        return
+    if any("**" in part and part != "**" for part in parts):
+        raise ValueError("recursive glob must be a complete path component")
+
+    def closure(states):
+        states = set(states)
+        for index in range(len(parts)):
+            if index in states and parts[index] == "**":
+                states.add(index + 1)
+        return states
+
+    initial_states = closure({0})
+    stack = [(directory, initial_states)]
+    inspected = 0
+    yielded = 0
+    directories_only = pattern.endswith("/") or parts[-1] == "**"
+    if len(parts) in initial_states:
+        yield directory
+        yielded += 1
+    while stack and inspected < 4096 and yielded < 200:
+        current, states = stack.pop()
+        with os.scandir(current) as entries:
+            for entry in islice(entries, 4096 - inspected):
+                inspected += 1
+                if entry.is_symlink():
+                    continue
+                next_states = closure({index if parts[index] == "**" else index + 1
+                                       for index in states if index < len(parts)
+                                       and (parts[index] == "**" or fnmatch(entry.name, parts[index]))})
+                candidate = Path(entry.path)
+                is_directory = entry.is_dir(follow_symlinks=False)
+                if len(parts) in next_states and (not directories_only or is_directory):
+                    yield candidate
+                    yielded += 1
+                    if yielded >= 200:
+                        return
+                if is_directory and any(index < len(parts) for index in next_states):
+                    stack.append((candidate, next_states))
+
+
 @registry.register(
     name="list_files",
     description="List files in a directory. Returns filenames with sizes.",
@@ -927,9 +981,9 @@ async def list_files(path: str = ".", pattern: str = "*") -> str:
     try:
 
         def _list():
-            files = list(dir_path.glob(pattern))[:200]
+            files = list(_bounded_glob(dir_path, pattern))
             if not files:
-                return f"No files found matching '{pattern}' in {path}"
+                return f"No files found matching '{pattern}' in {path} (inspection limited to 4096 entries)"
             lines = []
             for f in sorted(files)[:200]:
                 try:
@@ -947,6 +1001,7 @@ async def list_files(path: str = ".", pattern: str = "*") -> str:
                     lines.append(f"{f.relative_to(dir_path)} ({size} bytes)")
                 elif f.is_dir():
                     lines.append(f"{f.relative_to(dir_path)}/ (dir)")
+            lines.append("(Listing limited to 200 matches and 4096 inspected entries.)")
             return "\n".join(lines)
 
         return await asyncio.to_thread(_list)

@@ -118,9 +118,9 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         name="kimi",
         # Kimi Code (overseas base; China uses
         # https://api.kimi.com/coding/v1). Subscribers create a key in the
-        # Kimi Code Console; the OpenAI-compatible endpoint documents a
-        # top-level reasoning_effort (low/high/max) for k3 / k3-256k /
-        # kimi-for-coding, so the OpenAI-style knob is wired as-is.
+        # Kimi Code Console. The provider-aware reasoning vocabulary is
+        # low/high/max (not medium), passed as top-level reasoning_effort
+        # only when explicitly configured; unset uses the endpoint default.
         base_url="https://api.kimi.ai/coding/v1",
         api_key_env="KIMI_API_KEY",
         default_model="kimi-for-coding",

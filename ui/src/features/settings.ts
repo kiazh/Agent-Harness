@@ -450,14 +450,14 @@ export const settingsCommands: Command[] = [
 	},
 	{
 		name: "effort",
-		description: "Show or set reasoning effort (OpenAI: per-model low..max)",
+		description: "Show or set reasoning effort (provider-specific tiers)",
 		argumentHint: "[low|medium|high|xhigh|max|off]",
 		getArgumentCompletions: options([
 			["low", "Shallow reasoning, fast and cheap"],
-			["medium", "Balanced reasoning depth"],
+			["medium", "Balanced reasoning depth (not Kimi)"],
 			["high", "Deep reasoning for hard problems"],
 			["xhigh", "Extra-high (OpenAI catalog tier)"],
-			["max", "Maximum depth (OpenAI catalog tier)"],
+			["max", "Maximum depth (Kimi or supported OpenAI account models)"],
 			["off", "Provider default (no effort override)"],
 		]),
 		async run(args, host) {

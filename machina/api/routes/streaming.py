@@ -176,7 +176,7 @@ async def _stream_session(
             source_close_timeout_s=RETIRE_JOIN_TIMEOUT_SECONDS,
         )
 
-        async def close_turn(*, driver_settled: bool = True):
+        async def close_turn(*, driver_settled: bool = True, retirement_task: asyncio.Task | None = None):
             """Close the stream and the engine; ``driver_settled=False`` when the
             stream's step task was quarantined (its own unwind owns the stream
             close — an ``aclose`` on a still-running generator would raise)."""
@@ -187,7 +187,7 @@ async def _stream_session(
                     if stream is not None and driver_settled:
                         await stream.aclose()
                 finally:
-                    closed = await engine.close(cancelled=_stream_cancelled)
+                    closed = await engine.close(cancelled=_stream_cancelled, retirement_task=retirement_task)
                 return closed
 
             return await await_joined(finish())
@@ -219,7 +219,14 @@ async def _stream_session(
             from machina.core.agent_factory import build_agent_for_session
 
             _record_stage("building_agent")
-            agent = await _owned_step(build_agent_for_session(session), 300)
+            async def build_owned_agent():
+                built = await build_agent_for_session(session)
+                # Adoption belongs to the build task: even a build that resists
+                # cancellation must hand its resources to deferred engine close.
+                engine.attach(built)
+                return built
+
+            agent = await _owned_step(build_owned_agent(), 300)
             _record_stage("waiting_for_provider")
             # Total turn timeout: a per-anext wait_for against a fixed
             # deadline so a hung provider cannot hold the stream forever.
@@ -433,8 +440,9 @@ async def _stream_session(
                         # operation gets the bound again; at the deadline the
                         # step is quarantined by ``await_joined_bounded``
                         # (cancelled, strongly referenced, failure observed)
-                        # and ``close_turn()`` proceeds, so the provider close
-                        # and claim release can never be held hostage.
+                        # and ``close_turn()`` returns a pending outcome. Provider
+                        # close and claim release wait for actual retirement;
+                        # renewal continues to exclude a successor meanwhile.
                         try:
                             await await_joined_bounded(
                                 active,
@@ -449,7 +457,7 @@ async def _stream_session(
                         # generator (``aclose`` would raise); its own unwind
                         # closes it, exactly like the engine's H01 rule. Only
                         # a settled driver lets the stream close here.
-                        await close_turn(driver_settled=active.done())
+                        await close_turn(driver_settled=active.done(), retirement_task=active)
 
                     runtime_services.track(active)
                     runtime_services.track(asyncio.create_task(retire_execution()))

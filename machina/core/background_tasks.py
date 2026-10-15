@@ -161,8 +161,8 @@ async def await_joined_bounded(operation, *, timeout: float, label: str) -> bool
     the same operation gets the bound again (mirrors the claim-release
     contract); when the bound expires the operation is quarantined — cancelled,
     strongly referenced, and its eventual failure observed — and ``False`` is
-    returned so the caller can continue bounded cleanup; ownership release must
-    never wait on resistant work. ``True`` means the operation settled; a
+    returned so the caller can return a pending outcome. It is not proof of
+    retirement: owners must defer resource/claim release until the task ends. ``True`` means the operation settled; a
     settled failure is raised (or logged when the caller's cancellation is
     already propagating).
     """

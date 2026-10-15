@@ -420,8 +420,6 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
                     event = sse_event(line)
                     if event is not None:
                         event_type = event.strip()
-                        if event_type == "message_stop":
-                            saw_terminal = True
                         continue
                     data = sse_data(line)
                     if data is None:
@@ -505,7 +503,7 @@ class AnthropicProvider(LLMProvider, RateLimitBinding):
                             native["_arguments"] += delta["partial_json"]
                     elif event_type == "message_delta":
                         output_tokens = data.get("usage", {}).get("output_tokens", output_tokens)
-                    elif event_type == "message_stop" or data.get("type") == "message_stop":
+                    elif data.get("type") == "message_stop":
                         saw_terminal = True
             if not saw_terminal:
                 # A clean EOF without ``message_stop`` is a truncation: the

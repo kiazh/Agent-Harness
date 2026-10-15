@@ -129,6 +129,8 @@ def _validate_key(key: str) -> str:
 def _normalize_key_token(raw: str) -> str:
     """Upper-case a dotenv key token; '' when it is not a well-formed KEY."""
     token = raw.strip()
+    if token.startswith("export ") or token.startswith("export\t"):
+        token = token[6:].lstrip()
     return token.upper() if _KEY_RE_CI.match(token) else ""
 
 
@@ -164,7 +166,13 @@ def find_env_file(start: Path | None = None) -> Path:
 
 
 def read_env_values(path: Path | None = None) -> dict[str, str]:
-    """Parse ``KEY=value`` pairs from a dotenv file (no interpolation)."""
+    """Read persisted dotenv assignments without resolving interpolation.
+
+    Management callers use these raw parsed values to preserve templates and
+    detect/remove assignments, including empty ones. Runtime effective values
+    come from Config.get/load_dotenv; the installer env_get likewise resolves
+    interpolation with existing process environment taking precedence.
+    """
     target = path or find_env_file()
     values: dict[str, str] = {}
     try:
@@ -177,26 +185,15 @@ def read_env_values(path: Path | None = None) -> dict[str, str]:
         return values
     except ValueError:
         return values
-    for line in text.splitlines():
-        if len(line.encode("utf-8")) > _LINE_MAX_BYTES:
-            continue
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        raw_key, _, raw_value = stripped.partition("=")
+    from io import StringIO
+
+    from dotenv import dotenv_values
+
+    # Share runtime dotenv syntax, including export, quoting and comments.
+    for raw_key, value in dotenv_values(stream=StringIO(text), interpolate=False).items():
         key = _normalize_key_token(raw_key)
-        if not key:
-            continue
-        value = raw_value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-            quote_char = value[0]
-            value = value[1:-1]
-            if quote_char == '"':
-                # Undo _quote's backslash/quote escapes so ``\`` and ``"``
-                # round-trip (R4-043); single-quoted values stay literal,
-                # mirroring python-dotenv.
-                value = _unescape(value)
-        values[key] = value
+        if key and value is not None and len(value.encode("utf-8")) <= _LINE_MAX_BYTES:
+            values[key] = value
     return values
 
 
@@ -237,10 +234,26 @@ def _env_line_key(line: str) -> str:
     line is updated/removed in place; writers emit the canonical uppercase
     spelling.
     """
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#") or "=" not in stripped:
-        return ""
-    return _normalize_key_token(stripped.partition("=")[0])
+    from io import StringIO
+
+    from dotenv.parser import parse_stream
+
+    # Use the same parsed identity for quoted/exported/multiline assignments
+    # as the reader and installer; raw partitioning misses quoted keys.
+    for binding in parse_stream(StringIO(line)):
+        if binding.key is not None:
+            return _normalize_key_token(binding.key)
+    return ""
+
+
+def _env_bindings(text: str) -> list[str]:
+    """Keep multiline dotenv assignments together during updates/removal."""
+    from io import StringIO
+
+    from dotenv.parser import parse_stream
+
+    return [binding.original.string.rstrip("\r\n")
+            for binding in parse_stream(StringIO(text))]
 
 
 def set_env_values(
@@ -267,7 +280,7 @@ def set_env_values(
     if target.is_file():
         if target.stat().st_size > _ENV_MAX_BYTES:
             raise ValueError(f".env file exceeds {_ENV_MAX_BYTES} bytes")
-        lines = target.read_text(encoding="utf-8").splitlines()
+        lines = _env_bindings(target.read_text(encoding="utf-8"))
     elif not create:
         raise OSError(f".env not found: {target}")
     seen: set[str] = set()
@@ -380,7 +393,7 @@ def remove_env_values(keys: list[str] | tuple[str, ...], path: Path | None = Non
         raise ValueError(f".env file exceeds {_ENV_MAX_BYTES} bytes")
     removed: set[str] = set()
     kept: list[str] = []
-    for line in target.read_text(encoding="utf-8").splitlines():
+    for line in _env_bindings(target.read_text(encoding="utf-8")):
         key = _env_line_key(line)
         if key in normalized:
             removed.add(key)

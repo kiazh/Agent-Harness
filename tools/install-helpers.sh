@@ -155,11 +155,16 @@ resolve_env_file() {
 
 # env_get <key> [file] — stdout: value of KEY ("" when absent).
 env_get() {
-  local key="$1" file="${2:-.env}" line
+  local key="$1" file="${2:-.env}"
   [ -f "$file" ] || return 0
-  line="$(grep -E "^${key}=" "$file" 2>/dev/null | tail -n 1 || true)"
-  [ -n "$line" ] || return 0
-  printf '%s' "${line#*=}"
+  "${VENV_PY:-${PYTHON_BIN:-python3}}" - "$key" "$file" <<'PYENV'
+import os
+import sys
+from dotenv.main import DotEnv
+# Runtime load_dotenv uses override=False for both interpolation and assignment.
+values = DotEnv(sys.argv[2], interpolate=True, override=False).dict()
+print(os.environ.get(sys.argv[1], values.get(sys.argv[1])) or "", end="")
+PYENV
 }
 
 # env_set <key> <value> [file] — atomically set KEY=VALUE, mode 0600.
@@ -177,9 +182,32 @@ env_set() {
   tmp="$(mktemp "${file}.tmp.XXXXXX" 2>/dev/null)" || return 1
   chmod 600 "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
   if [ -f "$file" ]; then
-    grep -v -E "^${key}=" "$file" > "$tmp" 2>/dev/null || true
+    # Parse whole assignments so quoted multiline/exported values are replaced too.
+    "${VENV_PY:-${PYTHON_BIN:-python3}}" - "$key" "$file" > "$tmp" <<'PYENV'
+import sys
+from dotenv.parser import parse_stream
+with open(sys.argv[2], encoding="utf-8") as source:
+    for binding in parse_stream(source):
+        if binding.key != sys.argv[1]:
+            print(binding.original.string, end="")
+# Separate the appended assignment when the original had no final newline.
+print()
+PYENV
+    [ "$?" -eq 0 ] || { rm -f "$tmp"; return 1; }
   fi
-  printf '%s=%s\n' "$key" "$value" >> "$tmp" || { rm -f "$tmp"; return 1; }
+  # printf is a shell builtin: the credential crosses stdin, never child argv.
+  if ! printf '%s' "$value" | "${VENV_PY:-${PYTHON_BIN:-python3}}" -c '
+import sys
+value = sys.stdin.read()
+if any(c in value for c in "\r\n\x00"):
+    raise ValueError("env value contains a line break or NUL")
+quote = chr(39)
+slash = chr(92)
+print(sys.argv[1] + "=" + quote + value.replace(slash, slash + slash).replace(quote, slash + quote) + quote)
+' "$key" >> "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
   mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
   chmod 600 "$file" 2>/dev/null || true
   return 0
@@ -190,7 +218,7 @@ env_set() {
 # replace it. Any other present value is custom and must be preserved.
 db_url_is_installer_default() {
   local file="${1:-.env}" current
-  current="$(env_get DATABASE_URL "$file")"
+  current="$(env_get DATABASE_URL "$file")" || return 2
   [ -z "$current" ] && return 0
   [ "$current" = "$INSTALLER_DEFAULT_DB_URL" ] && return 0
   return 1
@@ -201,11 +229,13 @@ db_url_is_installer_default() {
 # URL was written OR when a custom URL was deliberately preserved; returns
 # 1 only when the write itself failed.
 maybe_write_db_url() {
-  local url="$1" file="${2:-.env}"
+  local url="$1" file="${2:-.env}" status
   if db_url_is_installer_default "$file"; then
     env_set DATABASE_URL "$url" "$file" || return 1
     log "Wrote generated Postgres credentials to DATABASE_URL in $file (mode 0600)"
   else
+    status=$?
+    [ "$status" -eq 1 ] || return "$status"
     warn "Reusing existing custom DATABASE_URL in $file; ensure it matches the new database if init fails"
   fi
   return 0
@@ -263,7 +293,7 @@ start_docker_db() {
       maybe_write_db_url "$container_url" "$ENV_FILE" || return 1
       log "machina-db $container_state; reusing it and reconciling DATABASE_URL to its credentials"
     else
-      env_url="$(env_get DATABASE_URL "$ENV_FILE")"
+      env_url="$(env_get DATABASE_URL "$ENV_FILE")" || return 2
       if [ "$env_url" != "$container_url" ]; then
         warn "machina-db is $container_state but its password differs from DATABASE_URL in $ENV_FILE."
         warn "Refusing to reuse it: init would retry for 60s and Homebrew cannot repair a custom DATABASE_URL."

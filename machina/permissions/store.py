@@ -636,7 +636,9 @@ async def resolve_decision(request_id: str, verdict: str, principal: str) -> dic
     return {"request_id": request_id, "status": verdict}
 
 
-async def claim_execution(request_id: str, *, digest: str, session_id: str) -> bool:
+async def claim_execution(
+    request_id: str, *, digest: str, session_id: str, agent_id: str | None = None
+) -> bool:
     """Atomically claim an approved action for exactly one execution.
 
     approved → claimed, conditional on digest + session match. Exactly one
@@ -664,6 +666,7 @@ async def claim_execution(request_id: str, *, digest: str, session_id: str) -> b
                 and not rec.get("consumed")
                 and rec.get("digest") == digest
                 and rec.get("session_id") == str(session_id)
+                and agent_id is not None and rec.get("agent_id") == agent_id
             )
             if mem_ok:
                 rec["status"] = "claimed"
@@ -676,11 +679,12 @@ async def claim_execution(request_id: str, *, digest: str, session_id: str) -> b
             updated = await conn.fetchrow(
                 """UPDATE permission_approvals SET status = 'claimed', consumed = TRUE
                    WHERE request_id = $1 AND status = 'approved' AND digest = $2
-                     AND session_id = $3
+                     AND session_id = $3 AND agent_id = $4
                    RETURNING request_id""",
                 request_id,
                 digest,
                 uuid.UUID(session_id) if session_id else None,
+                agent_id,
             )
             ok = updated is not None
     except Exception:
@@ -809,7 +813,7 @@ async def get_approval(request_id: str) -> dict | None:
     return public_view(_with_completeness(mem_copy))
 
 
-async def find_pending(session_id: str, digest: str) -> dict | None:
+async def find_pending(session_id: str, digest: str, *, agent_id: str | None = None) -> dict | None:
     """Newest pending action for this session+digest, through ``public_view``.
 
     F4/R4-105b: the raw ``target`` column is persisted unredacted, so the
@@ -823,10 +827,11 @@ async def find_pending(session_id: str, digest: str) -> dict | None:
         try:
             row = await db.fetchrow(
                 """SELECT * FROM permission_approvals
-                   WHERE session_id = $1 AND digest = $2 AND status = 'pending'
+                   WHERE session_id = $1 AND digest = $2 AND agent_id = $3 AND status = 'pending'
                    ORDER BY created_at DESC LIMIT 1""",
                 uuid.UUID(session_id),
                 digest,
+                agent_id,
             )
             if row:
                 return public_view(_with_completeness(dict(row)))
@@ -839,6 +844,7 @@ async def find_pending(session_id: str, digest: str) -> dict | None:
             if (
                 rec.get("session_id") == str(session_id)
                 and rec.get("digest") == digest
+                and agent_id is not None and rec.get("agent_id") == agent_id
                 and rec.get("status") == "pending"
                 and not rec.get("consumed")
             ):
@@ -846,7 +852,7 @@ async def find_pending(session_id: str, digest: str) -> dict | None:
     return None
 
 
-async def find_approved_unclaimed(session_id: str, digest: str) -> dict | None:
+async def find_approved_unclaimed(session_id: str, digest: str, *, agent_id: str | None = None) -> dict | None:
     """Approved-but-never-executed action for headless resume (no new card).
 
     Legacy rows without a reviewable proposal never resume: a digest alone
@@ -863,11 +869,12 @@ async def find_approved_unclaimed(session_id: str, digest: str) -> dict | None:
         try:
             row = await db.fetchrow(
                 """SELECT * FROM permission_approvals
-                   WHERE session_id = $1 AND digest = $2 AND status = 'approved'
+                   WHERE session_id = $1 AND digest = $2 AND agent_id = $3 AND status = 'approved'
                      AND consumed = FALSE
                    ORDER BY created_at DESC LIMIT 1""",
                 uuid.UUID(session_id),
                 digest,
+                agent_id,
             )
             if row:
                 candidate = dict(row)
@@ -883,6 +890,7 @@ async def find_approved_unclaimed(session_id: str, digest: str) -> dict | None:
             if (
                 rec.get("session_id") == str(session_id)
                 and rec.get("digest") == digest
+                and agent_id is not None and rec.get("agent_id") == agent_id
                 and rec.get("status") == "approved"
                 and not rec.get("consumed")
                 # Durable-origin approvals are DB-authoritative only; without

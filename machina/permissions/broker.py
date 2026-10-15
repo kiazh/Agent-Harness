@@ -159,7 +159,7 @@ class PermissionBroker:
                 fresh = await _store.create_approval(req, principal="http")
                 raise NeedsApproval(fresh)
             if not await _store.claim_execution(
-                resume_id, digest=req.digest, session_id=req.session_id
+                resume_id, digest=req.digest, session_id=req.session_id, agent_id=req.agent_id
             ):
                 raise ApprovalDenied("approval already consumed")
             req.approval_id = resume_id
@@ -196,15 +196,15 @@ class PermissionBroker:
 
     async def _guard_headless(self, req: ActionRequest) -> ActionRequest:
         """No approver: resume an approved action or pause with a record."""
-        existing = await _store.find_pending(req.session_id, req.digest)
+        existing = await _store.find_pending(req.session_id, req.digest, agent_id=req.agent_id)
         if existing is not None:
             raise NeedsApproval(existing)
         # LP-02 resume: an approved-but-unclaimed action is claimed for this
         # fresh execution (revalidated). No new card, no permanent grant.
-        approved = await _store.find_approved_unclaimed(req.session_id, req.digest)
+        approved = await _store.find_approved_unclaimed(req.session_id, req.digest, agent_id=req.agent_id)
         if approved is not None:
             if await _store.claim_execution(
-                approved["request_id"], digest=req.digest, session_id=req.session_id
+                approved["request_id"], digest=req.digest, session_id=req.session_id, agent_id=req.agent_id
             ):
                 req.approval_id = approved["request_id"]
                 _stamp_execution(req)
@@ -240,7 +240,7 @@ class PermissionBroker:
                         "legacy approval lacks a reviewable proposal; re-approval required"
                     ) from None
                 if await _store.claim_execution(
-                    req.request_id, digest=req.digest, session_id=req.session_id
+                    req.request_id, digest=req.digest, session_id=req.session_id, agent_id=req.agent_id
                 ):
                     req.approval_id = req.request_id
                     _stamp_execution(req)
@@ -250,7 +250,7 @@ class PermissionBroker:
                 raise NeedsApproval(current or {"request_id": req.request_id}) from None
             audit_permission_verdict("denied", req, reason=f"approval already {state}")
             raise ApprovalDenied(f"approval already {state}") from None
-        existing = await _store.find_pending(req.session_id, req.digest)
+        existing = await _store.find_pending(req.session_id, req.digest, agent_id=req.agent_id)
         if existing is not None:
             # Queue/combine: no concurrent card flood for the same action.
             raise NeedsApproval(existing)
@@ -280,7 +280,7 @@ class PermissionBroker:
             raise ApprovalDenied("action changed after approval; re-approval required") from None
         # Execution claim: exactly one executor per approval (LP-01).
         if not await _store.claim_execution(
-            req.request_id, digest=req.digest, session_id=req.session_id
+            req.request_id, digest=req.digest, session_id=req.session_id, agent_id=req.agent_id
         ):
             audit_permission_verdict("denied", req, reason="approval already consumed")
             raise ApprovalDenied("approval already consumed by another execution") from None
@@ -327,7 +327,7 @@ class PermissionBroker:
             raise NeedsApproval({**approval, "status": "expired"}) from None
         if state == "approved" and not current.get("consumed"):
             if current.get("digest") == req.digest and await _store.claim_execution(
-                req.request_id, digest=req.digest, session_id=req.session_id
+                req.request_id, digest=req.digest, session_id=req.session_id, agent_id=req.agent_id
             ):
                 req.approval_id = req.request_id
                 _stamp_execution(req)

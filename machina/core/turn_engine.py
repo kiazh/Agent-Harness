@@ -17,7 +17,7 @@ delegate to:
   payload (text/tokens/iterations/toolCalls/needsApproval).
 - :meth:`TurnEngine.close` owns the ordered, bounded cleanup copied from the
   gateway's audited finally pyramids: bounded source shutdown (cancellation-
-  resistant work is quarantined, never awaited past its deadline), join
+  resistant work defers resource/claim release until retirement), join
   optional background work, close the owned provider, stop renewal, shielded
   bounded claim release, join renewal.
 
@@ -36,9 +36,8 @@ Deliberate semantics mirrored from the audited transports:
 - The renewal task is stopped before the release and joined after it; a
   shutdown cancellation delivered while joining a *still-running* renewal task
   propagates, while the expected self-cancelled join is absorbed (W7).
-- A cancellation delivered during the optional background join still runs
-  provider close + release before propagating (the transports' outer-finally
-  guarantee).
+- Cancellation during an optional background join still schedules cleanup;
+  resistant owned tasks defer provider close and release until retirement.
 - ``close()`` never raises for ordinary failures; every fallback is reported
   through ``record_failure`` under the transport's boundary.
 """
@@ -143,9 +142,9 @@ class TurnEvent:
 class TurnClose:
     """Outcome of :meth:`TurnEngine.close`.
 
-    ``release_failed`` means ownership is unknown — the release raised, or it
-    did not settle within ``release_timeout_s`` (including after a consumed
-    mid-release cancellation): the caller must not emit a terminal completion
+    ``release_failed`` means ownership is unproven or still held: release was
+    rejected/raised, did not settle within its bound, or owned effects have not
+    retired yet (including after a consumed mid-release cancellation): the caller must not emit a terminal completion
     claiming the turn is unowned. ``cancelled`` / ``timed_out`` are the
     transport's classifications, echoed back for terminal payloads.
     """
@@ -159,7 +158,7 @@ class TurnClose:
 
 
 class TurnEngine:
-    """Per-turn coordinator; construct one engine per turn, call close() once."""
+    """Per-turn coordinator; deferred cleanup retries after owned work retires."""
 
     def __init__(
         self,
@@ -188,6 +187,9 @@ class TurnEngine:
         self._agent: Any | None = None
         self._source: Any | None = None
         self._source_task: asyncio.Task | None = None
+        self._source_retirement: asyncio.Future | None = None
+        self._transport_retirement: asyncio.Task | None = None
+        self._deferred_close_task: asyncio.Task | None = None
         self._redactor = StreamingSecretRedactor()
         self._tail_flushed = False
         self._final: Any | None = None
@@ -339,25 +341,29 @@ class TurnEngine:
         finally:
             await self._close_source()
 
-    async def _close_source(self) -> None:
-        """Bounded source shutdown; resistant work is quarantined, never awaited.
+    async def _close_source(self) -> bool:
+        """Bound the caller's wait without treating cancellation as retirement.
 
-        The active driver is cancelled and joined within
-        ``source_close_timeout_s``; the source is then closed within the same
-        bound. H01: cleanup can never hang on a cancellation-resistant driver
-        or finalizer — their unsettled work is cancelled, strongly referenced,
-        and observed by :func:`await_joined_bounded`, and these bounded waits
-        return so claim release can proceed (the previous unbounded
-        ``await_joined`` left the session claim held and renewed forever).
-        Idempotent: whoever reads the source reference first owns its single
-        ``aclose``.
+        False retains the source driver/finalizer for deferred cleanup. Its
+        provider and renewed session claim remain owned until it really ends.
         """
+        current = asyncio.current_task()
+        transport = self._transport_retirement
+        if transport is not None and transport is not current and not transport.done():
+            return False
+        if transport is not None and transport.done():
+            self._transport_retirement = None
+        pending = self._source_retirement
+        if pending is not None and pending is not current and not pending.done():
+            return False
+        self._source_retirement = None
         driver = self._source_task
-        if driver is not None and driver is not asyncio.current_task() and not driver.done():
+        if driver is not None and driver is not current and not driver.done():
+            self._source_retirement = driver
             driver.cancel()
             try:
-                settled = await await_joined_bounded(
-                    asyncio.gather(driver, return_exceptions=True),
+                await await_joined_bounded(
+                    driver,
                     timeout=self._source_close_timeout_s,
                     label=f"{self._boundary}.source_driver",
                 )
@@ -365,23 +371,22 @@ class TurnEngine:
                 raise
             except Exception as exc:
                 self._record("source_driver", exc)
-                settled = True
-            if not settled:
-                # The quarantined driver still owns the source generator; its
-                # own unwind closes the source (an ``aclose`` here would race
-                # the actively-executing generator).
-                logger.warning(
-                    "turn source driver did not settle within %.2fs; source close deferred",
-                    self._source_close_timeout_s,
-                )
-                return
+            if not driver.done():
+                return False
+            # The driver's own finally may have installed a resistant source
+            # finalizer. Clear only our driver barrier, then re-check all state.
+            if self._source_retirement is driver:
+                self._source_retirement = None
+            return await self._close_source()
         source = self._source
         if source is None:
-            return
+            return True
         self._source = None
+        closing = asyncio.ensure_future(source.aclose())
+        self._source_retirement = closing
         try:
             await await_joined_bounded(
-                source.aclose(),
+                closing,
                 timeout=self._source_close_timeout_s,
                 label=f"{self._boundary}.source_close",
             )
@@ -389,6 +394,39 @@ class TurnEngine:
             raise
         except Exception as exc:
             self._record("source_close", exc)
+        if closing.done():
+            self._source_retirement = None
+            return True
+        return False
+
+    def _pending_retirements(self) -> set[asyncio.Future]:
+        current = asyncio.current_task()
+        tasks = [self._source_retirement, self._transport_retirement, self._source_task]
+        if self._agent is not None:
+            tasks.extend(getattr(self._agent, "_consolidation_tasks", ()))
+            tasks.extend(getattr(self._agent, "_learning_tasks", ()))
+        return {task for task in tasks if isinstance(task, asyncio.Future) and task is not current and not task.done()}
+
+    def _defer_close(self, *, cancelled: bool, timed_out: bool) -> None:
+        """Keep renewal/resources until every still-owned operation retires."""
+        pending = self._pending_retirements()
+        if not pending:
+            return
+        existing = self._deferred_close_task
+        if existing is not None and not existing.done():
+            return
+
+        async def retire() -> None:
+            # Independent barriers preserve both an HTTP driver and a source
+            # finalizer: completion of one never overwrites proof of the other.
+            await asyncio.wait(pending)
+            self._deferred_close_task = None
+            await self.close(cancelled=cancelled, timed_out=timed_out)
+
+        task = asyncio.create_task(retire())
+        self._deferred_close_task = task
+        task.add_done_callback(self._observe_release)
+        runtime_services.track(task)
 
     def _translate(self, event: Any) -> TurnEvent | None:
         """Map one agent ``StreamEvent`` to its semantic counterpart."""
@@ -530,32 +568,25 @@ class TurnEngine:
 
     # ─── cleanup ───────────────────────────────────────────────────────────
 
-    async def close(self, *, cancelled: bool = False, timed_out: bool = False) -> TurnClose:
-        """Bounded, ordered cleanup; call exactly once after the stream.
+    async def close(
+        self, *, cancelled: bool = False, timed_out: bool = False,
+        retirement_task: asyncio.Task | None = None,
+    ) -> TurnClose:
+        """Bound foreground cleanup; never release ahead of owned effects.
 
-        Order: source shutdown (bounded; resistant work is quarantined) ->
-        notification hooks -> join optional background work -> close the owned
-        provider -> stop renewal -> shielded bounded release -> join renewal.
-        Ordinary failures (including a failed claim release) are reported and
-        returned in :class:`TurnClose`, never raised. A cancellation delivered
-        during the optional-work join still runs provider close + release
-        before it propagates; one delivered during the release itself is
-        consumed (RF4-C1); one delivered while joining a still-running renewal
-        task propagates (W7). Source shutdown is bounded by
-        ``source_close_timeout_s`` so a resistant source can never block the
-        release (H01).
+        A transport may pass its resistant step task, including an agent-build
+        task not yet visible as a source driver. Unsettled work returns a pending
+        outcome and defers provider/claim cleanup while renewal stays active.
         """
         self._stage("cleanup_started")
         agent = self._agent
+        source_settled = False
+        release_failed = True
+        if retirement_task is not None and not retirement_task.done():
+            self._transport_retirement = retirement_task
         try:
-            try:
-                await self._close_source()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                # Ordinary source failures are reported, never mask the release.
-                self._record("source_shutdown", exc)
-            if agent is not None:
+            source_settled = await self._close_source()
+            if source_settled and agent is not None:
                 self._stage("joining_optional_work")
                 try:
                     await join_agent_background_tasks(
@@ -564,21 +595,20 @@ class TurnEngine:
                 except Exception as exc:
                     self._record("join_optional", exc)
         finally:
-            try:
-                self._stage("closing_owned_clients")
-                if agent is not None:
-                    try:
-                        await _agent_factory.close_agent_provider(agent)
-                    except (TimeoutError, asyncio.CancelledError):
-                        logger.warning(
-                            "Provider close timed out for session %s", self.spec.session_id
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Could not close turn provider for session %s", self.spec.session_id
-                        )
-            finally:
-                release_failed = await self._release_claim()
+            if self._pending_retirements():
+                self._defer_close(cancelled=cancelled, timed_out=timed_out)
+            else:
+                try:
+                    self._stage("closing_owned_clients")
+                    if agent is not None:
+                        try:
+                            await _agent_factory.close_agent_provider(agent)
+                        except (TimeoutError, asyncio.CancelledError):
+                            logger.warning("Provider close timed out for session %s", self.spec.session_id)
+                        except Exception:
+                            logger.exception("Could not close turn provider for session %s", self.spec.session_id)
+                finally:
+                    release_failed = await self._release_claim()
         return TurnClose(
             cancelled=cancelled,
             timed_out=timed_out,
@@ -630,16 +660,16 @@ class TurnEngine:
     async def _await_release(self, release: asyncio.Task) -> bool:
         """Bounded wait(s) on the shielded release; True = ownership unproven."""
         try:
-            await asyncio.wait_for(asyncio.shield(release), timeout=self._release_timeout_s)
-            return False
+            released = await asyncio.wait_for(asyncio.shield(release), timeout=self._release_timeout_s)
+            return released is not True
         except asyncio.CancelledError:
             # Cancellation delivered mid-release (RF4-C1): consume it once and
             # give the same release the shared bound again. A second
             # cancellation is uncertainty too: fail closed instead of
             # continuing cleanup as if the claim were released.
             try:
-                await asyncio.wait_for(asyncio.shield(release), timeout=self._release_timeout_s)
-                return False
+                released = await asyncio.wait_for(asyncio.shield(release), timeout=self._release_timeout_s)
+                return released is not True
             except asyncio.CancelledError:
                 return self._retain_release(release, "cancelled again")
             except TimeoutError:

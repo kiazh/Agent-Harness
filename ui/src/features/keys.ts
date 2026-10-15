@@ -13,9 +13,20 @@
 // Ordering stays stable: catalog keys, then named providers in list order.
 
 import { table } from "../format.ts";
-import type { ProvidersListResult, SecretsListResult, SecretsSetResult } from "../protocol.ts";
+import type { EffectiveCredentialState, ProvidersListResult, SecretsListResult, SecretsSetResult } from "../protocol.ts";
 import { splitSub } from "../commands.ts";
 import { confirm, options, type Command, type FeatureHost } from "./types.ts";
+
+function printSet(host: FeatureHost, result: SecretsSetResult): void {
+    host.print(result.message ?? `${result.key} set${result.persisted ? ` (saved to ${result.envFile})` : " (this session only)"}. Takes effect on the next turn.`,
+        result.effectiveUpdated === false ? "info" : "success");
+}
+
+async function clearKey(host: FeatureHost, key: string): Promise<void> {
+    const result = await host.request<EffectiveCredentialState>("secrets.clear", { key });
+    host.print(result.message ?? `${key.toUpperCase()} cleared (session and .env).`,
+        result.effectiveUpdated === false ? "info" : "success");
+}
 
 // Mirrors PROVIDER_KEYS + MANAGED_ENV_KEYS in machina/security/env_file.py and
 // machina/gateway/features/secrets.py: `secrets.set` refuses anything outside
@@ -71,8 +82,8 @@ export async function loadKeyRows(host: FeatureHost): Promise<{ rows: KeyRow[]; 
 	const { secrets, envFile } = await host.request<SecretsListResult>("secrets.list");
 	const rows: KeyRow[] = secrets.map((secret) => ({
 		key: secret.key,
-		status: secret.set ? "set" : "not set",
-		set: secret.set,
+		status: secret.effectiveSet === null ? "unresolved" : (secret.effectiveSet ?? secret.set) ? `set${secret.effectiveSource ? ` (${secret.effectiveSource})` : ""}` : "not set",
+		set: secret.effectiveSet ?? secret.set,
 		editable: true,
 		description: secret.description,
 	}));
@@ -143,10 +154,7 @@ export const keysCommand: Command = {
 			if (!value) throw new Error("Usage: /keys set KEY VALUE [--no-save]");
 			try {
 				const result = await host.request<SecretsSetResult>("secrets.set", { key, value, persist });
-				host.print(
-					`${result.key} set${result.persisted ? ` (saved to ${result.envFile})` : " (this session only)"}. Takes effect on the next turn.`,
-					"success",
-				);
+				printSet(host, result);
 			} catch (error) {
 				throw new Error(`Could not save ${key}: ${redactSecret(value, error instanceof Error ? error.message : String(error))}`);
 			}
@@ -156,8 +164,7 @@ export const keysCommand: Command = {
 			const key = rest.trim();
 			if (!key) throw new Error("Usage: /keys clear KEY");
 			const picked = await resolveKey(host, key);
-			await host.request("secrets.clear", { key: picked });
-			host.print(`${picked.toUpperCase()} cleared (session and .env).`, "success");
+			await clearKey(host, picked);
 			return;
 		}
 		throw new Error(`Unknown /keys option "${sub}". Try: list, set, clear.`);
@@ -206,8 +213,7 @@ async function openMenu(host: FeatureHost): Promise<void> {
 			const confirmed = await confirm(host, `Clear ${info.key}?`, "Clear");
 			if (!confirmed) continue;
 			try {
-				await host.request("secrets.clear", { key: info.key });
-				host.print(`${info.key} cleared (session and .env).`, "success");
+				await clearKey(host, info.key);
 			} catch (error) {
 				host.print(`Could not clear ${info.key}: ${error instanceof Error ? error.message : String(error)}`, "error");
 			}
@@ -222,10 +228,7 @@ async function openMenu(host: FeatureHost): Promise<void> {
 		if (value === undefined) continue;
 		try {
 			const result = await host.request<SecretsSetResult>("secrets.set", { key: info.key, value, persist: true });
-			host.print(
-				`${result.key} set${result.persisted ? ` (saved to ${result.envFile})` : " (this session only)"}. Takes effect on the next turn.`,
-				"success",
-			);
+			printSet(host, result);
 		} catch (error) {
 			host.print(
 				`Could not save ${info.key}: ${redactSecret(value, error instanceof Error ? error.message : String(error))}`,

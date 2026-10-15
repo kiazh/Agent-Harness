@@ -42,7 +42,8 @@ than words in usernames, source filenames, or documentation titles.
 `sandbox` selects Docker for terminal execution; other tools still have their
 own boundaries. `full` issues an explicit session-scoped grant under which host
 operations proceed without further approval — including credential access,
-privilege escalation, security settings, and destructive system actions. Routing
+privilege escalation, security settings, destructive system actions, and
+untrusted MCP remote tool calls without per-call review. Routing
 mode alone authorizes nothing; the grant is bound to that session and ends when
 the session leaves `full` mode or `/approvals revoke` runs. Grant `full` only
 to a session whose operator explicitly consents to no-approval host authority.
@@ -51,9 +52,11 @@ authority inherited from a parent.
 
 ## Exact approvals and execution
 
-Action digest version 2 binds session, original turn, agent, tool, operation,
-capabilities, canonical targets, argv/shell, cwd, backend, timeout, network
-declarations, content digest, and workspace identity. Display previews are
+Action digest version 2 binds tool, operation, mode, capabilities, canonical
+targets, argv/shell, cwd, backend, timeout, network declarations, content digest,
+and workspace identity. Approval records separately bind the session, original
+turn, and agent. Lookup and atomic consumption require the same session and
+agent; a resumed execution may run in a fresh turn. Display previews are
 redacted and bounded; full content length and digest preserve review identity.
 Changing material action fields requires fresh approval. Legacy proposals that
 lack the complete reviewed action cannot authorize a new execution.

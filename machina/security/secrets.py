@@ -16,6 +16,7 @@ import httpx
 _SECRET_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,64}$")
 
 _CACHE_SECONDS = 60
+_cache_generation = 0
 _cache: dict[tuple[str, str, str], tuple[float, str]] = {}
 _lock = threading.Lock()
 _redaction_values: set[str] = set()
@@ -28,7 +29,7 @@ def _read_file(path: str) -> str:
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     if nofollow:
         try:
-            fd = os.open(path, os.O_RDONLY | nofollow)
+            fd = os.open(path, os.O_RDONLY | nofollow | getattr(os, "O_NONBLOCK", 0))
         except OSError as e:
             raise ValueError("secret path must be a file") from e
         try:
@@ -130,12 +131,14 @@ def _resolve_secret(name: str, *, env_names: tuple[str, ...] | None = None) -> s
     cache_key = (backend, source, name)
     now = time.monotonic()
     with _lock:
+        generation = _cache_generation
         cached = _cache.get(cache_key)
         if cached and now - cached[0] < _CACHE_SECONDS:
             return cached[1]
     value = _external_secret(name, backend)
     with _lock:
-        _cache[cache_key] = (now, value)
+        if generation == _cache_generation:
+            _cache[cache_key] = (time.monotonic(), value)
     return value
 
 
@@ -180,5 +183,7 @@ def known_secret_values() -> tuple[str, ...]:
 
 def invalidate_secret_cache() -> None:
     """Forget backend values after an administrator rotation."""
+    global _cache_generation
     with _lock:
+        _cache_generation += 1
         _cache.clear()

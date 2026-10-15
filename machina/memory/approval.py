@@ -182,6 +182,7 @@ class MemoryApprovalGate:
         explicitly_important: bool = False,
         base_strength: float = 1.0,
         embedding: list[float] | None = None,
+        embedding_space: str | None = None,
     ) -> PendingMemory:
         """Submit a memory for approval.
 
@@ -213,7 +214,9 @@ class MemoryApprovalGate:
         # was submitted with, so approval completes it under the ORIGINAL
         # space even if the configured embedder changes while it is pending.
         # No vector (or unavailable DDL) keeps the pre-migration INSERT shape.
-        space_id = embedding_space_id() if embedding else None
+        space_id = None
+        if embedding:
+            space_id = embedding_space if embedding_space is not None else embedding_space_id()
         if space_id is not None and not await self._ensure_pending_embedding_space(
             db, durable=True
         ):

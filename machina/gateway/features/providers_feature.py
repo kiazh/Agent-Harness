@@ -13,7 +13,7 @@ Surfaces the real catalogs to the UI:
   resumed session pinned to another route lists ITS provider; an explicit
   ``provider`` parameter still wins for cross-provider listings.
 * ``models.setEffort`` — validate one reasoning effort against the request
-  session's pinned model catalog entry (ChatGPT) or the shared wire
+  session's pinned model catalog entry (ChatGPT) or provider wire
   vocabulary (other providers) and apply it. Unset aliases (``off``,
   ``none``, ``default``, ``auto``) clear the setting instead of failing
   provider validation.
@@ -34,13 +34,13 @@ from typing import TYPE_CHECKING, Any
 
 from machina.core.config import (
     DEFAULTS,
-    REASONING_EFFORTS,
     REASONING_UNSET_EFFORTS,
     config,
     persist_provider_fallback,
 )
 from machina.core.exceptions import ValidationError
 from machina.core.provider import catalog
+from machina.core.provider.reasoning import supported_reasoning_efforts
 from machina.core.provider.specs import PROVIDER_SPECS
 from machina.core.session import session_manager
 from machina.gateway.errors import INVALID_PARAMS, RpcError
@@ -109,18 +109,19 @@ async def _named_models(provider: str, refresh: bool) -> dict[str, Any]:
     age = store.pulled_at_age_seconds(entry)
     fresh_enough = age is not None and age < 3600
     fetch_error: str | None = None
+    source = "cache"
     if refresh or not models or not fresh_enough:
         key = store.resolve_provider_key(entry)
         try:
             pulled = await asyncio.to_thread(store.fetch_models, base_url, api_key=key)
-            if pulled:
-                models = await asyncio.to_thread(store.save_models, provider, pulled)
-                entry = store.get_provider_entry(provider) or entry
+            models = await asyncio.to_thread(store.save_models, provider, pulled)
+            entry = store.get_provider_entry(provider) or entry
+            source = "live"
         except Exception as exc:  # ProviderStoreError and transport failures
             fetch_error = str(exc) or type(exc).__name__
     return _models_payload(
         provider,
-        source="live" if fetch_error is None and models else "cache",
+        source=source,
         models=list(models),
         fetch_error=fetch_error,
         fetched_at=str(entry.get("models_fetched_at") or "") or None,
@@ -225,16 +226,16 @@ async def models_set_effort(gw: Gateway, params: dict[str, Any]) -> dict[str, An
             raise RpcError(INVALID_PARAMS, str(exc)) from None
         supported = list(catalog.supported_efforts_for(model) or ())
     else:
-        allowed = ("", *REASONING_EFFORTS)
+        supported = list(supported_reasoning_efforts(provider))
+        allowed = ("", *supported)
         if effort not in allowed:
             raise RpcError(
                 INVALID_PARAMS,
                 f"reasoning effort {effort!r} is not supported for "
-                f"{provider or 'this provider'}; supported: {', '.join(REASONING_EFFORTS)} "
+                f"{provider or 'this provider'}; supported: {', '.join(supported)} "
                 "(or unset)",
             )
         normalized = effort
-        supported = list(REASONING_EFFORTS)
     try:
         config.set("reasoning_effort", normalized, persist=persist)
     except ValueError as exc:

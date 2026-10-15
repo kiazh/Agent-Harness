@@ -188,6 +188,7 @@ class MemoryRetriever:
                 embedding=query_embedding,
                 agent_id=agent_id,
                 category=category,
+                date_range=date_range,
                 limit=self.top_k * 2,  # Get more candidates for re-ranking
             )
         sparse_task = self._keyword_search(
@@ -195,6 +196,7 @@ class MemoryRetriever:
             agent_id=agent_id,
             category=category,
             limit=self.top_k * 2,
+            date_range=date_range,
         )
 
         tasks = [t for t in (dense_task, sparse_task) if t is not None]
@@ -372,6 +374,7 @@ class MemoryRetriever:
         agent_id: str | None = None,
         category: str | None = None,
         limit: int = 10,
+        date_range: tuple[datetime, datetime] | None = None,
     ) -> list[tuple[MemoryEntry, float]]:
         """Keyword-based search using PostgreSQL full-text search (FTS).
 
@@ -402,6 +405,11 @@ class MemoryRetriever:
             conditions.append(f"category = ${param_idx}")
             params.append(category)
             param_idx += 1
+
+        if date_range is not None:
+            conditions.append(f"created_at BETWEEN ${param_idx} AND ${param_idx + 1}")
+            params.extend(date_range)
+            param_idx += 2
 
         # FTS is exact on stemmed lexemes, so keep ILIKE substring matching
         # as well: queries that are a prefix of a longer indexed token

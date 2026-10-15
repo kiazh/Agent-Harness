@@ -275,7 +275,11 @@ export class Transcript {
 				if (event.text.startsWith(this.displayed)) {
 					const missing = event.text.slice(this.displayed.length);
 					if (missing) {
-						this.current?.append(missing);
+						if (this.current) this.current.append(missing);
+						else {
+							this.current = new AssistantTurn(missing);
+							this.retain(this.current);
+						}
 						this.displayed = event.text;
 					}
 				} else if (this.current) {

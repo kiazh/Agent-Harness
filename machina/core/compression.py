@@ -461,7 +461,7 @@ class ContextCompressor:
                     pairs[i] = i
                     continue
                 tool_name = chunk.payload.get("tool", "")
-                if tool_name:
+                if tool_name and _call_id(chunk.payload) is None:
                     tool_call_indices.setdefault(tool_name, []).append(i)
 
         # Match separate result chunks to their tool calls
@@ -471,10 +471,16 @@ class ContextCompressor:
             if chunk.chunk_type == "result":
                 # Prefer call-ID match already handled; fall back to name.
                 tool_name = chunk.payload.get("tool", "")
-                if tool_name and tool_name in tool_call_indices:
-                    # Find the most recent unmatched tool_call for this tool
-                    for call_idx in reversed(tool_call_indices[tool_name]):
-                        if call_idx not in pairs:
+                if tool_name in tool_call_indices and _call_id(chunk.payload) is None:
+                    # Input is newest-first: the nearest older call follows
+                    # this result. Never cross an explicit invocation identity.
+                    for call_idx in tool_call_indices[tool_name]:
+                        if (
+                            call_idx > i
+                            and call_idx not in pairs
+                            and chunks[call_idx].session_id == chunk.session_id
+                            and chunks[call_idx].agent_id == chunk.agent_id
+                        ):
                             pairs[call_idx] = i
                             pairs[i] = call_idx
                             break

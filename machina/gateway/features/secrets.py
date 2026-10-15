@@ -8,6 +8,7 @@ next turn can use the key) and, by default, persists to the git-ignored
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -56,6 +57,41 @@ def _require_managed_key(key: str) -> str:
     return key
 
 
+def _effective_state(key: str, *, expected: str | None = None) -> dict[str, Any]:
+    """Describe the credential actually selected without exposing its value."""
+    from machina.core.config import SECRET_KEYS, get_config
+    from machina.security.secrets import get_secret
+
+    setting = key.lower()
+    cfg = get_config()
+    names = (f"MACHINA_{key}", key) if setting in SECRET_KEYS else (key,)
+    source = "configuration"
+    if setting in getattr(cfg, "_session_overrides", {}):
+        source = "session override"
+    else:
+        source = next((name for name in names if os.environ.get(name, "").strip()), "")
+        if not source:
+            source = next((f"{name}_FILE" for name in names
+                           if os.environ.get(f"{name}_FILE", "").strip()), "")
+        if not source:
+            source = "external backend" if os.environ.get("MACHINA_SECRET_BACKEND") else "configuration"
+    try:
+        effective = cfg.get(setting) if setting in SECRET_KEYS else (
+            get_secret(key) if key.endswith("_API_KEY") else os.environ.get(key)
+        )
+    except Exception:
+        # Invalid mounted/backend credentials are not a successful effective change.
+        return {"effectiveSet": None, "effectiveSource": source,
+                "effectiveUpdated": False, "message": "Effective credential could not be resolved"}
+    active = bool(effective)
+    updated = (effective or "") == expected if expected is not None else True
+    result: dict[str, Any] = {"effectiveSet": active, "effectiveSource": source,
+                              "effectiveUpdated": updated}
+    if not updated:
+        result["message"] = f"Saved setting; effective credential is still selected from {source}"
+    return result
+
+
 def _catalog() -> list[dict[str, Any]]:
     """Provider keys + managed env keys with live set/not-set status."""
     file_values = read_env_values()
@@ -68,6 +104,7 @@ def _catalog() -> list[dict[str, Any]]:
                 "description": description,
                 "set": live or bool(file_values.get(key, "").strip()),
                 "liveSet": live,
+                **_effective_state(key),
             }
         )
     return items
@@ -76,7 +113,7 @@ def _catalog() -> list[dict[str, Any]]:
 async def secrets_list(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     """List managed secret keys with set/not-set status (values never sent)."""
     gw.require_db()  # keep auth/db gating consistent with other features
-    return {"secrets": _catalog(), "envFile": str(find_env_file())}
+    return {"secrets": await asyncio.to_thread(_catalog), "envFile": str(find_env_file())}
 
 
 async def secrets_set(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
@@ -117,7 +154,8 @@ async def secrets_set(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
 
     invalidate_secret_cache()
     logger.info("secrets.set: %s updated (persist=%s)", key, persist)
-    return {"key": key, "set": True, "persisted": persist, "envFile": env_file}
+    return {"key": key, "set": True, "persisted": persist, "envFile": env_file,
+            **await asyncio.to_thread(_effective_state, key, expected=value)}
 
 
 async def secrets_clear(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
@@ -151,4 +189,4 @@ async def secrets_clear(gw: Gateway, params: dict[str, Any]) -> dict[str, Any]:
     if key.lower() in SECRET_KEYS:
         get_config().set(key.lower(), "")
     invalidate_secret_cache()
-    return {"key": key, "set": False}
+    return {"key": key, "set": False, **await asyncio.to_thread(_effective_state, key, expected="")}

@@ -148,6 +148,7 @@ class MemoryStore:
                     explicitly_important=explicitly_important,
                     base_strength=base_strength,
                     embedding=embedding,
+                    embedding_space=embedding_space,
                 )
                 logger.info(
                     "Memory write routed to approval gate: pending %s (agent %s)",
@@ -203,6 +204,8 @@ class MemoryStore:
                     space_id = None
 
         async def insert(executor: Any) -> Any:
+            if provenance is not None and not callable(getattr(executor, "execute", None)):
+                raise TypeError("signed memory writes require provenance persistence")
             columns = (
                 "id, session_id, agent_id, content, category, importance, "
                 "embedding, explicitly_important, base_strength, quarantined"
@@ -235,41 +238,23 @@ class MemoryStore:
                 *params,
             )
             if provenance is not None:
-                try:
-                    await executor.execute(
-                        """
-                    INSERT INTO memory_provenance
-                        (memory_id, source_agent, signature, parent_memory_id)
-                    VALUES ($1, $2, $3, $4)
-                    """,
-                        memory_id,
-                        source,
-                        provenance.signature,
-                        parent_memory_id,
-                    )
-                except AttributeError:
-                    # Mocks without execute (e.g. CapturingMock with fetchrow only)
-                    pass
+                await executor.execute(
+                    """INSERT INTO memory_provenance
+                       (memory_id, source_agent, signature, parent_memory_id)
+                       VALUES ($1, $2, $3, $4)""",
+                    memory_id, source, provenance.signature, parent_memory_id,
+                )
             return row
 
         if connection is not None:
             row = await insert(connection)
+        elif provenance is not None:
+            # Signed writes require one transaction; body failures never replay.
+            async with db.acquire() as conn:
+                async with conn.transaction():
+                    row = await insert(conn)
         else:
-            # Use db directly for compat with mocks; when provenance exists
-            # try transactional acquire, falling back to direct on mocks.
-            try:
-                acquire = getattr(db, "acquire", None)
-                if provenance is not None and callable(acquire):
-                    async with db.acquire() as conn:
-                        try:
-                            async with conn.transaction():
-                                row = await insert(conn)
-                        except AttributeError:
-                            row = await insert(conn)
-                else:
-                    row = await insert(db)
-            except (TypeError, AttributeError):
-                row = await insert(db)
+            row = await insert(db)
         memory = self._row_to_entry(row)
         audit_log(
             "memory_add",
@@ -363,6 +348,7 @@ class MemoryStore:
         limit: int = 5,
         include_quarantined: bool = False,
         embedding_space: str | None = None,
+        date_range: tuple[Any, Any] | None = None,
     ) -> list[tuple[MemoryEntry, float]]:
         """Search memories by embedding similarity (cosine distance).
 
@@ -404,6 +390,11 @@ class MemoryStore:
             conditions.append(f"(embedding_space = ${param_idx} OR embedding_space IS NULL)")
             params.append(space_id)
             param_idx += 1
+
+        if date_range is not None:
+            conditions.append(f"created_at BETWEEN ${param_idx} AND ${param_idx + 1}")
+            params.extend(date_range)
+            param_idx += 2
 
         where_clause = " AND ".join(conditions)
 

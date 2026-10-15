@@ -165,6 +165,7 @@ class RAGPipeline:
         config: RAGConfig | None = None,
     ) -> None:
         self._config = config or _default_rag_config()
+        self._cache_generation = 0
         self._search_cache: dict[tuple, tuple[float, list[SearchResult]]] = {}
         self._embedding_space_cache: dict[tuple, tuple[float, str]] = {}
         # AH-AUDIT-032: keyword-capable pipeline with no embedder. Dense
@@ -396,11 +397,11 @@ class RAGPipeline:
             if cm is not None:
                 async with cm as conn:
                     attempted = True
-                    try:
-                        async with conn.transaction():
+                    transaction = getattr(conn, "transaction", None)
+                    if callable(transaction):
+                        async with transaction():
                             rows = await _replace_and_insert(conn)
-                    except AttributeError:
-                        # Legacy connection doubles without transaction().
+                    else:
                         rows = await _replace_and_insert(conn)
         if not attempted:
             # Test doubles without an acquire/transaction protocol.
@@ -474,6 +475,7 @@ class RAGPipeline:
             bool(self._config.enable_hybrid_search),
             scope,
         )
+        generation = self._cache_generation
         now = time.monotonic()
         if cache_key in self._search_cache:
             cached_time, cached_results = self._search_cache[cache_key]
@@ -509,7 +511,8 @@ class RAGPipeline:
             for result in results:
                 result.retrieval_degraded = embedding_failed
             return await self._finish_search(
-                results, query, session_id, k, rerank, cache_key, now, embed_model, "keyword-only"
+                results, query, session_id, k, rerank, cache_key, now,
+                embed_model, "keyword-only", generation,
             )
         # Embedding-space identity (AH-AUDIT-035): dimension AND model must
         # match the stored dense space. Different same-dimension models
@@ -562,6 +565,7 @@ class RAGPipeline:
             now,
             embed_model,
             "hybrid" if self._config.enable_hybrid_search else "dense",
+            generation,
         )
 
     async def _enforce_embedding_space(
@@ -584,6 +588,7 @@ class RAGPipeline:
         them (FM5 W15).
         """
         cache_key = (session_id, query_model, tuple(chunk_types))
+        generation = self._cache_generation
         now = time.monotonic()
         cached = self._embedding_space_cache.get(cache_key)
         if cached is not None:
@@ -636,6 +641,8 @@ class RAGPipeline:
             if len(rows) < page_size:
                 # Verified: cache the verdict (bounded, TTL) so cold searches
                 # do not rescan every row (FM5 W15).
+                if generation != self._cache_generation:
+                    return
                 self._embedding_space_cache[cache_key] = (time.monotonic(), query_model)
                 if len(self._embedding_space_cache) > self._embedding_space_cache_max_size:
                     oldest_key = min(
@@ -657,6 +664,7 @@ class RAGPipeline:
         now: float,
         embed_model: str,
         retrieval_mode: str = "unknown",
+        generation: int | None = None,
     ) -> list[SearchResult]:
         for result in results:
             result.retrieval_mode = retrieval_mode
@@ -710,7 +718,7 @@ class RAGPipeline:
         # or the nested chunk payloads through fresh results or cache hits.
         # Never cache empty results: a delete+reindex inside the TTL would
         # otherwise keep serving stale emptiness.
-        if final_results:
+        if final_results and generation == self._cache_generation:
             self._search_cache[cache_key] = (now, copy.deepcopy(final_results))
             # Evict oldest if cache is full (simple approach)
             if len(self._search_cache) > self._search_cache_max_size:
@@ -842,6 +850,7 @@ class RAGPipeline:
 
     def _invalidate_search_cache(self, session_id: uuid.UUID) -> None:
         """Remove cached search results for *session_id* (after re-indexing)."""
+        self._cache_generation += 1
         for key in [k for k in self._search_cache if k[0] == session_id]:
             self._search_cache.pop(key, None)
         # Indexed content changed: drop cached embedding-space verdicts too.

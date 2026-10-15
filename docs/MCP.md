@@ -47,3 +47,14 @@ Not supported: HTTP credential-profile authentication, legacy SSE, remote resour
 SDK fixture tests prove transport and harness pipeline behavior. No particular external MCP vendor or live-provider quality gain is implied. See [release evidence](verification/RELEASE_READINESS.md) and the historical [connector progress](archive/plans/MCP_CONNECTORS_PROGRESS.md).
 
 OAuth is implemented per the [implementation handoff](archive/plans/MCP_OAUTH_IMPLEMENTATION_HANDOFF.md) with progress in [MCP OAuth progress](archive/plans/MCP_OAUTH_PROGRESS.md). Remote hosted callbacks, device-code grants, OIDC user login, all-vendor certification and total DNS-rebinding defense remain deferred.
+
+## Remote-call consent
+
+Untrusted remote tools require an exact action approval in ordinary modes.
+A verified `trusted_read` tool allowlist can permit listed reads without
+per-call approval. An explicit live `full` grant also authorizes untrusted
+remote calls without further per-call approval for that session. Selecting
+full mode alone does not issue authority. Remote server descriptions, OAuth
+login, tool annotations, and saved connection configuration do not grant
+execution consent. Changes to reviewed call material invalidate an exact
+action approval; calls with uncertain outcomes are not automatically retried.

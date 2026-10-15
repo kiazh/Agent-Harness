@@ -51,9 +51,10 @@ export async function listFamilySessions(host: SessionListHost, current: Session
 		},
 	});
 	members.set(current.id, current); // the visible session always wins
-	const root = members.get(rootId) ?? current;
+	const root = members.get(rootId);
 	const children = [...members.values()].filter((session) => session.id !== rootId);
-	return [root, ...children];
+	// A bounded listing may omit the root; never relabel/duplicate a child.
+	return root ? [root, ...children] : children;
 }
 
 /** What the family store needs from App (state plus navigation side effects). */

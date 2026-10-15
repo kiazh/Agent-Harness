@@ -26,28 +26,36 @@ from machina.core.provider._log import logger
 ANTHROPIC_THINKING_BUDGETS = {"low": 1024, "medium": 4096, "high": 10000}
 
 
-def normalize_reasoning_effort(value: str | None) -> str:
+def supported_reasoning_efforts(provider: str | None = None) -> tuple[str, ...]:
+    """Wire vocabulary for direct providers; ChatGPT uses its model catalog."""
+    return ("low", "high", "max") if provider == "kimi" else REASONING_EFFORTS
+
+
+def normalize_reasoning_effort(value: str | None, *, provider: str | None = None) -> str:
     """Normalize a reasoning-effort value; ``""``/None means unset (provider default)."""
     if value is None:
         return ""
     normalized = str(value).strip().lower()
     if normalized in REASONING_UNSET_EFFORTS:
         return ""
-    if normalized not in REASONING_EFFORTS:
+    supported = supported_reasoning_efforts(provider)
+    if normalized not in supported:
         raise ValidationError(
-            f"reasoning_effort must be one of {REASONING_EFFORTS} (or unset), got {value!r}"
+            f"reasoning_effort must be one of {supported} (or unset), got {value!r}"
         )
     return normalized
 
 
-def _resolve_effort(explicit: str | None, instance_default: str | None = None) -> str:
+def _resolve_effort(
+    explicit: str | None, instance_default: str | None = None, *, provider: str | None = None
+) -> str:
     """Effort precedence: per-call argument > provider instance > config key."""
     if explicit is not None:
-        return normalize_reasoning_effort(explicit)
+        return normalize_reasoning_effort(explicit, provider=provider)
     if instance_default:
-        return normalize_reasoning_effort(instance_default)
+        return normalize_reasoning_effort(instance_default, provider=provider)
     try:
-        return normalize_reasoning_effort(config.get("reasoning_effort"))
+        return normalize_reasoning_effort(config.get("reasoning_effort"), provider=provider)
     except (ValidationError, ValueError) as exc:
         # A bad value in config.yaml must not fail every call, but it must not
         # vanish silently either: log what was ignored and use the provider

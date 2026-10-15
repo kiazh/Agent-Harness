@@ -61,7 +61,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
             # endpoints (custom spec) simply send no Authorization header.
             raise ValidationError(f"{spec.api_key_env} not set")
         self.model = model or spec.default_model
-        self._default_effort = normalize_reasoning_effort(reasoning_effort)
+        self._default_effort = normalize_reasoning_effort(reasoning_effort, provider=spec.name)
         self._rate_limit_key = spec.name
         self.client = httpx.AsyncClient(
             base_url=spec.base_url,
@@ -71,7 +71,7 @@ class DirectProvider(LLMProvider, RateLimitBinding):
 
     def _effort_payload(self, reasoning_effort: str | None) -> dict[str, Any]:
         """Extra body params for the requested effort ({} when unset/unsupported)."""
-        effort = _resolve_effort(reasoning_effort, self._default_effort)
+        effort = _resolve_effort(reasoning_effort, self._default_effort, provider=self.spec.name)
         if effort and self.spec.reasoning == "openai":
             return {"reasoning_effort": effort}
         return {}

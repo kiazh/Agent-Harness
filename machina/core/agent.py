@@ -53,7 +53,7 @@ from machina.core.provider import LLMProvider, audit_log, get_provider
 from machina.core.session import Session, session_manager
 from machina.core.session_mode import turn_scope
 from machina.core.turn_flow import collect_pauses, stagnation_step, stopped_response
-from machina.core.usage import usage_store
+from machina.core.usage import provider_identity, usage_store
 from machina.memory.consolidator import MemoryConsolidator
 from machina.memory.retriever import MemoryRetriever
 from machina.memory.store import memory_store
@@ -498,7 +498,7 @@ class BaseReActAgent:
         if session_id is None:
             return None
         model = str(getattr(self.provider, "model", "unknown"))
-        provider_name = type(self.provider).__name__.removesuffix("Provider").lower()
+        provider_name = provider_identity(self.provider)
         max_tokens = int(config.get("max_tokens"))
         output_limit = getattr(type(self.provider), "reservation_max_tokens", None)
         if callable(output_limit):
