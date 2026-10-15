@@ -12,13 +12,15 @@ from machina.connectors.service import ConnectorService
 from machina.permissions.policy import build_request, decide
 
 
-def test_native_mcp_tools_are_lazy_and_uncached():
-    from machina.tools.base import _UNCACHEABLE_TOOLS, registry
+def test_native_mcp_tools_are_lazy():
+    """Native MCP tools register lazily; the cache is gone entirely (R4-096),
+    so "uncached" is structural — every call executes fresh (pinned by
+    tests/test_bugfixes_tool_cache_redos.py)."""
+    from machina.tools.base import registry
 
     assert {"mcp_list", "mcp_describe", "mcp_call"} <= set(registry.list_tools())
-    assert {"mcp_list", "mcp_describe", "mcp_call"} <= _UNCACHEABLE_TOOLS
-    # Agent-callable management tools declare mutating effects instead (never
-    # cached, always review-gated); see tests/test_mcp_manage_tool.py.
+    # Agent-callable management tools declare mutating effects (always
+    # review-gated, never cached); see tests/test_mcp_manage_tool.py.
     assert {"mcp_connect", "mcp_disconnect"} <= set(registry.list_tools())
 
 
