@@ -261,7 +261,8 @@ def is_loopback_base_url(base_url: str) -> bool:
         host = (urlparse(str(base_url)).hostname or "").lower()
     except ValueError:
         return False
-    return host in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
+    # String comparison against known loopback spellings (never a bind call):
+    return host in ("127.0.0.1", "localhost", "::1", "0.0.0.0")  # nosec B104 # loopback comparison, not a bind
 
 
 def _empty_store() -> dict[str, Any]:
