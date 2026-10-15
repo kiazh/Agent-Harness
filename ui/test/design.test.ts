@@ -39,7 +39,11 @@ test("theme_registry_preserves_all_saved_ids", () => {
 	for (const id of REQUIRED_THEME_IDS) {
 		assert.ok(SKIN_NAMES.includes(id), `missing required theme: ${id}`);
 	}
-	for (const id of ["opencode", "light", "linen", "lagoon", "afterglow"]) {
+	for (const id of [
+		"opencode", "light", "linen", "lagoon", "afterglow",
+		"aurora", "ember", "forest", "glacier", "neon-grid", "paper", "sepia-crt",
+		"blueprint", "rose-quartz", "high-contrast-dark", "high-contrast-light", "sunset-drive",
+	]) {
 		assert.ok(SKIN_NAMES.includes(id), `missing added theme: ${id}`);
 	}
 	for (const name of SKIN_NAMES) {
