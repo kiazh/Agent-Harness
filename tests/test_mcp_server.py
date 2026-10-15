@@ -47,11 +47,12 @@ PAUSE_SUGGESTION_LINE = "Resolve the request, then resume the session."
 
 
 def _fake_runner(result: ProcessResult, capture: dict | None = None):
-    def run(cmd, *, timeout, env_extra=None):
+    def run(cmd, *, timeout, env_extra=None, cancel_event=None):
         if capture is not None:
             capture["cmd"] = cmd
             capture["timeout"] = timeout
             capture["env_extra"] = env_extra
+            capture["cancel_event"] = cancel_event
         return result
 
     return run
@@ -133,6 +134,10 @@ async def test_chat_dash_prompt_follows_double_dash_terminator(monkeypatch, dash
 
 
 async def test_chat_resume_and_mode_flags(monkeypatch):
+    # R5-A: tool modes at/under the server ceiling still reach the child.
+    # The default operator mode is ask, so raise the ceiling for this
+    # at-ceiling case via the operator's own configured mode.
+    monkeypatch.setenv("MACHINA_EXECUTION_MODE", "full")
     capture: dict = {}
     monkeypatch.setattr(
         mcp_server,
@@ -253,13 +258,136 @@ async def test_chat_failure_is_bounded(monkeypatch):
     ],
 )
 async def test_chat_invalid_requests_never_spawn(monkeypatch, kwargs):
-    def forbidden(cmd, *, timeout, env_extra=None):
+    def forbidden(cmd, *, timeout, env_extra=None, cancel_event=None):
         raise AssertionError("subprocess must not run for invalid chat requests")
 
     monkeypatch.setattr(mcp_server, "_run_process", forbidden)
     payload = json.loads(await mcp_server.machina_chat(**kwargs))
     assert payload["status"] == "invalid_request"
     assert payload["error"]
+
+
+# ---------------------------------------------------------------------------
+# R5-A finding 1 — server mode ceiling
+# ---------------------------------------------------------------------------
+
+
+async def test_chat_mode_above_ceiling_never_spawns(monkeypatch):
+    """Tool mode above the operator ceiling is refused; no grant is minted."""
+
+    def forbidden(cmd, *, timeout, env_extra=None, cancel_event=None):
+        raise AssertionError("subprocess must not run above the mode ceiling")
+
+    monkeypatch.setattr(mcp_server, "_run_process", forbidden)
+    # Default operator mode in tests is ask: full and workspace both exceed it.
+    for mode in ("full", "workspace"):
+        payload = json.loads(await mcp_server.machina_chat("hello", mode=mode))
+        assert payload["status"] == "invalid_request"
+        assert payload["code"] == "mode_ceiling_exceeded"
+        assert payload["ceiling"] == "ask"
+        assert "no grant was minted" in payload["error"]
+
+
+async def test_chat_mode_at_ceiling_still_spawns(monkeypatch):
+    """Operator-configured full keeps the old path: mode forwards, grant possible."""
+    monkeypatch.setenv("MACHINA_EXECUTION_MODE", "full")
+    capture: dict = {}
+    monkeypatch.setattr(
+        mcp_server,
+        "_run_process",
+        _fake_runner(ProcessResult(0, SAMPLE_OK_OUTPUT, "", False, False), capture),
+    )
+    payload = json.loads(await mcp_server.machina_chat("hello", mode="full"))
+    assert payload["status"] == "completed"
+    assert capture["cmd"][capture["cmd"].index("--mode") + 1] == "full"
+
+
+async def test_chat_mcp_max_mode_tightens_but_never_escalates(monkeypatch):
+    """MCP_MAX_MODE can lower the ceiling, never raise it above operator mode."""
+    capture: dict = {}
+    monkeypatch.setattr(
+        mcp_server,
+        "_run_process",
+        _fake_runner(ProcessResult(0, SAMPLE_OK_OUTPUT, "", False, False), capture),
+    )
+    # Tighten: operator full + MCP_MAX_MODE=ask refuses workspace.
+    monkeypatch.setenv("MACHINA_EXECUTION_MODE", "full")
+    monkeypatch.setenv("MCP_MAX_MODE", "ask")
+    payload = json.loads(await mcp_server.machina_chat("hello", mode="workspace"))
+    assert payload["status"] == "invalid_request"
+    assert payload["ceiling"] == "ask"
+    # Never escalate: operator ask + MCP_MAX_MODE=full still refuses full.
+    monkeypatch.setenv("MACHINA_EXECUTION_MODE", "ask")
+    monkeypatch.setenv("MCP_MAX_MODE", "full")
+    payload = json.loads(await mcp_server.machina_chat("hello", mode="full"))
+    assert payload["status"] == "invalid_request"
+    assert payload["ceiling"] == "ask"
+
+
+async def test_chat_invalid_mcp_max_mode_fails_closed(monkeypatch):
+    def forbidden(cmd, *, timeout, env_extra=None, cancel_event=None):
+        raise AssertionError("subprocess must not run with an invalid ceiling")
+
+    monkeypatch.setattr(mcp_server, "_run_process", forbidden)
+    monkeypatch.setenv("MCP_MAX_MODE", "bogus")
+    payload = json.loads(await mcp_server.machina_chat("hello", mode="workspace"))
+    assert payload["status"] == "invalid_request"
+    assert payload["ceiling"] == "ask"
+
+
+# ---------------------------------------------------------------------------
+# R5-A finding 15 — cancellation retires the child tree
+# ---------------------------------------------------------------------------
+
+
+async def test_chat_cancellation_retires_the_child(tmp_path):
+    """Cancelling the handler kills the process tree (bounded join).
+
+    Real runner, real stop handle: the child would write a marker 5s after
+    start; cancellation at ~0.5s must prevent it, and the handler must still
+    report cancellation.
+    """
+    marker = tmp_path / "survivor.txt"
+    code = (
+        "import pathlib, time; time.sleep(5.0); "
+        f"pathlib.Path({str(marker)!r}).write_text('survived')"
+    )
+
+    def slow(cmd, *, timeout, env_extra=None, cancel_event=None):
+        adapted = child_process.run_bounded(
+            [sys.executable, "-c", code],
+            env=mcp_server._sanitized_env(),
+            timeout=30.0,
+            cwd=tmp_path,
+            max_stdout=mcp_server.MAX_OUTPUT_CHARS,
+            max_stderr=mcp_server.MAX_STDERR_CHARS,
+            cancel_event=cancel_event,
+        )
+        return ProcessResult(
+            returncode=adapted.returncode,
+            output=adapted.stdout,
+            stderr=adapted.stderr,
+            timed_out=adapted.timed_out,
+            truncated=adapted.truncated,
+        )
+
+    real = mcp_server._run_process
+    mcp_server._run_process = slow
+    try:
+        task = asyncio.ensure_future(mcp_server.machina_chat("hello"))
+        await asyncio.sleep(0.5)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            cancelled = True
+        else:
+            cancelled = False
+    finally:
+        mcp_server._run_process = real
+    assert cancelled, "the handler must still report cancellation"
+    await asyncio.sleep(6.0)
+    assert not marker.exists(), "the child kept running after cancellation"
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +432,7 @@ async def test_chat_fails_typed_when_database_resolution_fails(monkeypatch):
     def unresolved() -> dict[str, str]:
         raise RuntimeError("runtime unavailable")
 
-    def forbidden(cmd, *, timeout, env_extra=None):
+    def forbidden(cmd, *, timeout, env_extra=None, cancel_event=None):
         raise AssertionError("subprocess must not run without a resolved DSN")
 
     monkeypatch.setattr(mcp_server, "_child_database_env", unresolved)

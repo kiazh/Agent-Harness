@@ -30,9 +30,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import re
 import sys
+import threading
+import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -43,6 +46,8 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
 from machina import __version__
+
+logger = logging.getLogger("machina.mcp_server")
 
 # Editable-checkout root. NOT the child cwd anymore (interop review N2): in a
 # wheel install this resolves to site-packages, and children used to run with
@@ -74,6 +79,48 @@ MAX_OUTPUT_CHARS = 64_000
 MAX_STDERR_CHARS = 8_000
 DEFAULT_CHAT_TIMEOUT_SECONDS = 300.0
 VALID_MODES = ("ask", "workspace", "sandbox", "full")
+
+# R5-A (finding 1): tool-supplied modes are capped by a server-side ceiling so
+# an MCP caller can never select broader host authority than the operator
+# configured. Rank is ascending authority; MCP_MAX_MODE can only tighten below
+# the operator's own execution_mode, never escalate above it.
+_MODE_RANK = {"ask": 0, "workspace": 1, "sandbox": 2, "full": 3}
+# Bounded wait for the child tree to retire after a cancelled request signals
+# the stop handle (R5-A finding 15); run_bounded kills promptly on the event,
+# so this budget only covers teardown, never a full turn.
+CANCEL_JOIN_SECONDS = 10.0
+
+
+def _operator_mode() -> str:
+    """The operator's configured execution mode (the ceiling's default)."""
+    try:
+        from machina.core.config import config
+
+        mode = str(config.get("execution_mode") or "ask").strip().lower()
+    except Exception:
+        return "ask"
+    return mode if mode in _MODE_RANK else "ask"
+
+
+def _mcp_mode_ceiling() -> str:
+    """Maximum mode a tool argument may request (R5-A finding 1).
+
+    Default is the operator's own execution_mode. ``MCP_MAX_MODE`` (server
+    environment, set by the human operator at launch) may only tighten the
+    ceiling, never raise it above the operator mode; an invalid value fails
+    closed to ``ask`` and is logged.
+    """
+    operator = _operator_mode()
+    raw = os.environ.get("MCP_MAX_MODE", "").strip().lower()
+    if not raw:
+        return operator
+    if raw not in _MODE_RANK:
+        logger.warning("invalid MCP_MAX_MODE %r; failing closed to 'ask'", raw)
+        return "ask"
+    if _MODE_RANK[raw] > _MODE_RANK[operator]:
+        return operator
+    return raw
+
 
 SESSION_ID_PATTERN = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
@@ -200,6 +247,7 @@ def _run_process(
     timeout: float,
     cwd: Path | None = None,
     env_extra: dict[str, str] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> ProcessResult:
     """Run one child through the shared bounded runner (round-5 review F2).
 
@@ -212,8 +260,9 @@ def _run_process(
     separately, each capped. Prolific stdout stops the child; stderr past its
     cap is drained and discarded so the pipe cannot deadlock. On deadline
     expiry the whole group is killed; this function never waits past
-    ``timeout`` plus bounded teardown. Spawn failures come back as a typed
-    result (``stderr``), never raised.
+    ``timeout`` plus bounded teardown. A set ``cancel_event`` kills the tree
+    too (R5-A finding 15: the async handler's stop handle). Spawn failures
+    come back as a typed result (``stderr``), never raised.
     """
     child_cwd = cwd if cwd is not None else _default_child_cwd()
     env = _sanitized_env()
@@ -226,6 +275,7 @@ def _run_process(
         cwd=child_cwd,
         max_stdout=MAX_OUTPUT_CHARS,
         max_stderr=MAX_STDERR_CHARS,
+        cancel_event=cancel_event,
     )
     return ProcessResult(
         returncode=result.returncode,
@@ -444,6 +494,13 @@ def _json_text(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+async def _join_worker(worker: threading.Thread) -> None:
+    """Bounded wait for a chat worker thread to retire (R5-A finding 15)."""
+    deadline = time.monotonic() + CANCEL_JOIN_SECONDS
+    while worker.is_alive() and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+
+
 async def machina_chat(prompt: str, session_id: str | None = None, mode: str | None = None) -> str:
     """Run one headless Machina turn and return a JSON result.
 
@@ -454,10 +511,36 @@ async def machina_chat(prompt: str, session_id: str | None = None, mode: str | N
     completed | paused_for_approval | failed | timeout | invalid_request, plus
     session_id, the reply, and — for an approval pause — the pending request
     ids. Never hangs on exit 3.
+
+    R5-A finding 1: a tool-supplied ``mode`` above the server ceiling
+    (``_mcp_mode_ceiling``) is refused with a typed error and never spawns,
+    so tool arguments cannot mint authority the operator did not configure.
+    R5-A finding 15: the child runs on a worker thread bound to a stop
+    handle; cancelling this coroutine sets the handle (the runner kills the
+    process tree promptly) and the handler joins the worker with a bounded
+    wait before the cancellation propagates — no orphaned agent keeps
+    modifying files or spending budget after the request is gone.
     """
     invalid = _validate_chat_args(prompt, session_id, mode)
     if invalid:
         return _json_text({"status": "invalid_request", "error": invalid})
+    requested = mode.strip().lower() if isinstance(mode, str) else ""
+    if requested:
+        ceiling = _mcp_mode_ceiling()
+        if _MODE_RANK[requested] > _MODE_RANK[ceiling]:
+            logger.warning("mcp mode ceiling refused mode=%s ceiling=%s", requested, ceiling)
+            return _json_text(
+                {
+                    "status": "invalid_request",
+                    "code": "mode_ceiling_exceeded",
+                    "ceiling": ceiling,
+                    "error": (
+                        f"mode {requested!r} exceeds the server mode ceiling "
+                        f"{ceiling!r}; the child was not started and no grant "
+                        "was minted"
+                    ),
+                }
+            )
     cmd = _chat_command(prompt, session_id, mode)
     try:
         # R4-081: resolve the parent's own DSN; the child must never guess.
@@ -471,9 +554,39 @@ async def machina_chat(prompt: str, session_id: str | None = None, mode: str | N
                 "error": _bounded(f"database resolution failed: {type(exc).__name__}", 600),
             }
         )
-    result = await asyncio.to_thread(
-        _run_process, cmd, timeout=DEFAULT_CHAT_TIMEOUT_SECONDS, env_extra=child_env
-    )
+    result_box: dict[str, Any] = {}
+    cancel_event = threading.Event()
+
+    def _invoke() -> None:
+        try:
+            result_box["result"] = _run_process(
+                cmd,
+                timeout=DEFAULT_CHAT_TIMEOUT_SECONDS,
+                env_extra=child_env,
+                cancel_event=cancel_event,
+            )
+        except BaseException as exc:  # never lost: re-raised on the loop thread
+            result_box["error"] = exc
+
+    worker = threading.Thread(target=_invoke, daemon=True)
+    worker.start()
+    try:
+        while worker.is_alive():
+            await asyncio.sleep(0.02)
+    except BaseException:
+        # Handler cancellation (or loop shutdown): retire the process tree
+        # first — cancelling the await alone never stops the worker or the
+        # child (finding 15). The runner observes the event promptly and
+        # kills the group; the join is bounded and shielded so a second
+        # cancel cannot strand the tree, then the original exception
+        # propagates so the request still reports cancelled.
+        cancel_event.set()
+        with contextlib.suppress(BaseException):
+            await asyncio.shield(_join_worker(worker))
+        raise
+    if "error" in result_box:
+        raise result_box["error"]
+    result = result_box["result"]
     parsed_session = _parse_session_id(result.output)
     reply = _bounded(_extract_reply(result.output), MAX_REPLY_CHARS)
     if result.timed_out:

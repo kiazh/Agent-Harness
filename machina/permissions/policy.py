@@ -859,6 +859,17 @@ def decide(req: ActionRequest, grants: list[dict] | None = None) -> Decision:
         # Full mode is explicit no-approval authority for THIS session:
         # a live full-mode session grant allows everything, including
         # sensitive capabilities, without approval cards.
+        # R5-A disposition (finding 2, policy side): this fast path STANDS.
+        # Gating sensitive capabilities here would reintroduce unresolvable
+        # approval pauses (exit 3) on every headless transport that depends
+        # on full meaning no-approval (CLI chat grant_full_default, R4-018).
+        # The mismatch is therefore a DISCLOSURE defect, not a grant defect:
+        # the activation copy owned by R5-D (mode.ts:56, README:250,
+        # SECURITY.md:45) must state exactly this — a full grant authorizes
+        # credential reads, privilege escalation, and destructive operations
+        # in this session without further approval. See
+        # docs/verification/proofs/codebase_review_round5_2026-10-15/R5-A_mcp_authority.md
+        # for the exact grant-path semantics R5-D must disclose.
         return Decision("allowed", "full-mode session grant", req)
     if req.mode == "full":
         # LP-07: full authority comes from a live full-mode grant bound to
