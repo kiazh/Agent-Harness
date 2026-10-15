@@ -852,6 +852,47 @@ class SkillRegistry(SkillSource):
         self._invalidate()
         return skill
 
+    def _write_skill_file(
+        self,
+        skill: Skill,
+        *,
+        description: str,
+        content: str,
+        triggers: list[str],
+        enabled: bool,
+    ) -> None:
+        """Atomically replace a skill's SKILL.md (temp file + fsync + replace).
+
+        Raises ``OSError`` without touching the live object or leaving a
+        partial file, mirroring the telemetry writer's crash-safe idiom.
+        """
+        frontmatter = {
+            "name": skill.name,
+            "description": description,
+            "triggers": triggers,
+            "version": skill.version,
+            "enabled": enabled,
+            "created_at": skill.created_at.isoformat(),
+            "source": skill.source,
+            "source_type": skill.source_type,
+        }
+        yaml_text = yaml.dump(frontmatter, default_flow_style=False, sort_keys=True)
+        skill_content = f"---\n{yaml_text}---\n{content}\n"
+
+        path = Path(skill.file_path)
+        temp_file = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        try:
+            temp_file.write_text(skill_content, encoding="utf-8")
+            with open(temp_file, "rb") as handle:
+                os.fsync(handle.fileno())
+            os.replace(temp_file, path)
+        except OSError:
+            try:
+                temp_file.unlink()
+            except OSError:
+                pass
+            raise
+
     def update_skill(
         self,
         name: str,
@@ -859,53 +900,70 @@ class SkillRegistry(SkillSource):
         content: str | None = None,
         triggers: list[str] | None = None,
     ) -> Skill | None:
-        """Update an existing skill."""
+        """Update an existing skill.
+
+        All proposed fields are validated into locals first and the SKILL.md
+        is replaced atomically; the live object is published only after the
+        disk write succeeds, so a validation error or an ``OSError`` leaves
+        both the live skill and the file untouched.
+        """
         skill = self._skills.get(name)
         if not skill:
             return None
         if skill.source_type == "builtin-ecc":
             return None
 
+        new_description = skill.description
         if description is not None:
             if not isinstance(description, str) or len(description) > 1000:
                 raise ValueError("skill description must be a string of at most 1000 characters")
             SkillParser._scan_injection(description)
-            skill.description = description
+            new_description = description
+        new_content = skill.content
         if content is not None:
-            skill.content = SkillParser._validate_content(content)
+            new_content = SkillParser._validate_content(content)
+        new_triggers = skill.triggers
         if triggers is not None:
             for _t in triggers:
                 SkillParser._scan_injection(_t)
-            SkillParser._validate_metadata(skill.name, skill.description, triggers)
-            skill.triggers = triggers
+            SkillParser._validate_metadata(skill.name, new_description, triggers)
+            new_triggers = list(triggers)
 
-        # Rebuild SKILL.md
-        frontmatter = {
-            "name": skill.name,
-            "description": skill.description,
-            "triggers": skill.triggers,
-            "version": skill.version,
-            "enabled": skill.enabled,
-            "created_at": skill.created_at.isoformat(),
-            "source": skill.source,
-            "source_type": skill.source_type,
-        }
-        yaml_text = yaml.dump(frontmatter, default_flow_style=False, sort_keys=True)
-        skill_content = f"---\n{yaml_text}---\n{skill.content}\n"
+        self._write_skill_file(
+            skill,
+            description=new_description,
+            content=new_content,
+            triggers=new_triggers,
+            enabled=skill.enabled,
+        )
 
-        Path(skill.file_path).write_text(skill_content, encoding="utf-8")
+        skill.description = new_description
+        skill.content = new_content
+        skill.triggers = new_triggers
         self._invalidate()
         return skill
 
     def set_enabled(self, name: str, enabled: bool) -> Skill | None:
-        """Persist whether a skill is available for agent discovery and reading."""
+        """Persist whether a skill is available for agent discovery and reading.
+
+        The flag is published to the live object only after the SKILL.md
+        rewrite succeeds, so a failed write never diverges memory from disk.
+        """
         skill = self._skills.get(name)
         if skill is None:
             return None
         if skill.source_type == "builtin-ecc":
             return None
+        self._write_skill_file(
+            skill,
+            description=skill.description,
+            content=skill.content,
+            triggers=skill.triggers,
+            enabled=enabled,
+        )
         skill.enabled = enabled
-        return self.update_skill(name)
+        self._invalidate()
+        return skill
 
     def delete_skill(self, name: str) -> bool:
         """Delete a skill by name."""
