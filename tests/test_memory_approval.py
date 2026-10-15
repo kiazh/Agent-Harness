@@ -526,3 +526,140 @@ class TestUserProfileStore:
             mock_db.execute = AsyncMock(return_value="DELETE 0")
             result = await store.delete(uuid.uuid4())
             assert result is False
+
+
+# ===========================================================================
+# R4-089 (b): approval gate wired into MemoryStore.add
+# ===========================================================================
+
+
+class TestApprovalGateWiring:
+    """Enabled via config: memory writes route to ``pending_memories`` and the
+    approve/reject surface completes them. Disabled (default): unchanged."""
+
+    async def test_enabled_routes_add_to_pending_then_approve(self, db_pool, monkeypatch):
+        from machina.core.config import config
+        from machina.memory.approval import memory_approval_gate
+        from machina.memory.store import MemoryStore
+
+        for target in (
+            "machina.memory.store.db",
+            "machina.memory.identity.db",
+            "machina.memory.approval.db",
+        ):
+            monkeypatch.setattr(target, db_pool)
+        # raising=False so the RED run against the unwired code fails at the
+        # semantic assertion (durable write instead of pending), not at the
+        # config surface itself.
+        monkeypatch.setattr(config, "memory_approval_enabled", True, raising=False)
+
+        agent_id = f"r4-089-gate-{uuid.uuid4()}"
+        try:
+            placeholder = await MemoryStore().add(
+                None, agent_id, "User prefers concise release notes", "preference"
+            )
+
+            pending = await db_pool.fetchrow(
+                "SELECT id, status, content FROM pending_memories WHERE id = $1",
+                placeholder.id,
+            )
+            assert pending is not None, "the write must land in pending_memories"
+            assert pending["status"] == "pending"
+            assert pending["content"] == "User prefers concise release notes"
+            assert (
+                await db_pool.fetchval(
+                    "SELECT COUNT(*) FROM memories WHERE agent_id = $1", agent_id
+                )
+                == 0
+            ), "no durable memory may exist before approval"
+
+            memory = await memory_approval_gate.approve(placeholder.id)
+            assert memory is not None
+            assert memory.content == "User prefers concise release notes"
+            assert (
+                await db_pool.fetchval(
+                    "SELECT COUNT(*) FROM memories WHERE agent_id = $1", agent_id
+                )
+                == 1
+            )
+            assert (
+                await db_pool.fetchval(
+                    "SELECT memory_id FROM pending_memories WHERE id = $1", placeholder.id
+                )
+                == memory.id
+            )
+        finally:
+            await db_pool.execute(
+                "DELETE FROM pending_memories WHERE agent_id = $1", agent_id
+            )
+            await db_pool.execute("DELETE FROM memories WHERE agent_id = $1", agent_id)
+
+    async def test_enabled_reject_creates_no_memory(self, db_pool, monkeypatch):
+        from machina.core.config import config
+        from machina.memory.approval import memory_approval_gate
+        from machina.memory.store import MemoryStore
+
+        for target in (
+            "machina.memory.store.db",
+            "machina.memory.identity.db",
+            "machina.memory.approval.db",
+        ):
+            monkeypatch.setattr(target, db_pool)
+        monkeypatch.setattr(config, "memory_approval_enabled", True, raising=False)
+
+        agent_id = f"r4-089-gate-{uuid.uuid4()}"
+        try:
+            placeholder = await MemoryStore().add(
+                None, agent_id, "Ephemeral fact the user rejects", "fact"
+            )
+            assert (
+                await db_pool.fetchval(
+                    "SELECT COUNT(*) FROM memories WHERE agent_id = $1", agent_id
+                )
+                == 0
+            )
+
+            assert await memory_approval_gate.reject(placeholder.id) is True
+            assert (
+                await db_pool.fetchval(
+                    "SELECT COUNT(*) FROM memories WHERE agent_id = $1", agent_id
+                )
+                == 0
+            )
+            assert (
+                await db_pool.fetchval(
+                    "SELECT status FROM pending_memories WHERE id = $1", placeholder.id
+                )
+                == "rejected"
+            )
+        finally:
+            await db_pool.execute(
+                "DELETE FROM pending_memories WHERE agent_id = $1", agent_id
+            )
+            await db_pool.execute("DELETE FROM memories WHERE agent_id = $1", agent_id)
+
+    async def test_disabled_writes_directly_without_pending(self, db_pool, monkeypatch):
+        """Default OFF preserves the pre-gate behavior exactly."""
+        from machina.memory.store import MemoryStore
+
+        for target in ("machina.memory.store.db", "machina.memory.identity.db"):
+            monkeypatch.setattr(target, db_pool)
+
+        agent_id = f"r4-089-gate-off-{uuid.uuid4()}"
+        try:
+            entry = await MemoryStore().add(None, agent_id, "Direct durable fact", "fact")
+            assert entry.id is not None
+            assert (
+                await db_pool.fetchval(
+                    "SELECT COUNT(*) FROM memories WHERE agent_id = $1", agent_id
+                )
+                == 1
+            )
+            assert (
+                await db_pool.fetchval(
+                    "SELECT COUNT(*) FROM pending_memories WHERE agent_id = $1", agent_id
+                )
+                == 0
+            )
+        finally:
+            await db_pool.execute("DELETE FROM memories WHERE agent_id = $1", agent_id)

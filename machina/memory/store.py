@@ -6,7 +6,9 @@ structured logging, and audit logging.
 
 from __future__ import annotations
 
+import importlib as _importlib
 import logging
+import sys as _sys
 import uuid
 from typing import Any
 
@@ -24,6 +26,21 @@ __all__ = ["MemoryStore", "memory_store"]
 logger = logging.getLogger(__name__)
 
 db = LazyDb()
+
+
+def _approval_gate():
+    """SEAM: resolve the memory approval gate without a store↔approval cycle.
+
+    ``machina.memory.approval`` imports ``memory_store`` at module level, so
+    this module cannot import it back; the ``sys.modules``/``importlib``
+    binding mirrors the leaf-core seam idiom and keeps the deferred-import
+    census unchanged. By the time any write runs, ``machina.memory`` has
+    finished importing, so the singleton is defined.
+    """
+    module = _sys.modules.get("machina.memory.approval")
+    if module is None:
+        module = _importlib.import_module("machina.memory.approval")
+    return module.memory_approval_gate
 
 
 class MemoryStore:
@@ -45,13 +62,54 @@ class MemoryStore:
         connection: Any | None = None,
         source_agent: str | None = None,
         parent_memory_id: uuid.UUID | None = None,
+        bypass_approval: bool = False,
     ) -> MemoryEntry:
         """Add a new memory entry. Secrets are redacted before storage.
+
+        When the approval gate is enabled (``memory_approval_enabled`` config
+        or an explicitly enabled gate), the write is routed to
+        ``pending_memories`` instead of ``memories`` and the returned entry
+        mirrors the pending record (its ``id`` is the pending id) — it is not
+        yet durable; ``approve()``/``reject()`` complete the flow. Internal
+        completions of that flow (``approve``/``approve_all``), and the
+        shared-bus delivery copy, pass ``bypass_approval=True``: they own
+        their durable write semantics (an open transaction / a receipt that
+        must reference the real copy).
 
         The IdentityGate validates the memory against the agent's belief
         model before storage. If validation fails, the memory is still
         stored but flagged as quarantined.
         """
+        if not bypass_approval:
+            gate = _approval_gate()
+            if gate.is_enabled():
+                pending = await gate.submit(
+                    content=content,
+                    category=category,
+                    importance=importance,
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    explicitly_important=explicitly_important,
+                    base_strength=base_strength,
+                    embedding=embedding,
+                )
+                logger.info(
+                    "Memory write routed to approval gate: pending %s (agent %s)",
+                    pending.id,
+                    agent_id,
+                )
+                return MemoryEntry(
+                    id=pending.id,
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    content=pending.content,
+                    category=category,
+                    importance=importance,
+                    embedding=embedding,
+                    explicitly_important=explicitly_important,
+                    base_strength=base_strength,
+                )
+
         # Redact secrets from content before storing
         redaction_result = self._redactor.redact(content)
         content = redaction_result.text
@@ -338,12 +396,16 @@ class MemoryStore:
         return deleted
 
     async def update_access(self, memory_id: uuid.UUID) -> None:
-        """Update last_accessed and increment access_count."""
+        """Update last_accessed and increment access_count.
+
+        Quarantined memories are excluded, matching ``batch_update_access``:
+        they are not retrievable, so they must not accrue access evidence.
+        """
         await db.execute(
             """
             UPDATE memories
             SET last_accessed = now(), access_count = access_count + 1
-            WHERE id = $1
+            WHERE id = $1 AND quarantined = FALSE
             """,
             memory_id,
         )

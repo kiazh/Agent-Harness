@@ -119,8 +119,9 @@ class MemoryConsolidator:
     Follows the research-backed pipeline:
     1. Extract candidate memories via LLM
     2. Score importance
-    3. Deduplicate against existing memories
-    4. Write new memories
+    3. Embed candidates (redaction-first) so vector dedup can see them
+    4. Deduplicate against existing memories
+    5. Write new memories
     """
 
     def __init__(
@@ -290,9 +291,39 @@ class MemoryConsolidator:
         for candidate in candidates:
             candidate.importance = self.scorer.score(candidate)
 
+        eligible = [c for c in candidates if c.importance >= 0.2]
+
+        # Step 3.5: Redaction-before-embedding ingestion (AH-AUDIT-038) —
+        # BEFORE dedup so the vector comparison in step 4 can actually see the
+        # candidates. LLM extraction returns embedding=None; comparing first
+        # would leave only exact-text dedup and let paraphrases above the
+        # dedup threshold through as duplicates. Redacted content is embedded
+        # through the same query embedder, so candidate and query embeddings
+        # share an enforced space. No-key operation is preserved (embedding
+        # stays None, keyword retrieval unaffected); embedding failures never
+        # drop the memory.
+        try:
+            from machina.memory.embeddings import embed_query as _embed_query
+            from machina.memory.redaction import redact_secrets as _redact_mem
+
+            for candidate in eligible:
+                if candidate.embedding:
+                    continue
+                try:
+                    redacted = _redact_mem(candidate.content or "").text
+                    if not redacted.strip():
+                        continue
+                    candidate.embedding = await _embed_query(redacted[:2000])
+                except Exception as _boundary_error:
+                    # Optional fallback preserves the primary outcome; report no payload.
+                    record_failure("consolidator.candidate_embedding", _boundary_error)
+                    candidate.embedding = None
+        except Exception as _boundary_error:
+            # Optional fallback preserves the primary outcome; report no payload.
+            record_failure("consolidator.consolidate_session", _boundary_error)
+
         # Step 4: Deduplicate against existing memories (batch)
         new_memories: list[MemoryEntry] = []
-        eligible = [c for c in candidates if c.importance >= 0.2]
         candidates_with_embedding = [c for c in eligible if c.embedding]
         candidates_without_embedding = [c for c in eligible if not c.embedding]
 
@@ -356,9 +387,9 @@ class MemoryConsolidator:
                         seen_embeddings.append(candidate.embedding)
                     new_memories.append(candidate)
 
-        # Candidates extracted by the LLM carry no embeddings, so the vector
-        # check above never applies to them. Dedup by normalized content
-        # against stored memories and within this batch.
+        # Candidates whose embedding is still missing (no provider, embedding
+        # failure, or empty content) stay on normalized-content dedup against
+        # stored memories and within this batch.
         seen = {_normalize(m.content) for m in existing_memories}
         for candidate in candidates_without_embedding:
             key = _normalize(candidate.content)
@@ -376,33 +407,6 @@ class MemoryConsolidator:
                 continue
             seen.add(key)
             new_memories.append(candidate)
-
-        # Step 4.5: Redaction-before-embedding ingestion (AH-AUDIT-038).
-        # Candidates extracted by the LLM carry embedding=None; without this
-        # stage they stay invisible to dense retrieval and vector dedup.
-        # Redacted content is embedded through the same query embedder, so
-        # candidate and query embeddings share an enforced space. No-key
-        # operation is preserved (embedding stays None, keyword retrieval
-        # unaffected); embedding failures never drop the memory.
-        try:
-            from machina.memory.embeddings import embed_query as _embed_query
-            from machina.memory.redaction import redact_secrets as _redact_mem
-
-            for candidate in new_memories:
-                if candidate.embedding:
-                    continue
-                try:
-                    redacted = _redact_mem(candidate.content or "").text
-                    if not redacted.strip():
-                        continue
-                    candidate.embedding = await _embed_query(redacted[:2000])
-                except Exception as _boundary_error:
-                    # Optional fallback preserves the primary outcome; report no payload.
-                    record_failure("consolidator.candidate_embedding", _boundary_error)
-                    candidate.embedding = None
-        except Exception as _boundary_error:
-            # Optional fallback preserves the primary outcome; report no payload.
-            record_failure("consolidator.consolidate_session", _boundary_error)
 
         # Step 5: Write new memories
         written: list[MemoryEntry] = []
@@ -637,9 +641,10 @@ class MemoryConsolidator:
                         category=item.get("category", "fact"),
                         importance=float(item.get("importance", 0.5)),
                         explicitly_important=bool(item.get("explicitly_important", False)),
-                        # LLM extraction provides no embeddings; embedding stays None
-                        # so the vector dedup path is skipped for these candidates
-                        # (normalized-content dedup applies instead).
+                        # LLM extraction provides no embeddings; the
+                        # consolidation pipeline embeds candidates before
+                        # dedup (step 3.5), so they participate in vector
+                        # retrieval and cosine dedup.
                         embedding=None,
                     )
                 except (KeyError, TypeError, ValueError) as e:

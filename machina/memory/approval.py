@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
+from machina.core.config import config
 from machina.core.provider import audit_log
 from machina.core.serialization import embedding_to_str, str_to_embedding
 from machina.db.lazy import LazyDb
@@ -115,6 +116,19 @@ class MemoryApprovalGate:
         self.enabled = enabled
         self.redactor = redactor or SecretRedactor()
 
+    def is_enabled(self) -> bool:
+        """Effective gate state: explicit flag OR ``memory_approval_enabled``.
+
+        The constructor flag stays the direct/test control; the config key is
+        the production switch (default OFF preserves direct writes). Both the
+        write router (``MemoryStore.add``) and ``submit``'s auto-approve use
+        this single resolution so an enabled request can never be
+        auto-approved by a default-constructed singleton.
+        """
+        if self.enabled:
+            return True
+        return bool(config.get("memory_approval_enabled"))
+
     async def submit(
         self,
         content: str,
@@ -197,7 +211,7 @@ class MemoryApprovalGate:
         )
 
         # Step 3: If gate is disabled, auto-approve
-        if not self.enabled:
+        if not self.is_enabled():
             await self.approve(pending_id, auto_approved=True)
 
         return pending
@@ -242,6 +256,8 @@ class MemoryApprovalGate:
                     explicitly_important=row["explicitly_important"],
                     base_strength=row["base_strength"],
                     connection=conn,
+                    # Completing an approved row must never re-enter the gate.
+                    bypass_approval=True,
                 )
                 await conn.execute(
                     """
@@ -399,6 +415,8 @@ class MemoryApprovalGate:
                 explicitly_important=row["explicitly_important"],
                 base_strength=row["base_strength"],
                 connection=conn,
+                # Completing approved rows must never re-enter the gate.
+                bypass_approval=True,
             )
             memory_ids.append(memory.id)
 

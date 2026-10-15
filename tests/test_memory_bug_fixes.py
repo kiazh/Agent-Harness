@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from machina.core.models import LLMResponse
+from machina.core.models import ContextChunk, LLMResponse
 from machina.memory import (
     MemoryConsolidator,
     MemoryEntry,
@@ -267,37 +267,63 @@ class TestRerankTimeout:
         return store
 
     async def test_rerank_has_timeout(self, retriever, mock_store):
-        """Verify _rerank() uses asyncio.wait_for with a timeout."""
-        # Create a mock LLM that hangs
+        """Verify _rerank() bounds the LLM call and falls back to the input order.
+
+        Two candidates are required to reach the re-rank path at all
+        (``_rerank`` returns early for <= 1 candidate). The production call
+        passes ``timeout=10.0``; this test compresses the wait by wrapping the
+        retriever's ``asyncio.wait_for`` with the real implementation at a
+        tiny timeout, so the real timeout-and-cancel machinery runs and the
+        LLM stub actually gets invoked before being cancelled.
+        """
         mock_llm = AsyncMock()
+        llm_started = asyncio.Event()
 
         async def slow_complete(*args, **kwargs):
-            await asyncio.sleep(10)  # Would hang without timeout
+            llm_started.set()
+            await asyncio.sleep(10)  # Would hang without the timeout
             return LLMResponse(content="[]", model="test", usage={"total_tokens": 5})
 
-        mock_llm.complete = slow_complete
+        mock_llm.complete = AsyncMock(side_effect=slow_complete)
         retriever.llm = mock_llm
         retriever.store = mock_store
 
-        # Create some candidates
         candidates = [
             RetrievedMemory(
                 memory=MemoryEntry(
                     id=uuid.uuid4(),
                     session_id=None,
                     agent_id="harness",
-                    content="Test",
+                    content=f"Test memory {i}",
                     category="fact",
                 ),
-                score=0.5,
+                score=0.5 - i * 0.1,
             )
+            for i in range(2)
         ]
 
-        # Patch asyncio.wait_for to verify it's called
-        with patch("machina.memory.retriever.asyncio.wait_for", side_effect=TimeoutError()):
+        import machina.memory.retriever as retriever_module
+
+        real_wait_for = asyncio.wait_for
+        observed_timeouts: list[float] = []
+
+        async def compressed_wait_for(coro, timeout):
+            # The production bound is 10s; run the real wait_for with a tiny
+            # bound so cancellation and TimeoutError are the production ones.
+            observed_timeouts.append(timeout)
+            return await real_wait_for(coro, timeout=0.05)
+
+        with patch.object(retriever_module.asyncio, "wait_for", compressed_wait_for):
             result = await retriever._rerank("test", candidates)
-            # Should fall back to original candidates on timeout
-            assert result == candidates
+
+        # The production bound is the documented 10s wait_for budget.
+        assert observed_timeouts == [10.0]
+        # The timeout path was reached: the LLM call started and was cancelled.
+        assert llm_started.is_set()
+        assert mock_llm.complete.await_count == 1
+        # Fallback: the original candidates, unchanged and in order.
+        assert [rm.memory.id for rm in result] == [rm.memory.id for rm in candidates]
+        assert result == candidates
 
 
 # ===========================================================================
@@ -384,33 +410,92 @@ class TestConsolidatorBatchDedup:
         return store
 
     async def test_consolidate_uses_batch_dedup(self, consolidator, mock_llm, mock_store):
-        """Verify consolidator uses batch similarity instead of O(n*m) nested loop."""
+        """Embedded candidates must go through the batch vector-dedup branch.
+
+        A real context chunk feeds extraction (the LLM boundary returns the
+        candidates). The first candidate is a vector-duplicate of a stored
+        memory (different text, similarity above the threshold) and must be
+        deduped through ``search_by_embedding`` with an access bump; the
+        second is new and must be the only write. The old version asserted
+        ``status == "empty"`` before extraction was ever reached.
+        """
         consolidator.llm = mock_llm
         consolidator.store = mock_store
 
-        # Create candidates with embeddings
-        candidate = MemoryEntry(
+        chunk = ContextChunk(
+            id=uuid.uuid4(),
+            session_id=uuid.uuid4(),
+            agent_id="harness",
+            chunk_type="user_message",
+            payload={"content": "The user keeps saying they like Python."},
+        )
+        session_id = chunk.session_id
+
+        duplicate = MemoryEntry(
             id=uuid.uuid4(),
             session_id=None,
             agent_id="harness",
-            content="User likes Python",
+            content="The user enjoys programming in Python",
             category="preference",
             importance=0.8,
             embedding=[0.1] * 1536,
         )
+        fresh = MemoryEntry(
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="The user's deploy target is us-east-1",
+            category="fact",
+            importance=0.8,
+            embedding=[0.9] * 1536,
+        )
 
-        # Mock _extract_memories to return our candidate
         async def mock_extract(*args, **kwargs):
-            return [candidate]
+            return [duplicate, fresh]
 
         consolidator._extract_memories = mock_extract
 
-        # Mock context_manager
-        with patch("machina.memory.consolidator.context_manager") as mock_cm:
-            mock_cm.get_chunks = AsyncMock(return_value=[])
-            # This should not raise and should complete
-            results = await consolidator.consolidate_session(uuid.uuid4(), "harness")
-            assert results.status == "empty" and results.entries == []
+        existing = MemoryEntry(
+            id=uuid.uuid4(),
+            session_id=None,
+            agent_id="harness",
+            content="I write Python code every day",
+            category="preference",
+            importance=0.7,
+            embedding=[0.1] * 1536,
+        )
+        mock_store.search = AsyncMock(return_value=[existing])
+        mock_store.search_by_embedding = AsyncMock(
+            side_effect=[[(existing, 0.99)], []]  # paraphrase matches; fresh does not
+        )
+        mock_store.update_access = AsyncMock()
+        mock_store.add = AsyncMock(
+            side_effect=lambda **kwargs: MemoryEntry(
+                id=uuid.uuid4(),
+                session_id=kwargs.get("session_id"),
+                agent_id=kwargs.get("agent_id", "harness"),
+                content=kwargs.get("content", ""),
+                category=kwargs.get("category", "fact"),
+                importance=kwargs.get("importance", 0.5),
+            )
+        )
+
+        context = MagicMock()
+        context.get_chunks_since = AsyncMock(return_value=[chunk])
+        context.get_chunks = AsyncMock(return_value=[chunk])
+
+        with patch("machina.memory.consolidator.context_manager", context):
+            results = await consolidator.consolidate_session(session_id, "harness")
+
+        # The batch vector branch ran for every embedded candidate.
+        assert mock_store.search_by_embedding.await_count == 2
+        # The paraphrase was deduped against the stored memory (access bump),
+        # not written; the fresh candidate was the only write.
+        mock_store.update_access.assert_awaited_once_with(existing.id)
+        assert mock_store.add.await_count == 1
+        assert mock_store.add.await_args.kwargs["content"] == fresh.content
+        assert results.status == "complete"
+        assert [entry.content for entry in results.entries] == [fresh.content]
 
 
 # ===========================================================================
@@ -674,3 +759,167 @@ class TestConsolidationPoolIndependence:
             assert [r.status for r in results] == ["empty"] * 10
         finally:
             await database.close()
+
+
+# ===========================================================================
+# R4-089 (a): the 0.85 cosine dedup must run on the production path
+# ===========================================================================
+
+# Provider-boundary fake embeddings: every "green cluster" paraphrase maps to
+# the same unit vector, so cosine similarity 1.0 clears the 0.85 threshold.
+_DEDUP_VECTOR = [1.0] + [0.0] * 1535
+_OTHER_VECTOR = [0.0, 1.0] + [0.0] * 1534
+
+
+async def _fake_dedup_embed(text: str):
+    return list(_DEDUP_VECTOR if "green cluster" in text.lower() else _OTHER_VECTOR)
+
+
+async def _run_production_consolidation(db_pool, monkeypatch, agent_id: str, response_json: str):
+    """Drive ``MemoryConsolidator.consolidate_session`` over the real DB path.
+
+    Only the provider/embedder boundaries are faked: the LLM completion and
+    the embedding service. Chunks, sessions, dedup and writes all hit the
+    real test database.
+    """
+    from types import SimpleNamespace
+
+    from machina.core import usage as usage_module
+    from machina.core.context import context_manager
+    from machina.memory import embeddings as embeddings_module
+
+    session_id = await db_pool.fetchval(
+        "INSERT INTO sessions (agent_id, title) VALUES ($1, 'R4-089 dedup') RETURNING id",
+        agent_id,
+    )
+    await context_manager.add_chunk(
+        session_id, agent_id, "user_message", {"content": "R4-089 dedup fixture turn."}
+    )
+
+    async def fake_complete(*args, **kwargs):
+        return SimpleNamespace(content=response_json)
+
+    monkeypatch.setattr(embeddings_module, "embed_query", _fake_dedup_embed)
+    monkeypatch.setattr(usage_module.usage_store, "complete_call", fake_complete)
+    consolidator = MemoryConsolidator(llm_provider=object(), store=MemoryStore())
+    return await consolidator.consolidate_session(session_id, agent_id)
+
+
+async def _cleanup_agent(db_pool, agent_id: str) -> None:
+    await db_pool.execute("DELETE FROM memories WHERE agent_id = $1", agent_id)
+    await db_pool.execute("DELETE FROM sessions WHERE agent_id = $1", agent_id)
+
+
+class TestConsolidatorDedupEmbedding:
+    """R4-089 (a): candidates must be embedded BEFORE the cosine comparison.
+
+    LLM extraction returns candidates without embeddings. If comparison runs
+    first, only exact normalized text dedup fires and a paraphrase above the
+    0.85 cosine threshold is stored as a second memory.
+    """
+
+    @needs_db
+    async def test_paraphrase_of_stored_memory_is_deduped(self, db_pool, monkeypatch):
+        for target in (
+            "machina.memory.store.db",
+            "machina.memory.identity.db",
+            "machina.memory.consolidator.db",
+            "machina.core.context.db",
+        ):
+            monkeypatch.setattr(target, db_pool)
+
+        agent_id = f"r4-089-dedup-{uuid.uuid4()}"
+        store = MemoryStore()
+        try:
+            stored = await store.add(
+                None,
+                agent_id,
+                "The deployment target is the green cluster in us-east-1",
+                "fact",
+                importance=0.8,
+                embedding=list(_DEDUP_VECTOR),
+            )
+            await _run_production_consolidation(
+                db_pool,
+                monkeypatch,
+                agent_id,
+                '[{"content": "The green cluster in us-east-1 is the deployment target", '
+                '"category": "fact", "importance": 0.9}]',
+            )
+
+            memories = await store.search(agent_id=agent_id)
+            assert [m.content for m in memories] == [stored.content], (
+                "a paraphrase above the 0.85 cosine threshold must not be stored"
+            )
+            refreshed = await store.get(stored.id)
+            assert refreshed.access_count == 1, "the dedup match must update access"
+        finally:
+            await _cleanup_agent(db_pool, agent_id)
+
+    @needs_db
+    async def test_intra_batch_paraphrases_write_once(self, db_pool, monkeypatch):
+        for target in (
+            "machina.memory.store.db",
+            "machina.memory.identity.db",
+            "machina.memory.consolidator.db",
+            "machina.core.context.db",
+        ):
+            monkeypatch.setattr(target, db_pool)
+
+        agent_id = f"r4-089-dedup-{uuid.uuid4()}"
+        store = MemoryStore()
+        try:
+            result = await _run_production_consolidation(
+                db_pool,
+                monkeypatch,
+                agent_id,
+                '[{"content": "The green cluster in us-east-1 is the deployment target", '
+                '"category": "fact", "importance": 0.9},'
+                ' {"content": "The user deploys to the green cluster in us-east-1", '
+                '"category": "fact", "importance": 0.9}]',
+            )
+
+            memories = await store.search(agent_id=agent_id)
+            assert len(memories) == 1, "intra-batch paraphrases must collapse to one memory"
+            assert len(result.entries) == 1
+        finally:
+            await _cleanup_agent(db_pool, agent_id)
+
+
+# ===========================================================================
+# R4-089 (c): update_access must apply the same quarantined filter as the
+# batch variant
+# ===========================================================================
+
+
+class TestUpdateAccessQuarantined:
+    @needs_db
+    async def test_update_access_skips_quarantined(self, db_pool, monkeypatch):
+        monkeypatch.setattr("machina.memory.store.db", db_pool)
+        monkeypatch.setattr("machina.memory.identity.db", db_pool)
+
+        agent_id = f"r4-089-access-{uuid.uuid4()}"
+        store = MemoryStore()
+        try:
+            quarantined = await store.add(None, agent_id, "quarantined candidate", "fact")
+            active = await store.add(None, agent_id, "active candidate", "fact")
+            await db_pool.execute(
+                "UPDATE memories SET quarantined = TRUE WHERE id = $1", quarantined.id
+            )
+
+            await store.update_access(quarantined.id)
+            await store.update_access(active.id)
+
+            row = await db_pool.fetchrow(
+                "SELECT access_count, last_accessed FROM memories WHERE id = $1",
+                quarantined.id,
+            )
+            assert row["access_count"] == 0
+            assert row["last_accessed"] is None
+
+            active_row = await db_pool.fetchrow(
+                "SELECT access_count FROM memories WHERE id = $1", active.id
+            )
+            assert active_row["access_count"] == 1
+        finally:
+            await _cleanup_agent(db_pool, agent_id)

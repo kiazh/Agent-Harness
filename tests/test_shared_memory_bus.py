@@ -88,6 +88,67 @@ async def test_delivery_without_signing_key_is_rejected(db_pool, monkeypatch):
         )
 
 
+async def test_missing_provenance_rejection_is_retryable(db_pool, monkeypatch):
+    """R4-089 (d): a transiently missed provenance row must not be cached as a
+    permanent rejection; once the provenance row is visible, the retry
+    delivers the memory."""
+    monkeypatch.setenv("MACHINA_PROVENANCE_KEY", "test-only-provenance-key")
+    monkeypatch.setattr("machina.memory.store.db", db_pool)
+    monkeypatch.setattr("machina.memory.identity.db", db_pool)
+    monkeypatch.setattr("machina.memory.shared_bus.db", db_pool)
+    source_agent = f"source-{uuid.uuid4()}"
+    target_agent = f"target-{uuid.uuid4()}"
+    store = MemoryStore()
+    bus = SharedMemoryBus()
+    source = await store.add(None, source_agent, "Retryable provenance fact", "fact")
+    try:
+        provenance = await db_pool.fetchrow(
+            """
+            SELECT memory_id, source_agent, signature, parent_memory_id
+            FROM memory_provenance WHERE memory_id = $1
+            """,
+            source.id,
+        )
+        assert provenance is not None
+
+        # Transient miss: the source memory is durable but its provenance row
+        # is not visible yet (e.g. the write's provenance insert failed after
+        # the memory insert committed).
+        await db_pool.execute(
+            "DELETE FROM memory_provenance WHERE memory_id = $1", source.id
+        )
+        first = await bus.deliver(source.id, target_agent, publisher_agent=source_agent)
+        assert first.status == "rejected"
+        assert (
+            await db_pool.fetchval(
+                "SELECT COUNT(*) FROM shared_memory_deliveries WHERE source_memory_id = $1",
+                source.id,
+            )
+            == 0
+        ), "a transient provenance miss must not become a durable rejection"
+
+        # Recovery: the provenance row becomes visible; the retry must succeed.
+        await db_pool.execute(
+            """
+            INSERT INTO memory_provenance
+                (memory_id, source_agent, signature, parent_memory_id)
+            VALUES ($1, $2, $3, $4)
+            """,
+            provenance["memory_id"],
+            provenance["source_agent"],
+            provenance["signature"],
+            provenance["parent_memory_id"],
+        )
+        second = await bus.deliver(source.id, target_agent, publisher_agent=source_agent)
+        assert second.status == "accepted"
+        assert second.target_memory_id is not None
+    finally:
+        await db_pool.execute(
+            "DELETE FROM memories WHERE agent_id = ANY($1::text[])",
+            [source_agent, target_agent],
+        )
+
+
 async def test_delivery_works_with_a_single_database_connection(db_pool, monkeypatch):
     monkeypatch.setenv("MACHINA_PROVENANCE_KEY", "test-only-provenance-key")
     monkeypatch.setenv("MACHINA_DB_MIN_POOL", "1")

@@ -25,7 +25,14 @@ class DeliveryReceipt:
 
 
 class SharedMemoryBus:
-    """Validate every recipient and keep one durable receipt per delivery."""
+    """Validate every recipient and keep one durable receipt per delivery.
+
+    Conclusive outcomes (accepted / quarantined / durable rejections) are
+    cached one-per-(source, recipient). A rejection caused by a missing
+    provenance row is NOT cached: the lookup can transiently miss before the
+    row is visible, and a durable rejection would permanently block every
+    retry. Such a receipt is returned as retryable.
+    """
 
     async def deliver(
         self,
@@ -83,13 +90,22 @@ class SharedMemoryBus:
                 )
                 provenance = MemoryProvenance(**dict(provenance_row)) if provenance_row else None
                 target_id: uuid.UUID | None = None
+                retryable = False
                 if source.quarantined:
                     status: DeliveryStatus = "rejected"
                     reason = "source memory is quarantined"
-                elif (
-                    provenance is None
-                    or provenance.source_agent != source.agent_id
-                    or not provenance.verify(source.id, source.content)
+                elif provenance is None:
+                    # The provenance lookup can transiently miss: the source
+                    # memory's provenance row may not be visible yet (e.g. the
+                    # signing key was enabled after the write, or the source
+                    # insert committed without its provenance row). Caching a
+                    # rejection here would permanently block every retry once
+                    # the row appears, so this receipt stays retryable.
+                    status = "rejected"
+                    reason = "missing or invalid source provenance"
+                    retryable = True
+                elif provenance.source_agent != source.agent_id or not provenance.verify(
+                    source.id, source.content
                 ):
                     status = "rejected"
                     reason = "missing or invalid source provenance"
@@ -110,6 +126,11 @@ class SharedMemoryBus:
                             connection=conn,
                             source_agent=source.agent_id,
                             parent_memory_id=source.id,
+                            # The delivery copy is authorized by provenance +
+                            # the recipient identity gate, and the receipt must
+                            # reference the real copy; the memory approval gate
+                            # must not re-route it to pending.
+                            bypass_approval=True,
                         )
                         status = "quarantined" if copy.quarantined else "accepted"
                         reason = (
@@ -124,32 +145,35 @@ class SharedMemoryBus:
                 # deliveries for the same (source, recipient) serialize on
                 # the source-row FOR UPDATE lock above, and the PK/ON
                 # CONFLICT guard makes a duplicate receipt impossible.
-                insert_result = await conn.execute(
-                    """
-                    INSERT INTO shared_memory_deliveries
-                        (source_memory_id, recipient_agent, target_memory_id, status, reason)
-                    VALUES ($1, $2, $3, $4, $5)
-                    ON CONFLICT (source_memory_id, recipient_agent) DO NOTHING
-                    """,
-                    source_memory_id,
-                    recipient_agent,
-                    target_id,
-                    status,
-                    reason,
-                )
-                if parse_command_count(insert_result) == 0:
-                    # ON CONFLICT DO NOTHING skipped the insert (a concurrent
-                    # delivery won) — return the winner's receipt.
-                    existing = await conn.fetchrow(
+                # Retryable (missing-provenance) rejections are returned
+                # without a durable receipt.
+                if not retryable:
+                    insert_result = await conn.execute(
                         """
-                        SELECT source_memory_id, recipient_agent, target_memory_id, status, reason
-                        FROM shared_memory_deliveries
-                        WHERE source_memory_id = $1 AND recipient_agent = $2
+                        INSERT INTO shared_memory_deliveries
+                            (source_memory_id, recipient_agent, target_memory_id, status, reason)
+                        VALUES ($1, $2, $3, $4, $5)
+                        ON CONFLICT (source_memory_id, recipient_agent) DO NOTHING
                         """,
                         source_memory_id,
                         recipient_agent,
+                        target_id,
+                        status,
+                        reason,
                     )
-                    return DeliveryReceipt(**dict(existing))
+                    if parse_command_count(insert_result) == 0:
+                        # ON CONFLICT DO NOTHING skipped the insert (a concurrent
+                        # delivery won) — return the winner's receipt.
+                        existing = await conn.fetchrow(
+                            """
+                            SELECT source_memory_id, recipient_agent, target_memory_id, status, reason
+                            FROM shared_memory_deliveries
+                            WHERE source_memory_id = $1 AND recipient_agent = $2
+                            """,
+                            source_memory_id,
+                            recipient_agent,
+                        )
+                        return DeliveryReceipt(**dict(existing))
 
         receipt = DeliveryReceipt(source_memory_id, recipient_agent, target_id, status, reason)
         audit_log(
