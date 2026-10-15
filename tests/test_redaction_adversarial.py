@@ -231,3 +231,102 @@ def test_streaming_never_leaks_across_boundaries(case: SecretCase) -> None:
 @pytest.mark.parametrize("case", _benign_params())
 def test_benign_text_is_left_untouched(case: BenignCase) -> None:
     assert redact_secrets(case.text).text == case.text
+
+
+# --- R4-089: long-digit streaming hold + calibration follow-ups ---------------
+#
+# The streaming digit-run hold was capped at 40 chars, cutting long spaced
+# runs mid-window (the word-boundary pullback stops at spaces) and emitting
+# a raw head fragment of a CC window the batch pass redacts. The hold is now
+# the whole trailing run; stream output must equal batch output at every
+# chunking. Calibration cases below pin the fail-closed policy: labeled
+# contiguous SSNs redact, bare digit runs survive; CC needs 13-19 digits
+# AND Luhn; sk- needs a non-alphanumeric left boundary. All values synthetic.
+
+_R4_089_CC_UNIT = "4111 1111 1111 1111"  # Luhn-valid 16-digit window
+_R4_089_LONG_DIGIT_SECRETS: tuple[str, ...] = (
+    f"ref {_R4_089_CC_UNIT} {_R4_089_CC_UNIT} 4111 done",
+    f"ref {_R4_089_CC_UNIT} {_R4_089_CC_UNIT} {_R4_089_CC_UNIT} done",
+    f"card: {_R4_089_CC_UNIT} {_R4_089_CC_UNIT} trailing 99 done",
+)
+
+_R4_089_LONG_DIGIT_BENIGN: tuple[str, ...] = (
+    # 50 plain digits: no 13-19 window carries both boundaries.
+    "ref 12345678901234567890123456789012345678901234567890 done",
+    # Luhn-invalid groups stay, however long the run.
+    "count 1111111111111112 2222222222222222 end",
+)
+
+
+def _stream_sized(text: str, size: int) -> str:
+    redactor = StreamingSecretRedactor()
+    chunks = [text[index : index + size] for index in range(0, len(text), size)]
+    return "".join(redactor.feed(chunk) for chunk in chunks) + redactor.flush()
+
+
+@pytest.mark.parametrize("text", _R4_089_LONG_DIGIT_SECRETS)
+def test_r4_089_long_digit_run_stream_matches_batch(text: str) -> None:
+    batch = redact_secrets(text).text
+    assert "[REDACTED_CC]" in batch
+    for size in (1, 2, 3, 5, 8, 13):
+        _assert_secret_gone(_R4_089_CC_UNIT, _stream_sized(text, size), f"chunks of {size}")
+        assert _stream_sized(text, size) == batch, f"chunks of {size}"
+    for split in range(1, len(text)):
+        assert _stream(text, [text[:split], text[split:]]) == batch
+
+
+@pytest.mark.parametrize("text", _R4_089_LONG_DIGIT_SECRETS)
+def test_r4_089_over_40_run_head_withheld_until_terminated(text: str) -> None:
+    head, _, _ = text.partition("done")
+    redactor = StreamingSecretRedactor()
+    emitted = redactor.feed(head)
+    # The whole trailing run is held: the pre-run prefixes carry no digits,
+    # so no run byte may be out before the run terminates.
+    assert not any(ch.isdigit() for ch in emitted), f"run bytes out: {emitted!r}"
+    assert _R4_089_CC_UNIT[:8] not in emitted
+    assert _stream(text, [head, "done"]) == redact_secrets(text).text
+
+
+@pytest.mark.parametrize("text", _R4_089_LONG_DIGIT_BENIGN)
+def test_r4_089_long_digit_benign_streams_untouched(text: str) -> None:
+    assert redact_secrets(text).text == text
+    for size in (1, 2, 7):
+        assert _stream_sized(text, size) == text, f"chunks of {size}"
+
+
+# (text, probe, probe_must_be_gone): pinning the SSN/CC/sk- policy corners.
+_R4_089_CALIBRATION: tuple[tuple[str, str, bool], ...] = (
+    ("SSN 123456789", "123456789", True),
+    ("ssn=123456789", "123456789", True),
+    ("social security number: 123456789", "123456789", True),
+    ("SSN 123-45-6789", "123-45-6789", True),
+    ("ID 123456789", "ID 123456789", False),
+    ("card 4222222222222", "4222222222222", True),
+    ("card 4111-1111-1111-1111", "4111111111111111", True),
+    ("card 4111111111111112", "4111111111111112", False),
+    ("card 400000000002", "400000000002", False),
+    ("card 40000000000000000002", "40000000000000000002", False),
+    ("ask disk-cache cleanup", "ask disk-cache cleanup", False),
+    ("key sk-abc", "key sk-abc", False),
+    ("key sk-AbCd0123456789EfGhIjKlMnOpQrStUv", "sk-AbCd0123456789EfGhIjKlMnOpQrStUv", True),
+    # Fail-closed: a literal sk- lead after a dash still redacts.
+    ("task-sk-AbCd0123456789EfGhIjKlMn", "sk-AbCd0123456789EfGhIjKlMn", True),
+)
+
+
+@pytest.mark.parametrize(
+    "text, probe, gone", [pytest.param(t, p, g, id=t) for t, p, g in _R4_089_CALIBRATION]
+)
+def test_r4_089_calibration_batch_and_stream(text: str, probe: str, gone: bool) -> None:
+    batch = redact_secrets(text).text
+    if gone:
+        assert probe not in batch, f"batch leaked {probe!r} in {batch!r}"
+    else:
+        assert batch == text, f"batch mangled benign {text!r} -> {batch!r}"
+    for size in (1, 7):
+        out = _stream_sized(text, size)
+        assert out == batch, f"stream diverged from batch at chunks of {size}"
+        if gone:
+            assert probe not in out
+        else:
+            assert out == text

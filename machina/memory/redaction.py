@@ -506,7 +506,10 @@ def redact_secrets(text: str) -> RedactionResult:
 # redacted; complete matches inside it are removed). Everything from the
 # frontier on is withheld until more deltas arrive or flush() redacts it
 # whole. Bounded by construction: every partial pattern has an explicit max
-# length except PEM blocks. An open PEM block is withheld whole; if it grows
+# length except PEM blocks and the leadless trailing digit run (R4-089: the
+# run ends at the first non-digit/space/dash char, so the hold is transient;
+# capping it cuts long spaced runs mid-window and leaks CC bytes — see
+# _DIGIT_RUN_RE). An open PEM block is withheld whole; if it grows
 # past MAX_BUFFERED_PEM the stream redactor replaces its body with the
 # standard marker and discards it — a frontier *inside* an unterminated block
 # would leak raw body lines, since the whole-string PEM pattern needs the END
@@ -599,9 +602,13 @@ _PEM_END_RE = re.compile(r"-----END [A-Z ]*PRIVATE KEY-----")
 # Leadless formats (bare base64, card/SSN digit runs): withhold a trailing
 # run that could grow into one. One trailing word/number of lag mid-stream;
 # flush always completes. This is the honest cost of the invariant for
-# formats with no distinctive lead.
+# formats with no distinctive lead. The digit run is uncapped by design
+# (R4-089): a length cap cuts long spaced runs mid-window — the word-boundary
+# pullback stops at spaces — emitting a raw head fragment of a CC window the
+# batch pass redacts. A run ends at the first non-digit/space/dash char, so
+# the hold is transient; only emission timing changes, never final output.
 _BARE_RUN_RE = re.compile(r"(?:(?<=[^A-Za-z0-9/+=])|^)[A-Za-z0-9/+=]{1,39}$")
-_DIGIT_RUN_RE = re.compile(r"\d[\d -]{0,39}$")
+_DIGIT_RUN_RE = re.compile(r"\d[\d -]*$")
 # Unanchored twins of the lead partials: a hold placed by a run rule can land
 # inside a longer secret (e.g. digit hold on the last char of "sk-ant-...0").
 # Any such match overlapping the cut pulls the frontier back to its start.
@@ -809,8 +816,9 @@ class StreamingSecretRedactor:
     block is withheld whole; once it exceeds ``MAX_BUFFERED_PEM`` its body is
     replaced by ``[REDACTED_PRIVATE_KEY]`` and discarded — raw body prefixes
     are never emitted, and :meth:`flush` fails closed for any block whose END
-    never arrives. Byte-bounded buffering; see policy table above for
-    per-format bounds.
+    never arrives. Buffering is bounded per format (see policy table above),
+    except a trailing digit run, which is held whole until the run terminates
+    (R4-089) — only emission timing, never final output.
     """
 
     def __init__(self, tail: int = STREAM_TAIL_CHARS) -> None:
