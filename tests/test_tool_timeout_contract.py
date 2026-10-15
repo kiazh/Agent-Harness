@@ -96,8 +96,21 @@ class _ToolBudgetRecorder:
 
     def install(self):
         async def recorded(coro, timeout):
-            code = getattr(coro, "cr_code", None)
-            if code is not None and code.co_qualname == "ToolRegistry.execute":
+            # The agent wraps each tool run in a local ``execute`` closure and
+            # waits on a Task (R8/R12 join-on-cancel contract), so match the
+            # task's inner coroutine by its qualifying name in agent.py as well
+            # as the direct ToolRegistry.execute coroutine.
+            target = coro
+            if asyncio.isfuture(target) and hasattr(target, "get_coro"):
+                target = target.get_coro()
+            code = getattr(target, "cr_code", None)
+            if code is not None and (
+                code.co_qualname == "ToolRegistry.execute"
+                or (
+                    code.co_name == "execute"
+                    and str(code.co_filename).endswith("machina/core/agent.py")
+                )
+            ):
                 self.seen.append(timeout)
                 if timeout is not None and timeout >= self._compress_at:
                     timeout = self._compress_to
