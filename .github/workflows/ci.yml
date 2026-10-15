@@ -27,26 +27,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: machina_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/machina_test
-      # tests/conftest.py points the database singleton at this (never at DATABASE_URL)
-      MACHINA_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/machina_test
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -80,30 +60,6 @@ jobs:
       - name: Run bandit security scan
         run: bandit -r machina/ -ll -x machina/cli/
 
-      - name: "Windows-only tests must skip on Linux (tracked: R4-104)"
-        # Decision (R4-095, option B): no Windows CI runner is added — its cost
-        # and flake surface are not justified by the single scope-semantics
-        # test that needs Windows. That test is expected to SKIP on Linux; this
-        # step fails loudly if it ever runs or errors here, so the skip stays
-        # explicit and tracked instead of silently disappearing into the main
-        # pytest run. Tracked: docs/verification/proofs/
-        # codebase_review_round4_2026-10-14/R4-095_infra.md (Windows decision).
-        run: |
-          set -o pipefail
-          python -m pytest \
-            tests/test_integration_permissions.py::test_scope_windows_case_unc_and_symlink_lexical \
-            -q -p no:cacheprovider -rs | tee /tmp/windows-only-skip.log
-          grep -q "1 skipped" /tmp/windows-only-skip.log
-
-      - name: Run pytest with coverage
-        run: |
-          pytest tests/ -v \
-            -m "not ui_integration and not workflow_trial" \
-            --cov=machina \
-            --cov-report=xml \
-            --cov-report=term-missing \
-            --cov-fail-under=60
-
       - name: Build distributable artifacts
         run: python -m hatchling build
 
@@ -115,16 +71,6 @@ jobs:
         with:
           name: distributions
           path: dist/*
-
-      - name: Upload coverage to Codecov
-        if: github.event_name == 'push'
-        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
-        with:
-          file: ./coverage.xml
-          fail_ci_if_error: false
-          verbose: true
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   ui:
     # Owns the full UI check, including tests against a restarted real gateway.

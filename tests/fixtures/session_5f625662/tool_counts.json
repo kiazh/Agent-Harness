@@ -1,1 +1,0 @@
-{"counts": {"delegate": 9, "harness_status": 1, "learn_personality": 5, "list_agents": 6, "list_files": 4, "read_file": 22, "recall": 2, "search_files": 1, "session_recall": 21, "session_recall_window": 3, "terminal": 154}, "source": "docs/verification/OPENCODE_SESSION_5F625662_ISSUES.md lines 61-79", "total": 228, "ui_total_tokens": 2119552, "write_file": 0}

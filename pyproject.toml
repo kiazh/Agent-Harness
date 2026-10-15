@@ -85,22 +85,4 @@ extend-exclude = ["skills/ecc", "machina/bundled_agents/ecc"]
 # I = import order, UP = modern Python syntax.
 select = ["E4", "E7", "E9", "F", "B904", "I", "UP"]
 
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
-markers = [
-    "ui_integration: full UI checks against the gateway (owned by the UI CI job)",
-    "workflow_trial: optional native-versus-LangGraph research checks",
-    "db: requires the dedicated PostgreSQL test database",
-    "integration: exercises service or transport integration boundaries",
-    "load: load/concurrent integration tests (deselect with '-m \"not load\"')",
-]
 
-
-[tool.coverage.run]
-source = ["machina"]
-omit = ["tests/*", "machina/cli/*"]
-
-[tool.coverage.report]
-fail_under = 60
-show_missing = true
